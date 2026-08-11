@@ -511,6 +511,73 @@ async def test_require_client_and_node_no_node(
         matter_lock._require_client_and_node()
 
 
+def test_match_node_returns_none_without_matching_device_identifier(
+    matter_lock: MatterLock, matter_client: MagicMock
+) -> None:
+    """_match_node returns None when the device has no Matter deviceid_ identifier.
+
+    ``_resolve`` calls this for every device it looks up; a device whose
+    identifiers don't include a ``deviceid_``-prefixed Matter identifier
+    (e.g. a stale or foreign device) must resolve to "no node" rather than
+    raising, so the caller reports it via the ordinary node-not-found path.
+    """
+    device = MagicMock()
+    device.identifiers = {("not_matter", "some_other_id")}
+
+    assert matter_lock._match_node(matter_client, device) is None
+
+
+async def test_log_node_resolution_failure_handles_get_nodes_exception(
+    hass: HomeAssistant,
+    matter_lock: MatterLock,
+    matter_client: MagicMock,
+) -> None:
+    """The node-count diagnostic degrades to -1 when get_nodes() itself fails.
+
+    ``_require_client_and_node`` resolves once via ``_resolve`` (which
+    succeeds with an empty node list here) and then calls ``get_nodes()``
+    again purely for the failure-diagnostic log. If the client's node list
+    becomes unavailable between those two calls (e.g. a disconnect mid
+    resolution), the diagnostic log must still complete -- with node_count
+    reported as -1 -- rather than letting the logging failure mask the
+    real "node not found" error.
+    """
+    matter_client.get_nodes.side_effect = [[], RuntimeError("nodes unavailable")]
+
+    with pytest.raises(LockDisconnected, match="Matter node not found"):
+        matter_lock._require_client_and_node()
+
+
+async def test_log_node_resolution_failure_falls_back_when_diagnostics_raise(
+    hass: HomeAssistant,
+    matter_lock: MatterLock,
+    matter_client: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Diagnostic logging itself is best-effort and never escapes the caller.
+
+    ``_log_node_resolution_failure`` is purely informational (issue #1268
+    triage data). If collecting that diagnostic data raises for any reason
+    (e.g. the config entries API failing), the fallback debug log fires
+    instead of the exception propagating -- the caller still surfaces the
+    ordinary "node not found" LockDisconnected.
+    """
+    matter_client.get_nodes.return_value = []
+    caplog.set_level(logging.DEBUG, logger=_PROVIDER_MODULE)
+
+    with (
+        patch.object(
+            hass.config_entries,
+            "async_loaded_entries",
+            side_effect=RuntimeError("registry unavailable"),
+        ),
+        pytest.raises(LockDisconnected, match="Matter node not found"),
+    ):
+        matter_lock._require_client_and_node()
+
+    assert "diagnostics unavailable" in caplog.text
+
+
 # =============================================================================
 # Tag resolver helpers (pure functions over the raw user list)
 # =============================================================================

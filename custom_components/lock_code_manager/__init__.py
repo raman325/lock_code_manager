@@ -344,7 +344,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         )
         errors = [err for err in results if isinstance(err, Exception)]
         if errors:
-            errors_str = "\n".join(str(errors))
+            # Join the individual messages, not str(list): the latter iterates
+            # the repr's characters and puts a newline between each one.
+            errors_str = "\n".join(str(err) for err in errors)
             raise HomeAssistantError(
                 "The following errors occurred while processing this service "
                 f"request:\n{errors_str}"

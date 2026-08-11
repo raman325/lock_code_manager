@@ -3,7 +3,7 @@
 import asyncio
 import copy
 import logging
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -23,6 +23,7 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
@@ -33,18 +34,24 @@ from custom_components.lock_code_manager import (
     _setup_entry_after_start,
     async_remove_config_entry_device,
     async_remove_entry,
+    async_unload_lock,
 )
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
     ATTR_IN_SYNC,
+    ATTR_TEXT,
     BACKOFF_FAILURE_THRESHOLD,
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
+    SERVICE_DEOBFUSCATE_LOG,
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
+)
+from custom_components.lock_code_manager.domain.exceptions import (
+    LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.repairs import (
@@ -546,6 +553,16 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
                 CONF_ENABLED: True,
                 CONF_CALENDAR: "calendar.test_1",
             },
+            3: {
+                CONF_NAME: "test3",
+                CONF_PIN: "9012",
+                CONF_ENABLED: True,
+                # Both fields already set (e.g. a partially-migrated config) --
+                # the migration must drop the stale calendar key and leave the
+                # already-set entity_id alone rather than overwriting it.
+                CONF_CALENDAR: "calendar.stale",
+                CONF_ENTITY_ID: "calendar.test_2",
+            },
         },
     }
 
@@ -574,6 +591,11 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     # Slot 2 should have CONF_ENTITY_ID instead of CONF_CALENDAR
     assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][2]
     assert migrated_data[CONF_SLOTS][2][CONF_ENTITY_ID] == "calendar.test_1"
+
+    # Slot 3 already had both fields set -- calendar is dropped and the
+    # pre-existing entity_id value is preserved untouched.
+    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][3]
+    assert migrated_data[CONF_SLOTS][3][CONF_ENTITY_ID] == "calendar.test_2"
 
     await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.config_entries.async_remove(config_entry.entry_id)
@@ -1611,3 +1633,255 @@ async def test_remove_config_entry_device_allows_only_unconfigured_slots(
             )
             is True
         ), f"slot {stale_slot} device should be deletable"
+
+
+async def test_hard_refresh_usercodes_service_raises_on_lock_error(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The hard_refresh_usercodes service surfaces per-lock failures as one error.
+
+    ``asyncio.gather(..., return_exceptions=True)`` isolates a failing lock
+    from its siblings; the service handler collects any exceptions and
+    re-raises a single ``HomeAssistantError`` summarizing them, rather than
+    letting one bad lock silently swallow the whole request.
+    """
+    locks = lock_code_manager_config_entry.runtime_data.locks
+    lock_2 = locks[LOCK_2_ENTITY_ID]
+
+    with patch.object(
+        lock_2,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=Exception("simulated refresh failure")),
+    ):
+        with pytest.raises(HomeAssistantError) as exc_info:
+            await hass.services.async_call(
+                DOMAIN,
+                SERVICE_HARD_REFRESH_USERCODES,
+                {ATTR_ENTITY_ID: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]},
+                blocking=True,
+            )
+
+    # One line per failing lock, readable as-is.
+    assert str(exc_info.value).endswith("simulated refresh failure")
+
+    # LOCK_1's refresh still completed despite LOCK_2 raising.
+    assert locks[LOCK_1_ENTITY_ID].service_calls["hard_refresh_codes"]
+
+
+async def test_deobfuscate_log_service_errors_when_not_fully_set_up(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The deobfuscate_log service refuses to run without a usable instance_id.
+
+    ``instance_id`` is populated once during ``async_setup`` and never
+    cleared in normal operation. This simulates a call landing before that
+    completes (or after it was wiped) to verify the service degrades to an
+    explicit, actionable error instead of building a broken deobfuscation
+    table.
+    """
+    original_instance_id = hass.data[DOMAIN]["instance_id"]
+    hass.data[DOMAIN]["instance_id"] = ""
+    try:
+        with pytest.raises(HomeAssistantError, match="not fully set up yet"):
+            await hass.services.async_call(
+                DOMAIN,
+                SERVICE_DEOBFUSCATE_LOG,
+                {ATTR_TEXT: "some log text"},
+                blocking=True,
+                return_response=True,
+            )
+    finally:
+        hass.data[DOMAIN]["instance_id"] = original_instance_id
+
+
+async def test_setup_entry_with_empty_data_uses_initial_listener_task(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """An entry persisted with empty ``data`` and full ``options`` still sets up.
+
+    Every entry created through the config flow starts with populated
+    ``data``, so the normal first-setup path always takes the "move data to
+    options" branch in ``_setup_entry_after_start``. A config entry can also
+    legitimately hold its config entirely under ``options`` with empty
+    ``data`` (nothing currently produces this via the flow, but restored/
+    hand-edited storage could) -- that takes the other branch, scheduling
+    ``async_update_listener`` directly as a background task instead.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={},
+        options=BASE_CONFIG,
+        unique_id="Empty Data Entry",
+        title="Empty Data Entry",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert set(entry.runtime_data.locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+    # The listener consolidates options back into data, as normal.
+    assert entry.data[CONF_SLOTS]
+    assert not entry.options
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_async_unload_lock_skips_untracked_lock_entity_id(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """async_unload_lock is a no-op for a lock_entity_id no longer tracked.
+
+    Guards the defensive ``if lock is None: continue`` in the per-lock loop
+    -- calling it for an entity_id that was never (or is no longer) part of
+    ``runtime_data.locks`` must not raise, and must leave the entry's real
+    locks untouched.
+    """
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    assert set(runtime_data.locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+    await async_unload_lock(hass, entry, lock_entity_id="lock.untracked")
+
+    assert set(runtime_data.locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+
+async def test_new_lock_setup_failure_logged_and_lock_excluded(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """An unexpected exception during a new lock's setup is logged, not fatal.
+
+    Structural/transport failures are caught inside ``async_setup_internal``
+    and leave the lock degraded but present. An exception of any other type
+    is a genuine bug; ``_async_setup_new_locks`` must still log it and drop
+    just that lock, without blocking sibling locks in the same batch.
+    """
+    config = copy.deepcopy(BASE_CONFIG)
+    config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Partial Locks", title="Partial Locks"
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    original_setup_internal = MockLCMLock.async_setup_internal
+
+    async def _maybe_fail(self: MockLCMLock, config_entry) -> None:
+        if self.lock.entity_id == LOCK_2_ENTITY_ID:
+            raise RuntimeError("simulated unexpected setup failure")
+        await original_setup_internal(self, config_entry)
+
+    new_config = copy.deepcopy(config)
+    new_config[CONF_LOCKS] = [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+
+    caplog.set_level(logging.ERROR)
+    with patch.object(MockLCMLock, "async_setup_internal", _maybe_fail):
+        hass.config_entries.async_update_entry(entry, options=new_config)
+        await hass.async_block_till_done()
+
+    assert "Failed to set up lock" in caplog.text
+    assert LOCK_2_ENTITY_ID not in entry.runtime_data.locks
+    assert LOCK_1_ENTITY_ID in entry.runtime_data.locks
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_update_listener_slot_removal_handles_missing_and_failing_coordinators(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Slot removal tolerates a coordinator already gone or one that raises on stop.
+
+    Covers two defensive branches in the ``slots_to_remove`` loop of
+    ``async_update_listener``: a slot whose coordinator was already
+    discarded is skipped cleanly, and a coordinator whose ``async_stop``
+    raises is logged but does not block removal of the other slot.
+    """
+    caplog.set_level(logging.ERROR)
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    assert 1 in runtime_data.slot_coordinators
+    assert 2 in runtime_data.slot_coordinators
+
+    # Simulate slot 1's coordinator already having been discarded.
+    runtime_data.slot_coordinators.pop(1)
+
+    # Slot 2's coordinator raises when stopped.
+    boom = RuntimeError("simulated coordinator stop failure")
+    slot_2_coordinator = runtime_data.slot_coordinators[2]
+    with patch.object(slot_2_coordinator, "async_stop", side_effect=boom):
+        new_config = copy.deepcopy(BASE_CONFIG)
+        new_config[CONF_SLOTS] = {}
+        hass.config_entries.async_update_entry(
+            lock_code_manager_config_entry, options=new_config
+        )
+        await hass.async_block_till_done()
+
+    # Both slots were removed from the registry despite the failure.
+    assert 1 not in runtime_data.slot_coordinators
+    assert 2 not in runtime_data.slot_coordinators
+    assert not hass.states.async_entity_ids(Platform.TEXT)
+    assert "slot 2 coordinator stop raised" in caplog.text
+
+
+async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Slot removal releases lock-side state per (lock, slot) pair, tolerating failures.
+
+    Covers two edge cases in the ``pairs_removed`` loop of
+    ``async_update_listener``: a lock still listed in config but absent
+    from ``runtime_data.locks`` (e.g. it failed setup) is skipped rather
+    than raising, and a ``LockDisconnected``/``LockOperationFailed`` from a
+    present lock's ``async_release_managed_slot`` is logged as a warning
+    without blocking the rest of the teardown.
+    """
+    config = copy.deepcopy(BASE_CONFIG)
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Release Test", title="Release Test"
+    )
+    entry.add_to_hass(hass)
+
+    original_setup_internal = MockLCMLock.async_setup_internal
+
+    async def _fail_lock_2(self: MockLCMLock, config_entry) -> None:
+        if self.lock.entity_id == LOCK_2_ENTITY_ID:
+            raise RuntimeError("simulated unexpected setup failure")
+        await original_setup_internal(self, config_entry)
+
+    with patch.object(MockLCMLock, "async_setup_internal", _fail_lock_2):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # LOCK_2 failed setup and was popped, but remains listed in config.
+    assert LOCK_2_ENTITY_ID not in entry.runtime_data.locks
+    assert LOCK_1_ENTITY_ID in entry.runtime_data.locks
+
+    lock_1 = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    with patch.object(
+        lock_1,
+        "async_release_managed_slot",
+        AsyncMock(side_effect=LockDisconnected("simulated disconnect")),
+    ):
+        new_config = copy.deepcopy(config)
+        new_config[CONF_SLOTS].pop(1)
+        caplog.set_level(logging.WARNING)
+        hass.config_entries.async_update_entry(entry, options=new_config)
+        await hass.async_block_till_done()
+
+    assert "could not release slot 1" in caplog.text
+    assert LOCK_1_ENTITY_ID in caplog.text
+
+    await hass.config_entries.async_unload(entry.entry_id)

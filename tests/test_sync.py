@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
+from homeassistant.const import CONF_PIN, STATE_OFF, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -1369,6 +1369,30 @@ class TestSyncStatusAttribute:
         assert state is not None
         assert state.attributes.get("sync_status") == "suspended"
 
+    async def test_sync_status_and_state_unknown_while_loading(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """The entity renders unknown with no sync_status attribute while LOADING.
+
+        ``in_sync``/``sync_status`` read None until the manager's initial
+        tick determines a real state; that lets the in-sync binary sensor
+        show "unknown" rather than a stale guess before the first tick.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.LOADING
+        manager._write_state()
+        await hass.async_block_till_done()
+
+        state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
+        assert state is not None
+        assert state.state == STATE_UNKNOWN
+        assert "sync_status" not in state.attributes
+
 
 class TestAsyncStopAwaitsInFlightTick:
     """Tests that SlotSyncManager.async_stop blocks until the in-flight tick completes."""
@@ -1847,3 +1871,163 @@ class TestBreakerTickSoleMutatorInvariant:
 
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._slot_breaker.failure_count == starting_count
+
+
+class TestOptimisticSetPendingConfirmation:
+    """Tests for the post-sync pending-write check in ``_async_tick_impl``."""
+
+    async def test_optimistic_set_transitions_to_pending_confirmation(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A successful but ambiguous (OPTIMISTIC) set parks the slot in PENDING_CONFIRMATION.
+
+        Mirrors a masked lock whose post-write verification is ambiguous: the
+        provider returns ``WriteResult.OPTIMISTIC``, the seam records a
+        pending write, and when the immediate confirmation read can't observe
+        the slot (simulated here by removing it from the mock lock's
+        readable codes), the pending write survives into the tick's post-sync
+        check, which must not declare success or failure -- it waits.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.IN_SYNC
+
+        manager._coordinator.data[1] = SlotCredential.empty()
+        manager.request_sync_check()
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+        async def optimistic_set_usercode(
+            code_slot: int,
+            usercode: str,
+            name: str | None = None,
+            source: str = "direct",
+        ) -> WriteResult:
+            return WriteResult.OPTIMISTIC
+
+        async def absent_read() -> dict[int, SlotCredential]:
+            # Every read (the immediate confirmation read AND the tick's own
+            # post-sync poll refresh) observes slot 1 as still empty -- e.g.
+            # a masked lock whose write hasn't propagated to readback yet --
+            # so the pending write survives both.
+            return {1: SlotCredential.empty(), 2: SlotCredential.known("5678")}
+
+        with (
+            patch.object(manager._lock, "async_set_usercode", optimistic_set_usercode),
+            patch.object(manager._lock, "async_hard_refresh_codes", absent_read),
+            patch.object(manager._lock, "async_get_usercodes", absent_read),
+        ):
+            await manager._async_tick()
+
+        assert manager._state is SyncState.PENDING_CONFIRMATION
+        assert 1 in manager._lock._pending_writes
+        assert manager._coordinator.is_verified(1) is False
+
+
+class TestAsyncTickDefensiveGuards:
+    """Tests for the defensive early-return guards in ``_async_tick``."""
+
+    async def test_tick_noop_when_manager_stopped(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """_async_tick is a no-op if the manager has already been stopped."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._started = False
+        try:
+            with patch.object(
+                manager, "_async_tick_impl", new_callable=AsyncMock
+            ) as tick_impl:
+                await manager._async_tick()
+
+            tick_impl.assert_not_called()
+        finally:
+            # Restore so the fixture's normal entry-unload teardown actually
+            # unsubscribes the tick timer instead of short-circuiting on a
+            # manager that looks already-stopped (which would leak a timer).
+            manager._started = True
+
+    async def test_tick_noop_when_no_current_task(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """_async_tick is a defensive no-op if asyncio.current_task() returns None.
+
+        Guards against registering a task tracker with a None key -- this
+        should never happen in practice (the tick is always awaited from
+        within a task), but the guard exists so ``async_stop`` can safely
+        assume every entry in ``_tick_tasks`` is a real task.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        with patch(
+            "custom_components.lock_code_manager.domain.sync.asyncio.current_task",
+            return_value=None,
+        ):
+            await manager._async_tick()
+
+        assert manager._tick_tasks == set()
+
+
+class TestAsyncStartIdempotent:
+    """Tests for the idempotent-start guard in ``SlotSyncManager.async_start``."""
+
+    async def test_async_start_second_call_is_noop(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A second async_start call does not re-subscribe or re-tick."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        assert manager._started is True
+
+        with (
+            patch.object(manager, "_setup_state_tracking") as setup_tracking,
+            patch.object(manager, "_setup_coordinator_listener") as setup_listener,
+        ):
+            await manager.async_start()
+
+        setup_tracking.assert_not_called()
+        setup_listener.assert_not_called()
+
+
+class TestEntityStateHelpers:
+    """Tests for small entity-state-resolution helpers."""
+
+    async def test_get_entity_state_returns_none_for_undiscovered_role(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """_get_entity_state returns None for a role key with no discovered entity ID."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        assert manager._get_entity_state("nonexistent_role") is None
+
+    async def test_ensure_entities_ready_false_when_role_undiscovered(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """_ensure_entities_ready returns False if a required role wasn't discovered."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        # A full setup tick has already populated the map; simulate a role
+        # whose entity was never found (e.g. platform not loaded yet).
+        manager._entity_id_map.pop(CONF_PIN, None)
+
+        assert manager._ensure_entities_ready() is False

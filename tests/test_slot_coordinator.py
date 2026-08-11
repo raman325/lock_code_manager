@@ -830,6 +830,165 @@ async def test_text_set_value_raises_when_slot_coordinator_missing(
         await text_entity.async_set_value("9999")
 
 
+async def test_inactive_because_of_returns_defensive_copy(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """inactive_because_of returns a fresh list, not the internal state list."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[2]
+    # Slot 2 has a calendar condition entity that starts inactive.
+    assert coordinator.is_active is False
+
+    result = coordinator.inactive_because_of
+    assert result == coordinator._inactive_because_of
+    assert result is not coordinator._inactive_because_of
+
+    result.append("mutated")
+    assert "mutated" not in coordinator._inactive_because_of
+
+
+async def test_async_request_name_update_writes_name_field(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """async_request_name_update writes the CONF_NAME field for the slot."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_name_update("Bob")
+    await hass.async_block_till_done()
+
+    config = get_entry_config(lock_code_manager_config_entry).slot(1)
+    assert config.get(CONF_NAME) == "Bob"
+
+
+async def test_async_start_is_idempotent(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A second async_start call is a no-op; it does not re-subscribe or recompute."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    assert coordinator._started is True
+
+    with patch.object(coordinator, "_recompute_active") as recompute:
+        coordinator.async_start()
+
+    recompute.assert_not_called()
+
+
+async def test_notify_config_changed_noop_once_stopped(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """notify_config_changed is a no-op once the coordinator has been stopped."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    coordinator.async_stop()
+    assert coordinator._started is False
+
+    with patch.object(coordinator, "_recompute_active") as recompute:
+        coordinator.notify_config_changed()
+
+    recompute.assert_not_called()
+
+
+async def test_notify_state_subscribers_isolates_individual_failures(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """One raising state subscriber does not prevent the others from being notified."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    boom = RuntimeError("simulated subscriber failure")
+    healthy_called = {"value": False}
+
+    def failing() -> None:
+        raise boom
+
+    def healthy() -> None:
+        healthy_called["value"] = True
+
+    unsub_failing = coordinator.register_state_subscriber(failing)
+    unsub_healthy = coordinator.register_state_subscriber(healthy)
+    try:
+        with caplog.at_level(logging.ERROR):
+            coordinator._notify_state_subscribers()
+    finally:
+        unsub_failing()
+        unsub_healthy()
+
+    assert healthy_called["value"] is True
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "ERROR"
+    )
+
+
+async def test_recompute_active_missing_condition_entity_is_inactive(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """A configured condition entity with no state (not created) reads as inactive.
+
+    ``hass.states.get`` returns None for a nonexistent entity, which must be
+    treated the same as "unknown" (neither definitely on nor off) rather
+    than crashing or defaulting to active.
+    """
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "alice",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+                CONF_ENTITY_ID: "input_boolean.does_not_exist",
+            },
+        },
+    }
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="Test Missing Cond")
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = entry.runtime_data.slot_coordinators[1]
+    assert coordinator.is_active is False
+    assert CONF_ENTITY_ID in coordinator.inactive_because_of
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_pin_required_issue_creation_failure_is_swallowed(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A failure creating the pin_required repair issue does not swallow the raise."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    await coordinator.async_request_pin_update("")
+    await hass.async_block_till_done()
+    assert coordinator.pin_value is None
+
+    boom = RuntimeError("issue registry boom")
+    with patch(
+        "custom_components.lock_code_manager.domain.slot_coordinator.async_create_issue",
+        side_effect=boom,
+    ):
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(PinRequiredError):
+                await coordinator.async_request_active_toggle(True)
+
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "ERROR"
+    )
+
+
 async def test_unload_clears_registry_when_coordinator_stop_raises_before_cleanup(
     hass: HomeAssistant,
     mock_lock_config_entry,

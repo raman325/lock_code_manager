@@ -3,12 +3,14 @@
 import re
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.domain.util import (
     async_disable_slot,
     build_pin_deobfuscation_map,
@@ -162,6 +164,43 @@ async def test_build_pin_deobfuscation_map_uses_configured_pins(
     assert table[mask_pin("1234", 1, INSTANCE_ID)] == "1234"
     assert table[mask_pin("5678", 2, INSTANCE_ID)] == "5678"
     assert len(table) == 2
+
+
+async def test_build_pin_deobfuscation_map_skips_empty_pin_slots(
+    hass: HomeAssistant,
+):
+    """A slot with no configured PIN contributes no entry to the map.
+
+    ``mask_pin`` returns the sentinel ``<empty>`` for a falsy PIN, which is
+    not a token worth reversing, so the empty slot must be skipped rather
+    than mapped to ``<empty>``.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "a", CONF_PIN: "1234", CONF_ENABLED: True},
+                2: {CONF_NAME: "b", CONF_PIN: "", CONF_ENABLED: False},
+            },
+        },
+    )
+    entry.add_to_hass(hass)
+
+    table = build_pin_deobfuscation_map([entry], INSTANCE_ID)
+
+    assert table == {mask_pin("1234", 1, INSTANCE_ID): "1234"}
+
+
+async def test_async_disable_slot_returns_false_when_switch_not_found(
+    hass: HomeAssistant,
+):
+    """async_disable_slot returns False when no switch entity exists for the slot."""
+    ent_reg = er.async_get(hass)
+
+    result = await async_disable_slot(hass, ent_reg, "nonexistent_entry", 99)
+
+    assert result is False
 
 
 async def test_async_disable_slot_no_issue_without_reason(

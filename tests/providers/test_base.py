@@ -11,7 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, State, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
@@ -23,6 +23,9 @@ from custom_components.lock_code_manager.const import (
     ATTR_NOTIFICATION_SOURCE,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
+)
+from custom_components.lock_code_manager.domain.coordinator import (
+    LockUsercodeUpdateCoordinator,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -151,6 +154,89 @@ async def test_unsubscribe_push_updates_suppresses_not_implemented(
 
     # The public wrapper must not propagate it
     lock.unsubscribe_push_updates()  # must not raise
+
+
+class _PushSetupRaisesLock(MockLCMLock):
+    """Mock lock whose setup_push_subscription raises a configurable error."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Initialize mock lock."""
+        super().__init__(*args, **kwargs)
+        self.push_setup_error: Exception | None = None
+
+    @property
+    def supports_push(self) -> bool:
+        """Return whether this lock supports push-based updates."""
+        return True
+
+    def setup_push_subscription(self) -> None:
+        """Subscribe to push-based value updates, raising if configured to."""
+        if self.push_setup_error is not None:
+            raise self.push_setup_error
+
+
+async def test_subscribe_push_updates_reraises_provider_not_implemented(
+    hass: HomeAssistant,
+) -> None:
+    """subscribe_push_updates re-raises ProviderNotImplementedError, not swallowing it.
+
+    Every other setup_push_subscription failure is logged and absorbed (the
+    reconnect paths retry later), but ProviderNotImplementedError signals a
+    programming error -- a provider claiming supports_push without
+    overriding setup_push_subscription -- and must surface loudly instead
+    of silently disabling push updates.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_push_not_implemented",
+        config_entry=config_entry,
+    )
+    lock = _PushSetupRaisesLock(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    lock.push_setup_error = ProviderNotImplementedError(lock, "setup_push_subscription")
+
+    with pytest.raises(ProviderNotImplementedError):
+        lock.subscribe_push_updates()
+
+
+async def test_subscribe_push_updates_logs_warning_on_unexpected_error(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """subscribe_push_updates logs and swallows an unexpected setup exception.
+
+    Unlike LockDisconnected (expected, debug-logged, retried automatically)
+    or ProviderNotImplementedError (re-raised), an unanticipated exception
+    from setup_push_subscription must not crash the caller -- it is logged
+    at warning level and the existing reconnect paths retry later.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_push_unexpected_error",
+        config_entry=config_entry,
+    )
+    lock = _PushSetupRaisesLock(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    lock.push_setup_error = RuntimeError("unexpected driver failure")
+
+    with caplog.at_level(logging.WARNING):
+        lock.subscribe_push_updates()  # must not raise
+
+    assert any(
+        record.levelname == "WARNING"
+        and "push subscription failed unexpectedly" in record.message
+        for record in caplog.records
+    )
 
 
 async def test_config_entry_state_change_resubscribes(
@@ -588,6 +674,32 @@ async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
     assert lock != {"entity_id": lock_entity.entity_id}
 
 
+async def test_lock_equality_with_same_entity_id(hass: HomeAssistant):
+    """Two BaseLock instances wrapping the same lock entity are equal.
+
+    __hash__ is defined by entity ID alone, so __eq__ must agree: any two
+    BaseLock objects (even different provider classes or instances) that
+    wrap the same lock.entity_id are the same logical lock.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_eq_same",
+        config_entry=config_entry,
+    )
+
+    lock_a = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+    lock_b = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+    assert lock_a is not lock_b
+    assert lock_a == lock_b
+    assert lock_a == lock_a  # noqa: PLR0124 - Intentionally testing reflexive __eq__
+
+
 async def test_fire_code_slot_event_with_state_source(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -669,6 +781,85 @@ async def test_fire_code_slot_event_with_dict_source(
     )  # dict doesn't set source type
     extra_data = events[0].data[ATTR_EXTRA_DATA]
     assert extra_data == custom_data
+
+
+async def test_fire_code_slot_event_with_state_source_distinct_timestamps(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A State whose last_updated differs from last_changed serializes both distinctly.
+
+    The common case (no attribute update since the state changed) collapses
+    last_updated to the same ISO string as last_changed. When a state has
+    been updated (e.g. an attribute-only refresh) without a state change,
+    the two timestamps diverge and must each serialize to their own value.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    events = []
+
+    @callback
+    def capture_events(event):
+        events.append(event)
+
+    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, capture_events)
+
+    changed = datetime.now() - timedelta(minutes=5)
+    updated = datetime.now()
+    state = State(
+        entity_id="lock.test_lock",
+        state="locked",
+        last_changed=changed,
+        last_updated=updated,
+    )
+
+    lock_provider.async_fire_code_slot_event(
+        code_slot=1,
+        to_locked=True,
+        action_text="Keypad lock",
+        source_data=state,
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    extra_data = events[0].data[ATTR_EXTRA_DATA]
+    assert extra_data["last_changed"] == changed.isoformat()
+    assert extra_data["last_updated"] == updated.isoformat()
+    assert extra_data["last_changed"] != extra_data["last_updated"]
+
+
+async def test_fire_code_slot_event_with_no_source_data(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """An event fired without source_data serializes to no source / no extra data.
+
+    Not every caller has an Event, State, or dict to attach (e.g. a purely
+    synthetic notification); source_data defaults to None and must resolve
+    to (None, None) rather than raising or mislabeling the source type.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    events = []
+
+    @callback
+    def capture_events(event):
+        events.append(event)
+
+    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, capture_events)
+
+    lock_provider.async_fire_code_slot_event(
+        code_slot=1,
+        to_locked=True,
+        action_text="Keypad lock",
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data[ATTR_NOTIFICATION_SOURCE] is None
+    assert events[0].data[ATTR_EXTRA_DATA] is None
 
 
 async def test_setup_defers_push_subscription_when_entry_not_loaded(
@@ -785,6 +976,54 @@ async def test_async_setup_internal_creates_coordinator_when_setup_fails(
     assert lock._setup_succeeded is True
 
 
+async def test_async_setup_internal_setup_in_progress_first_refresh_not_ready(
+    hass: HomeAssistant,
+):
+    """A first-refresh failure during initial setup is absorbed, not propagated.
+
+    When async_setup_internal runs while its own LCM config entry is still
+    SETUP_IN_PROGRESS (the normal case: initial integration load), the new
+    coordinator's first refresh uses
+    async_config_entry_first_refresh(), which raises ConfigEntryNotReady /
+    UpdateFailed instead of returning when the initial fetch fails. That
+    failure is expected during a cold start and must not escape
+    async_setup_internal -- the coordinator is still created and the lock
+    stays degraded until the next successful refresh.
+    """
+    entity_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    # state=SETUP_IN_PROGRESS mirrors what HA sets on the LCM config entry
+    # while running its own async_setup_entry -- the actual state
+    # async_setup_internal observes on initial (non-hot-added) lock setup.
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, state=ConfigEntryState.SETUP_IN_PROGRESS
+    )
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_setup_in_progress_not_ready",
+        config_entry=config_entry,
+    )
+
+    lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
+
+    with patch.object(
+        LockUsercodeUpdateCoordinator,
+        "async_config_entry_first_refresh",
+        side_effect=ConfigEntryNotReady("lock still asleep"),
+    ):
+        # Should not raise even though the first refresh wasn't ready.
+        await lock.async_setup_internal(config_entry)
+
+    assert lock.coordinator is not None
+    assert lock._setup_complete.is_set()
+
+    await lock.async_unload(False)
+
+
 async def test_on_integration_loaded_skips_when_no_config_entry(
     hass: HomeAssistant,
 ):
@@ -807,10 +1046,17 @@ async def test_on_integration_loaded_skips_when_no_config_entry(
     assert lock._setup_succeeded is False
 
 
-async def test_on_integration_loaded_retries_on_disconnect(
+async def test_on_integration_loaded_skips_when_entry_not_loaded(
     hass: HomeAssistant,
 ):
-    """Test that _async_on_integration_loaded retries setup on LockDisconnected."""
+    """
+    A not-yet-loaded provider entry short circuits before setup is attempted.
+
+    The handler fires on any config entry state change, so it has to ignore
+    the transitions that are not "the integration finished loading" -- probing
+    a half-loaded integration would fail on the capability read and churn the
+    degraded-lock machinery for nothing.
+    """
     entity_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
 
@@ -823,14 +1069,54 @@ async def test_on_integration_loaded_retries_on_disconnect(
 
     lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
     lock._lcm_config_entry = config_entry
+    assert lock.lock_config_entry.state is not ConfigEntryState.LOADED
 
-    # async_setup raises LockDisconnected — should not propagate
+    with patch.object(lock, "async_setup") as setup:
+        await lock._async_on_integration_loaded()
+
+    # The point of the guard: no provider I/O was attempted at all.
+    setup.assert_not_called()
+    assert lock._setup_succeeded is False
+
+
+async def test_on_integration_loaded_logs_debug_on_transient_reconnect_failure(
+    hass: HomeAssistant,
+) -> None:
+    """A transient LockDisconnected/LockOperationFailed during reconnect setup is quiet.
+
+    Unlike a structural LockCodeManagerProviderError (which reports a repair
+    issue), a transport failure while re-running provider setup on the
+    LOADED transition is expected and logged at debug only -- the next
+    reconnect event tries again automatically. This requires the config
+    entry to actually be in the LOADED state; a not-yet-loaded entry short
+    circuits before the retry logic runs at all.
+    """
+    entity_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock_retry_transient", config_entry=config_entry
+    )
+
+    lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
+    lock._lcm_config_entry = config_entry
+
+    loaded_entry = MagicMock()
+    loaded_entry.state = ConfigEntryState.LOADED
+    lock.lock_config_entry = loaded_entry
+
     with patch.object(
-        lock, "async_setup", side_effect=LockDisconnected("still offline")
+        lock, "async_setup", side_effect=LockOperationFailed("transient failure")
     ):
         await lock._async_on_integration_loaded()
 
+    # The transient failure is absorbed: setup did not succeed, but it also
+    # did not escalate to a repair issue or leave _setup_running stuck.
     assert lock._setup_succeeded is False
+    assert lock._setup_running is False
 
 
 class MockNativeUserLock(MockLCMLock):
@@ -1370,6 +1656,34 @@ async def test_check_duplicate_code_no_coordinator(
     lock._check_duplicate_code(1, "1234")
 
 
+async def test_mark_code_rejected_causes_next_set_to_raise_duplicate_then_clears(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A firmware-rejected slot raises DuplicateCodeError on the next set, then clears.
+
+    mark_code_rejected() records that the lock's own firmware rejected the
+    PIN already written to a slot (e.g. an asynchronous duplicate-code NAK
+    the driver only reports after the write call returned success).
+    async_internal_set_usercode surfaces that as a DuplicateCodeError on the
+    very next set attempt for that slot -- but the flag is single-shot: it
+    is cleared up front, so a retry after the raise proceeds normally
+    instead of wedging the slot as permanently invalid.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    lock_provider.mark_code_rejected(1)
+    assert 1 in lock_provider._rejected_code_slots
+
+    with pytest.raises(DuplicateCodeError):
+        await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
+
+    # Single-shot: the flag was cleared by the failed attempt above.
+    assert 1 not in lock_provider._rejected_code_slots
+    await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
+
+
 async def test_async_unload_cancels_in_flight_reconnect_task(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1394,6 +1708,44 @@ async def test_async_unload_cancels_in_flight_reconnect_task(
     await lock.async_unload(False)
 
     assert lock._reconnect_task is None
+
+
+async def test_async_unload_reraises_cancelled_when_caller_itself_is_cancelled(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """async_unload propagates CancelledError when its own caller is cancelled.
+
+    async_unload cancels its in-flight reconnect task and awaits it, which
+    always raises CancelledError for that reason alone -- that case is
+    expected and absorbed. But if the *caller's own task* is what's being
+    cancelled (e.g. Home Assistant shutting down while a lock is mid
+    unload), the CancelledError must propagate rather than being silently
+    swallowed, or the outer cancellation would never take effect.
+    """
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    started = asyncio.Event()
+
+    async def slow_reconnect() -> None:
+        started.set()
+        await asyncio.sleep(60)
+
+    lock._reconnect_task = hass.async_create_task(slow_reconnect())
+    await started.wait()
+
+    unload_task = hass.async_create_task(lock.async_unload(False))
+    # Let unload_task run up to its first await point: it synchronously
+    # cancels the reconnect task, then suspends on `await reconnect_task`.
+    # Cancelling unload_task itself right there means the CancelledError it
+    # receives is attributable to its own cancellation, not just the
+    # reconnect task's.
+    await asyncio.sleep(0)
+    unload_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await unload_task
 
 
 async def test_handle_state_change_supersedes_prior_reconnect_task(

@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_USERCODE,
 )
 from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
+from custom_components.lock_code_manager.domain.services import async_set_usercode
 from custom_components.lock_code_manager.domain.util import mask_pin
 
 from .common import LOCK_1_ENTITY_ID
@@ -293,6 +294,23 @@ async def test_set_usercode_service_empty_usercode(
                 },
                 blocking=True,
             )
+
+
+async def test_async_set_usercode_domain_function_rejects_empty_usercode(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """The domain-layer function itself rejects a blank usercode.
+
+    The HA service schema for ``set_usercode`` already strips and enforces
+    a minimum length, so a whitespace-only usercode never reaches
+    ``async_set_usercode`` through that path. The websocket API's schema is
+    looser (a bare ``str``), so the domain function's own guard is the last
+    line of defense and must be exercised directly.
+    """
+    with pytest.raises(ServiceValidationError, match="must not be empty"):
+        await async_set_usercode(hass, LOCK_1_ENTITY_ID, 3, "   ")
 
 
 async def test_get_loaded_config_entry_wrong_domain(

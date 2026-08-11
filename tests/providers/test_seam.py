@@ -183,6 +183,8 @@ async def test_primitive_defaults_raise(hass: HomeAssistant) -> None:
         await lock.async_delete_credential(CredentialRef(1, CredentialType.PIN, 1))
     with pytest.raises(ProviderNotImplementedError):
         await lock.async_get_users()
+    with pytest.raises(ProviderNotImplementedError):
+        await lock.async_get_capabilities()
 
 
 async def test_setup_internal_rejects_lock_without_pin_support(

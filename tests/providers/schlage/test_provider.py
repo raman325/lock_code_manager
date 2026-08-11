@@ -355,6 +355,134 @@ async def test_tag_unmanaged_codes_rollback_on_delete_failure(
     assert delete_handler.call_count == 2
 
 
+async def test_tag_unmanaged_codes_skips_already_assigned_slot(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """An already-tagged code reserves its slot so a new untagged code gets the next one."""
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code0": {"name": "lcm:1:Existing", "code": "****"},
+            "code1": {"name": "Guest", "code": "1234"},
+        },
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=get_response)
+    )
+    add_handler = AsyncMock(return_value=None)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "delete_code", AsyncMock(return_value=None)
+    )
+
+    await schlage_lock._async_tag_unmanaged_codes()
+
+    # Slot 1 is already reserved by the tagged code, so the untagged Guest
+    # code must be tagged into slot 2 instead.
+    assert add_handler.call_count == 1
+    add_call = add_handler.call_args[0][0]
+    assert add_call.data["name"] == "lcm:2:Guest"
+
+
+async def test_tag_unmanaged_codes_skips_empty_name(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Untagged codes with an empty or whitespace-only name cannot be tagged and are skipped."""
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "   ", "code": "1234"},
+        },
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=get_response)
+    )
+    add_handler = AsyncMock(return_value=None)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+
+    await schlage_lock._async_tag_unmanaged_codes()
+
+    assert add_handler.call_count == 0
+
+
+async def test_tag_unmanaged_codes_no_slot_for_extra_code(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Once the two managed slots are exhausted, a third untagged code is left untouched."""
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "Guest A", "code": "1111"},
+            "code2": {"name": "Guest B", "code": "2222"},
+            "code3": {"name": "Guest C", "code": "3333"},
+        },
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=get_response)
+    )
+
+    add_calls: list[str] = []
+
+    async def _capture_add(call):
+        add_calls.append(call.data["name"])
+
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "add_code", AsyncMock(side_effect=_capture_add)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "delete_code", AsyncMock(return_value=None)
+    )
+
+    await schlage_lock._async_tag_unmanaged_codes()
+
+    # Only 2 managed slots exist (simple_lcm_config_entry), so exactly the
+    # first two codes get tagged and the third is left untouched.
+    assert len(add_calls) == 2
+    assert "lcm:1:Guest A" in add_calls
+    assert "lcm:2:Guest B" in add_calls
+
+
+async def test_tag_unmanaged_codes_rollback_disconnect_sets_first_disconnect(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """
+    A LockDisconnected during rollback still surfaces after a non-disconnect delete failure.
+
+    The original-delete failure is a plain LockOperationFailed (which does
+    not set first_disconnect), so the subsequent rollback failure is the
+    first LockDisconnected seen and must be the one that gets raised.
+    """
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "Guest", "code": "1234"},
+        },
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=get_response)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "add_code", AsyncMock(return_value=None)
+    )
+
+    with patch.object(
+        schlage_lock,
+        "_async_delete_code",
+        AsyncMock(
+            side_effect=[
+                LockOperationFailed("delete failed"),
+                LockDisconnected("rollback failed"),
+            ]
+        ),
+    ):
+        with pytest.raises(LockDisconnected, match="disconnect during tag pass"):
+            await schlage_lock._async_tag_unmanaged_codes()
+
+
 async def test_tag_unmanaged_codes_no_managed_slots(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
@@ -845,6 +973,27 @@ async def test_get_codes_malformed_entity_response(
 
     with pytest.raises(LockCodeManagerError, match="malformed entity response"):
         await schlage_lock.async_get_users()
+
+
+async def test_get_codes_top_level_non_dict_response(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """
+    Test that a non-dict top-level response raises LockCodeManagerError.
+
+    Home Assistant's service layer normally guarantees a dict when
+    return_response=True (a non-dict return is rejected before it ever
+    reaches provider code), so the transport seam is patched directly here
+    to exercise the provider's own defensive guard in case that contract is
+    ever violated by a future transport change.
+    """
+    with patch.object(
+        schlage_lock, "async_call_service", AsyncMock(return_value="not a dict")
+    ):
+        with pytest.raises(LockCodeManagerError, match="malformed response"):
+            await schlage_lock._async_get_codes()
 
 
 # ---------------------------------------------------------------------------

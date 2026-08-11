@@ -445,6 +445,46 @@ class TestSetCredential:
         # Friendly portion preserved verbatim; only the format changed.
         assert modify_calls[0]["name"] == "lcm:1:Guest"
 
+    async def test_set_credential_ignores_cloud_user_tagged_for_slot(
+        self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
+    ) -> None:
+        """A cloud user tagged for the target slot is ignored; a new local user is added."""
+        list_response = {
+            LOCK_ENTITY_ID: {
+                "users": [
+                    make_user("300", "lcm:1:Cloud Guest", "1111", source_type="2"),
+                ],
+            },
+        }
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
+        )
+
+        add_calls: list[dict[str, Any]] = []
+
+        async def _capture_add(call):
+            add_calls.append(dict(call.data))
+
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "add_user", AsyncMock(side_effect=_capture_add)
+        )
+        modify_handler = AsyncMock(return_value=None)
+        register_mock_service(hass, AKUVOX_DOMAIN, "modify_user", modify_handler)
+
+        result = await akuvox_lock.async_set_credential(
+            1,
+            _pin_cred(1, "9999"),
+            "9999",
+            name="New Guest",
+            source="direct",
+        )
+
+        assert result is WriteResult.CONFIRMED
+        # The cloud user is not modified; a brand new local user is added.
+        modify_handler.assert_not_called()
+        assert len(add_calls) == 1
+        assert add_calls[0]["name"] == "lcm:1:New Guest"
+
     async def test_set_credential_service_failure(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
@@ -489,6 +529,28 @@ class TestDeleteCredential:
 
         result = await akuvox_lock.async_delete_credential(_cred_ref(1))
         assert result is False
+
+    async def test_delete_credential_ignores_cloud_user_tagged_for_slot(
+        self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
+    ) -> None:
+        """A cloud user tagged for the target slot is ignored, so deletion reports no change."""
+        list_response = {
+            LOCK_ENTITY_ID: {
+                "users": [
+                    make_user("300", "lcm:1:Cloud Guest", "1111", source_type="2"),
+                ],
+            },
+        }
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
+        )
+        delete_handler = AsyncMock(return_value=None)
+        register_mock_service(hass, AKUVOX_DOMAIN, "delete_user", delete_handler)
+
+        result = await akuvox_lock.async_delete_credential(_cred_ref(1))
+
+        assert result is False
+        delete_handler.assert_not_called()
 
     async def test_delete_credential_service_failure(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
@@ -584,6 +646,31 @@ class TestListUsersErrors:
         ):
             await akuvox_lock.async_get_users()
 
+    async def test_list_users_top_level_non_dict_response(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """
+        Test that a non-dict top-level response raises LockCodeManagerError.
+
+        Home Assistant's service layer normally guarantees a dict when
+        return_response=True (a non-dict return is rejected before it ever
+        reaches provider code), so the transport seam is patched directly
+        here to exercise the provider's own defensive guard in case that
+        contract is ever violated by a future transport change.
+        """
+        with patch.object(
+            akuvox_lock,
+            "async_call_service",
+            AsyncMock(return_value=["not", "a", "dict"]),
+        ):
+            with pytest.raises(
+                LockCodeManagerError, match="Malformed list_users response from"
+            ):
+                await akuvox_lock._async_list_users()
+
 
 # ---------------------------------------------------------------------------
 # Auto-tagging
@@ -663,6 +750,71 @@ class TestAutoTagging:
         assert len(modify_calls) == 1
         assert modify_calls[0]["id"] == "201"
         assert modify_calls[0]["name"] == "lcm:1:Visitor B"
+
+    async def test_tag_pass_skips_cloud_users_and_reuses_free_slot(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Cloud users are ignored, and an already-tagged local user reserves its slot."""
+        mock_response = {
+            LOCK_ENTITY_ID: {
+                "users": [
+                    make_user("50", "Cloud Visitor", "0000", source_type="2"),
+                    make_user("100", "lcm:1:Guest", "1111"),
+                    make_user("200", "New Local", "3333"),
+                ],
+            },
+        }
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=mock_response)
+        )
+
+        modify_calls: list[dict[str, Any]] = []
+
+        async def _capture_modify(call):
+            modify_calls.append(dict(call.data))
+
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
+        )
+
+        await akuvox_lock._async_tag_unmanaged_users()
+
+        # Only the untagged local user is touched; slot 1 is already reserved
+        # by the tagged local user, and the cloud user is ignored entirely.
+        assert len(modify_calls) == 1
+        assert modify_calls[0]["id"] == "200"
+        assert modify_calls[0]["name"] == "lcm:2:New Local"
+
+    async def test_tag_pass_no_available_slot_leaves_untouched(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Untagged local users are left untouched once all managed slots are assigned."""
+        mock_response = {
+            LOCK_ENTITY_ID: {
+                "users": [
+                    make_user("100", "lcm:1:Guest", "1111"),
+                    make_user("101", "lcm:2:Family", "2222"),
+                    make_user("200", "Visitor", "9999"),
+                ],
+            },
+        }
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=mock_response)
+        )
+        modify_handler = AsyncMock(return_value=None)
+        register_mock_service(hass, AKUVOX_DOMAIN, "modify_user", modify_handler)
+
+        await akuvox_lock._async_tag_unmanaged_users()
+
+        # Both managed slots are already assigned, so the untagged visitor
+        # cannot be tagged; no modify_user call should be made for them.
+        modify_handler.assert_not_called()
 
     async def test_no_managed_slots_is_noop(
         self,

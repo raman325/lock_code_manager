@@ -27,7 +27,8 @@ from homeassistant.const import (
     STATE_ON,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -46,6 +47,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
 )
+from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 
 from .common import (
@@ -2082,3 +2084,143 @@ async def test_availability_subscription_scoped_to_locks(
     entity._handle_add_locks([re_added_lock])
     assert tracker._last_track_states.all_states is False
     assert tracker._last_track_states.entities == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+
+async def test_handle_locks_updated_noop_before_tracker_exists(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A lock-added/removed callback firing before the availability tracker exists is a no-op.
+
+    ``_register_callbacks`` (which wires ``_handle_add_locks`` /
+    ``_handle_remove_lock``) runs slightly before
+    ``_available_state_tracker`` is assigned in ``async_added_to_hass``.
+    ``_async_handle_locks_updated`` guards that window by returning early
+    when the tracker is still ``None`` instead of crashing on
+    ``tracker.async_update_listeners``.
+    """
+    entity = get_in_sync_entity_obj(hass, SLOT_1_ACTIVE_ENTITY)
+    assert entity._available_state_tracker is not None
+    entity._available_state_tracker = None
+
+    # Must not raise despite the tracker being unset.
+    entity._handle_remove_lock(LOCK_1_ENTITY_ID)
+
+    # The locks list is still updated even though the re-scope was skipped.
+    assert LOCK_1_ENTITY_ID not in [lock.lock.entity_id for lock in entity.locks]
+
+
+async def test_handle_available_state_update_ignores_unrelated_entity(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A stray state-changed event for an entity outside the tracked lock set is ignored."""
+    entity = get_in_sync_entity_obj(hass, SLOT_1_ACTIVE_ENTITY)
+    initial_available = entity._attr_available
+
+    stray_event = Event(
+        "state_changed",
+        {"entity_id": "lock.unrelated", "old_state": None, "new_state": None},
+    )
+    entity._handle_available_state_update(stray_event)
+
+    assert entity._attr_available == initial_available
+
+
+async def test_handle_available_state_update_skips_recompute_between_available_states(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A lock transition between two non-unavailable states skips the availability recompute.
+
+    Both endpoints of the transition are already known-available, so
+    ``_handle_available_state_update`` short-circuits before calling
+    ``_is_available()`` again -- verified here by counting calls rather than
+    by the (unchanged either way) resulting ``available`` value.
+    """
+    entity = get_in_sync_entity_obj(hass, SLOT_1_ACTIVE_ENTITY)
+    assert entity.available
+
+    call_count = [0]
+    original_is_available = entity._is_available
+
+    def _counting_is_available():
+        call_count[0] += 1
+        return original_is_available()
+
+    with patch.object(entity, "_is_available", _counting_is_available):
+        # LOCK_1 starts "unlocked" (MockLockEntity's default) -- moving to
+        # "locked" is a real state change between two non-unavailable states.
+        hass.states.async_set(LOCK_1_ENTITY_ID, "locked")
+        await hass.async_block_till_done()
+
+    assert call_count[0] == 0
+    assert entity.available
+
+
+async def test_add_code_slot_entity_skipped_when_lock_has_no_coordinator(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A lock whose provider setup has not finished (no coordinator yet) is skipped.
+
+    ``add_code_slot_entities`` is invoked via the lock-slot-adder callback
+    registry once a lock has been set up. This exercises the defensive
+    ``if coordinator is None: return`` for a lock instance that has not
+    completed ``async_setup_internal`` -- the in-sync sensor is simply not
+    created rather than crashing on a ``None`` coordinator.
+    """
+    entry = lock_code_manager_config_entry
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    fresh_lock = async_create_lock_instance(
+        hass, dev_reg, ent_reg, entry, LOCK_1_ENTITY_ID
+    )
+    assert fresh_lock.coordinator is None
+
+    entities_before = set(hass.states.async_entity_ids("binary_sensor"))
+    entry.runtime_data.callbacks.invoke_lock_slot_adders(fresh_lock, 1, ent_reg)
+    await hass.async_block_till_done()
+
+    assert set(hass.states.async_entity_ids("binary_sensor")) == entities_before
+
+
+async def test_add_standard_entity_for_slot_without_coordinator_logs_warning(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Adding an entity for a slot with no registered SlotEntityCoordinator logs a warning.
+
+    The normal flow (``async_update_listener``) always creates the slot
+    coordinator before adding entities for a new slot -- see the comment
+    above the loop that creates them "BEFORE setting up new locks". This
+    covers the defensive fallback for a slot number added out of band
+    (``invoke_standard_adders`` called directly for a slot the coordinator
+    registry has never seen), verifying entity creation degrades gracefully
+    with a warning rather than raising.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    assert 99 not in runtime_data.slot_coordinators
+
+    ent_reg = er.async_get(hass)
+    caplog.set_level(logging.WARNING)
+    runtime_data.callbacks.invoke_standard_adders(99, ent_reg)
+    await hass.async_block_till_done()
+
+    assert "No slot coordinator for slot 99" in caplog.text
+
+    # The active binary sensor entity was still created for the slot.
+    slot_99_entities = [
+        entry
+        for entry in er.async_entries_for_config_entry(
+            ent_reg, lock_code_manager_config_entry.entry_id
+        )
+        if "|99|" in entry.unique_id
+    ]
+    assert slot_99_entities

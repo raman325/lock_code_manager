@@ -2,6 +2,10 @@
 
 import pytest
 
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+
+from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
@@ -105,6 +109,42 @@ async def test_delete_credential_returns_changed_status(virtual_lock: VirtualLoc
     # Clearing again should return False (already cleared)
     changed = await lock.async_delete_credential(_make_ref(1))
     assert changed is False
+
+
+async def test_async_unload_remove_permanently_removes_store(
+    hass: HomeAssistant,
+    virtual_lock_with_slots: VirtualLock,
+):
+    """
+    remove_permanently=True deletes the persisted store instead of saving current state.
+
+    A brand-new Store instance is used to verify the on-disk state rather
+    than reusing ``lock._store``: the HA test harness's in-memory storage
+    mock caches the loaded/saved payload on the Store instance itself once
+    it has been read, so re-reading through the same instance would not
+    reliably reflect a subsequent removal.
+    """
+    lock = virtual_lock_with_slots
+    await lock.async_set_credential(
+        1,
+        credential_from_slot(1, SlotCredential.known("1234")),
+        "1234",
+        name="test",
+        source="direct",
+    )
+
+    def _fresh_store() -> Store:
+        return Store(hass, 1, f"{lock.domain}_{DOMAIN}_{lock.lock.entity_id}")
+
+    # Persist to disk first (remove_permanently=False path) so there is
+    # something on disk to remove.
+    await lock.async_unload(remove_permanently=False)
+    assert await _fresh_store().async_load() == {"1": {"code": "1234", "name": "test"}}
+
+    await lock.async_unload(remove_permanently=True)
+
+    # The store file itself is gone rather than re-saved.
+    assert await _fresh_store().async_load() is None
 
 
 async def test_virtual_lock_does_not_support_code_slot_events(
