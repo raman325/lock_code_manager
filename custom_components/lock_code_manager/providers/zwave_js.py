@@ -18,6 +18,7 @@ from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.access_control import UserCredentialType
 from zwave_js_server.const.command_class.lock import (
+    ATTR_CODE_SLOT,
     ATTR_IN_USE,
     LOCK_USERCODE_PROPERTY,
     LOCK_USERCODE_STATUS_PROPERTY,
@@ -29,7 +30,7 @@ from zwave_js_server.const.command_class.notification import (
 )
 from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode
+from zwave_js_server.util.lock import get_usercode, get_usercodes
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -313,6 +314,60 @@ class ZWaveJSLock(BaseLock):
                 Credential(type=domain_type, slot=cred.slot, state=state)
             )
         return list(users_by_id.values())
+
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+        """
+        Project to slots, then rescue occupied slots the unified read left valueless.
+
+        Deliberately overrides the projection rather than ``async_get_users``:
+        the user list also drives the write paths (delete-owner resolution
+        and ``async_set_user``'s adoption scan), and an occupancy inferred
+        from the value database must not redirect which user a write
+        targets. Read-repair belongs to the read.
+        """
+        codes = await super().async_get_usercodes()
+        return self._overlay_uc_occupancy(codes)
+
+    def _overlay_uc_occupancy(
+        self, codes: dict[int, SlotCredential]
+    ) -> dict[int, SlotCredential]:
+        """
+        Upgrade empty slots that User Code CC reports occupied to ``unreadable``.
+
+        When a lock reports ``userIdStatus`` occupied while withholding the
+        code itself, node-zwave-js's User Code CC adapter drops the
+        credential from the unified read rather than returning it with no
+        value. The slot then projects to ``empty()``, which tells the sync
+        layer the write definitively did not land -- so it rewrites, fails
+        to confirm again, and the circuit breaker suspends a slot whose
+        Personal Identification Number works on the keypad (issue #1397).
+
+        ``userIdStatus`` is the occupancy authority and the credential
+        supplies only the value, so an occupied slot with no credential is
+        ``unreadable`` -- "something is here, we cannot read it" -- never
+        ``empty``. Consequences of that split:
+
+        - A cleared slot reports ``AVAILABLE``, so clears still confirm.
+        - Only ``empty`` entries are upgraded; a readable credential always
+          outranks the fallback, so a healthy lock is untouched.
+        - ``in_use`` is compared against ``True`` explicitly: ``None`` means
+          the value database holds no status for the slot, which is absence
+          of evidence, not evidence of occupancy.
+
+        Read-only against the driver's value database (no device traffic),
+        and only for nodes advertising User Code CC -- a native User
+        Credential CC lock reports its own credentials and needs no
+        fallback.
+        """
+        if not self._node_advertises_user_code_cc():
+            return codes
+        for code_slot in get_usercodes(self.node):
+            slot = code_slot[ATTR_CODE_SLOT]
+            if code_slot.get(ATTR_IN_USE) is not True:
+                continue
+            if codes.get(slot, SlotCredential.empty()).is_empty:
+                codes[slot] = SlotCredential.unreadable()
+        return codes
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """

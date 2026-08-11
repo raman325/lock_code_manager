@@ -295,12 +295,18 @@ async def test_async_get_usercodes_returns_projection_with_managed_slots(
     (starting from empty), and overlays any Personal Identification Number
     credentials returned by async_get_users. With no users on the lock, all
     managed slots are present and empty.
+
+    Managed slots 3 and 4 are used deliberately: the fixture reports them
+    ``userIdStatus=AVAILABLE``, so the User Code CC occupancy fallback has
+    nothing to contribute and the plain empty projection is what's under
+    test here. Slots 1 and 2 are ENABLED in the fixture and are covered by
+    ``test_async_get_usercodes_reports_occupied_uc_slot_as_unreadable``.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}},
+            CONF_SLOTS: {"3": {}, "4": {}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -310,8 +316,8 @@ async def test_async_get_usercodes_returns_projection_with_managed_slots(
 
     codes = await zwave_js_lock.async_get_usercodes()
 
-    assert codes[1] == SlotCredential.empty()
-    assert codes[2] == SlotCredential.empty()
+    assert codes[3] == SlotCredential.empty()
+    assert codes[4] == SlotCredential.empty()
 
 
 async def test_async_get_usercodes_overlays_pin_credentials(
@@ -325,12 +331,16 @@ async def test_async_get_usercodes_overlays_pin_credentials(
 
     When the lock has a user with a PIN credential at slot 1, the result maps slot 1
     to the readable credential value.
+
+    Slot 3 stands in for the unoccupied managed slot because the fixture
+    reports it ``userIdStatus=AVAILABLE``; a readable credential on slot 1
+    already outranks the User Code CC occupancy fallback.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}},
+            CONF_SLOTS: {"1": {}, "3": {}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -354,6 +364,176 @@ async def test_async_get_usercodes_overlays_pin_credentials(
     codes = await zwave_js_lock.async_get_usercodes()
 
     assert codes[1] == SlotCredential.known("9999")
+    assert codes[3] == SlotCredential.empty()
+
+
+async def test_async_get_usercodes_reports_occupied_uc_slot_as_unreadable(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Regression test for issue #1397: an occupied slot must not project to empty.
+
+    When a lock reports ``userIdStatus`` occupied but withholds the code
+    value, node-zwave-js's User Code CC adapter omits the credential from
+    ``get_all_credentials`` entirely. Projecting that to ``empty()`` tells
+    the sync layer the write definitively did not land, which drives a
+    non-converging write/verify loop until the circuit breaker suspends the
+    slot -- even though the Personal Identification Number works on the
+    keypad.
+
+    Occupancy comes from ``userIdStatus``; only the *value* is unknown, so
+    the slot must project to ``unreadable()``. The fixture reports slot 2
+    ENABLED, and the unified read here returns the user without any
+    credential.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}, "3": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    mock_access_control.get_users_cached.return_value = [
+        UserData(
+            user_id=2,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="lcm:2:weshley",
+        ),
+    ]
+    mock_access_control.get_all_credentials_cached.return_value = []
+
+    codes = await zwave_js_lock.async_get_usercodes()
+
+    assert codes[2] == SlotCredential.unreadable()
+    # Slot 3 is AVAILABLE on the lock, so a cleared slot still reads empty --
+    # otherwise a clear could never confirm.
+    assert codes[3] == SlotCredential.empty()
+
+
+async def test_async_get_usercodes_reports_occupied_slot_with_no_user_as_unreadable(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    An occupied User Code CC slot surfaces even when the unified read reports no user.
+
+    The User Code CC adapter can omit the implicit user as well as the
+    credential when the value is withheld. The fallback works off the slot
+    projection rather than the user list precisely so it does not depend on
+    a user surviving that read.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {}, "3": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    mock_access_control.get_users_cached.return_value = []
+    mock_access_control.get_all_credentials_cached.return_value = []
+
+    codes = await zwave_js_lock.async_get_usercodes()
+
+    assert codes[1] == SlotCredential.unreadable()
+    assert codes[3] == SlotCredential.empty()
+
+
+async def test_async_get_usercodes_readable_credential_outranks_uc_occupancy(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    The unified credential wins over the User Code CC occupancy fallback.
+
+    The fallback only fills the gap where no credential of the requested
+    type came back. A slot that reports both must keep the readable value,
+    or every occupied slot on a healthy lock would regress to unreadable
+    and stop reconciling against the configured Personal Identification
+    Number.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {}, "2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    mock_access_control.get_users_cached.return_value = [
+        UserData(
+            user_id=1,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="alice",
+        ),
+        UserData(
+            user_id=2,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="bob",
+        ),
+    ]
+    mock_access_control.get_all_credentials_cached.return_value = [
+        CredentialData(
+            user_id=1,
+            type=UserCredentialType.PIN_CODE,
+            slot=1,
+            data="9999",
+        ),
+        CredentialData(
+            user_id=2,
+            type=UserCredentialType.PIN_CODE,
+            slot=2,
+            data="1234",
+        ),
+    ]
+
+    codes = await zwave_js_lock.async_get_usercodes()
+
+    assert codes[1] == SlotCredential.known("9999")
+    assert codes[2] == SlotCredential.known("1234")
+
+
+async def test_async_get_usercodes_skips_uc_occupancy_without_user_code_cc(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A pure User Credential CC lock never consults the User Code CC value database.
+
+    Such a lock reports its own credentials natively, so an empty slot is
+    genuinely empty. Reading occupancy from User Code CC values that the
+    node does not even advertise would invent occupancy from stale or
+    unrelated cache entries -- despite the fixture reporting slots 1 and 2
+    ENABLED, both must stay empty here.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {}, "2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    mock_access_control.get_users_cached.return_value = []
+    mock_access_control.get_all_credentials_cached.return_value = []
+
+    with patch.object(ZWaveJSLock, "_node_advertises_user_code_cc", return_value=False):
+        codes = await zwave_js_lock.async_get_usercodes()
+
+    assert codes[1] == SlotCredential.empty()
     assert codes[2] == SlotCredential.empty()
 
 
