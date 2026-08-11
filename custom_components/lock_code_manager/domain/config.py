@@ -309,3 +309,29 @@ def build_slot_unique_id(
     if lock_entity_id:
         uid = f"{uid}|{lock_entity_id}"
     return uid
+
+
+def build_slot_device_identifier(entry_id: str, slot_num: int) -> str:
+    """
+    Build the device registry identifier for a slot's device.
+
+    Format: {entry_id}|{slot_num}. Deliberately distinct from the entry's
+    own device identifier, which is the bare entry_id.
+    """
+    return f"{entry_id}|{slot_num}"
+
+
+def parse_slot_device_identifier(entry_id: str, identifier: str) -> int | None:
+    """
+    Recover the slot number from a slot device identifier, else ``None``.
+
+    The inverse of :func:`build_slot_device_identifier`, used to tell a slot
+    device apart from the entry's own device when sweeping the registry.
+    ``None`` covers both the entry device (bare entry_id, no separator) and
+    anything that does not belong to this entry.
+    """
+    prefix = f"{entry_id}|"
+    if not identifier.startswith(prefix):
+        return None
+    suffix = identifier.removeprefix(prefix)
+    return int(suffix) if suffix.isdigit() else None

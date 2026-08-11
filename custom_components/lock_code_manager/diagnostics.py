@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import DOMAIN
+from .domain.config import build_slot_device_identifier
 from .domain.models import SlotCode, SlotCredential
 from .domain.queries import get_entry_config
 from .domain.util import mask_pin
@@ -162,7 +163,10 @@ def _slot_diagnostic(
     }
 
     # Find the slot device and its entities
-    slot_identifier = (DOMAIN, f"{config_entry.entry_id}|{slot_num}")
+    slot_identifier = (
+        DOMAIN,
+        build_slot_device_identifier(config_entry.entry_id, slot_num),
+    )
     device = dev_reg.async_get_device(identifiers={slot_identifier})
     if device:
         result["entities"] = _entity_states_for_device(hass, ent_reg, device.id)

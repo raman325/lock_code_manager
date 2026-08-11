@@ -25,7 +25,7 @@ from .const import (
     ATTR_TO,
     DOMAIN,
 )
-from .domain.config import build_slot_unique_id
+from .domain.config import build_slot_device_identifier, build_slot_unique_id
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import get_entry_config
 from .domain.slot_coordinator import SlotEntityCoordinator
@@ -67,7 +67,9 @@ class BaseLockCodeManagerEntity(Entity):
         self._attr_translation_placeholders = {"slot_num": slot_num}
 
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{self.entry_id}|{slot_num}")},
+            identifiers={
+                (DOMAIN, build_slot_device_identifier(self.entry_id, slot_num))
+            },
             name=f"{config_entry.title} Code slot {slot_num}",
             manufacturer="Lock Code Manager",
             model="Code Slot",
