@@ -104,7 +104,7 @@ _PERMANENT_ZWAVE_ERROR_CODES: frozenset[int] = frozenset(
 
 def _mapped_zwave_error(
     err: BaseZwaveJSServerError, context: str
-) -> LockOperationFailed:
+) -> LockCodeManagerProviderError:
     """
     Classify a zwave-js-server error as permanent or transient.
 
@@ -590,8 +590,9 @@ class ZWaveJSLock(BaseLock):
                 credential_slot=credential.slot,
             )
         except BaseZwaveJSServerError as err:
-            # Transient Z-Wave command failure (e.g. a sleeping/battery lock):
-            # route to retry rather than slot suspension.
+            # Retry a transient command failure (e.g. a sleeping/battery lock);
+            # suspend only on a code the node can never accept. _mapped_zwave_error
+            # decides which, since the two are indistinguishable from here.
             raise _mapped_zwave_error(
                 err, f"set credential slot {credential.slot} failed"
             ) from err

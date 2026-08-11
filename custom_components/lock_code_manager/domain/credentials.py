@@ -287,6 +287,26 @@ class LockCapabilities:
         """Return True when the lock advertises ``credential_type``."""
         return credential_type in self.credential_types
 
+    def bounded_slot_count(self, credential_type: CredentialType) -> int | None:
+        """
+        Return the slot count to bound against, or ``None`` when unknown.
+
+        ``None`` covers both an unadvertised credential type and a
+        ``num_slots`` of 0, which means "capacity unknown" rather than "no
+        slots": Matter reports 0 for a capacity field the lock did not
+        supply, and a lock that cannot answer must never be treated as
+        having nowhere to write. Callers use ``None`` to skip a bounds
+        check rather than to reject.
+
+        This lives here so the 0-means-unknown convention is stated once.
+        Every caller that re-derived it would be one place for a lock with
+        an unreadable capacity to start failing writes it should accept.
+        """
+        capability = self.capability_for(credential_type)
+        if capability is None or capability.num_slots <= 0:
+            return None
+        return capability.num_slots
+
 
 def credential_from_slot(slot: int, state: SlotCredential) -> Credential:
     """

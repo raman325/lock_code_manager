@@ -1454,11 +1454,15 @@ class BaseLock:
         misclassification is what made an out-of-range slot look like an
         unreachable lock (issue #1398).
 
-        A capabilities read that fails or reports ``num_slots == 0`` skips
-        the check rather than blocking the write: 0 means "unknown capacity"
-        for Matter, and a lock that cannot answer must not be assumed to
-        have no slots. Letting the write through preserves the previous
-        behavior for those cases instead of inventing a new failure.
+        A capabilities read that fails, or one whose slot count is unknown
+        (see ``LockCapabilities.bounded_slot_count``), skips the check
+        rather than blocking the write, preserving the previous behavior
+        for those cases instead of inventing a new failure.
+
+        The advertised count is the lock's own claim and is not always
+        right -- a Z-Wave node hitting the User Credential CC dispatch
+        defect can report the wrong command class's slot count -- so the
+        error names the stale-interview remedy alongside the renumber one.
         """
         if not self.credential_index_follows_slot:
             return
@@ -1468,16 +1472,16 @@ class BaseLock:
             # Covers the unreachable lock, the failed probe, and the provider
             # that never implemented the read (ProviderNotImplementedError).
             return
-        pin_caps = caps.capability_for(CredentialType.PIN)
-        if pin_caps is None or pin_caps.num_slots <= 0:
+        num_slots = caps.bounded_slot_count(CredentialType.PIN)
+        if num_slots is None or 1 <= code_slot <= num_slots:
             return
-        if not 1 <= code_slot <= pin_caps.num_slots:
-            raise LockOperationUnsupported(
-                f"Lock {self.lock.entity_id} has {pin_caps.num_slots} PIN code "
-                f"slots, so slot {code_slot} does not exist on it. Renumber the "
-                f"slot to a value between 1 and {pin_caps.num_slots}, or remove "
-                f"this lock from the slot's configuration."
-            )
+        raise LockOperationUnsupported(
+            f"Lock {self.lock.entity_id} reports {num_slots} PIN code slots, so "
+            f"slot {code_slot} is out of range. Either renumber the slot to fall "
+            f"within 1-{num_slots} (or drop this lock from the slot), or, if the "
+            f"lock really does have more slots than that, re-interview it -- a "
+            f"stale or incomplete interview makes it under-report its capacity."
+        )
 
     async def _assert_credential_ref_supported(self, ref: CredentialRef) -> None:
         """

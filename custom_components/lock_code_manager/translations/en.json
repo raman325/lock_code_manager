@@ -10,7 +10,7 @@
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
-      "slot_out_of_range": "Lock {lock} has only {num_slots} PIN code slots, so these slot numbers cannot be used with it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration.",
+      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}"
     },
     "step": {
@@ -129,7 +129,7 @@
     "error": {
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
       "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}.",
-      "slot_out_of_range": "Lock {lock} has only {num_slots} PIN code slots, so these slot numbers cannot be used with it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration."
+      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity."
     },
     "step": {
       "init": {

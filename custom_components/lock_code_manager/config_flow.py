@@ -158,16 +158,13 @@ async def _async_check_slot_capacity(
             )
             continue
 
-        pin_capability = capabilities.capability_for(CredentialType.PIN)
-        # num_slots of 0 means "capacity unknown", not "no slots".
-        if pin_capability is None or pin_capability.num_slots <= 0:
+        num_slots = capabilities.bounded_slot_count(CredentialType.PIN)
+        if num_slots is None:
             continue
-        if out_of_range := [
-            slot for slot in slots if not 1 <= slot <= pin_capability.num_slots
-        ]:
+        if out_of_range := [slot for slot in slots if not 1 <= slot <= num_slots]:
             return {"base": "slot_out_of_range"}, {
                 "lock": lock_entity_id,
-                "num_slots": str(pin_capability.num_slots),
+                "num_slots": str(num_slots),
                 "out_of_range_slots": ", ".join(str(slot) for slot in out_of_range),
             }
     return {}, {}
