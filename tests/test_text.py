@@ -59,6 +59,29 @@ async def test_text_entities(
     assert state.state == STATE_OFF
 
 
+async def test_set_name_updates_slot_name(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Setting the name text entity's value updates the slot's configured name."""
+    state = hass.states.get(SLOT_2_NAME_ENTITY)
+    assert state
+    assert state.state == "test2"
+
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "renamed"},
+        target={ATTR_ENTITY_ID: SLOT_2_NAME_ENTITY},
+        blocking=True,
+    )
+
+    state = hass.states.get(SLOT_2_NAME_ENTITY)
+    assert state
+    assert state.state == "renamed"
+
+
 async def test_whitespace_pin_normalized_to_empty(
     hass: HomeAssistant,
     mock_lock_config_entry,

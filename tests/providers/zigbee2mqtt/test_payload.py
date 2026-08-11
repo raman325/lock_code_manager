@@ -361,6 +361,47 @@ def test_users_payload_before_coordinator_does_not_poison_delta_gate() -> None:
     )
 
 
+def test_users_non_dict_user_info_skipped() -> None:
+    """A users entry whose value is not a dict (malformed payload) is skipped.
+
+    The valid entry alongside it still updates normally, proving the
+    malformed entry didn't abort the whole payload.
+    """
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock._process_z2m_device_payload(
+        {
+            "users": {
+                "2": "not_a_dict",
+                "3": {"status": "enabled", "pin_code": "1234"},
+            }
+        }
+    )
+    lock.coordinator.push_update.assert_called_once_with(
+        {3: SlotCredential.known("1234")}
+    )
+
+
+def test_pin_code_payload_without_user_field_ignored() -> None:
+    """A pin_code payload missing the user field is ignored without touching futures."""
+    lock = _minimal_lock()
+    fut = MagicMock(spec=["cancel", "done", "set_result"])
+    fut.done.return_value = False
+    lock._pending_codes[1] = fut  # type: ignore[assignment]
+    lock._process_z2m_device_payload(
+        {"pin_code": {"user_enabled": True, "pin_code": "1234"}}
+    )
+    fut.set_result.assert_not_called()
+    assert 1 in lock._pending_codes
+
+
+def test_maybe_raise_wrong_bridge_disconnect_no_device_entry_returns() -> None:
+    """Without a device entry there is nothing to compare, so this is a no-op."""
+    lock = _minimal_lock()
+    assert lock.device_entry is None
+    lock._maybe_raise_wrong_bridge_disconnect()
+
+
 def test_pin_code_boolean_user_does_not_resolve_slot_one() -> None:
     """A malformed boolean ``user`` must not address slot 1 (int(True) == 1)."""
     lock = _minimal_lock()

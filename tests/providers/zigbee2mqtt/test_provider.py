@@ -206,6 +206,83 @@ class TestPushSubscription:
         assert not lock._push_unsubs
         assert fut.cancelled()
 
+    async def test_ensure_device_subscription_idempotent(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """A second call is a no-op once a subscription is already active."""
+        lock = zigbee2mqtt_lock_with_device
+        lock._push_unsubs.append(lambda: None)
+        with patch(
+            "custom_components.lock_code_manager.providers.zigbee2mqtt.async_subscribe",
+            new_callable=AsyncMock,
+        ) as mock_subscribe:
+            await lock._async_ensure_device_subscription()
+
+        mock_subscribe.assert_not_called()
+
+    async def test_ensure_device_subscription_raises_when_mqtt_disabled(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """Subscribing while MQTT is disabled raises LockDisconnected."""
+        lock = zigbee2mqtt_lock_with_device
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=False,
+            ),
+            pytest.raises(LockDisconnected, match="MQTT component not available"),
+        ):
+            await lock._async_ensure_device_subscription()
+
+    async def test_ensure_device_subscription_raises_when_no_topic(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_wrong_identifier: Zigbee2MQTTLock,
+    ) -> None:
+        """Subscribing without a resolvable Zigbee2MQTT topic raises LockDisconnected."""
+        lock = zigbee2mqtt_lock_wrong_identifier
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            pytest.raises(LockDisconnected, match="Cannot subscribe for"),
+        ):
+            await lock._async_ensure_device_subscription()
+
+    async def test_setup_push_subscribe_home_assistant_error_wrapped_and_deferred(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """A HomeAssistantError from async_subscribe is wrapped as LockDisconnected.
+
+        This happens inside the background reconnect task scheduled by
+        ``setup_push_subscription``, which must catch the resulting
+        LockDisconnected and defer rather than raise (it runs sync and
+        cannot propagate an exception to a caller).
+        """
+        lock = zigbee2mqtt_lock_with_device
+        lock.coordinator = MagicMock()
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_subscribe",
+                new=AsyncMock(side_effect=HomeAssistantError("denied")),
+            ),
+        ):
+            lock.setup_push_subscription()
+            await hass.async_block_till_done()
+
+        assert not lock._push_unsubs
+
 
 class TestAsyncGetUsers:
     """Request/response path for async_get_users via MQTT get + pin_code futures."""

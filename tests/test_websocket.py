@@ -21,6 +21,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
@@ -30,6 +31,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CALENDAR_END_TIME,
     ATTR_CALENDAR_NEXT_START,
     ATTR_CALENDAR_NEXT_SUMMARY,
+    ATTR_CALENDAR_START_TIME,
     ATTR_CALENDAR_SUMMARY,
     ATTR_CODE,
     ATTR_CODE_LENGTH,
@@ -65,7 +67,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
 )
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
@@ -79,14 +81,17 @@ from custom_components.lock_code_manager.websocket import (
     _get_slot_state_entity_ids,
     _get_text_state,
     _serialize_slot,
+    _slot_code_payload,
 )
 
 from .common import (
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     SLOT_1_ENABLED_ENTITY,
+    SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
 )
+from .conftest import async_initial_tick, async_trigger_sync_tick
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -187,6 +192,46 @@ async def test_get_config_entry_data(
     )
     msg = await ws_client.receive_json()
     assert not msg["success"]
+
+
+async def test_get_config_entry_data_lock_name_falls_back_to_display_name(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """A lock whose state carries no friendly_name attribute falls back to display_name.
+
+    ``_get_lock_friendly_name`` prefers the state's ``friendly_name``
+    attribute (what HA shows in the UI) and only falls back to the
+    provider's ``display_name`` when that attribute is absent.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    state = hass.states.get(LOCK_1_ENTITY_ID)
+    assert state is not None
+    # Re-set the state with no attributes at all, dropping friendly_name.
+    hass.states.async_set(LOCK_1_ENTITY_ID, state.state, {})
+    await hass.async_block_till_done()
+
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/get_config_entry_data",
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    lock_1 = next(
+        lock_data
+        for lock_data in msg["result"][CONF_LOCKS]
+        if lock_data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
+    )
+    assert lock_1[CONF_NAME] == lock.display_name
 
 
 async def test_subscribe_lock_codes(
@@ -406,6 +451,45 @@ async def test_subscribe_code_slot(
     # Config entry title is surfaced so the slot card header can render
     # the "Slot N · {title}" kicker without a separate WS round-trip.
     assert data[ATTR_CONFIG_ENTRY_TITLE] == lock_code_manager_config_entry.title
+
+
+async def test_subscribe_code_slot_includes_sync_status_once_determined(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Once a slot's sync state is determined, subscribe_code_slot surfaces it per-lock.
+
+    Right after entry setup the in-sync sensor may still be at
+    ``SyncState.LOADING`` (no ``sync_status`` attribute yet); the per-lock
+    status only includes ``sync_status`` once the sync manager has ticked
+    into a real state.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 1,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    event = await ws_client.receive_json()
+    data = event["event"]
+
+    lock_1_status = next(
+        lock_data
+        for lock_data in data[CONF_LOCKS]
+        if lock_data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
+    )
+    assert lock_1_status[ATTR_SYNC_STATUS] == "in_sync"
 
 
 async def test_subscribe_code_slot_masked(
@@ -1796,6 +1880,7 @@ class TestGetConditionEntityData:
             {
                 "friendly_name": "Test Calendar",
                 "message": "Team Meeting",
+                "start_time": "2024-01-15T09:00:00",
                 "end_time": "2024-01-15T10:00:00",
             },
         )
@@ -1811,6 +1896,7 @@ class TestGetConditionEntityData:
         assert ATTR_CALENDAR in result
         assert result[ATTR_CALENDAR][ATTR_CALENDAR_ACTIVE] is True
         assert result[ATTR_CALENDAR][ATTR_CALENDAR_SUMMARY] == "Team Meeting"
+        assert result[ATTR_CALENDAR][ATTR_CALENDAR_START_TIME] == "2024-01-15T09:00:00"
         assert result[ATTR_CALENDAR][ATTR_CALENDAR_END_TIME] == "2024-01-15T10:00:00"
 
     async def test_calendar_entity_inactive(self, hass: HomeAssistant) -> None:
@@ -1852,6 +1938,32 @@ class TestGetConditionEntityData:
         assert result[ATTR_CONDITION_ENTITY_DOMAIN] == "schedule"
         assert ATTR_SCHEDULE in result
         assert ATTR_SCHEDULE_NEXT_EVENT in result[ATTR_SCHEDULE]
+        assert result[ATTR_SCHEDULE][ATTR_SCHEDULE_NEXT_EVENT] == next_event.isoformat()
+
+    async def test_schedule_entity_with_next_event_as_string(
+        self, hass: HomeAssistant
+    ) -> None:
+        """A next_event attribute that is already a plain string is passed through as-is.
+
+        Not every schedule-like integration necessarily reports
+        ``next_event`` as a ``datetime`` -- the helper falls back to
+        ``str(next_event)`` for anything without an ``isoformat`` method.
+        """
+        hass.states.async_set(
+            SCHEDULE_TEST_ENTITY_ID,
+            STATE_OFF,
+            {
+                "friendly_name": "Test Schedule",
+                "next_event": "2024-01-15T08:00:00",
+            },
+        )
+        await hass.async_block_till_done()
+
+        result = _get_condition_entity_data(hass, SCHEDULE_TEST_ENTITY_ID)
+
+        assert result is not None
+        assert ATTR_SCHEDULE in result
+        assert result[ATTR_SCHEDULE][ATTR_SCHEDULE_NEXT_EVENT] == "2024-01-15T08:00:00"
 
     async def test_schedule_entity_without_next_event(
         self, hass: HomeAssistant
@@ -2355,6 +2467,73 @@ class TestSetSlotCondition:
 
         assert result["success"] is True
 
+    async def test_unrecognized_validation_error_maps_to_unknown_error(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        hass_ws_client: WebSocketGenerator,
+    ) -> None:
+        """A ServiceValidationError message matching no known pattern maps to unknown_error.
+
+        Neither "not found" nor "not supported" appears in the message, so
+        it falls through to the generic unknown_error code rather than
+        being misclassified.
+        """
+        ws_client = await hass_ws_client(hass)
+
+        with patch(
+            "custom_components.lock_code_manager.websocket.async_set_slot_condition",
+            AsyncMock(side_effect=ServiceValidationError("something went sideways")),
+        ):
+            await ws_client.send_json(
+                {
+                    "id": 1,
+                    "type": "lock_code_manager/set_slot_condition",
+                    ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+                    "slot": 1,
+                    "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
+                }
+            )
+            result = await ws_client.receive_json()
+
+        assert result["success"] is False
+        assert result["error"]["code"] == "unknown_error"
+        assert "something went sideways" in result["error"]["message"]
+
+    async def test_unexpected_exception_maps_to_unknown_error(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        hass_ws_client: WebSocketGenerator,
+    ) -> None:
+        """A non-ServiceValidationError exception is still caught and reported.
+
+        The generic ``except Exception`` fallback reports it as
+        unknown_error instead of crashing the websocket connection.
+        """
+        ws_client = await hass_ws_client(hass)
+
+        with patch(
+            "custom_components.lock_code_manager.websocket.async_set_slot_condition",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            await ws_client.send_json(
+                {
+                    "id": 1,
+                    "type": "lock_code_manager/set_slot_condition",
+                    ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+                    "slot": 1,
+                    "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
+                }
+            )
+            result = await ws_client.receive_json()
+
+        assert result["success"] is False
+        assert result["error"]["code"] == "unknown_error"
+        assert "boom" in result["error"]["message"]
+
 
 class TestClearSlotCondition:
     """Tests for clear_slot_condition websocket command."""
@@ -2854,6 +3033,26 @@ async def test_subscribe_code_slot_unsub_all_with_empty_state_ref(
 # =============================================================================
 # _serialize_slot SlotCode tests
 # =============================================================================
+
+
+class TestSlotCodePayloadWithBareSlotCode:
+    """A bare SlotCode reaching the payload builder serializes as its label."""
+
+    @pytest.mark.parametrize("sentinel", [SlotCode.EMPTY, SlotCode.UNREADABLE_CODE])
+    @pytest.mark.parametrize("reveal", [True, False])
+    def test_bare_slot_code_serializes_as_label(
+        self, sentinel: SlotCode, reveal: bool
+    ) -> None:
+        """
+        The sentinel is a label, never a secret, so reveal must not change it.
+
+        SlotCode is a StrEnum, so a value annotated ``str`` can legitimately be
+        one of these members. Masking it would emit a "code length" for a slot
+        that holds no code.
+        """
+        result = _slot_code_payload(sentinel, reveal=reveal)
+        assert result == {ATTR_CODE: str(sentinel)}
+        assert ATTR_CODE_LENGTH not in result
 
 
 class TestSerializeSlotWithSlotCode:

@@ -2,11 +2,14 @@
 
 import pytest
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry as ar, entity_registry as er
 
 from custom_components.lock_code_manager.domain.locks import get_locks_from_targets
+from custom_components.lock_code_manager.domain.queries import get_loaded_config_entry
 
 from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 
@@ -129,3 +132,22 @@ async def test_get_locks_from_targets_deduplicates(
     )
 
     assert len(locks) == 1
+
+
+async def test_get_loaded_config_entry_raises_when_not_loaded(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """get_loaded_config_entry raises ServiceValidationError for an unloaded entry.
+
+    Covers the loaded-vs-not-loaded branch distinct from the "no such
+    entry"/"wrong domain" cases already covered via the services tests.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is not ConfigEntryState.LOADED
+
+    with pytest.raises(ServiceValidationError, match="not loaded"):
+        get_loaded_config_entry(hass, entry.entry_id)

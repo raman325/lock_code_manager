@@ -403,6 +403,63 @@ async def test_get_gateway_handles_exceptions(
         assert zha_lock._get_gateway() is None
 
 
+async def test_get_gateway_handles_value_error(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test _get_gateway logs a warning and returns None on an unexpected ValueError."""
+    with patch(
+        "custom_components.lock_code_manager.providers.zha._get_zha_gateway_proxy",
+        side_effect=ValueError("unexpected"),
+    ):
+        assert zha_lock._get_gateway() is None
+
+
+async def test_get_door_lock_cluster_no_device_proxy(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test cluster lookup returns None when device proxy is missing."""
+    zha_lock._door_lock_cluster = None
+    entity_ref = MagicMock()
+    entity_ref.entity_data.device_proxy = None
+    gateway = MagicMock()
+    gateway.get_entity_reference.return_value = entity_ref
+    with patch.object(zha_lock, "_get_gateway", return_value=gateway):
+        assert zha_lock._get_door_lock_cluster() is None
+
+
+async def test_get_door_lock_cluster_no_zigpy_device(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test cluster lookup returns None when the underlying zigpy device is missing."""
+    zha_lock._door_lock_cluster = None
+    entity_ref = MagicMock()
+    entity_ref.entity_data.device_proxy.device.device = None
+    gateway = MagicMock()
+    gateway.get_entity_reference.return_value = entity_ref
+    with patch.object(zha_lock, "_get_gateway", return_value=gateway):
+        assert zha_lock._get_door_lock_cluster() is None
+
+
+async def test_get_door_lock_cluster_no_matching_endpoint_cluster(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test cluster lookup returns None and warns when no endpoint exposes DoorLock."""
+    zha_lock._door_lock_cluster = None
+    fake_endpoint = MagicMock()
+    fake_endpoint.in_clusters = {}
+    entity_ref = MagicMock()
+    entity_ref.entity_data.device_proxy.device.device.endpoints = {
+        0: MagicMock(),
+        1: fake_endpoint,
+    }
+    gateway = MagicMock()
+    gateway.get_entity_reference.return_value = entity_ref
+    with patch.object(zha_lock, "_get_gateway", return_value=gateway):
+        assert zha_lock._get_door_lock_cluster() is None
+        # Not cached since no cluster was found.
+        assert zha_lock._door_lock_cluster is None
+
+
 # ---------------------------------------------------------------------------
 # Parse PIN response edge cases
 # ---------------------------------------------------------------------------
@@ -695,3 +752,63 @@ async def test_delete_credential_generic_exception(
     ref = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
     with pytest.raises(LockDisconnected, match="Failed to clear PIN"):
         await zha_lock.async_delete_credential(ref)
+
+
+async def test_get_users_propagates_lock_disconnected(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test async_get_users re-raises LockDisconnected instead of marking unreadable.
+
+    Unlike a bare zigpy comms error (which degrades the slot to unreadable),
+    a LockDisconnected raised mid-loop means the connection gate itself
+    tripped, so it must propagate for reconnect handling rather than being
+    swallowed per-slot.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(side_effect=LockDisconnected("gone"))
+
+    with pytest.raises(LockDisconnected, match="gone"):
+        await zha_lock.async_get_users()
+
+
+async def test_hard_refresh_codes(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test async_hard_refresh_codes re-reads all managed slots from the lock."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        return type(
+            "Response",
+            (),
+            {"user_status": DoorLock.UserStatus.Enabled, "code": "1111"},
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+
+    codes = await zha_lock.async_hard_refresh_codes()
+    assert codes[1] == SlotCredential.known("1111")
+    assert codes[2] == SlotCredential.known("1111")
+
+
+async def test_programming_event_unparseable_with_coordinator_triggers_refresh(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test unparseable programming event still refreshes as a safety net.
+
+    When the args can't be parsed we don't know which slot changed, but we
+    know *something* did — so a coordinator refresh must fire if attached.
+    """
+    zha_lock.coordinator = MagicMock()
+    zha_lock.coordinator.async_request_refresh = AsyncMock()
+
+    zha_lock._handle_programming_event(None)
+    await hass.async_block_till_done()
+
+    zha_lock.coordinator.async_request_refresh.assert_called_once()

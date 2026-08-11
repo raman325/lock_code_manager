@@ -828,6 +828,30 @@ async def test_async_get_capabilities_zero_slots_recovery_query_failure_still_ra
     assert mock_lock_helpers["async_get_credential_capabilities"].await_count == 1
 
 
+async def test_recover_user_code_slot_count_returns_false_without_root_endpoint(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+) -> None:
+    """The recovery query is skipped (not attempted) when endpoint 0 is missing.
+
+    ``.get()`` is used instead of a direct index lookup specifically so a
+    node model missing its root endpoint degrades to "recovery
+    unavailable" rather than raising a KeyError that would escape every
+    typed handler and get the lock dropped. No device query should be
+    attempted in that case.
+    """
+    original_endpoint = zwave_js_lock.node.endpoints[0]
+    invoke = AsyncMock()
+    with (
+        patch.object(original_endpoint, "async_invoke_cc_api", invoke),
+        patch.object(zwave_js_lock.node, "endpoints", {}),
+    ):
+        result = await zwave_js_lock._async_recover_user_code_slot_count()
+
+    assert result is False
+    invoke.assert_not_called()
+
+
 async def test_async_get_capabilities_no_pin_type_returns_empty(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,

@@ -61,8 +61,6 @@ class BaseLockCodeManagerEntity(Entity):
         self.key = key
         self.ent_reg = ent_reg
 
-        self._uid_cache: dict[str, str] = {}
-
         self._attr_translation_key = key
         self._attr_translation_placeholders = {"slot_num": slot_num}
 
@@ -98,15 +96,6 @@ class BaseLockCodeManagerEntity(Entity):
     def _state(self) -> Any:
         """Return state of entity."""
         return get_entry_config(self.config_entry).slot(self.slot_num).get(self.key)
-
-    @final
-    def _get_uid(self, key: str) -> str:
-        """Get and cache unique id for a given key."""
-        if key not in self._uid_cache:
-            self._uid_cache[key] = build_slot_unique_id(
-                self.base_unique_id, self.slot_num, key
-            )
-        return self._uid_cache[key]
 
     async def _internal_async_remove(self) -> None:
         """

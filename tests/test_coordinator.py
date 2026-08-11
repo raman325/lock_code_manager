@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
@@ -17,6 +18,8 @@ from custom_components.lock_code_manager.const import (
     BACKOFF_FAILURE_THRESHOLD,
     BACKOFF_INITIAL_SECONDS,
     BACKOFF_MAX_SECONDS,
+    CONF_LOCKS,
+    CONF_SLOTS,
     DOMAIN,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
@@ -1119,6 +1122,68 @@ async def test_confirm_pending_writes_swallows_unexpected_error(
 
     assert 1 in push_lock._pending_writes
     assert push_coordinator.is_verified(1) is False
+
+
+async def test_desired_credential_disabled_slot_is_empty(
+    hass: HomeAssistant,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A disabled slot's desired credential is empty even with a configured PIN."""
+    hass.config_entries.async_update_entry(
+        lcm_config_entry,
+        data={
+            CONF_LOCKS: [],
+            CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "1234", CONF_ENABLED: False}},
+        },
+    )
+    assert poll_coordinator.desired_credential(1) == SlotCredential.empty()
+
+
+async def test_desired_credential_enabled_blank_pin_is_empty(
+    hass: HomeAssistant,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """An enabled slot with no configured PIN has an empty desired credential."""
+    hass.config_entries.async_update_entry(
+        lcm_config_entry,
+        data={
+            CONF_LOCKS: [],
+            CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "", CONF_ENABLED: True}},
+        },
+    )
+    assert poll_coordinator.desired_credential(1) == SlotCredential.empty()
+
+
+async def test_desired_credential_enabled_with_pin_is_known(
+    hass: HomeAssistant,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """An enabled slot with a configured PIN yields that PIN as the desired credential."""
+    hass.config_entries.async_update_entry(
+        lcm_config_entry,
+        data={
+            CONF_LOCKS: [],
+            CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "4242", CONF_ENABLED: True}},
+        },
+    )
+    assert poll_coordinator.desired_credential(1) == SlotCredential.known("4242")
+
+
+async def test_connection_check_swallows_lock_code_manager_error(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A LockCodeManagerError from the reachability probe is logged and swallowed."""
+    mock_check = AsyncMock(side_effect=LockDisconnected("offline"))
+    with patch.object(push_lock, "async_is_integration_connected", mock_check):
+        # Must not raise: this runs on a periodic timer with no caller to
+        # observe an exception.
+        await push_coordinator._async_connection_check(dt_util.utcnow())
+
+    mock_check.assert_called_once()
 
 
 async def test_apply_read_takes_differing_readable_external_change(

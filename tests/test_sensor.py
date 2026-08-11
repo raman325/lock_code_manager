@@ -3,7 +3,9 @@
 import logging
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 
@@ -57,3 +59,31 @@ async def test_sensor_native_value_with_slot_code(
     state = hass.states.get("sensor.test_1_code_slot_1")
     assert state is not None
     assert state.state == "5678"
+
+
+async def test_add_code_slot_entity_skipped_when_lock_has_no_coordinator(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A lock whose provider setup has not finished (no coordinator yet) is skipped.
+
+    ``add_code_slot_entities`` is invoked via the lock-slot-adder callback
+    registry once a lock has been set up. This exercises the defensive
+    ``if coordinator is None: return`` for a lock instance that has not
+    completed ``async_setup_internal`` -- the code sensor is simply not
+    created rather than crashing on a ``None`` coordinator.
+    """
+    entry = lock_code_manager_config_entry
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    fresh_lock = async_create_lock_instance(
+        hass, dev_reg, ent_reg, entry, LOCK_1_ENTITY_ID
+    )
+    assert fresh_lock.coordinator is None
+
+    entities_before = set(hass.states.async_entity_ids("sensor"))
+    entry.runtime_data.callbacks.invoke_lock_slot_adders(fresh_lock, 1, ent_reg)
+    await hass.async_block_till_done()
+
+    assert set(hass.states.async_entity_ids("sensor")) == entities_before

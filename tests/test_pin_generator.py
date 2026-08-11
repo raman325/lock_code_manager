@@ -1,7 +1,10 @@
 """Tests for the PIN generator."""
 
+from unittest.mock import patch
+
 import pytest
 
+from custom_components.lock_code_manager.domain import pin_generator
 from custom_components.lock_code_manager.domain.pin_generator import (
     COMMON_WEAK_PINS_4,
     DEFAULT_PIN_LENGTH,
@@ -79,3 +82,9 @@ class TestGeneratePin:
         """Statistical check: the generator should not be returning a fixed value."""
         pins = {generate_pin() for _ in range(50)}
         assert len(pins) > 30
+
+    def test_gives_up_after_100_failed_attempts(self) -> None:
+        """A filter that rejects every candidate raises RuntimeError, not an infinite loop."""
+        with patch.object(pin_generator, "is_unsafe_pin", return_value=True):
+            with pytest.raises(RuntimeError, match="after 100 attempts"):
+                generate_pin()
