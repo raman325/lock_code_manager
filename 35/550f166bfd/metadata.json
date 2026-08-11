@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "35550f166bfd",
+  "strategy": "manual-commit",
+  "branch": "fix/1399-orphaned-slot-devices",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/config.py",
+    "tests/test_config.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/35/550f166bfd/0/metadata.json",
+      "transcript": "/35/550f166bfd/0/full.jsonl",
+      "compact_transcript": "/35/550f166bfd/0/transcript.jsonl",
+      "content_hash": "/35/550f166bfd/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 1773,
+    "cache_read_tokens": 397193,
+    "output_tokens": 574,
+    "api_call_count": 1
+  }
+}
