@@ -21,13 +21,18 @@ from custom_components.lock_code_manager.const import (
     CONF_START_SLOT,
     DOMAIN,
 )
+from custom_components.lock_code_manager.domain.credentials import (
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
+)
 from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
+from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, MockLCMLock
 
 GET_ALL_CODES_PATCH = (
     "custom_components.lock_code_manager.config_flow._async_get_all_codes"
@@ -1090,3 +1095,149 @@ async def test_options_flow_invalid_yaml_shows_error(hass: HomeAssistant):
     assert result["type"] == "form"
     assert result["errors"] == {"base": "invalid_config"}
     mock_get_codes.assert_not_called()
+
+
+# Slot capacity validation (issue #1398)
+
+
+def _capacity_probe(**capabilities_mock_kwargs):
+    """
+    Make the config flow able to probe the test lock's capacity.
+
+    The autouse ``auto_setup_mock_lock`` fixture only registers MockLCMLock in
+    the ``domain.locks`` provider map; the config flow builds its throwaway
+    provider instance from its own map, so the test platform has to be
+    registered there too or every capacity check silently skips.
+    """
+    return (
+        patch.dict(
+            "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
+            {"test": MockLCMLock},
+        ),
+        patch.object(
+            MockLCMLock,
+            "async_get_capabilities",
+            new_callable=AsyncMock,
+            **capabilities_mock_kwargs,
+        ),
+    )
+
+
+def _capabilities_with_slots(num_slots: int) -> LockCapabilities:
+    """Build PIN-capable capabilities advertising ``num_slots`` slots."""
+    return LockCapabilities(
+        supports_user_management=False,
+        max_users=num_slots,
+        credential_types={
+            CredentialType.PIN: CredentialTypeCapability(
+                num_slots=num_slots,
+                min_length=4,
+                max_length=8,
+                supports_learn=False,
+            )
+        },
+    )
+
+
+async def test_config_flow_yaml_rejects_slot_beyond_lock_capacity(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A slot number the lock cannot hold is caught before the entry is created."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    probe_registered, probe_capabilities = _capacity_probe(
+        return_value=_capabilities_with_slots(30)
+    )
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "slot_out_of_range"}
+    assert result["description_placeholders"]["out_of_range_slots"] == "50"
+    assert result["description_placeholders"]["num_slots"] == "30"
+
+
+async def test_config_flow_yaml_accepts_slot_within_capacity(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A slot inside the advertised range still creates the entry."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    probe_registered, probe_capabilities = _capacity_probe(
+        return_value=_capabilities_with_slots(30)
+    )
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_SLOTS: {30: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+        )
+
+    assert result["type"] == "create_entry"
+
+
+async def test_config_flow_ui_rejects_slot_range_beyond_lock_capacity(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The UI path bounds start+count against the lock the same way YAML does."""
+    flow_id = await _start_config_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "ui"}
+    )
+    assert result["step_id"] == "ui"
+
+    probe_registered, probe_capabilities = _capacity_probe(
+        return_value=_capabilities_with_slots(10)
+    )
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_START_SLOT: 8, CONF_NUM_SLOTS: 5}
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "ui"
+    assert result["errors"] == {"base": "slot_out_of_range"}
+    assert result["description_placeholders"]["out_of_range_slots"] == "11, 12"
+
+
+async def test_config_flow_capacity_check_skipped_when_lock_unreachable(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    An unreachable lock must not block configuration.
+
+    Capabilities need the lock awake, so a sleeping battery lock would
+    otherwise make the flow unusable. The write-time check still covers it.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+
+    probe_registered, probe_capabilities = _capacity_probe(
+        side_effect=LockDisconnected("lock asleep")
+    )
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+        )
+
+    assert result["type"] == "create_entry"
+
+
+async def test_config_flow_capacity_check_skipped_when_capacity_unknown(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """``num_slots`` of 0 is "unknown", not "no slots", so it cannot reject."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    probe_registered, probe_capabilities = _capacity_probe(
+        return_value=_capabilities_with_slots(0)
+    )
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+        )
+
+    assert result["type"] == "create_entry"

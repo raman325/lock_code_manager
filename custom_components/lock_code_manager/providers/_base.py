@@ -63,6 +63,7 @@ from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnsupported,
     ProviderNotImplementedError,
 )
 from ..domain.models import SlotCredential
@@ -561,6 +562,27 @@ class BaseLock:
         legacy one-Personal-Identification-Number-per-slot model.
         """
         return False
+
+    @property
+    def credential_index_follows_slot(self) -> bool:
+        """
+        Return whether the Lock Code Manager slot number IS the lock's credential index.
+
+        True (the default) for providers that address a credential by the
+        slot number verbatim: the Z-Wave unified access control surface
+        passes it as ``credential_slot``, and every slot-only provider
+        keys its single code by slot. On those locks a slot number above
+        the advertised slot count can never be written, so
+        ``_assert_slot_within_capacity`` rejects it before the write.
+
+        False for providers that let the lock allocate the index (Matter
+        picks the next free credential index). There the slot number is a
+        Lock Code Manager-side label with no device-side bound, so slot
+        50 is legal on a 30-credential lock as long as no more than 30
+        slots are configured. Capacity on those locks is a limit on the
+        NUMBER of slots, which this check does not police.
+        """
+        return True
 
     @property
     def supports_code_slot_events(self) -> bool:
@@ -1121,6 +1143,8 @@ class BaseLock:
             source,
         )
 
+        await self._assert_slot_within_capacity(code_slot)
+
         def _pre_execute_checks() -> None:
             """Check for duplicate PINs and firmware-rejected codes, atomically inside the lock."""
             # Clear the firmware-rejection flag first so it doesn't persist
@@ -1417,6 +1441,42 @@ class BaseLock:
                 code_slot=credential.slot,
                 lock_entity_id=self.lock.entity_id,
                 reason=f"unsupported credential type: {credential.type}",
+            )
+
+    async def _assert_slot_within_capacity(self, code_slot: int) -> None:
+        """
+        Raise ``LockOperationUnsupported`` if the slot exceeds the lock's capacity.
+
+        Only meaningful when ``credential_index_follows_slot`` is True; see
+        that property for why Matter is exempt. Without this the write goes
+        out and the lock rejects it deterministically, which providers have
+        no reliable way to tell apart from a transport failure — that
+        misclassification is what made an out-of-range slot look like an
+        unreachable lock (issue #1398).
+
+        A capabilities read that fails or reports ``num_slots == 0`` skips
+        the check rather than blocking the write: 0 means "unknown capacity"
+        for Matter, and a lock that cannot answer must not be assumed to
+        have no slots. Letting the write through preserves the previous
+        behavior for those cases instead of inventing a new failure.
+        """
+        if not self.credential_index_follows_slot:
+            return
+        try:
+            caps = await self._get_cached_capabilities()
+        except LockCodeManagerError:
+            # Covers the unreachable lock, the failed probe, and the provider
+            # that never implemented the read (ProviderNotImplementedError).
+            return
+        pin_caps = caps.capability_for(CredentialType.PIN)
+        if pin_caps is None or pin_caps.num_slots <= 0:
+            return
+        if not 1 <= code_slot <= pin_caps.num_slots:
+            raise LockOperationUnsupported(
+                f"Lock {self.lock.entity_id} has {pin_caps.num_slots} PIN code "
+                f"slots, so slot {code_slot} does not exist on it. Renumber the "
+                f"slot to a value between 1 and {pin_caps.num_slots}, or remove "
+                f"this lock from the slot's configuration."
             )
 
     async def _assert_credential_ref_supported(self, ref: CredentialRef) -> None:

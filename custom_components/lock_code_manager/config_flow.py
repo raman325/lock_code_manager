@@ -34,6 +34,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .domain.config import EntryConfig
+from .domain.credentials import CredentialType
 from .domain.exceptions import LockCodeManagerError
 from .domain.models import SlotCredential
 from .domain.queries import get_entry_config
@@ -110,7 +111,69 @@ def _check_common_slots(
         }
 
 
-def _validate_slots_yaml(
+async def _async_check_slot_capacity(
+    hass: HomeAssistant,
+    locks: Iterable[str],
+    slots_list: Iterable[int | str],
+) -> tuple[dict, dict]:
+    """
+    Reject slot numbers no lock in the set could ever hold.
+
+    Only locks whose credential index IS the slot number are checked (see
+    ``BaseLock.credential_index_follows_slot``) -- Matter allocates its own
+    index, so a slot number above its credential count is perfectly legal
+    there. Catching this at configuration time is what issue #1398 asked
+    for: the write would otherwise fail forever on the device with nothing
+    but a connectivity warning to show for it.
+
+    A lock that cannot be queried is skipped rather than blocking the flow.
+    Capabilities need the lock awake, and a battery lock that happens to be
+    asleep must not make the config flow unusable; the same check runs again
+    at write time, where it can suspend the affected slot precisely.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    slots = sorted({int(slot) for slot in slots_list})
+    for lock_entity_id in locks:
+        try:
+            lock_instance = _async_build_lock_instance(
+                hass, dev_reg, ent_reg, lock_entity_id
+            )
+            if not lock_instance.credential_index_follows_slot:
+                continue
+            capabilities = await lock_instance.async_get_capabilities()
+        except _LockQuerySkipped:
+            continue
+        except LockCodeManagerError as err:
+            _LOGGER.debug(
+                "Skipping slot capacity check for %s: %s", lock_entity_id, err
+            )
+            continue
+        except Exception:
+            _LOGGER.warning(
+                "Skipping slot capacity check for %s; its slot count could not "
+                "be determined",
+                lock_entity_id,
+                exc_info=True,
+            )
+            continue
+
+        pin_capability = capabilities.capability_for(CredentialType.PIN)
+        # num_slots of 0 means "capacity unknown", not "no slots".
+        if pin_capability is None or pin_capability.num_slots <= 0:
+            continue
+        if out_of_range := [
+            slot for slot in slots if not 1 <= slot <= pin_capability.num_slots
+        ]:
+            return {"base": "slot_out_of_range"}, {
+                "lock": lock_entity_id,
+                "num_slots": str(pin_capability.num_slots),
+                "out_of_range_slots": ", ".join(str(slot) for slot in out_of_range),
+            }
+    return {}, {}
+
+
+async def _async_validate_slots_yaml(
     hass: HomeAssistant,
     raw_slots: dict[Any, Any],
     locks: Iterable[str],
@@ -120,9 +183,10 @@ def _validate_slots_yaml(
     Validate a slots-YAML submission for the config and options flows.
 
     Runs ``CODE_SLOTS_SCHEMA`` over ``raw_slots`` and, when it parses cleanly,
-    checks for slots already configured on the same locks by another entry.
-    Returns the parsed slots (or ``None`` if validation failed) along with the
-    accumulated error and description-placeholder dicts.
+    checks for slots already configured on the same locks by another entry and
+    for slot numbers beyond what the locks can hold. Returns the parsed slots
+    (or ``None`` if validation failed) along with the accumulated error and
+    description-placeholder dicts.
     """
     try:
         parsed_slots = CODE_SLOTS_SCHEMA(raw_slots)
@@ -131,6 +195,10 @@ def _validate_slots_yaml(
         return None, {"base": "invalid_config"}, {}
 
     errors, placeholders = _check_common_slots(hass, locks, parsed_slots, config_entry)
+    if not errors:
+        errors, placeholders = await _async_check_slot_capacity(
+            hass, locks, parsed_slots
+        )
     return parsed_slots, errors, placeholders
 
 
@@ -372,13 +440,21 @@ class LockCodeManagerFlowHandler(
         if user_input is not None:
             start = user_input[CONF_START_SLOT]
             num_slots = user_input[CONF_NUM_SLOTS]
+            requested_slots = list(range(start, start + num_slots))
             additional_errors, additional_placeholders = _check_common_slots(
-                self.hass, self.data[CONF_LOCKS], list(range(start, start + num_slots))
+                self.hass, self.data[CONF_LOCKS], requested_slots
             )
+            if not additional_errors:
+                (
+                    additional_errors,
+                    additional_placeholders,
+                ) = await _async_check_slot_capacity(
+                    self.hass, self.data[CONF_LOCKS], requested_slots
+                )
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
-                self.slots_to_configure = list(range(start, start + num_slots))
+                self.slots_to_configure = requested_slots
                 self._occupied_lock_slots = self._find_occupied_lock_slots(
                     self.slots_to_configure
                 )
@@ -453,7 +529,11 @@ class LockCodeManagerFlowHandler(
         if not user_input:
             user_input = {}
         if user_input:
-            slots, validation_errors, validation_placeholders = _validate_slots_yaml(
+            (
+                slots,
+                validation_errors,
+                validation_placeholders,
+            ) = await _async_validate_slots_yaml(
                 self.hass, user_input[CONF_SLOTS], self.data[CONF_LOCKS]
             )
             errors.update(validation_errors)
@@ -503,12 +583,22 @@ class LockCodeManagerFlowHandler(
             # form; seed the lock selector from the entry's current config.
             user_input = {CONF_LOCKS: list(get_entry_config(config_entry).locks)}
         elif CONF_SLOTS not in user_input:
+            existing_slots = get_entry_config(config_entry).slots.keys()
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass,
                 user_input[CONF_LOCKS],
-                get_entry_config(config_entry).slots.keys(),
+                existing_slots,
                 config_entry,
             )
+            if not additional_errors:
+                # Reauth is where a lock gets swapped, so it is also where an
+                # already-valid slot set can become too large for the new lock.
+                (
+                    additional_errors,
+                    additional_placeholders,
+                ) = await _async_check_slot_capacity(
+                    self.hass, user_input[CONF_LOCKS], existing_slots
+                )
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
@@ -571,13 +661,15 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
             user_input = {}
 
         if user_input:
-            parsed_slots, validation_errors, validation_placeholders = (
-                _validate_slots_yaml(
-                    self.hass,
-                    user_input[CONF_SLOTS],
-                    user_input[CONF_LOCKS],
-                    self.config_entry,
-                )
+            (
+                parsed_slots,
+                validation_errors,
+                validation_placeholders,
+            ) = await _async_validate_slots_yaml(
+                self.hass,
+                user_input[CONF_SLOTS],
+                user_input[CONF_LOCKS],
+                self.config_entry,
             )
             errors.update(validation_errors)
             description_placeholders.update(validation_placeholders)

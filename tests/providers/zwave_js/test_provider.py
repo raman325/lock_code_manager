@@ -42,6 +42,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnsupported,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
@@ -1182,6 +1183,90 @@ async def test_async_delete_credential_maps_failed_command_to_lock_disconnected(
     with pytest.raises(LockDisconnected):
         await zwave_js_lock.async_delete_credential(
             CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
+        )
+
+
+@pytest.mark.parametrize(
+    "zwave_error_code",
+    [
+        302,  # CC_NotSupported
+        303,  # CC_NotImplemented
+        304,  # CC_NoAPI
+        322,  # Argument_Invalid -- the out-of-range slot from issue #1398
+    ],
+)
+async def test_async_set_credential_maps_permanent_codes_to_unsupported(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    zwave_error_code: int,
+) -> None:
+    """
+    A deterministic driver rejection must not look like a transport failure.
+
+    These codes mean the request itself is invalid for the node, so the retry
+    path would loop forever while the lock circuit breaker logged nothing but
+    "Update failed N consecutive times" (issue #1398).
+    """
+    mock_lock_helpers["async_set_credential"].side_effect = FailedZWaveCommand(
+        "cmd", zwave_error_code, "Credential slot 50 is out of range"
+    )
+    credential = Credential(
+        type=CredentialType.PIN, slot=50, state=SlotCredential.known("2222")
+    )
+    with pytest.raises(LockOperationUnsupported, match="out of range"):
+        await zwave_js_lock.async_set_credential(
+            user_id=1,
+            credential=credential,
+            pin="2222",
+            name=None,
+            source="sync",
+        )
+
+
+async def test_async_set_credential_unknown_code_stays_retryable(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    An unlisted error code keeps the retry classification it has today.
+
+    The permanent-code table is a deny-list, so a code node-zwave-js adds
+    later degrades to the old behavior rather than wrongly suspending a slot.
+    """
+    mock_lock_helpers["async_set_credential"].side_effect = FailedZWaveCommand(
+        "cmd", 9999, "something new"
+    )
+    credential = Credential(
+        type=CredentialType.PIN, slot=4, state=SlotCredential.known("2222")
+    )
+    # LockDisconnected and LockOperationUnsupported are siblings, so this
+    # raises-check also asserts the code did not land in the permanent bucket.
+    with pytest.raises(LockDisconnected):
+        await zwave_js_lock.async_set_credential(
+            user_id=1,
+            credential=credential,
+            pin="2222",
+            name=None,
+            source="sync",
+        )
+
+
+async def test_async_set_user_maps_permanent_code_to_unsupported(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """The user write path classifies the same way as the credential write."""
+    mock_access_control.get_users.return_value = []
+    mock_access_control.get_all_credentials.return_value = []
+    mock_lock_helpers["async_set_user"].side_effect = FailedZWaveCommand(
+        "cmd", 322, "User ID 50 is out of range"
+    )
+    with pytest.raises(LockOperationUnsupported, match="out of range"):
+        await zwave_js_lock.async_set_user(
+            User(user_id=50, name="lcm:50:Guest", active=True)
         )
 
 

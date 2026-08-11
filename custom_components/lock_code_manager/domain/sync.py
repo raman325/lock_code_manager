@@ -54,7 +54,12 @@ from ..const import (
     TICK_INTERVAL,
 )
 from .config import build_slot_unique_id
-from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
+from .exceptions import (
+    CodeRejectedError,
+    LockDisconnected,
+    LockOperationFailed,
+    LockOperationUnsupported,
+)
 from .models import SlotCredential, SyncState
 from .resilience import CircuitBreaker
 from .util import async_disable_slot
@@ -826,6 +831,26 @@ class SlotSyncManager:
             # successful poll/push).
             self._coordinator.note_connectivity_failure()
             self._state = SyncState.OUT_OF_SYNC
+            return
+        except LockOperationUnsupported as err:
+            # Permanent: the lock can never accept this request as configured,
+            # so charging the slot breaker would just burn three ticks before
+            # suspending with a vaguer message. Suspend now and put the real
+            # reason in the repair. Handled ahead of LockOperationFailed
+            # because it is a subclass of it.
+            _LOGGER.error(
+                "%s: Lock cannot %s this slot: %s. Suspending sync until the "
+                "configuration changes.",
+                self._log_prefix,
+                "set" if slot_state.active_state == STATE_ON else "clear",
+                err,
+            )
+            self._suspend_slot(
+                slot_state,
+                f"Lock **{self._lock.lock.entity_id}**: slot "
+                f"**{self._slot_num}** cannot be synced because the lock will "
+                f"not accept it.\n\n{err}",
+            )
             return
         except LockOperationFailed as err:
             _LOGGER.info(
