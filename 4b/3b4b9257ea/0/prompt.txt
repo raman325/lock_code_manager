@@ -1,0 +1,218 @@
+lets look into 1398 and 1399
+
+---
+
+run code reviews on both PRs
+
+---
+
+<task-notification>
+<task-id>a785fbd86b483fd26</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/a785fbd86b483fd26.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: zha/zigbee2mqtt" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Note: `tests/providers/akuvox/test_provider.py` shows as modified too, but that's from another agent working in parallel in the same worktree — I did not touch it.
+
+## Summary
+
+**Final coverage (measured against the full test suite):**
+- `custom_components/lock_code_manager/providers/zha.py` — **100%** (221/221 statements)
+- `custom_components/lock_code_manager/providers/zigbee2mqtt.py` — **100%** (293/293 statements)
+
+Full suite: 1311 passed, 3 skipped (pre-existing, unrelated documentation skips), 0 failures.
+
+### ZHA (`tests/providers/zha/test_provider.py`)
+Added tests for:
+- `_get_gateway` swallowing an unexpected `ValueError` and logging a warning (195-201)
+- `_get_door_lock_cluster` returning `None` when `device_proxy` is missing (153-154), when the underlying zigpy device is missing (158-159), and when no endpoint exposes a `DoorLock` cluster, hitting the final warning branch (175-176)
+- `async_get_users` re-raising `LockDisconnected` instead of degrading the slot to unreadable (327) — distinguishes connection-gate failures from transient per-slot read errors
+- `async_hard_refresh_codes` delegating to `async_get_usercodes` (340)
+- `_handle_programming_event`'s unparseable-args branch firing a coordinator refresh when a coordinator is attached (427) — the existing test only exercised the parse-failure path without a coordinator
+
+### Zigbee2MQTT (`tests/providers/zigbee2mqtt/`)
+Added tests for:
+- `_process_z2m_device_payload`: a non-dict `users` entry being skipped without aborting the rest of the payload (279-285); a `pin_code` payload missing the `user` field being ignored (336-340)
+- `_maybe_raise_wrong_bridge_disconnect` being a no-op when there's no device entry at all (199)
+- `_async_ensure_device_subscription`: idempotent no-op when already subscribed (363), raising `LockDisconnected` when MQTT is disabled (366), raising `LockDisconnected` when no topic resolves (370)
+- A `HomeAssistantError` from `async_subscribe` being wrapped as `LockDisconnected` inside `_async_ensure_device_subscription` (392-397), and that `LockDisconnected` being caught and deferred (logged, not raised) by the background reconnect task in `setup_push_subscription` (439) — one test covers both, since the exception naturally propagates from the inner method into the outer task's handler
+
+No lines were left deliberately uncovered — every previously-missing line in both files was reachable with a genuine behavioral test. No production code was modified; only the three test files listed under my mandate (`tests/providers/zha/test_provider.py`, `tests/providers/zigbee2mqtt/test_payload.py`, `tests/providers/zigbee2mqtt/test_provider.py`) were edited.</result>
+<usage><subagent_tokens>148784</subagent_tokens><tool_uses>24</tool_uses><duration_ms>336787</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad00e86e9b2b6d1ba</task-id>
+<tool-use-id>toolu_01A75AVaiJHcHLoSB1Kz4LBs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/ad00e86e9b2b6d1ba.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: akuvox/schlage/virtual" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+Final coverage for the three target files (verified via `pytest tests/providers/akuvox tests/providers/schlage tests/providers/virtual --cov=custom_components/lock_code_manager/providers`):
+
+- `custom_components/lock_code_manager/providers/akuvox.py`: **100%** (was 96%)
+- `custom_components/lock_code_manager/providers/schlage.py`: **100%** (was 96%)
+- `custom_components/lock_code_manager/providers/virtual.py`: **100%** (was 99%)
+
+Only files edited: `/Users/raman/projects/lcm-cov/tests/providers/akuvox/test_provider.py`, `/Users/raman/projects/lcm-cov/tests/providers/schlage/test_provider.py`, `/Users/raman/projects/lcm-cov/tests/providers/virtual/test_provider.py`. No production code touched.
+
+### What was added
+
+**akuvox** (`TestListUsersErrors`, `TestAutoTagging`, `TestSetCredential`, `TestDeleteCredential`):
+- `test_list_users_top_level_non_dict_response` (line 114) — patches `async_call_service` directly to return a non-dict, proving the provider's own defensive guard raises `LockCodeManagerError`.
+- `test_tag_pass_skips_cloud_users_and_reuses_free_slot` (lines 238, 245) — a cloud user is ignored and an already-tagged local user reserves its slot, so an untagged local user lands on the next free slot.
+- `test_tag_pass_no_available_slot_leaves_untouched` (lines 253-259) — once all managed slots are already assigned, a remaining untagged user is left untouched (`modify_user` never called).
+- `test_set_credential_ignores_cloud_user_tagged_for_slot` (line 365) — a cloud user tagged for the target slot is skipped, so `add_user` (not `modify_user`) is called.
+- `test_delete_credential_ignores_cloud_user_tagged_for_slot` (line 404) — same skip on the delete path; returns `False` and never calls `delete_user`.
+
+**schlage** (mirrors the akuvox pattern):
+- `test_get_codes_top_level_non_dict_response` (line 98).
+- `test_tag_unmanaged_codes_skips_already_assigned_slot` (line 195).
+- `test_tag_unmanaged_codes_skips_empty_name` (lines 204-208) — whitespace-only code names can't be tagged.
+- `test_tag_unmanaged_codes_no_slot_for_extra_code` (lines 229-234) — a third untagged code beyond the two managed slots is left untouched.
+- `test_tag_unmanaged_codes_rollback_disconnect_sets_first_disconnect` (line 278) — original-delete fails with `LockOperationFailed` (doesn't set `first_disconnect`), then the rollback delete fails with `LockDisconnected`, which must be the one that surfaces.
+
+**virtual**:
+- `test_async_unload_remove_permanently_removes_store` (line 65) — exercises the `remove_permanently=True` branch. Had to work around a quirk in `pytest_homeassistant_custom_component`'s `mock_storage`: once a `Store` instance's `_async_load` has been invoked, its `_data` attribute becomes permanently "sticky" and further loads on that same instance return stale data regardless of removal. The test verifies via fresh `Store` instances (same key) before/after removal, which correctly reflects the mocked on-disk state.
+
+No lines were left deliberately uncovered — all originally-listed lines in the three target files are now exercised with behavioral assertions (return values, exceptions raised, and which service was/wasn't called).</result>
+<usage><subagent_tokens>187112</subagent_tokens><tool_uses>68</tool_uses><duration_ms>902029</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adaf18e0443e4ce2d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/adaf18e0443e4ce2d.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: domain layer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 273 tests in the target files pass in 7.6 seconds. The full suite (1345 tests) passes in ~59s, matching the baseline timing.
+
+## Summary
+
+Raised the `domain/` layer to **100% coverage** (was 97.38%, now 100.00% across 1291 statements). Full suite: 1345 passed, 3 skipped, ~59s (no regression from the baseline ~58s).
+
+**Final per-file coverage:** all seven target files now at 100% — `coordinator.py`, `pin_generator.py`, `queries.py`, `services.py`, `slot_coordinator.py`, `sync.py`, `util.py`.
+
+Tests added (all in files on the allow-list; no production code touched):
+
+- **`tests/test_coordinator.py`**: `desired_credential` for disabled/blank-PIN/configured slots; `_async_connection_check` swallowing a `LockCodeManagerError`.
+- **`tests/test_pin_generator.py`**: `generate_pin` raising `RuntimeError` after 100 rejected candidates (patched `is_unsafe_pin` to always reject).
+- **`tests/test_queries.py`**: `get_loaded_config_entry` raising `ServiceValidationError` for an entry that exists but isn't `LOADED`.
+- **`tests/test_services.py`**: the domain `async_set_usercode` function's own empty-usercode guard, called directly (the HA service schema already filters this, but the websocket API's looser schema can reach it).
+- **`tests/test_slot_coordinator.py`**: `inactive_because_of` defensive-copy semantics; `async_request_name_update`; `async_start`/`notify_config_changed` idempotency guards; `_notify_state_subscribers` isolating a raising subscriber; `_recompute_active` treating a missing condition entity as inactive; `_safely_raise_pin_required_issue` swallowing a repair-issue-creation failure.
+- **`tests/test_sync.py`**: `in_sync`/`sync_status` reading `None` while `LOADING` (via the real entity write path); `_async_tick`'s two defensive guards (stopped manager, `asyncio.current_task()` returning `None`); `_get_entity_state`/`_ensure_entities_ready` for an undiscovered entity role; `SlotSyncManager.async_start` idempotency; and the OPTIMISTIC-write → `PENDING_CONFIRMATION` transition (had to model the mock lock's read as observing slot 1 explicitly empty rather than omitted, since `_apply_read` only preserves verified-flags for slots present in the observed dict).
+- **`tests/test_util.py`**: `build_pin_deobfuscation_map` skipping a slot with an empty PIN; `async_disable_slot` returning `False` when no switch entity is found for the slot.
+
+No lines were left deliberately uncovered — every previously-listed line is now exercised with a genuine behavioral assertion (state transitions, return values, or structured log/call data per the project's "avoid caplog text assertions" convention).</result>
+<usage><subagent_tokens>258063</subagent_tokens><tool_uses>97</tool_uses><duration_ms>944149</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7c5fe207d3128578</task-id>
+<tool-use-id>toolu_013voQu2pNg667SFMDTy972U</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/a7c5fe207d3128578.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: base/matter/zwave_js" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three target files reached 100% coverage. Final report:
+
+## Coverage results (full suite, `custom_components/lock_code_manager/providers`)
+
+| File | Before | After |
+|---|---|---|
+| `_base.py` | 97% (15 missed) | **100%** |
+| `matter.py` | 99% (5 missed) | **100%** |
+| `zwave_js.py` | 99% (3 missed) | **100%** |
+
+699 tests pass in `tests/providers/`. The one full-suite failure (`tests/test_init.py::test_hard_refresh_usercodes_service_raises_on_lock_error`) is outside my scope — that file is modified by another agent working in this shared worktree and fails the same way in isolation, unrelated to any provider test I touched.
+
+## What was added
+
+**`tests/providers/test_base.py`** (13 new tests + 1 new helper class `_PushSetupRaisesLock`):
+- `_serialize_source_data`: distinct `last_changed`/`last_updated` timestamps serialize separately; `source_data=None` resolves to `(None, None)`.
+- `BaseLock.__eq__`: two instances wrapping the same `entity_id` are equal.
+- `subscribe_push_updates`: re-raises `ProviderNotImplementedError`; logs+swallows an unexpected exception.
+- `async_setup_internal`: a `SETUP_IN_PROGRESS` config entry whose `async_config_entry_first_refresh()` raises `ConfigEntryNotReady` is absorbed, not propagated.
+- `_async_on_integration_loaded`: transient `LockOperationFailed` during the LOADED-transition retry is logged at debug and absorbed (added a *new*, correctly-configured test since the existing `test_on_integration_loaded_retries_on_disconnect` never actually entered the retry branch — its `lock_config_entry.state` was never `LOADED` — left untouched per the no-weakening rule).
+- `mark_code_rejected`: a firmware-rejected slot raises `DuplicateCodeError` on the next set, then clears (single-shot).
+- `async_unload`: propagates `CancelledError` when the *caller's own task* (not just the reconnect task) is being cancelled — a timing-sensitive asyncio test cancelling the outer `async_unload` task at its first await point.
+
+**`tests/providers/test_seam.py`**: extended `test_primitive_defaults_raise` to assert the default `async_get_capabilities` raises `ProviderNotImplementedError`.
+
+**`tests/providers/matter/test_provider.py`** (3 new tests):
+- `_match_node` returns `None` when the device has no `deviceid_`-prefixed Matter identifier.
+- `_log_node_resolution_failure`'s inner node-count diagnostic degrades to `-1` when `get_nodes()` raises.
+- The outer diagnostics try/except falls back to a "diagnostics unavailable" debug log when collecting the diagnostic data itself raises (e.g. `async_loaded_entries` failing).
+
+**`tests/providers/zwave_js/test_provider.py`**: `_async_recover_user_code_slot_count` returns `False` without attempting a device query when the node has no root endpoint.
+
+**`tests/providers/zwave_js/test_events.py`**: a User Code CC value update for a slot with no cached value pushes `known()` rather than `empty()` for all-zeros — exercising `_uc_slot_in_use`'s `NotFoundError → None` path via a real push event, mirroring the existing `test_uc_shim_*` convention.
+
+No lines were left deliberately uncovered — every originally-listed line was reachable through a genuine behavioral test. `ruff check` is clean on all edited files.</result>
+<usage><subagent_tokens>241658</subagent_tokens><tool_uses>145</tool_uses><duration_ms>1406697</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac34ced79b2def498</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/ac34ced79b2def498.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: entry/entities/websocket" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+Final coverage (measured against the full suite `tests/`):
+
+| File | Before | After |
+|---|---|---|
+| `custom_components/lock_code_manager/__init__.py` | 96% | **100%** |
+| `custom_components/lock_code_manager/entity.py` | 95% | 98% (3 stmts, lines 103-107, deliberately left uncovered) |
+| `custom_components/lock_code_manager/diagnostics.py` | 96% | **100%** |
+| `custom_components/lock_code_manager/binary_sensor.py` | 99% | **100%** |
+| `custom_components/lock_code_manager/sensor.py` | 98% | **100%** |
+| `custom_components/lock_code_manager/text.py` | 97% | **100%** |
+| `custom_components/lock_code_manager/websocket.py` | 98% | 99% (1 stmt, line 142, deliberately left uncovered) |
+
+Full suite: 1374 passed, 3 skipped, in ~59s. `ruff check` and `ruff format --check` both pass clean on every file I touched.
+
+### What was added
+
+- **`tests/test_init.py`**: migration test extended for a slot with both `calendar`/`entity_id` already set; new tests for `hard_refresh_usercodes` surfacing a per-lock failure, `deobfuscate_log` refusing to run without an `instance_id`, an entry persisted with empty `data`/full `options`, `async_unload_lock` no-op on an untracked lock id, an unexpected exception during new-lock setup being logged and excluding just that lock, slot removal tolerating a missing/failing slot coordinator, and the `pairs_removed` loop skipping an untracked lock while logging a `LockDisconnected` release failure.
+- **`tests/test_binary_sensor.py`**: tests for the availability-tracker-not-yet-created race, a stray state-changed event for an untracked entity, the "skip recompute between two available states" optimization, a lock-slot entity being skipped when the lock has no coordinator yet, and a standard entity being added for a slot with no `SlotEntityCoordinator` (warning path).
+- **`tests/test_sensor.py`**: mirrors the "lock has no coordinator yet" guard for the code-slot sensor.
+- **`tests/test_text.py`**: new test setting the name text entity's value (the PIN branch was already covered; the name branch wasn't).
+- **`tests/test_diagnostics.py`**: one new test covering `_mask_code`'s three branches (slot absent from coordinator data, a cleared slot, and a present-but-empty-string PIN), driven through `coordinator.push_update`.
+- **`tests/test_websocket.py`**: lock-name fallback to `display_name` when state has no `friendly_name`; calendar condition data now also asserts `start_time`; a new test for a schedule's `next_event` arriving as a plain string instead of `datetime`; a new test driving an initial sync tick so `subscribe_code_slot` includes `sync_status`; and two new `set_slot_condition` tests (an unrecognized `ServiceValidationError` message, and a non-`ServiceValidationError` exception) both mapping to `unknown_error`.
+
+### Deliberately left uncovered (dead code, not contorted)
+
+- **`entity.py` lines 103-107** (`_get_uid`): grepped the entire repo — this method has zero callers anywhere in production or test code. It appears to be leftover from a refactor.
+- **`websocket.py` line 142** (`isinstance(code, SlotCode): return {code_key: str(code)}` inside `_slot_code_payload`): all three call sites pass either a `SlotCredential` (whose `SlotCode` labels are handled by the earlier branch via `.as_label()`) or a plain `str`/`None` from `_get_text_state`/coordinator lookups — never a bare `SlotCode`. Confirmed via grep of every call site.
+
+Both would require calling the private function/method directly with a value no real code path produces, which the task's rules explicitly call out as "contorting" — so I left them uncovered rather than forcing it.
+
+### Incidental finding (not fixed — out of scope)
+
+While testing `hard_refresh_usercodes`, I found `__init__.py`'s error-aggregation line `errors_str = "\n".join(str(errors))` joins over `str(errors)` (the list's repr) instead of per-item, which splits the message one character per line. The test asserts the actual (odd) observable behavior rather than masking it; flagging in case a follow-up fix is wanted.</result>
+<usage><subagent_tokens>341211</subagent_tokens><tool_uses>166</tool_uses><duration_ms>1579276</duration_ms></usage>
+</task-notification>
+
+---
+
+fix merge conflicts with 1403
+
+---
+
+ff 1279 and fix merge conflicts
