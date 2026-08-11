@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "613d13ed5e0f",
+  "strategy": "manual-commit",
+  "branch": "fix/1398-out-of-range-slot",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/61/3d13ed5e0f/0/metadata.json",
+      "transcript": "/61/3d13ed5e0f/0/full.jsonl",
+      "compact_transcript": "/61/3d13ed5e0f/0/transcript.jsonl",
+      "content_hash": "/61/3d13ed5e0f/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 6893,
+    "cache_read_tokens": 3220255,
+    "output_tokens": 5286,
+    "api_call_count": 8
+  }
+}
