@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "2f670964c27c",
+  "strategy": "manual-commit",
+  "branch": "test/coverage-to-100",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/entity.py",
+    "tests/providers/akuvox/test_provider.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/schlage/test_provider.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_seam.py",
+    "tests/providers/virtual/test_provider.py",
+    "tests/providers/zha/test_provider.py",
+    "tests/providers/zigbee2mqtt/test_payload.py",
+    "tests/providers/zigbee2mqtt/test_provider.py",
+    "tests/providers/zwave_js/test_events.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_coordinator.py",
+    "tests/test_diagnostics.py",
+    "tests/test_init.py",
+    "tests/test_pin_generator.py",
+    "tests/test_queries.py",
+    "tests/test_sensor.py",
+    "tests/test_services.py",
+    "tests/test_slot_coordinator.py",
+    "tests/test_sync.py",
+    "tests/test_text.py",
+    "tests/test_util.py",
+    "tests/test_websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2f/670964c27c/0/metadata.json",
+      "transcript": "/2f/670964c27c/0/full.jsonl",
+      "compact_transcript": "/2f/670964c27c/0/transcript.jsonl",
+      "content_hash": "/2f/670964c27c/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 40471,
+    "cache_read_tokens": 12866312,
+    "output_tokens": 13150,
+    "api_call_count": 29
+  }
+}
