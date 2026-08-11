@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "9d178f84aeb0",
+  "strategy": "manual-commit",
+  "branch": "test/property-codec-coverage",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "tests/properties/test_identifier_codec.py",
+    "tests/properties/test_pin_masking.py",
+    "tests/test_config.py",
+    "tests/test_credentials.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9d/178f84aeb0/0/metadata.json",
+      "transcript": "/9d/178f84aeb0/0/full.jsonl",
+      "compact_transcript": "/9d/178f84aeb0/0/transcript.jsonl",
+      "content_hash": "/9d/178f84aeb0/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 98,
+    "cache_creation_tokens": 1158429,
+    "cache_read_tokens": 28368576,
+    "output_tokens": 44821,
+    "api_call_count": 53
+  }
+}
