@@ -329,9 +329,22 @@ def parse_slot_device_identifier(entry_id: str, identifier: str) -> int | None:
     device apart from the entry's own device when sweeping the registry.
     ``None`` covers both the entry device (bare entry_id, no separator) and
     anything that does not belong to this entry.
+
+    Accepts exactly what the builder emits, verified by round-tripping the
+    parsed number back to a string. Anything looser breaks the pairing in one
+    direction or the other: ``str.isdigit()`` rejects the negative slot the
+    builder will happily encode (the slots YAML schema does not bound the key),
+    while a bare ``int()`` accepts ``+1`` and ``1_0`` as aliases the builder
+    would never produce. Either way the device becomes invisible to the sweep
+    AND to the removal hook -- the exact stuck, undeletable device this pairing
+    exists to clean up.
     """
     prefix = f"{entry_id}|"
     if not identifier.startswith(prefix):
         return None
     suffix = identifier.removeprefix(prefix)
-    return int(suffix) if suffix.isdigit() else None
+    try:
+        slot_num = int(suffix)
+    except ValueError:
+        return None
+    return slot_num if str(slot_num) == suffix else None

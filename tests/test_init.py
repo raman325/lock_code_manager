@@ -1530,16 +1530,20 @@ async def test_removing_slot_removes_its_device(
     assert dev_reg.async_get_device({(DOMAIN, entry_id)}) is not None
 
 
+@pytest.mark.parametrize("stale_slot", [99, 0, -1])
 async def test_setup_prunes_devices_for_unconfigured_slots(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    stale_slot: int,
 ):
     """
     A device left behind by the pre-fix behavior is swept up on reload.
 
     Without this, everyone who already hit the bug would have to delete each
-    stale device by hand.
+    stale device by hand. Negative and zero slots are covered because the
+    slots YAML schema does not bound the key, and a slot the identifier
+    parser cannot recover would be skipped by the sweep forever.
     """
     entry_id = lock_code_manager_config_entry.entry_id
     dev_reg = dr.async_get(hass)
@@ -1547,9 +1551,9 @@ async def test_setup_prunes_devices_for_unconfigured_slots(
     # that is not in the entry's config.
     stale = dev_reg.async_get_or_create(
         config_entry_id=entry_id,
-        identifiers={(DOMAIN, f"{entry_id}|99")},
+        identifiers={(DOMAIN, f"{entry_id}|{stale_slot}")},
         manufacturer="Lock Code Manager",
-        name="Mock Title Code slot 99",
+        name=f"Mock Title Code slot {stale_slot}",
         model="Code Slot",
     )
     assert dev_reg.async_get(stale.id) is not None
@@ -1557,7 +1561,7 @@ async def test_setup_prunes_devices_for_unconfigured_slots(
     await hass.config_entries.async_reload(entry_id)
     await hass.async_block_till_done()
 
-    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|99")}) is None
+    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|{stale_slot}")}) is None
     assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|1")}) is not None
 
 
@@ -1593,16 +1597,17 @@ async def test_remove_config_entry_device_allows_only_unconfigured_slots(
         is False
     )
 
-    stale = dev_reg.async_get_or_create(
-        config_entry_id=entry_id,
-        identifiers={(DOMAIN, f"{entry_id}|99")},
-        manufacturer="Lock Code Manager",
-        name="Mock Title Code slot 99",
-        model="Code Slot",
-    )
-    assert (
-        await async_remove_config_entry_device(
-            hass, lock_code_manager_config_entry, stale
+    for stale_slot in (99, -1):
+        stale = dev_reg.async_get_or_create(
+            config_entry_id=entry_id,
+            identifiers={(DOMAIN, f"{entry_id}|{stale_slot}")},
+            manufacturer="Lock Code Manager",
+            name=f"Mock Title Code slot {stale_slot}",
+            model="Code Slot",
         )
-        is True
-    )
+        assert (
+            await async_remove_config_entry_device(
+                hass, lock_code_manager_config_entry, stale
+            )
+            is True
+        ), f"slot {stale_slot} device should be deletable"

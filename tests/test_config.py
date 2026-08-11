@@ -14,6 +14,8 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.config import (
     EntryConfig,
     EntryConfigDiff,
+    build_slot_device_identifier,
+    parse_slot_device_identifier,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 
@@ -523,3 +525,42 @@ def test_to_dict_produces_plain_mutable_dicts() -> None:
     # Original EntryConfig is untouched by that mutation
     assert config.slots[1]["pin"] == "1234"
     assert config.locks == ("lock.a",)
+
+
+# Slot device identifier round-trip (issue #1399)
+
+
+@pytest.mark.parametrize("slot_num", [1, 2, 0, 30, 255, -1, -42])
+def test_slot_device_identifier_round_trips(slot_num: int) -> None:
+    """
+    Every identifier the builder emits must parse back to the same slot.
+
+    A slot the builder encodes but the parser rejects is invisible to both the
+    orphan sweep and the removal hook, which is the stuck undeletable device
+    issue #1399 is about. Negative slots are included because the slots YAML
+    schema does not bound the key.
+    """
+    identifier = build_slot_device_identifier("abc123", slot_num)
+    assert parse_slot_device_identifier("abc123", identifier) == slot_num
+
+
+def test_parse_slot_device_identifier_rejects_non_slot_identifiers() -> None:
+    """The entry's own device and other entries' devices are not slot devices."""
+    # The entry device carries the bare entry_id, with no slot suffix.
+    assert parse_slot_device_identifier("abc123", "abc123") is None
+    # A different entry's slot device.
+    assert parse_slot_device_identifier("abc123", "def456|1") is None
+    # Not a slot number at all.
+    assert parse_slot_device_identifier("abc123", "abc123|name") is None
+    assert parse_slot_device_identifier("abc123", "abc123|") is None
+
+
+@pytest.mark.parametrize("suffix", ["+1", "1_0", " 1", "01"])
+def test_parse_slot_device_identifier_rejects_builder_aliases(suffix: str) -> None:
+    """
+    Reject int-parseable spellings the builder would never emit.
+
+    ``int()`` accepts all of these, but treating them as slot numbers would map
+    two distinct identifiers onto one slot.
+    """
+    assert parse_slot_device_identifier("abc123", f"abc123|{suffix}") is None
