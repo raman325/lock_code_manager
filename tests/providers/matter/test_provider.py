@@ -1734,6 +1734,17 @@ async def test_supports_native_users(matter_lock: MatterLock) -> None:
     assert matter_lock.supports_native_users is True
 
 
+async def test_credential_index_does_not_follow_slot(matter_lock: MatterLock) -> None:
+    """
+    Matter opts out of the slot capacity check (issue #1398).
+
+    ``async_set_credential`` lets the lock allocate the credential index, so a
+    slot number above the lock's credential count is legal here and must not be
+    range-checked the way the Z-Wave path is.
+    """
+    assert matter_lock.credential_index_follows_slot is False
+
+
 # =============================================================================
 # async_get_users tests
 # =============================================================================

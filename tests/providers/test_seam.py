@@ -29,6 +29,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnsupported,
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -1177,3 +1178,94 @@ async def test_confirm_slot_keeps_belief_when_readable_matches(
 
     assert pushed == [({4: SlotCredential.known("1234")}, False)]
     assert 4 not in lock._pending_writes
+
+
+# Slot capacity pre-flight (issue #1398)
+
+
+class _AutoIndexStubLock(_NativeStubLock):
+    """Native provider whose lock allocates the credential index (Matter-shaped)."""
+
+    @property
+    def credential_index_follows_slot(self) -> bool:
+        return False
+
+
+class _UnknownCapacityStubLock(_NativeStubLock):
+    """Native provider that advertises PIN support without a slot count."""
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        return LockCapabilities(
+            supports_user_management=True,
+            max_users=0,
+            credential_types={
+                CredentialType.PIN: CredentialTypeCapability(
+                    num_slots=0,
+                    min_length=4,
+                    max_length=8,
+                    supports_learn=False,
+                ),
+            },
+            max_user_name_length=16,
+        )
+
+
+async def test_set_usercode_rejects_slot_beyond_capacity(hass: HomeAssistant) -> None:
+    """
+    A slot above the lock's advertised count fails before any device write.
+
+    Issue #1398: the write would otherwise be rejected deterministically by the
+    driver and misread as a transport failure, retrying forever.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_capacity_reject")
+    lock._min_operation_delay = 0.0
+    with (
+        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
+        pytest.raises(LockOperationUnsupported, match="30 PIN code slots"),
+    ):
+        await lock.async_internal_set_usercode(50, "4321", "guest")
+    assert lock.calls == []
+
+
+async def test_set_usercode_accepts_slot_at_capacity_boundary(
+    hass: HomeAssistant,
+) -> None:
+    """The highest advertised slot is usable; the bound is inclusive."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_capacity_boundary")
+    lock._min_operation_delay = 0.0
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        await lock.async_internal_set_usercode(30, "4321", "guest")
+    assert ("set_credential", 30, 30) in lock.calls
+
+
+async def test_set_usercode_skips_capacity_check_when_lock_allocates_index(
+    hass: HomeAssistant,
+) -> None:
+    """A high slot number is legal when the lock picks its own credential index."""
+    lock = _make_lock(hass, _AutoIndexStubLock, "seam_capacity_auto_index")
+    lock._min_operation_delay = 0.0
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        await lock.async_internal_set_usercode(50, "4321", "guest")
+    assert ("set_credential", 50, 50) in lock.calls
+
+
+async def test_set_usercode_skips_capacity_check_when_capacity_unknown(
+    hass: HomeAssistant,
+) -> None:
+    """``num_slots`` of 0 means unknown capacity, so it must not block the write."""
+    lock = _make_lock(hass, _UnknownCapacityStubLock, "seam_capacity_unknown")
+    lock._min_operation_delay = 0.0
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        await lock.async_internal_set_usercode(50, "4321", "guest")
+    assert ("set_credential", 50, 50) in lock.calls
+
+
+async def test_set_usercode_skips_capacity_check_when_capabilities_unavailable(
+    hass: HomeAssistant,
+) -> None:
+    """A provider with no capabilities read keeps writing as it did before."""
+    lock = _make_lock(hass, _DegenerateStubLock, "seam_capacity_no_caps")
+    lock._min_operation_delay = 0.0
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        await lock.async_internal_set_usercode(50, "4321", "guest")
+    assert ("set_credential", 50, 50) in lock.calls

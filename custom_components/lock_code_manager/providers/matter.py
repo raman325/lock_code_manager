@@ -208,6 +208,19 @@ class MatterLock(BaseLock):
         """
         return True
 
+    @property
+    def credential_index_follows_slot(self) -> bool:
+        """
+        Return False — Matter allocates its own credential index.
+
+        ``async_set_credential`` lets the lock pick the next free credential
+        index rather than pinning it to the slot number, so the slot number
+        carries no device-side bound and must not be range-checked against
+        ``num_slots``. What Matter does bound is how MANY slots can be
+        configured, which the base check deliberately does not police.
+        """
+        return False
+
     def _fresh_device_entry(self) -> Any | None:
         """
         Re-resolve the lock's device entry from the registry on every call.

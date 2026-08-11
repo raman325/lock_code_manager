@@ -84,6 +84,20 @@ class LockOperationFailed(LockCodeManagerProviderError):
     """
 
 
+class LockOperationUnsupported(LockOperationFailed):
+    """
+    Raised when the lock can never complete the operation as specified.
+
+    The distinction from its parent is retryability, and that is the whole
+    point of the type: ``LockOperationFailed`` is a transient lock-side
+    refusal worth retrying, while this says the request itself is invalid
+    for this lock and every retry will fail identically. Configuration has
+    to change first — a slot number beyond the lock's capacity, a
+    credential type the node rejects outright. Callers that don't
+    distinguish keep the retrying behavior, since this is a subclass.
+    """
+
+
 class ProviderNotImplementedError(LockCodeManagerProviderError, NotImplementedError):
     """Raised when a provider method that subclasses must override is called."""
 

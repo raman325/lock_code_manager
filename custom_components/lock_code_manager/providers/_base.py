@@ -63,6 +63,7 @@ from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnsupported,
     ProviderNotImplementedError,
 )
 from ..domain.models import SlotCredential
@@ -561,6 +562,27 @@ class BaseLock:
         legacy one-Personal-Identification-Number-per-slot model.
         """
         return False
+
+    @property
+    def credential_index_follows_slot(self) -> bool:
+        """
+        Return whether the Lock Code Manager slot number IS the lock's credential index.
+
+        True (the default) for providers that address a credential by the
+        slot number verbatim: the Z-Wave unified access control surface
+        passes it as ``credential_slot``, and every slot-only provider
+        keys its single code by slot. On those locks a slot number above
+        the advertised slot count can never be written, so
+        ``_assert_slot_within_capacity`` rejects it before the write.
+
+        False for providers that let the lock allocate the index (Matter
+        picks the next free credential index). There the slot number is a
+        Lock Code Manager-side label with no device-side bound, so slot
+        50 is legal on a 30-credential lock as long as no more than 30
+        slots are configured. Capacity on those locks is a limit on the
+        NUMBER of slots, which this check does not police.
+        """
+        return True
 
     @property
     def supports_code_slot_events(self) -> bool:
@@ -1121,6 +1143,8 @@ class BaseLock:
             source,
         )
 
+        await self._assert_slot_within_capacity(code_slot)
+
         def _pre_execute_checks() -> None:
             """Check for duplicate PINs and firmware-rejected codes, atomically inside the lock."""
             # Clear the firmware-rejection flag first so it doesn't persist
@@ -1418,6 +1442,46 @@ class BaseLock:
                 lock_entity_id=self.lock.entity_id,
                 reason=f"unsupported credential type: {credential.type}",
             )
+
+    async def _assert_slot_within_capacity(self, code_slot: int) -> None:
+        """
+        Raise ``LockOperationUnsupported`` if the slot exceeds the lock's capacity.
+
+        Only meaningful when ``credential_index_follows_slot`` is True; see
+        that property for why Matter is exempt. Without this the write goes
+        out and the lock rejects it deterministically, which providers have
+        no reliable way to tell apart from a transport failure — that
+        misclassification is what made an out-of-range slot look like an
+        unreachable lock (issue #1398).
+
+        A capabilities read that fails, or one whose slot count is unknown
+        (see ``LockCapabilities.bounded_slot_count``), skips the check
+        rather than blocking the write, preserving the previous behavior
+        for those cases instead of inventing a new failure.
+
+        The advertised count is the lock's own claim and is not always
+        right -- a Z-Wave node hitting the User Credential CC dispatch
+        defect can report the wrong command class's slot count -- so the
+        error names the stale-interview remedy alongside the renumber one.
+        """
+        if not self.credential_index_follows_slot:
+            return
+        try:
+            caps = await self._get_cached_capabilities()
+        except LockCodeManagerError:
+            # Covers the unreachable lock, the failed probe, and the provider
+            # that never implemented the read (ProviderNotImplementedError).
+            return
+        num_slots = caps.bounded_slot_count(CredentialType.PIN)
+        if num_slots is None or 1 <= code_slot <= num_slots:
+            return
+        raise LockOperationUnsupported(
+            f"Lock {self.lock.entity_id} reports {num_slots} PIN code slots, so "
+            f"slot {code_slot} is out of range. Either renumber the slot to fall "
+            f"within 1-{num_slots} (or drop this lock from the slot), or, if the "
+            f"lock really does have more slots than that, re-interview it -- a "
+            f"stale or incomplete interview makes it under-report its capacity."
+        )
 
     async def _assert_credential_ref_supported(self, ref: CredentialRef) -> None:
         """

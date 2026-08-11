@@ -65,12 +65,60 @@ from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnsupported,
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_tag
 
 _LOGGER = logging.getLogger(__name__)
+
+# Numeric ``ZWaveErrorCodes`` values from node-zwave-js. zwave-js-server-python
+# surfaces the code as a bare int on ``FailedZWaveCommand.zwave_error_code``
+# and ships no enum for it, so the names live here. The driver also appends the
+# padded form to its message ("... (ZW0322)").
+_ZWAVE_ERROR_CC_NOT_SUPPORTED = 302
+_ZWAVE_ERROR_CC_NOT_IMPLEMENTED = 303
+_ZWAVE_ERROR_CC_NO_API = 304
+_ZWAVE_ERROR_ARGUMENT_INVALID = 322
+
+# Codes that mean the request is invalid for this node, so no retry can ever
+# succeed: the caller passed an out-of-range slot or user identifier, or asked
+# for a command class the node does not implement. Every Argument_Invalid the
+# access control API raises is a bounds or shape check on our own arguments
+# (slot range, user range, credential type), never a transport symptom.
+#
+# This is deliberately a list of PERMANENT codes rather than a list of
+# transient ones: an unrecognized code -- including any node-zwave-js adds
+# later -- falls through to the retry path it has today, so the worst case of
+# an incomplete table is the old behavior rather than a wrongly suspended slot.
+_PERMANENT_ZWAVE_ERROR_CODES: frozenset[int] = frozenset(
+    {
+        _ZWAVE_ERROR_CC_NOT_SUPPORTED,
+        _ZWAVE_ERROR_CC_NOT_IMPLEMENTED,
+        _ZWAVE_ERROR_CC_NO_API,
+        _ZWAVE_ERROR_ARGUMENT_INVALID,
+    }
+)
+
+
+def _mapped_zwave_error(
+    err: BaseZwaveJSServerError, context: str
+) -> LockCodeManagerProviderError:
+    """
+    Classify a zwave-js-server error as permanent or transient.
+
+    Treating every server-side error as transient is what let an
+    out-of-range slot present as an unreachable lock: the write failed
+    deterministically, the retry path fed the lock circuit breaker, and the
+    only thing the user saw was "Update failed 3 consecutive times" while
+    reads kept succeeding and resetting the breaker (issue #1398).
+    """
+    code = getattr(err, "zwave_error_code", None)
+    if code in _PERMANENT_ZWAVE_ERROR_CODES:
+        return LockOperationUnsupported(f"{context}: {err}")
+    return LockDisconnected(f"{context}: {err}")
+
 
 _PIN_TYPE_STR = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
 
@@ -234,7 +282,7 @@ class ZWaveJSLock(BaseLock):
             users = await self.node.access_control.get_users_cached()
             credentials = await self.node.access_control.get_all_credentials_cached()
         except BaseZwaveJSServerError as err:
-            raise LockDisconnected(f"get users failed: {err}") from err
+            raise _mapped_zwave_error(err, "get users failed") from err
         except HomeAssistantError as err:
             raise LockOperationFailed(f"get users failed: {err}") from err
         users_by_id: dict[int, User] = {
@@ -344,7 +392,7 @@ class ZWaveJSLock(BaseLock):
         try:
             return await lock_helpers.async_get_credential_capabilities(self.node)
         except BaseZwaveJSServerError as err:
-            raise LockDisconnected(f"get capabilities failed: {err}") from err
+            raise _mapped_zwave_error(err, "get capabilities failed") from err
         except HomeAssistantError as err:
             raise LockOperationFailed(f"get capabilities failed: {err}") from err
 
@@ -426,7 +474,7 @@ class ZWaveJSLock(BaseLock):
                 active=user.active,
             )
         except BaseZwaveJSServerError as err:
-            raise LockDisconnected(f"set user for slot {slot} failed: {err}") from err
+            raise _mapped_zwave_error(err, f"set user for slot {slot} failed") from err
         except HomeAssistantError as err:
             raise LockOperationFailed(
                 f"set user for slot {slot} failed: {err}"
@@ -500,7 +548,7 @@ class ZWaveJSLock(BaseLock):
         try:
             await lock_helpers.async_delete_user(self.node, user_id)
         except BaseZwaveJSServerError as err:
-            raise LockDisconnected(f"delete user {user_id} failed: {err}") from err
+            raise _mapped_zwave_error(err, f"delete user {user_id} failed") from err
         except HomeAssistantError as err:
             raise LockOperationFailed(f"delete user {user_id} failed: {err}") from err
 
@@ -542,10 +590,11 @@ class ZWaveJSLock(BaseLock):
                 credential_slot=credential.slot,
             )
         except BaseZwaveJSServerError as err:
-            # Transient Z-Wave command failure (e.g. a sleeping/battery lock):
-            # route to retry rather than slot suspension.
-            raise LockDisconnected(
-                f"set credential slot {credential.slot} failed: {err}"
+            # Retry a transient command failure (e.g. a sleeping/battery lock);
+            # suspend only on a code the node can never accept. _mapped_zwave_error
+            # decides which, since the two are indistinguishable from here.
+            raise _mapped_zwave_error(
+                err, f"set credential slot {credential.slot} failed"
             ) from err
         except HomeAssistantError as err:
             key = getattr(err, "translation_key", None)
@@ -595,8 +644,8 @@ class ZWaveJSLock(BaseLock):
                 self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
             )
         except BaseZwaveJSServerError as err:
-            raise LockDisconnected(
-                f"delete credential slot {ref.slot} failed: {err}"
+            raise _mapped_zwave_error(
+                err, f"delete credential slot {ref.slot} failed"
             ) from err
         except HomeAssistantError as err:
             # Same supervised-failure staleness as the set path (see
@@ -968,7 +1017,7 @@ class ZWaveJSLock(BaseLock):
             await self.node.access_control.get_users()
             await self.node.access_control.get_all_credentials()
         except BaseZwaveJSServerError as err:
-            raise LockDisconnected(f"hard refresh failed: {err}") from err
+            raise _mapped_zwave_error(err, "hard refresh failed") from err
         except HomeAssistantError as err:
             raise LockOperationFailed(f"hard refresh failed: {err}") from err
         return await self.async_get_usercodes()

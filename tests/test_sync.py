@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnsupported,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.domain.sync import SlotState, SlotSyncManager
@@ -544,6 +545,74 @@ class TestLockOperationFailedRetry:
         await hass.async_block_till_done()
         assert manager._state is SyncState.SUSPENDED
         assert manager._coordinator.unreachable is False
+
+
+class TestLockOperationUnsupportedSuspend:
+    """A permanently-invalid request suspends immediately (issue #1398)."""
+
+    async def test_unsupported_operation_suspends_on_first_failure(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        No retries: the lock can never accept this request, so waiting out the
+        breaker would only delay a vaguer message by three ticks.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCredential.empty()
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockOperationUnsupported(
+                "Lock lock.test_1 has 30 PIN code slots, so slot 50 does not "
+                "exist on it."
+            ),
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        assert manager._state is SyncState.SUSPENDED
+        # The retry budget is untouched -- the suspend did not come from it.
+        assert manager._slot_breaker.failure_count == 0
+        # A permanent request error is not evidence the lock is unreachable.
+        assert manager._coordinator.unreachable is False
+
+    async def test_unsupported_operation_surfaces_reason_in_repair(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """The driver's own explanation reaches the repair, not a generic one."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCredential.empty()
+        lock_entity_id = manager._lock.lock.entity_id
+        entry_id = manager._config_entry.entry_id
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockOperationUnsupported(
+                "set credential slot 50 failed: zwave_error: Z-Wave error 322"
+            ),
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        issue = async_get_issue_registry(hass).async_get_issue(
+            DOMAIN, f"slot_suspended_{entry_id}_{lock_entity_id}_1"
+        )
+        assert issue is not None
+        assert "Z-Wave error 322" in issue.translation_placeholders["reason"]
 
 
 class TestSyncStateMachine:
