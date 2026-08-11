@@ -1,0 +1,454 @@
+lets look into 1398 and 1399
+
+---
+
+run code reviews on both PRs
+
+---
+
+<task-notification>
+<task-id>a785fbd86b483fd26</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/a785fbd86b483fd26.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: zha/zigbee2mqtt" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Note: `tests/providers/akuvox/test_provider.py` shows as modified too, but that's from another agent working in parallel in the same worktree — I did not touch it.
+
+## Summary
+
+**Final coverage (measured against the full test suite):**
+- `custom_components/lock_code_manager/providers/zha.py` — **100%** (221/221 statements)
+- `custom_components/lock_code_manager/providers/zigbee2mqtt.py` — **100%** (293/293 statements)
+
+Full suite: 1311 passed, 3 skipped (pre-existing, unrelated documentation skips), 0 failures.
+
+### ZHA (`tests/providers/zha/test_provider.py`)
+Added tests for:
+- `_get_gateway` swallowing an unexpected `ValueError` and logging a warning (195-201)
+- `_get_door_lock_cluster` returning `None` when `device_proxy` is missing (153-154), when the underlying zigpy device is missing (158-159), and when no endpoint exposes a `DoorLock` cluster, hitting the final warning branch (175-176)
+- `async_get_users` re-raising `LockDisconnected` instead of degrading the slot to unreadable (327) — distinguishes connection-gate failures from transient per-slot read errors
+- `async_hard_refresh_codes` delegating to `async_get_usercodes` (340)
+- `_handle_programming_event`'s unparseable-args branch firing a coordinator refresh when a coordinator is attached (427) — the existing test only exercised the parse-failure path without a coordinator
+
+### Zigbee2MQTT (`tests/providers/zigbee2mqtt/`)
+Added tests for:
+- `_process_z2m_device_payload`: a non-dict `users` entry being skipped without aborting the rest of the payload (279-285); a `pin_code` payload missing the `user` field being ignored (336-340)
+- `_maybe_raise_wrong_bridge_disconnect` being a no-op when there's no device entry at all (199)
+- `_async_ensure_device_subscription`: idempotent no-op when already subscribed (363), raising `LockDisconnected` when MQTT is disabled (366), raising `LockDisconnected` when no topic resolves (370)
+- A `HomeAssistantError` from `async_subscribe` being wrapped as `LockDisconnected` inside `_async_ensure_device_subscription` (392-397), and that `LockDisconnected` being caught and deferred (logged, not raised) by the background reconnect task in `setup_push_subscription` (439) — one test covers both, since the exception naturally propagates from the inner method into the outer task's handler
+
+No lines were left deliberately uncovered — every previously-missing line in both files was reachable with a genuine behavioral test. No production code was modified; only the three test files listed under my mandate (`tests/providers/zha/test_provider.py`, `tests/providers/zigbee2mqtt/test_payload.py`, `tests/providers/zigbee2mqtt/test_provider.py`) were edited.</result>
+<usage><subagent_tokens>148784</subagent_tokens><tool_uses>24</tool_uses><duration_ms>336787</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad00e86e9b2b6d1ba</task-id>
+<tool-use-id>toolu_01A75AVaiJHcHLoSB1Kz4LBs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/ad00e86e9b2b6d1ba.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: akuvox/schlage/virtual" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+Final coverage for the three target files (verified via `pytest tests/providers/akuvox tests/providers/schlage tests/providers/virtual --cov=custom_components/lock_code_manager/providers`):
+
+- `custom_components/lock_code_manager/providers/akuvox.py`: **100%** (was 96%)
+- `custom_components/lock_code_manager/providers/schlage.py`: **100%** (was 96%)
+- `custom_components/lock_code_manager/providers/virtual.py`: **100%** (was 99%)
+
+Only files edited: `/Users/raman/projects/lcm-cov/tests/providers/akuvox/test_provider.py`, `/Users/raman/projects/lcm-cov/tests/providers/schlage/test_provider.py`, `/Users/raman/projects/lcm-cov/tests/providers/virtual/test_provider.py`. No production code touched.
+
+### What was added
+
+**akuvox** (`TestListUsersErrors`, `TestAutoTagging`, `TestSetCredential`, `TestDeleteCredential`):
+- `test_list_users_top_level_non_dict_response` (line 114) — patches `async_call_service` directly to return a non-dict, proving the provider's own defensive guard raises `LockCodeManagerError`.
+- `test_tag_pass_skips_cloud_users_and_reuses_free_slot` (lines 238, 245) — a cloud user is ignored and an already-tagged local user reserves its slot, so an untagged local user lands on the next free slot.
+- `test_tag_pass_no_available_slot_leaves_untouched` (lines 253-259) — once all managed slots are already assigned, a remaining untagged user is left untouched (`modify_user` never called).
+- `test_set_credential_ignores_cloud_user_tagged_for_slot` (line 365) — a cloud user tagged for the target slot is skipped, so `add_user` (not `modify_user`) is called.
+- `test_delete_credential_ignores_cloud_user_tagged_for_slot` (line 404) — same skip on the delete path; returns `False` and never calls `delete_user`.
+
+**schlage** (mirrors the akuvox pattern):
+- `test_get_codes_top_level_non_dict_response` (line 98).
+- `test_tag_unmanaged_codes_skips_already_assigned_slot` (line 195).
+- `test_tag_unmanaged_codes_skips_empty_name` (lines 204-208) — whitespace-only code names can't be tagged.
+- `test_tag_unmanaged_codes_no_slot_for_extra_code` (lines 229-234) — a third untagged code beyond the two managed slots is left untouched.
+- `test_tag_unmanaged_codes_rollback_disconnect_sets_first_disconnect` (line 278) — original-delete fails with `LockOperationFailed` (doesn't set `first_disconnect`), then the rollback delete fails with `LockDisconnected`, which must be the one that surfaces.
+
+**virtual**:
+- `test_async_unload_remove_permanently_removes_store` (line 65) — exercises the `remove_permanently=True` branch. Had to work around a quirk in `pytest_homeassistant_custom_component`'s `mock_storage`: once a `Store` instance's `_async_load` has been invoked, its `_data` attribute becomes permanently "sticky" and further loads on that same instance return stale data regardless of removal. The test verifies via fresh `Store` instances (same key) before/after removal, which correctly reflects the mocked on-disk state.
+
+No lines were left deliberately uncovered — all originally-listed lines in the three target files are now exercised with behavioral assertions (return values, exceptions raised, and which service was/wasn't called).</result>
+<usage><subagent_tokens>187112</subagent_tokens><tool_uses>68</tool_uses><duration_ms>902029</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adaf18e0443e4ce2d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/adaf18e0443e4ce2d.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: domain layer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 273 tests in the target files pass in 7.6 seconds. The full suite (1345 tests) passes in ~59s, matching the baseline timing.
+
+## Summary
+
+Raised the `domain/` layer to **100% coverage** (was 97.38%, now 100.00% across 1291 statements). Full suite: 1345 passed, 3 skipped, ~59s (no regression from the baseline ~58s).
+
+**Final per-file coverage:** all seven target files now at 100% — `coordinator.py`, `pin_generator.py`, `queries.py`, `services.py`, `slot_coordinator.py`, `sync.py`, `util.py`.
+
+Tests added (all in files on the allow-list; no production code touched):
+
+- **`tests/test_coordinator.py`**: `desired_credential` for disabled/blank-PIN/configured slots; `_async_connection_check` swallowing a `LockCodeManagerError`.
+- **`tests/test_pin_generator.py`**: `generate_pin` raising `RuntimeError` after 100 rejected candidates (patched `is_unsafe_pin` to always reject).
+- **`tests/test_queries.py`**: `get_loaded_config_entry` raising `ServiceValidationError` for an entry that exists but isn't `LOADED`.
+- **`tests/test_services.py`**: the domain `async_set_usercode` function's own empty-usercode guard, called directly (the HA service schema already filters this, but the websocket API's looser schema can reach it).
+- **`tests/test_slot_coordinator.py`**: `inactive_because_of` defensive-copy semantics; `async_request_name_update`; `async_start`/`notify_config_changed` idempotency guards; `_notify_state_subscribers` isolating a raising subscriber; `_recompute_active` treating a missing condition entity as inactive; `_safely_raise_pin_required_issue` swallowing a repair-issue-creation failure.
+- **`tests/test_sync.py`**: `in_sync`/`sync_status` reading `None` while `LOADING` (via the real entity write path); `_async_tick`'s two defensive guards (stopped manager, `asyncio.current_task()` returning `None`); `_get_entity_state`/`_ensure_entities_ready` for an undiscovered entity role; `SlotSyncManager.async_start` idempotency; and the OPTIMISTIC-write → `PENDING_CONFIRMATION` transition (had to model the mock lock's read as observing slot 1 explicitly empty rather than omitted, since `_apply_read` only preserves verified-flags for slots present in the observed dict).
+- **`tests/test_util.py`**: `build_pin_deobfuscation_map` skipping a slot with an empty PIN; `async_disable_slot` returning `False` when no switch entity is found for the slot.
+
+No lines were left deliberately uncovered — every previously-listed line is now exercised with a genuine behavioral assertion (state transitions, return values, or structured log/call data per the project's "avoid caplog text assertions" convention).</result>
+<usage><subagent_tokens>258063</subagent_tokens><tool_uses>97</tool_uses><duration_ms>944149</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7c5fe207d3128578</task-id>
+<tool-use-id>toolu_013voQu2pNg667SFMDTy972U</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/a7c5fe207d3128578.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: base/matter/zwave_js" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three target files reached 100% coverage. Final report:
+
+## Coverage results (full suite, `custom_components/lock_code_manager/providers`)
+
+| File | Before | After |
+|---|---|---|
+| `_base.py` | 97% (15 missed) | **100%** |
+| `matter.py` | 99% (5 missed) | **100%** |
+| `zwave_js.py` | 99% (3 missed) | **100%** |
+
+699 tests pass in `tests/providers/`. The one full-suite failure (`tests/test_init.py::test_hard_refresh_usercodes_service_raises_on_lock_error`) is outside my scope — that file is modified by another agent working in this shared worktree and fails the same way in isolation, unrelated to any provider test I touched.
+
+## What was added
+
+**`tests/providers/test_base.py`** (13 new tests + 1 new helper class `_PushSetupRaisesLock`):
+- `_serialize_source_data`: distinct `last_changed`/`last_updated` timestamps serialize separately; `source_data=None` resolves to `(None, None)`.
+- `BaseLock.__eq__`: two instances wrapping the same `entity_id` are equal.
+- `subscribe_push_updates`: re-raises `ProviderNotImplementedError`; logs+swallows an unexpected exception.
+- `async_setup_internal`: a `SETUP_IN_PROGRESS` config entry whose `async_config_entry_first_refresh()` raises `ConfigEntryNotReady` is absorbed, not propagated.
+- `_async_on_integration_loaded`: transient `LockOperationFailed` during the LOADED-transition retry is logged at debug and absorbed (added a *new*, correctly-configured test since the existing `test_on_integration_loaded_retries_on_disconnect` never actually entered the retry branch — its `lock_config_entry.state` was never `LOADED` — left untouched per the no-weakening rule).
+- `mark_code_rejected`: a firmware-rejected slot raises `DuplicateCodeError` on the next set, then clears (single-shot).
+- `async_unload`: propagates `CancelledError` when the *caller's own task* (not just the reconnect task) is being cancelled — a timing-sensitive asyncio test cancelling the outer `async_unload` task at its first await point.
+
+**`tests/providers/test_seam.py`**: extended `test_primitive_defaults_raise` to assert the default `async_get_capabilities` raises `ProviderNotImplementedError`.
+
+**`tests/providers/matter/test_provider.py`** (3 new tests):
+- `_match_node` returns `None` when the device has no `deviceid_`-prefixed Matter identifier.
+- `_log_node_resolution_failure`'s inner node-count diagnostic degrades to `-1` when `get_nodes()` raises.
+- The outer diagnostics try/except falls back to a "diagnostics unavailable" debug log when collecting the diagnostic data itself raises (e.g. `async_loaded_entries` failing).
+
+**`tests/providers/zwave_js/test_provider.py`**: `_async_recover_user_code_slot_count` returns `False` without attempting a device query when the node has no root endpoint.
+
+**`tests/providers/zwave_js/test_events.py`**: a User Code CC value update for a slot with no cached value pushes `known()` rather than `empty()` for all-zeros — exercising `_uc_slot_in_use`'s `NotFoundError → None` path via a real push event, mirroring the existing `test_uc_shim_*` convention.
+
+No lines were left deliberately uncovered — every originally-listed line was reachable through a genuine behavioral test. `ruff check` is clean on all edited files.</result>
+<usage><subagent_tokens>241658</subagent_tokens><tool_uses>145</tool_uses><duration_ms>1406697</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac34ced79b2def498</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/ac34ced79b2def498.output</output-file>
+<status>completed</status>
+<summary>Agent "Coverage: entry/entities/websocket" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+Final coverage (measured against the full suite `tests/`):
+
+| File | Before | After |
+|---|---|---|
+| `custom_components/lock_code_manager/__init__.py` | 96% | **100%** |
+| `custom_components/lock_code_manager/entity.py` | 95% | 98% (3 stmts, lines 103-107, deliberately left uncovered) |
+| `custom_components/lock_code_manager/diagnostics.py` | 96% | **100%** |
+| `custom_components/lock_code_manager/binary_sensor.py` | 99% | **100%** |
+| `custom_components/lock_code_manager/sensor.py` | 98% | **100%** |
+| `custom_components/lock_code_manager/text.py` | 97% | **100%** |
+| `custom_components/lock_code_manager/websocket.py` | 98% | 99% (1 stmt, line 142, deliberately left uncovered) |
+
+Full suite: 1374 passed, 3 skipped, in ~59s. `ruff check` and `ruff format --check` both pass clean on every file I touched.
+
+### What was added
+
+- **`tests/test_init.py`**: migration test extended for a slot with both `calendar`/`entity_id` already set; new tests for `hard_refresh_usercodes` surfacing a per-lock failure, `deobfuscate_log` refusing to run without an `instance_id`, an entry persisted with empty `data`/full `options`, `async_unload_lock` no-op on an untracked lock id, an unexpected exception during new-lock setup being logged and excluding just that lock, slot removal tolerating a missing/failing slot coordinator, and the `pairs_removed` loop skipping an untracked lock while logging a `LockDisconnected` release failure.
+- **`tests/test_binary_sensor.py`**: tests for the availability-tracker-not-yet-created race, a stray state-changed event for an untracked entity, the "skip recompute between two available states" optimization, a lock-slot entity being skipped when the lock has no coordinator yet, and a standard entity being added for a slot with no `SlotEntityCoordinator` (warning path).
+- **`tests/test_sensor.py`**: mirrors the "lock has no coordinator yet" guard for the code-slot sensor.
+- **`tests/test_text.py`**: new test setting the name text entity's value (the PIN branch was already covered; the name branch wasn't).
+- **`tests/test_diagnostics.py`**: one new test covering `_mask_code`'s three branches (slot absent from coordinator data, a cleared slot, and a present-but-empty-string PIN), driven through `coordinator.push_update`.
+- **`tests/test_websocket.py`**: lock-name fallback to `display_name` when state has no `friendly_name`; calendar condition data now also asserts `start_time`; a new test for a schedule's `next_event` arriving as a plain string instead of `datetime`; a new test driving an initial sync tick so `subscribe_code_slot` includes `sync_status`; and two new `set_slot_condition` tests (an unrecognized `ServiceValidationError` message, and a non-`ServiceValidationError` exception) both mapping to `unknown_error`.
+
+### Deliberately left uncovered (dead code, not contorted)
+
+- **`entity.py` lines 103-107** (`_get_uid`): grepped the entire repo — this method has zero callers anywhere in production or test code. It appears to be leftover from a refactor.
+- **`websocket.py` line 142** (`isinstance(code, SlotCode): return {code_key: str(code)}` inside `_slot_code_payload`): all three call sites pass either a `SlotCredential` (whose `SlotCode` labels are handled by the earlier branch via `.as_label()`) or a plain `str`/`None` from `_get_text_state`/coordinator lookups — never a bare `SlotCode`. Confirmed via grep of every call site.
+
+Both would require calling the private function/method directly with a value no real code path produces, which the task's rules explicitly call out as "contorting" — so I left them uncovered rather than forcing it.
+
+### Incidental finding (not fixed — out of scope)
+
+While testing `hard_refresh_usercodes`, I found `__init__.py`'s error-aggregation line `errors_str = "\n".join(str(errors))` joins over `str(errors)` (the list's repr) instead of per-item, which splits the message one character per line. The test asserts the actual (odd) observable behavior rather than masking it; flagging in case a follow-up fix is wanted.</result>
+<usage><subagent_tokens>341211</subagent_tokens><tool_uses>166</tool_uses><duration_ms>1579276</duration_ms></usage>
+</task-notification>
+
+---
+
+fix merge conflicts with 1403
+
+---
+
+ff 1279 and fix merge conflicts
+
+---
+
+pull
+
+---
+
+<task-notification>
+<task-id>a33a5d386103c0257</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/a33a5d386103c0257.output</output-file>
+<status>completed</status>
+<summary>Agent "Redundancy: big test files" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Redundant Test Coverage Audit — Three Largest Test Files
+
+Analysis performed read-only (no files modified) across all three files, cross-referenced against the implementation code each test exercises (`custom_components/lock_code_manager/providers/matter.py`, `custom_components/lock_code_manager/websocket.py`, `custom_components/lock_code_manager/binary_sensor.py`, plus `providers/_base.py`).
+
+---
+
+## 1. `tests/providers/matter/test_provider.py` (151 tests, 3497 lines)
+
+Overall a rigorous file — most apparent overlap is **deliberate**, systematic coverage of independent exception families (`HomeAssistantError` / `MatterError` / `MatterClientException` are not subclasses of each other — issue #1257). Pairs that differ only by exception class hitting the same `except (...)` tuple are NOT flagged; that's a load-bearing regression guard, not duplication.
+
+**High confidence — delete:**
+- `test_is_device_available_ignores_node_resolution` (180–194) — byte-for-byte identical body to `test_is_device_available_follows_entity_state` (153–158). `async_is_device_available()` never touches node resolution, so the "regression guard" framing doesn't correspond to a real branch. Nothing lost.
+- `test_node_unresolvable_when_no_device` (1171–1181) — subsumed by `test_require_client_and_node_no_client` (489–498); the latter has a stricter `match=` assertion.
+- `test_setup_push_no_client_raises` (1204–1210) — subsumed by `test_setup_push_unresolvable_raises` (1358–1370), which asserts everything the former does plus more.
+- `test_wrong_cluster_ignored` — defined identically twice, in `TestLockOperationEvent` (1048–1065) and `TestLockUserChangeEvent` (1773–1791). Both prove the same class-agnostic early-return guard in `_on_node_event`. Delete one copy.
+
+**Medium confidence — merge:**
+- `test_setup_internal_unsupported_lock` (202–225) + `test_setup_internal_no_pin_support` (228–247) — per `_base.py`'s own docstring, `supports_user_management` is deliberately not gated on, so both tests collapse to the same `or []` fallback. Merge into one.
+
+**Lower-confidence consolidation-only (no guarantee lost, just fragmented setup)** — `test_node_resolves`/`test_client_from_integration` (two halves of one return tuple), the `test_set_credential_success_returns_true`/`test_set_credential_pushes_unreadable_optimistically` pair, and the `TestDeleteCredential` positive-path triple (3373–3456) — each assertion is legitimate; recommend merging setup, not deleting any assertion.
+
+**Explicitly checked and kept**: `test_set_user_creates_when_no_tagged_or_legacy_user` vs. `test_set_user_create_auto_allocates_and_returns_allocated_index` (different contract: LCM slot vs. Matter-allocated index); all `HomeAssistantError`/`MatterClientException` pairs; the e2e-vs-unit RFID-filtering pair.
+
+**File total: ~5 tests removed/merged outright, ~3 more consolidation-only ≈ 115–120 lines (~3.5%).**
+
+---
+
+## 2. `tests/test_websocket.py` (101 tests, 3219 lines)
+
+**High confidence — delete:**
+- `test_subscribe_code_slot_receives_coordinator_updates` (3174–3219) — near-exact duplicate of `test_subscribe_code_slot_coordinator_update` (694–740); same setup/assertions, only the literal code string differs. ~46 lines.
+- `test_coordinator_push_update_reflects_in_subscribe_lock_codes` (1286–1320) — strict subset of `test_subscribe_lock_codes` (237–274). ~35 lines.
+- `test_subscribe_code_slot_state_change` (656–691) — subsumed by `test_enable_toggle_reflects_in_subscribe_code_slot` (1242–1283), which re-proves the OFF transition plus the ON transition. ~36 lines.
+- `test_subscribe_code_slot_slot_2_with_calendar` (856–884) — the `CONF_CONDITIONS in data` assertion is a **tautology**: `_serialize_slot_card_data` places that key unconditionally for every slot. The incidental calendar-fetch-exception path it smoke-tests is already directly unit-tested in `TestGetNextCalendarEvent::test_returns_none_on_exception`. ~29 lines.
+- `TestGetConditionEntityData`: `test_binary_sensor_entity_on/off`, `test_switch_entity`, `test_input_boolean_entity` (1808–1873) — `_get_condition_entity_data` only branches on `CALENDAR_DOMAIN`/`SCHEDULE_DOMAIN`; these four domains all fall through identical generic code. Collapse to one parametrized test. ~30–35 lines net.
+
+**Medium confidence — simplify/merge:**
+- `test_pin_set_via_service_reflects_in_subscribe_code_slot` (1115–1171) vs. `test_subscribe_code_slot_receives_live_updates` (3131–3172) — `CONF_PIN` is read directly from entity state, not the coordinator, so the former's coordinator-refresh/poll machinery doesn't exercise a distinct path. Confirm with original author before cutting the polling pattern (possible flakiness defense). ~40–57 lines if merged.
+
+**Explicitly checked and kept** (flagged low-confidence, not recommended): the two `unsub_all_with_empty_state_ref` guard tests (shared guard but reached via two different WS commands — this bug class has bitten the codebase before); the three title-based config-entry lookups (each pins wiring for a distinct handler); `set_usercode`/`clear_usercode` error-path pairs (distinct endpoints).
+
+**File total: ~7 of 101 tests removed/merged ≈ 190–250 lines (~6–8%).**
+
+---
+
+## 3. `tests/test_binary_sensor.py` (40 tests, 2226 lines)
+
+**High confidence — delete:**
+- `test_coordinator_update_triggers_sync_on_external_change` (653–728) — same trigger/outcome as `test_coordinator_poll_detects_external_change_and_syncs` (1158–1218), but the latter uses the *real* background timer (`async_advance_time`) rather than the manual tick helper, and asserts more. ~76 lines.
+- `test_coordinator_refresh_failure_schedules_retry` (605–650) — its entire assertion is a strict subset of the first-tick portion of `test_coordinator_refresh_failure_after_sync_retries_on_next_tick` (1776–1834). ~46 lines.
+
+**Medium confidence:**
+- `test_unexpected_error_during_sync_suspends_slot` (1105–1137) — same generic-error→SUSPENDED assertion as `test_slot_suspension_isolated_from_other_slots` (1290–1341), which additionally proves sibling-slot isolation. Trade-off: deleting loses a simple, non-bespoke-fixture repro case for fast triage — flagged medium, not high. ~33 lines.
+
+**Lower confidence / different category:**
+- `test_sync_tracker_expired_window_resets` (1026–1045) — the underlying invariant is already exercised end-to-end by `test_sync_tracker_does_not_fire_breaker_with_expired_window` (978–1023), but this one gives faster fault-localization if the property regresses in isolation — real, if modest, diagnostic value. ~20 lines, judgment call.
+- `test_sync_manager_handles_string_slot_num` (1140–1150) — **not redundant with another test, but mislabeled/weak**: docstring claims it tests string→int slot-key normalization, but the body never constructs a string key; it only asserts `isinstance(manager._slot_num, int)` on a normally-built manager. As written it tests nothing real. Recommend either delete (11 lines) or rewrite to actually inject a string key.
+
+**Explicitly checked and kept**: the three "external change" trigger tests via poll/push_update/drift-check (three genuinely distinct entry points); the circuit-breaker equivalence-class partition; exception-type-specific tests (`LockDisconnected`, `DuplicateCodeError`, generic `Exception` → distinct outcomes); five defensive-guard tests at file end (2057–2227), each hitting a distinct guard clause.
+
+**Non-actionable observation**: several concurrency tests (1542–1936) hand-roll near-identical pause/resume event scaffolding (~60–80 lines total) — each proves a genuinely distinct contract and should be kept, but the boilerplate is a DRY/fixture-extraction opportunity, not a coverage-redundancy finding.
+
+**File total: 2 high-confidence removals + 1 medium ≈ 155 lines; up to 2 more low-confidence ≈ 175–190 lines total (~8%) if all taken.**
+
+---
+
+## Overall Quantitative Summary
+
+| File | Tests removed/merged (recommended) | Lines saved (approx.) |
+|---|---|---|
+| test_provider.py | 5 outright + 3 consolidation-only (8 total) | ~115–120 |
+| test_websocket.py | 7 | ~190–250 |
+| test_binary_sensor.py | 3–5 | ~155–190 |
+| **Total** | **~18–20 of 292 tests (~6–7%)** | **~460–560 lines (~4–5% of 8942 total)** |
+
+**Caveat on scope**: this is a modest reduction relative to file size. Across all three files, the large majority of apparent overlap turned out to be intentional — either equivalence-class/exception-family partitions (Matter), distinct trigger-mechanism coverage (binary sensor sync), or distinct-contract pairs sharing incidental setup (websocket). The genuinely redundant tests cluster around a specific pattern worth watching for in review: a "full vertical flow" or "regression guard" test added later that turns out to retrace an existing test's exact path without adding a new branch or a stronger assertion.</result>
+<usage><subagent_tokens>77227</subagent_tokens><tool_uses>3</tool_uses><duration_ms>340703</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a70e2947e0412aaf8</task-id>
+<tool-use-id>toolu_01EFmJZhqYBqPy7Zqn7nSQUC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/a70e2947e0412aaf8.output</output-file>
+<status>completed</status>
+<summary>Agent "Gaps: behavior beyond lines" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Findings
+
+I read `domain/sync.py` (1006 lines), `domain/resilience.py`, the migration code in `__init__.py`, and cross-referenced every claim against the actual test suite (`tests/test_sync.py` — 2033 lines, 60 tests; `tests/test_resilience.py`; `tests/test_init.py`; provider tests). I ran a targeted branch-coverage pass to confirm the specific partial branches you flagged, rather than trusting the aggregate 99% number. `SlotSyncManager` itself is unusually well tested at the unit level — races, mid-tick callback ordering, and `async_stop`/in-flight-tick interactions are all explicitly covered (e.g. `test_request_sync_check_does_not_mutate_breaker_mid_tick`, `test_async_stop_awaits_tick_when_concurrent_tick_returned_early`). The real gaps are elsewhere.
+
+### 1. Disable → recovery → issue-persistence sequence is never exercised end-to-end (highest risk)
+
+`_disable_slot` (sync.py:470) calls the real `async_disable_slot` service, which flips the slot's `active` switch OFF. The very next tick will then see `active_state=OFF` + no code on lock → trivially "in sync" → `_clear_resolved_issues` runs, which deliberately does **not** clear `slot_disabled_*` when the slot is inactive (sync.py:548, `if slot_state.active_state == STATE_ON`) — this is the designed behavior so a user isn't silently let off the hook after a code-rejection disable.
+
+Every test that exercises `_disable_slot` (`TestDisableSlotExceptionHandling`, `test_code_rejected_still_disables_slot`) mocks either `_disable_slot` itself or the underlying `async_disable_slot` service call, so the real switch-flip never happens and the follow-on tick is never run. The exact interaction the comment at sync.py:700-708 describes ("LOADING is an initial-state observation... the next genuine recovery... will clear issues") is asserted only for the LOADING path (`test_loading_branch_does_not_auto_clear_stale_issues`), never for a real OUT_OF_SYNC→disable→IN_SYNC cycle.
+
+**Real bug this hides:** if a future refactor collapses the active/inactive distinction in `_clear_resolved_issues`, a slot disabled for rejecting a code would silently lose its repair issue the instant the switch turns off — the user never learns why their code stopped working.
+
+**Test to add:** integration-style test that lets `CodeRejectedError` really call `_disable_slot` → `async_disable_slot` (no mocking), asserts the `active` switch is OFF, runs a real subsequent tick, and asserts the `slot_disabled_*` issue is *still present*.
+
+### 2. Push-provider "skip coordinator refresh" branch (sync.py:891) is untested in combination with optimistic pending writes
+
+Confirmed via `--cov-branch`: `891-&gt;915` is genuinely partial across the *entire* suite, not just `test_sync.py`. `MockLCMLock` (the default lock used throughout `test_sync.py`) always has `supports_push=False`; `MockLCMPushLock` exists but is used only in `test_coordinator.py`, never in `test_sync.py`. Provider-level push tests (`tests/providers/zwave_js/test_events.py`, etc.) exercise `push_update()` in isolation but never drive `SyncState`/`SlotSyncManager` ticks (confirmed: no provider test file references `SyncState`/`in_sync` except `test_events.py`, which doesn't touch the tick).
+
+So the actual production path for Z-Wave JS (UC), Matter, and Zigbee2MQTT — `WriteResult.OPTIMISTIC` set → pending write recorded → tick skips `coordinator.async_refresh()` (because a push provider's cache would be stale) → `PENDING_CONFIRMATION` → confirmed by a push event or times out — is never exercised as one sequence anywhere. `TestOptimisticSetPendingConfirmation` (test_sync.py:1876) covers the *non*-push, poll-based version of this exact scenario (masked/Schlage-style lock), which is valuable but is the other branch.
+
+**Real bug this hides:** a push provider whose confirming event never arrives (dropped WebSocket message, missed notification) relies entirely on the `PENDING_CONFIRMATION` timeout path with *no coordinator refresh as a backstop*. If that timeout/re-sync interaction has an off-by-one or the `_lock._pending_writes` dict access races with the push handler, it would manifest as a slot silently stuck in `PENDING_CONFIRMATION` forever — for real supported hardware, not just a synthetic mock.
+
+**Test to add:** `SlotSyncManager` test using `MockLCMPushLock` (`supports_push=True`) where `async_set_usercode` returns `WriteResult.OPTIMISTIC`, assert `coordinator.async_refresh` is never called, then exercise both outcomes — a `push_update()` call landing before the deadline (resolves cleanly) and no event arriving (timeout → breaker failure → re-sync).
+
+### 3. Circuit breaker double-trip cycle within one window is untested
+
+`test_code_suspension_latches_until_target_changes` (sync.py test at line 1280) covers exactly one cycle: trip → suspend → target changes → resume (`OUT_OF_SYNC`). No test then drives a **second** failure run to re-trip the same slot's breaker after the `_breaker_reset_requested` consumption at the top of `_async_tick_impl` (sync.py:674-676). This is the one combinatorial scenario the prompt specifically called out ("breaker trips → recovers → trips again within the same window") and it genuinely doesn't exist in the suite — I grepped every `SUSPENDED` occurrence in `test_sync.py` and confirmed none transitions `SUSPENDED → OUT_OF_SYNC → SUSPENDED` in the same test.
+
+**Real bug this hides:** the breaker-reset-request flag is a single coalescing bool (`_breaker_reset_requested`), by design ("coalescing many requests into one reset is intentional"). If a stale reset request from cycle 1 leaked into cycle 2's accounting, or if `_code_suspend_target` weren't correctly cleared/reset for a second suspend, a user could see a slot that resumes but can never re-suspend (silently retrying forever on a lock rejecting the same bad code again), or that re-suspends after only 1 failure instead of 3.
+
+**Test to add:** extend `test_code_suspension_latches_until_target_changes` (or add a sibling) to, after resuming via target change, drive `MAX_SYNC_ATTEMPTS` more failures and assert it re-suspends with a fresh `_code_suspend_target` and a repair issue that reflects the new failure.
+
+### 4. Migration entry already at version 2 is never invoked directly
+
+Confirmed by grep: the only migration test (`test_migration_v1_to_v2_calendar_to_entity_id`, test_init.py:535) starts every entry at `version=1`, so it always falls through both `if` blocks in `async_migrate_entry` (`__init__.py:126` and `:160`) in the same call. Your flagged branches `126-&gt;160` (skip v1 block) and `160-&gt;210` (skip v2 block) are real: no test constructs an entry at `version=2` and calls `async_migrate_entry`/`async_setup` on it directly.
+
+This matters concretely, not just as a coverage nit: `CONFIG_VERSION = 3` (config_flow.py:382) implies there was a real released state where entries sat at version 2 (before the `number_of_uses` migration existed). Any user who upgraded to that intermediate release and is now upgrading again will hit exactly the untested `version==2`-only path in production. The code itself looks correct (each block builds `new_data`/`new_options` fresh from `config_entry.data/options`, no state leaks from the v1 block), so I'd call this **lower risk than it looks** — but it's the one case in your list I can't rule out without a direct test, since I can't verify by inspection alone that `hass.config_entries.async_update_entry` mid-function correctly refreshes `config_entry.version` for the *second* real-world entry point (call starting at 2, not falling through from 1).
+
+**Test to add:** a `version=2` `MockConfigEntry` with a slot containing `number_of_uses` (no `CONF_CALENDAR`), run `async_setup`, assert it lands on version 3, the field is stripped, and the `number_of_uses_removed_*` issue is created — without ever exercising the v1 block.
+
+### Lower-priority / verified-but-minor
+
+- **resilience.py window boundary**: `test_window_expiry_resets_count` and `test_tripped_clears_when_window_elapses` both test at `window + 1s`, never at exactly `window` (the `&gt;`/`&lt;=` boundary asymmetry between `record_failure`'s reset check and `tripped`'s check). Real-world risk is low (wall-clock ticks essentially never land exactly on the boundary), but it's a genuine hole if you want it closed: add a `freezer.tick(timedelta(minutes=5))` (exact) case asserting `tripped` is still `True` and a failure at that instant does *not* reset the count.
+- **sync.py:905-&gt;907** (clear operation, not set, whose post-op `coordinator.async_refresh()` raises): only the `was_set=True` case is tested (`test_set_then_refresh_failure_records_failure`); the `was_set=False` (clear) case skips `record_failure` by design but is never asserted. Low risk — the logic is a one-line `if`, and a wrong result would just mean a clear failure doesn't count toward the breaker, which is the documented intent anyway.
+- **sync.py:268-&gt;271, 272-&gt;276** (`async_stop` guards for `_tick_unsub`/`_coordinator_unsub` being falsy): these can only be `None` from a partially-completed `async_start`, which `__init__` always initializes to `None` and `async_start` always sets both together. Defensive-only; not worth a test.
+- **Multi-lock/multi-entry partial failure**: better covered than the prompt's framing suggests. `test_hard_refresh_usercodes_service_raises_on_lock_error` and `test_new_lock_setup_failure_logged_and_lock_excluded` both explicitly test one-lock-fails/one-lock-succeeds via `asyncio.gather(..., return_exceptions=True)`. The one real gap here is narrower than "multi-lock": a slot-level suspend/breaker trip on a lock **shared by two config entries** is only tested within a single entry (`test_non_converging_code_suspends_only_its_slot`), never across two entries sharing the same `BaseLock`/coordinator instance — low risk since `SlotSyncManager` and its breaker are 1:1 per (lock, slot) regardless of entry, but untested.
+
+### Not worth chasing
+
+Concurrency/re-entrancy (ticks overlapping, push arriving mid-write, unload racing a tick) is already thoroughly tested at the `SlotSyncManager` level — I initially expected this to be a gap per your prompt, but `test_async_stop_awaits_tick_when_concurrent_tick_returned_early` and `test_request_sync_check_does_not_mutate_breaker_mid_tick` cover exactly the "second tick fires while first is mid-`_perform_sync`" and "coordinator listener fires across the await boundary" cases with real `asyncio.Event`-gated concurrency, not just sequential `await` calls.</result>
+<usage><subagent_tokens>138867</subagent_tokens><tool_uses>52</tool_uses><duration_ms>416013</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a16a728cbe7eec27d</task-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b44d615f-c56d-49aa-8419-5f0abf323238/tasks/a16a728cbe7eec27d.output</output-file>
+<status>completed</status>
+<summary>Agent "Redundancy: cross-layer overlap" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All four background audits are complete. Here is the consolidated cross-layer test redundancy report.
+
+## 1. `tests/providers/test_base.py` (59 tests) vs `tests/providers/test_seam.py` (59 tests)
+
+**Verdict: principled split, essentially clean.** `test_base.py` owns generic `BaseLock` orchestration mechanics (connection tracking, rate limiting/serialization, push subscription, reconnect-task cancellation, setup/repair-issue lifecycle, `async_call_service` error wrapping, duplicate-code checks, event firing). `test_seam.py` owns the User→Credential seam specifically (capability-derived gating, tagged-user naming, credential-type assertions, native/degenerate set-clear orchestration, rollback-on-failure, optimistic-write/confirm bookkeeping, capacity checks). The fixtures confirm the split is real, not accidental: `test_base.py`'s `MockLCMLock`/`MockNativeUserLock` only ever exercise the slot-level API and the setup capability gate; `test_seam.py`'s `_NativeStubLock`/`_DegenerateStubLock` are the only fixtures that implement the primitive-level API the seam dispatches to.
+
+**One genuine redundancy found:**
+- `tests/providers/test_seam.py:190` `test_setup_internal_rejects_lock_without_pin_support` asserts the same two facts (`_setup_succeeded is False`, `coordinator is not None`) already covered more thoroughly by `tests/providers/test_base.py:1238` `test_setup_internal_structural_failure_degrades_and_recovers_on_reload` and `tests/providers/test_base.py:1389` `test_on_integration_loaded_rejects_lock_without_pin_support` (which add repair-issue creation/dismissal and reload-recovery). Removing the seam copy loses no signal — it survives only for narrative co-location with its two non-duplicated siblings (`test_setup_internal_accepts_slot_only_capabilities`, `test_setup_internal_skips_capability_check_for_slot_only_providers`).
+
+Everything else checked out as non-overlapping or as correct coverage of disjoint branches of the same function (e.g., coordinator-refresh-on-change in `test_base.py` vs. optimistic-pending-write bookkeeping in `test_seam.py` are the CONFIRMED vs. OPTIMISTIC branches of the same `async_internal_set_usercode`, correctly split by branch).
+
+## 2. Concrete provider tests re-testing base-seam behavior
+
+**akuvox / schlage / matter (service-based):**
+- `tests/providers/akuvox/test_provider.py:886` `test_concurrent_set_credential_serialized_under_sequence_lock` and `tests/providers/schlage/test_provider.py:610` (same name) both re-prove `_serialize_sequence`'s race-prevention mechanic with the identical `max_overlap` harness already pinned generically at `tests/providers/test_base.py:1957` `test_serialize_sequence_serializes_concurrent_blocks`. Matter has no equivalent test at all despite also doing multi-step writes — so coverage is inconsistent (2× over-tested, 1× untested) rather than balanced.
+- Both akuvox (`test_provider.py:588,488,555` — list/set/delete service-failure tests) and schlage (`test_provider.py:938,850,888`) each re-derive the generic `HomeAssistantError → LockOperationFailed` wrapping contract at three separate call sites per provider, duplicating `tests/providers/test_base.py:516` `test_async_call_service_raises_operation_failed_on_error`.
+- Matter's `test_provider.py:202` `test_setup_internal_unsupported_lock` and `:228` `test_setup_internal_no_pin_support` triple-cover the "no PIN support degrades setup" fact — once via the seam-generic gate (`test_seam.py:190`), once via matter's own capability parsing (`test_provider.py:2105` `test_get_capabilities_no_pin_support_empty_types`), once via this integration test — without adding a distinct assertion.
+- Borderline (not flagged as pure duplicate, real value present): akuvox's `TestBaseOrchestration` (`test_provider.py:969`) and schlage's `test_base_orchestration_set_and_get`/`clear` (`test_provider.py:1004`) re-run the full set→get→clear roundtrip already proven generically by `test_seam.py:908` `test_internal_roundtrip_set_get_clear`, but each also surfaces one real provider-specific fact (e.g. schlage's masked-PIN → `unreadable()` mapping), so trimming rather than deleting is the right move.
+
+**zwave_js / zha / zigbee2mqtt / virtual:**
+- `tests/providers/zwave_js/test_provider.py:401` `test_async_internal_clear_usercode_calls_delete_primitives` re-asserts "clear touches only the credential, not the user record," already pinned by `test_seam.py:710` and `:867`.
+- `tests/providers/zwave_js/test_provider.py:1476` `test_async_set_usercode_builds_tagged_name_within_lock_limit` re-derives the exact truncation arithmetic already unit-pinned by `test_seam.py:488` `test_build_tagged_user_name_truncates_only_display`.
+- `tests/providers/zwave_js/test_provider.py:360` `test_async_internal_set_usercode_calls_primitives` partially duplicates the user-first-ordering claim from `test_seam.py:894`/`:687`.
+- `tests/providers/zha/test_provider.py:145` `test_get_usercodes_via_base_projection` (docstring literally says "Base async_get_usercodes projection...") and `:777` `test_hard_refresh_codes` both re-assert base projection mechanics already pinned by `test_seam.py:299` and `:359`.
+- zigbee2mqtt and virtual: **no seam re-testing found** — clean. Virtual's 9 tests are all pure wiring/plumbing against its own in-memory dict, appropriately minimal.
+- `tests/providers/zwave_js/test_provider.py` is oversized (1863 lines / ~68 tests) and would benefit from splitting (reconciliation-read block, UC zero-slots block are separable), independent of redundancy.
+
+**Legitimately provider-specific, correctly placed (representative, not exhaustive):** Akuvox's cloud-user filtering and legacy-tag migration; Matter's three-exception-family SDK translation guard (`test_sdk_exception_translation.py`) and node-event→slot resolution; Schlage's "already exists" idempotency quirk and rename-via-delete+add rollback; Z-Wave JS's UC-vs-U3C dispatch, value-DB reconciliation, driver error-code mapping; ZHA's zigpy cluster discovery and DoorLock command dispatch; Zigbee2MQTT's MQTT payload/status parsing and republication-delta gating.
+
+## 3. `helpers.py` contract classes vs hand-rolled provider tests
+
+Mixin usage is correctly matched to provider shape — no unjustified skips:
+
+| Mixin | akuvox | matter | schlage | zwave_js | zha | z2m | virtual |
+|---|---|---|---|---|---|---|---|
+| `ServiceProviderConnectionTests` | yes | yes | yes | n/a | n/a | n/a | n/a |
+| `ServiceProviderDeviceAvailabilityTests` | correctly opts out (no service-based check) | correctly opts out (entity-state-based, hand-rolls its own `TestDeviceAvailability`) | yes | n/a | n/a | n/a | n/a |
+| `ProviderNativeTransportContractTests` | yes, default injection | yes, SDK-patch override | yes, default injection | yes, SDK-patch override | **skipped with documented reason** (per-slot degrade, not top-level raise) + hand-rolled equivalents at `:701`/`:757` | **skipped with same documented reason** + only a write-path hand-rolled equivalent (`:704`,`:785`) | correctly skipped (no transport concept) |
+
+The zha/zigbee2mqtt skips are legitimate (their `async_get_users` degrades per-slot to `SlotCredential.unreadable()` rather than raising), and the docstring reasoning is sound — but it's copy-pasted independently in each file instead of expressed once.
+
+## 4. Top-level `tests/test_*.py`
+
+**Verdict: 0 genuine duplicate pairs.** Full review of `test_sync.py`, `test_resilience.py`, `test_credentials.py`, `test_coordinator.py`, `test_callbacks.py`, `test_services.py`, `test_slot_coordinator.py`, plus spot checks of `test_init.py`/`test_event.py` and a symbol grep across the remaining UI/entity-platform files. Every file exercises orchestration genuinely above the seam (sync state machine, circuit-breaker/backoff policy, coordinator scheduling, entity wiring, service routing) using `MockLCMLock` purely as a black-box fake — none re-assert seam-internal mechanics. One noted parallel-but-not-redundant pair: `test_coordinator.py:1189` `test_apply_read_takes_differing_readable_external_change` and `test_seam.py:1155` (same name) intentionally mirror the same *policy* ("differing readable observation wins") against two independent implementations (`LockUsercodeUpdateCoordinator._apply_read` vs. `BaseLock._confirm_slot`) — worth a code comment linking them so they don't silently diverge, but not a redundancy to remove.
+
+## Inverse gaps (coverage disguised as adequate)
+
+1. **Per-slot-degrade contract undertested and unshared.** zha and zigbee2mqtt both hand-roll the same "generic exception degrades a slot to `unreadable()`, but explicit `LockDisconnected` still propagates" contract instead of a shared mixin. Zigbee2mqtt's version is incomplete — it only tests this on the write path (`OSError`→`LockDisconnected`), never the read-side per-slot-degrade that zha covers. A `ProviderPerSlotDegradeContractTests` mixin in `helpers.py` would close z2m's gap and de-duplicate zha's.
+2. **Write-path native-transport injection isn't in the mixin at all.** `ProviderNativeTransportContractTests` only targets `async_get_usercodes`. Zigbee2mqtt's `test_provider.py:704`/`:785` hand-roll structurally identical write-path (`set_credential`/`delete_credential`) injection that the mixin could cover for all service-based providers uniformly if widened.
+3. **Sequence-lock serialization has no shared mixin.** Akuvox and schlage each hand-copy `test_base.py`'s race-detection harness (`max_overlap`) to re-prove `_serialize_sequence` generically, while matter — which also does multi-step writes — has no equivalent test at all. A `ProviderSequenceLockContractTests` mixin taking one service/attribute name would fix the 2×-over/1×-under asymmetry.
+
+## Quantitative summary
+
+| Category | Count | Disposition |
+|---|---|---|
+| `test_base.py` ↔ `test_seam.py` duplicate | 1 | Delete `test_seam.py::test_setup_internal_rejects_lock_without_pin_support` |
+| Provider tests duplicating seam/base generically | ~8 | Delete/trim: zwave_js (3: `:401`, `:1476`, partial `:360`), zha (2: `:145`, `:777`), akuvox+schlage sequence-lock tests (2), matter triple-covered setup-gate pair (2 tests → keep the capability-parsing one only) |
+| Provider tests duplicating generic service-error-wrapping | 6 (3 akuvox + 3 schlage) | Collapse to one "routes through `async_call_service`" wiring check per provider instead of re-proving the wrap semantics 3× each |
+| Top-level `tests/test_*.py` duplicates | 0 | None — clean layering confirmed |
+| Borderline (real value, not pure duplicate) | ~4 | akuvox/schlage `TestBaseOrchestration` roundtrips, matter's triple-cover (partial), coordinator/seam `_apply_read`/`_confirm_slot` parallel — trim or comment-link, don't delete |
+| Inverse coverage gaps (helpers.py could generalize) | 3 mixin candidates | New mixins would remove ~10 hand-rolled tests total while fixing 2 real undertested spots (z2m read-side degrade, matter sequence-lock) |
+
+**Overall reasoning:** the architecture's test layering is disciplined — the big finding is not "these two files duplicate each other" (they don't, materially) but that **individual service-based providers (akuvox, schlage, and to a lesser extent matter, zwave_js, zha) re-derive generic seam/base contracts (service-error wrapping, sequence-lock serialization, roundtrip mechanics, tagged-name truncation, projection mechanics) using their own mocks**, when a thinner "does my method actually route through the shared primitive" wiring check would suffice. The fix is consistently the same shape: trim the re-proven generic assertion, keep the one provider-specific fact each test currently smuggles in alongside it, and promote the three recurring hand-rolled patterns (per-slot-degrade, write-path transport injection, sequence-lock serialization) into `helpers.py` mixins so coverage is uniform across providers instead of accidentally 2×/0× depending on which provider happened to get the pattern first.</result>
+<usage><subagent_tokens>96945</subagent_tokens><tool_uses>12</tool_uses><duration_ms>497712</duration_ms></usage>
+</task-notification>
+
+---
+
+do we have all of our hegel/hypothesis tests in place?
+
+---
+
+start
