@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "1bcb5a2dd146",
+  "strategy": "manual-commit",
+  "branch": "fix/1398-out-of-range-slot",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/domain/credentials.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1b/cb5a2dd146/0/metadata.json",
+      "transcript": "/1b/cb5a2dd146/0/full.jsonl",
+      "compact_transcript": "/1b/cb5a2dd146/0/transcript.jsonl",
+      "content_hash": "/1b/cb5a2dd146/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 371361,
+    "cache_read_tokens": 13427470,
+    "output_tokens": 30883,
+    "api_call_count": 38
+  }
+}
