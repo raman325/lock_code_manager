@@ -1,6 +1,6 @@
 """Config flow tests."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -1241,3 +1241,62 @@ async def test_config_flow_capacity_check_skipped_when_capacity_unknown(
         )
 
     assert result["type"] == "create_entry"
+
+
+async def test_config_flow_capacity_check_skipped_when_lock_allocates_index(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    A provider that allocates its own credential index is not slot-bounded.
+
+    Matter picks the next free index, so a high slot number is legal there and
+    the flow must not query capabilities or reject it.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+
+    capabilities = AsyncMock(return_value=_capabilities_with_slots(30))
+    with (
+        patch.dict(
+            "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
+            {"test": MockLCMLock},
+        ),
+        patch.object(
+            MockLCMLock,
+            "credential_index_follows_slot",
+            new_callable=PropertyMock,
+            return_value=False,
+        ),
+        patch.object(MockLCMLock, "async_get_capabilities", capabilities),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+        )
+
+    assert result["type"] == "create_entry"
+    # Bailing before the read is the point: the answer would be irrelevant.
+    capabilities.assert_not_called()
+
+
+async def test_config_flow_capacity_check_survives_unexpected_error(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+):
+    """
+    An unexpected provider error must not take the config flow down with it.
+
+    Validation is advisory; a provider raising something outside the Lock Code
+    Manager hierarchy should degrade to "not checked", not a broken flow.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+
+    probe_registered, probe_capabilities = _capacity_probe(
+        side_effect=RuntimeError("provider blew up")
+    )
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+        )
+
+    assert result["type"] == "create_entry"
+    assert "provider blew up" in caplog.text
