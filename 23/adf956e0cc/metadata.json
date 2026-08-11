@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "23adf956e0cc",
+  "strategy": "manual-commit",
+  "branch": "fix/1397-uc-occupied-slot-unreadable",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/zwave_js/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/23/adf956e0cc/0/metadata.json",
+      "transcript": "/23/adf956e0cc/0/full.jsonl",
+      "compact_transcript": "/23/adf956e0cc/0/transcript.jsonl",
+      "content_hash": "/23/adf956e0cc/0/content_hash.txt",
+      "prompt": "/23/adf956e0cc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 432,
+    "cache_creation_tokens": 161265,
+    "cache_read_tokens": 7949908,
+    "output_tokens": 48136,
+    "api_call_count": 60
+  }
+}
