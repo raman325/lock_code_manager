@@ -136,6 +136,34 @@ async def test_request_pin_update_allows_in_range_pin(
     )
 
 
+async def test_request_pin_update_skips_lock_advertising_no_pin_type(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    A lock with known capabilities but no PIN type constrains nothing.
+
+    Distinct from the uncached case: here the capabilities ARE known, they
+    just say nothing about PIN length. Treating that silence as a rejection
+    would let one non-PIN lock in the entry block every write.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        lock._capabilities_cache = LockCapabilities(
+            supports_user_management=True,
+            max_users=30,
+            credential_types={},
+        )
+    coordinator = runtime_data.slot_coordinators[1]
+
+    # A single character would fail any real bound, so acceptance proves the skip.
+    await coordinator.async_request_pin_update("1")
+    await hass.async_block_till_done()
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == "1"
+
+
 async def test_request_pin_update_empty_pin_exempt_from_length(
     hass: HomeAssistant,
     mock_lock_config_entry,
