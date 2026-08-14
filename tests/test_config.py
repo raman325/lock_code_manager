@@ -15,6 +15,7 @@ from custom_components.lock_code_manager.domain.config import (
     EntryConfig,
     EntryConfigDiff,
     build_slot_device_identifier,
+    build_slot_unique_id,
     parse_slot_device_identifier,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
@@ -564,3 +565,98 @@ def test_parse_slot_device_identifier_rejects_builder_aliases(suffix: str) -> No
     two distinct identifiers onto one slot.
     """
     assert parse_slot_device_identifier("abc123", f"abc123|{suffix}") is None
+
+
+# --- has_changes: one field at a time (mutation-testing gap) ---
+
+
+@pytest.mark.parametrize(
+    ("label", "old", "new"),
+    [
+        (
+            "slots_added",
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}},
+        ),
+        (
+            "slots_removed",
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}},
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+        ),
+        (
+            "locks_added",
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+            {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}},
+        ),
+        (
+            "locks_removed",
+            {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}},
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+        ),
+    ],
+)
+def test_has_changes_is_true_for_each_field_alone(
+    label: str, old: dict, new: dict
+) -> None:
+    """
+    Any ONE of the four diff fields alone is enough to report a change.
+
+    The existing tests only ever move slots and locks together, or neither,
+    so each individual disjunct in ``has_changes`` went unpinned -- mutating
+    any single ``or`` to ``and`` survived. ``has_changes`` gates the Lovelace
+    dashboard re-render, so a collapsed disjunct means a user who only adds a
+    slot (or only removes a lock) silently gets a stale dashboard.
+    """
+    diff = EntryConfigDiff(old=_cfg(old), new=_cfg(new))
+
+    assert diff.has_changes is True, f"{label} alone should count as a change"
+    # Exactly the named field is populated; the other three stay empty.
+    populated = {
+        name
+        for name in ("slots_added", "slots_removed", "locks_added", "locks_removed")
+        if getattr(diff, name)
+    }
+    assert populated == {label}
+
+
+def test_has_changes_is_false_when_only_slot_contents_change() -> None:
+    """
+    Editing a slot's PIN is not a structural change.
+
+    ``has_changes`` asks specifically about added/removed slots and locks;
+    a PIN edit must not trigger a dashboard re-render.
+    """
+    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(pin="1111")}})
+    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(pin="2222")}})
+
+    assert EntryConfigDiff(old=old, new=new).has_changes is False
+
+
+# --- build_slot_unique_id format (never referenced by any test) ---
+
+
+def test_build_slot_unique_id_standard_format() -> None:
+    """
+    The standard unique id is entry|slot|key, pipe-delimited.
+
+    This string is the entity registry key. Changing the separator silently
+    orphans every existing entity, so the exact format is the contract --
+    yet no test referenced this function at all.
+    """
+    assert build_slot_unique_id("abc123", 4, "pin") == "abc123|4|pin"
+
+
+def test_build_slot_unique_id_per_lock_format() -> None:
+    """The per-lock variant appends the lock entity id as a fourth segment."""
+    assert (
+        build_slot_unique_id("abc123", 4, "in_sync", "lock.front_door")
+        == "abc123|4|in_sync|lock.front_door"
+    )
+
+
+def test_build_slot_unique_id_variants_never_collide() -> None:
+    """A per-lock id is always distinct from the standard id it extends."""
+    standard = build_slot_unique_id("abc123", 4, "code")
+    per_lock = build_slot_unique_id("abc123", 4, "code", "lock.front_door")
+    assert standard != per_lock
+    assert per_lock.startswith(f"{standard}|")

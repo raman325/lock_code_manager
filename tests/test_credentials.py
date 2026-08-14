@@ -13,6 +13,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     SetUserResult,
     User,
     UserType,
+    WriteResult,
     credential_from_slot,
     slot_credential_of,
     user_from_slot,
@@ -338,3 +339,142 @@ class TestProjectionHelpers:
     def test_user_from_slot_accepts_optional_name(self) -> None:
         user = user_from_slot(5, SlotCredential.known("1234"), name="alice")
         assert user.name == "alice"
+
+
+class TestWireValuesArePinned:
+    """
+    Every enum member's serialized value is asserted, not just its identity.
+
+    These strings go out on the wire to providers and come back in stored
+    config. Referring to members by identity (``CredentialType.RFID``) reads
+    as coverage but pins nothing: renaming the value would keep every such
+    test green while silently changing what the integration sends. Mutation
+    testing confirmed only ``PIN`` was actually pinned.
+    """
+
+    @pytest.mark.parametrize(
+        ("member", "wire_value"),
+        [
+            (CredentialType.PIN, "pin"),
+            (CredentialType.RFID, "rfid"),
+            (CredentialType.FINGERPRINT, "fingerprint"),
+            (CredentialType.FACE, "face"),
+            (CredentialType.PASSWORD, "password"),
+            (CredentialType.NFC, "nfc"),
+        ],
+    )
+    def test_credential_type_wire_value(
+        self, member: CredentialType, wire_value: str
+    ) -> None:
+        """The credential type serializes to its documented lowercase value."""
+        assert member.value == wire_value
+
+    @pytest.mark.parametrize(
+        ("member", "wire_value"),
+        [
+            (WriteResult.NO_CHANGE, "no_change"),
+            (WriteResult.CONFIRMED, "confirmed"),
+            (WriteResult.OPTIMISTIC, "optimistic"),
+        ],
+    )
+    def test_write_result_wire_value(
+        self, member: WriteResult, wire_value: str
+    ) -> None:
+        """The write result serializes to its documented value."""
+        assert member.value == wire_value
+
+
+class TestWriteResultChanged:
+    """
+    ``WriteResult.changed`` decides whether the seam refreshes the coordinator.
+
+    Nothing asserted it directly: it is read only in ``providers/_base.py``,
+    so it reached 100% line coverage on the strength of its callers while its
+    actual truth table went unpinned.
+    """
+
+    @pytest.mark.parametrize(
+        ("result", "expected"),
+        [
+            (WriteResult.NO_CHANGE, False),
+            (WriteResult.CONFIRMED, True),
+            (WriteResult.OPTIMISTIC, True),
+        ],
+    )
+    def test_changed_truth_table(self, result: WriteResult, expected: bool) -> None:
+        """Only NO_CHANGE reports no write; both write outcomes report one."""
+        assert result.changed is expected
+
+
+class TestBoundedSlotCount:
+    """
+    ``bounded_slot_count`` centralizes the "0 means unknown capacity" rule.
+
+    It is the gate for the out-of-range slot check, so getting it wrong
+    either blocks legitimate writes or lets an impossible slot through. It
+    had no direct test at all -- every mutation of its condition survived.
+    """
+
+    @staticmethod
+    def _caps(**pin_kwargs: int) -> LockCapabilities:
+        """Build capabilities advertising a PIN type with the given slot count."""
+        return LockCapabilities(
+            supports_user_management=True,
+            max_users=30,
+            credential_types={
+                CredentialType.PIN: CredentialTypeCapability(
+                    num_slots=pin_kwargs["num_slots"],
+                    min_length=4,
+                    max_length=8,
+                    supports_learn=False,
+                )
+            },
+        )
+
+    def test_positive_count_is_the_bound(self) -> None:
+        """A real advertised count is returned verbatim as the bound."""
+        assert self._caps(num_slots=30).bounded_slot_count(CredentialType.PIN) == 30
+
+    def test_single_slot_lock_is_still_bounded(self) -> None:
+        """A count of 1 is a genuine bound, not a degenerate "unknown"."""
+        assert self._caps(num_slots=1).bounded_slot_count(CredentialType.PIN) == 1
+
+    @pytest.mark.parametrize("num_slots", [0, -1])
+    def test_non_positive_count_reads_as_unknown(self, num_slots: int) -> None:
+        """
+        Zero or negative means "capacity unknown", so no bound is imposed.
+
+        Matter reports 0 for a field the lock did not supply; treating that
+        as "no slots" would reject every write to an otherwise fine lock.
+        """
+        assert (
+            self._caps(num_slots=num_slots).bounded_slot_count(CredentialType.PIN)
+            is None
+        )
+
+    def test_unadvertised_type_is_unknown(self) -> None:
+        """A type the lock never advertises imposes no bound either."""
+        caps = LockCapabilities(
+            supports_user_management=True, max_users=30, credential_types={}
+        )
+        assert caps.bounded_slot_count(CredentialType.PIN) is None
+
+    def test_bound_is_per_credential_type(self) -> None:
+        """The count for one type never leaks into another."""
+        caps = self._caps(num_slots=30)
+        assert caps.bounded_slot_count(CredentialType.PIN) == 30
+        assert caps.bounded_slot_count(CredentialType.RFID) is None
+
+
+def test_max_user_name_length_defaults_to_zero() -> None:
+    """
+    Omitting the field means "this lock has no concept of named users".
+
+    The seam skips the whole user-write path on a 0 here, so a non-zero
+    default would make it attempt name writes against locks that cannot
+    store them.
+    """
+    caps = LockCapabilities(
+        supports_user_management=True, max_users=30, credential_types={}
+    )
+    assert caps.max_user_name_length == 0
