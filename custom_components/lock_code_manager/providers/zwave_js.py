@@ -1068,30 +1068,57 @@ class ZWaveJSLock(BaseLock):
 
     def describe_link_health(self) -> str | None:
         """
-        Report how much of the traffic aimed at this node goes unanswered.
+        Report how much of the traffic aimed at this node fails to complete.
 
-        The counters are cumulative since Z-Wave JS last started, which the
-        wording says outright: a node that was unreachable last week and is
-        healthy now still reads badly, and a reader who assumed the numbers
-        were recent would draw the wrong conclusion from them.
+        Reports three counters side by side rather than a single ratio,
+        because each answers a different question and node-zwave-js counts
+        them over different populations. ``commandsTX`` counts only commands
+        that were *successfully sent*, so a lock that has drifted out of
+        range increments ``commandsDroppedTX`` instead and would otherwise
+        report a flawless link at the very moment it is unreachable.
+        ``timeoutResponse`` counts only Get-type commands whose reply never
+        arrived, so dividing it by every command sent -- Sets included --
+        would understate the failure rate on a lock that is mostly written
+        to. Quoting the raw numbers sidesteps both distortions.
 
-        They also count every command sent to the node, not only Lock Code
-        Manager's, so this describes the link rather than any one write --
-        which is exactly the question the suspension repair cannot answer on
-        its own.
+        The wording states the window ("since Z-Wave JS started or the
+        statistics were last reset") because the counters are cumulative and
+        resettable: a node that was unreachable last week and is healthy now
+        still reads badly, and a reader who assumed the numbers were recent
+        would draw the wrong conclusion. Round-trip time is reported as an
+        average for the same reason -- node-zwave-js keeps it as an
+        exponential moving average, so one old outlier holds it up long
+        after the link recovers.
+
+        Descriptive only, so an unresolvable node yields no description
+        rather than an error: this runs while a slot is already suspending,
+        and the repair matters more than the detail.
         """
-        statistics = self.node.statistics
-        if not (sent := statistics.commands_tx):
+        try:
+            statistics = self.node.statistics
+        except Exception as err:
+            _LOGGER.debug(
+                "Lock %s: failed to read Z-Wave node statistics: %s",
+                self.lock.entity_id,
+                err,
+            )
+            return None
+        sent = statistics.commands_tx
+        unsendable = statistics.commands_dropped_tx
+        if not (sent or unsendable):
             return None
         summary = (
-            f"Z-Wave link: {statistics.timeout_response} of {sent} commands sent "
-            f"to this lock went unanswered since Z-Wave JS last started"
+            f"Z-Wave link, counted since Z-Wave JS started or the statistics were "
+            f"last reset: {sent} commands reached this lock, {unsendable} could "
+            f"not be sent at all, and {statistics.timeout_response} read requests "
+            f"went unanswered"
         )
         if (round_trip := statistics.rtt) is not None:
-            summary += f", and the last round trip took {round_trip:.0f} ms"
+            summary += f"; recent round trips averaged {round_trip:.0f} ms"
         return (
-            f"{summary}. A large proportion of unanswered commands points to a "
-            f"Z-Wave range or mesh problem rather than the lock refusing the code."
+            f"{summary}. Commands that cannot be sent, or that go unanswered, "
+            f"point to a Z-Wave range or mesh problem rather than the lock "
+            f"refusing the code."
         )
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
