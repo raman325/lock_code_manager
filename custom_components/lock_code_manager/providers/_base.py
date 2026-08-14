@@ -1201,8 +1201,8 @@ class BaseLock:
                 await self.coordinator.async_confirm_pending_writes()
         elif result is WriteResult.CONFIRMED:
             # The lock acknowledged the write: supersede any pending optimistic
-            # state and clear a stale unverified flag from a prior optimistic
-            # write, so the slot can converge instead of churning to a suspend.
+            # state and drop the slot from the unverified set left by a prior
+            # optimistic write, so it can converge instead of churning to a suspend.
             self._pending_writes.pop(code_slot, None)
             if self.coordinator is not None:
                 self.coordinator.mark_verified(code_slot)

@@ -60,13 +60,17 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             config_entry=config_entry,
         )
         self.data: dict[int, SlotCredential] = {}
-        # Per-slot "verified" flag, kept in lockstep with ``data``. A slot is
+        # Slots awaiting confirmation, kept in lockstep with ``data``. A slot is
         # unverified only while an optimistic (ambiguous-but-treated-as-completed)
         # write awaits confirmation; every other source -- genuine push events,
-        # polls, hard refreshes, and authoritative writes -- is verified. Absent
-        # slots read as verified, so poll/cloud providers (which never push an
-        # optimistic update) are unaffected. See the Phase 2 push-as-commit spec.
-        self._verified: dict[int, bool] = {}
+        # polls, hard refreshes, and authoritative writes -- is verified.
+        #
+        # A set rather than a per-slot flag, because "verified" has no
+        # representation of its own: membership is the whole state. Storing it as
+        # ``dict[int, bool]`` admitted a third, redundant value -- an explicit
+        # ``True`` that read identically to absence -- and every writer had to
+        # remember which of the two to use. See the Phase 2 push-as-commit spec.
+        self._unverified: set[int] = set()
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -154,38 +158,36 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
                     out[slot] = cred
                 else:
                     out[slot] = SlotCredential.known(pin)
-                self._verified[slot] = True
+                self._unverified.discard(slot)
             elif pending is not None:
                 out[slot] = cred
-                self._verified[slot] = False
+                self._unverified.add(slot)
             else:
                 out[slot] = cred
-                self._verified.pop(slot, None)
-        # Keep the verified map in lockstep with the read.
-        self._verified = {
-            slot: flag for slot, flag in self._verified.items() if slot in out
-        }
+                self._unverified.discard(slot)
+        # Keep the unverified set in lockstep with the read.
+        self._unverified &= out.keys()
         return out
 
     def is_verified(self, slot: int) -> bool:
         """
         Return whether the slot's credential is a confirmed observation.
 
-        Absent slots default to verified: a slot is only unverified while an
+        Unlisted slots are verified: a slot is only unverified while an
         optimistic write awaits confirmation (push event or hard refresh).
         """
-        return self._verified.get(slot, True)
+        return slot not in self._unverified
 
     @callback
     def mark_verified(self, slot: int) -> None:
         """
-        Clear a slot's unverified flag (it defaults back to verified).
+        Drop a slot from the unverified set.
 
         Called when a write is confirmed by the lock (an authoritative
-        ``WriteResult.CONFIRMED``), so a stale unverified flag from a prior
+        ``WriteResult.CONFIRMED``), so a slot left unverified by a prior
         optimistic write on the same slot cannot strand it.
         """
-        self._verified.pop(slot, None)
+        self._unverified.discard(slot)
 
     async def async_confirm_pending_writes(self) -> None:
         """
@@ -235,7 +237,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
                 self._lock.lock.entity_id,
             )
             return
-        # _apply_read already cleared pending + flipped the verified flag in
+        # _apply_read already cleared pending + updated the unverified set in
         # place, so the confirmation takes effect even when the data is
         # unchanged; only the listener notification is gated on a real delta.
         if new_data != self.data:
@@ -258,20 +260,19 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
 
         normalized = self._normalize_keys(updates)
         new_data = {**self.data, **normalized}
-        verified = not optimistic
 
-        # Record the verified flag for the pushed slots regardless of whether
-        # the value changed: an optimistic re-push of the same value still
-        # flips the slot to unverified.
-        for slot in normalized:
-            self._verified[slot] = verified
-        # Keep the verified map in lockstep with data.
-        self._verified = {
-            slot: flag for slot, flag in self._verified.items() if slot in new_data
-        }
+        # Record the pushed slots regardless of whether the value changed: an
+        # optimistic re-push of the same value still flips the slot to
+        # unverified.
+        if optimistic:
+            self._unverified |= normalized.keys()
+        else:
+            self._unverified -= normalized.keys()
+        # Keep the unverified set in lockstep with data.
+        self._unverified &= new_data.keys()
 
         if new_data == self.data:
-            # Verified-flag-only change: the sync layer reads ``is_verified``
+            # Verification-only change: the sync layer reads ``is_verified``
             # directly on its next tick, and entities don't render the flag, so
             # there's nothing to notify and no reachability proof (no new data).
             return
