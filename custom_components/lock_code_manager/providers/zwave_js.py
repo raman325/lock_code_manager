@@ -1066,6 +1066,34 @@ class ZWaveJSLock(BaseLock):
             )
             return False
 
+    def describe_link_health(self) -> str | None:
+        """
+        Report how much of the traffic aimed at this node goes unanswered.
+
+        The counters are cumulative since Z-Wave JS last started, which the
+        wording says outright: a node that was unreachable last week and is
+        healthy now still reads badly, and a reader who assumed the numbers
+        were recent would draw the wrong conclusion from them.
+
+        They also count every command sent to the node, not only Lock Code
+        Manager's, so this describes the link rather than any one write --
+        which is exactly the question the suspension repair cannot answer on
+        its own.
+        """
+        statistics = self.node.statistics
+        if not (sent := statistics.commands_tx):
+            return None
+        summary = (
+            f"Z-Wave link: {statistics.timeout_response} of {sent} commands sent "
+            f"to this lock went unanswered since Z-Wave JS last started"
+        )
+        if (round_trip := statistics.rtt) is not None:
+            summary += f", and the last round trip took {round_trip:.0f} ms"
+        return (
+            f"{summary}. A large proportion of unanswered commands points to a "
+            f"Z-Wave range or mesh problem rather than the lock refusing the code."
+        )
+
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read users AND credentials fresh from the device, then project to slots."""
         try:

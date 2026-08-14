@@ -11,6 +11,7 @@ from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
 )
+from zwave_js_server.event import Event
 from zwave_js_server.exceptions import FailedZWaveCommand
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
@@ -101,6 +102,69 @@ async def test_connection_check_interval_is_none(zwave_js_lock: ZWaveJSLock) -> 
 async def test_supports_native_users(zwave_js_lock: ZWaveJSLock) -> None:
     """Test that Z-Wave JS lock reports supports_native_users=True."""
     assert zwave_js_lock.supports_native_users is True
+
+
+def _set_node_statistics(node: Node, **statistics: object) -> None:
+    """Push a statistics update through the node's normal event handler."""
+    node.handle_statistics_updated(
+        Event(
+            "statistics updated",
+            {
+                "source": "node",
+                "event": "statistics updated",
+                "nodeId": node.node_id,
+                "statistics": {
+                    "commandsTX": 0,
+                    "commandsRX": 0,
+                    "commandsDroppedTX": 0,
+                    "commandsDroppedRX": 0,
+                    "timeoutResponse": 0,
+                    **statistics,
+                },
+            },
+        )
+    )
+
+
+async def test_describe_link_health_reports_unanswered_commands(
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+) -> None:
+    """The description quotes the raw counters rather than a verdict."""
+    _set_node_statistics(
+        lock_schlage_be469, commandsTX=256, timeoutResponse=126, rtt=1072.1
+    )
+
+    description = zwave_js_lock.describe_link_health()
+
+    assert description is not None
+    assert "126 of 256 commands" in description
+    # Rounded, not raw: a fractional millisecond reads as false precision.
+    assert "1072 ms" in description
+
+
+async def test_describe_link_health_omits_round_trip_when_unknown(
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+) -> None:
+    """A node that has not reported a round trip still describes its counters."""
+    _set_node_statistics(lock_schlage_be469, commandsTX=10, timeoutResponse=1)
+
+    description = zwave_js_lock.describe_link_health()
+
+    assert description is not None
+    assert "1 of 10 commands" in description
+    assert "round trip" not in description
+
+
+async def test_describe_link_health_none_without_traffic(
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+) -> None:
+    """No commands sent yet means there is nothing truthful to report."""
+    _set_node_statistics(lock_schlage_be469, commandsTX=0, timeoutResponse=0)
+
+    assert zwave_js_lock.describe_link_health() is None
 
 
 async def test_node_property(
