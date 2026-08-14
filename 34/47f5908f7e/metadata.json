@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "3447f5908f7e",
+  "strategy": "manual-commit",
+  "branch": "fix/1397-surface-link-health",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/sync.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/test_base.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/test_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/34/47f5908f7e/0/metadata.json",
+      "transcript": "/34/47f5908f7e/0/full.jsonl",
+      "compact_transcript": "/34/47f5908f7e/0/transcript.jsonl",
+      "content_hash": "/34/47f5908f7e/0/content_hash.txt",
+      "prompt": "/34/47f5908f7e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 207,
+    "cache_creation_tokens": 753954,
+    "cache_read_tokens": 18714642,
+    "output_tokens": 109475,
+    "api_call_count": 107
+  }
+}

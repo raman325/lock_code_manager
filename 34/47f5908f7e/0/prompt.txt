@@ -1,0 +1,33 @@
+delete stale worktrees and branches, then look at #1397
+
+---
+
+is the fix that we are suggesting for older drivers? would updating to a newer version of zwave-js resolve the issue for the u
+
+---
+
+don't we clear the slot when the circuit breaker trips? so we may not know
+
+---
+
+looks like the PIN works
+
+---
+
+how would we detect a degraded link and what would we do?
+
+---
+
+I don't think adding yet another set of flags and properties is the answer. We've already made things more complex than they need to be I think and I think we're getting burned by the extra complexity
+
+---
+
+wait so I thought the idea was an optimistic write should be unreadable - best case scenario we get a real value back, worst case scenario it stays unreadable. If we can't get the value back but the write was successful, the value will recover on a poll eventually right? so what scenario are we possibly false positiving with this approach?
+
+---
+
+that could be interesting if we feel confident that we can tell when it is one scenario or the other
+
+---
+
+we can just implement in a new branch and push a PR
