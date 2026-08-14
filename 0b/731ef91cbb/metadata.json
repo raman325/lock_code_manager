@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "0b731ef91cbb",
+  "strategy": "manual-commit",
+  "branch": "fix/1397-surface-link-health",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0b/731ef91cbb/0/metadata.json",
+      "transcript": "/0b/731ef91cbb/0/full.jsonl",
+      "compact_transcript": "/0b/731ef91cbb/0/transcript.jsonl",
+      "content_hash": "/0b/731ef91cbb/0/content_hash.txt",
+      "prompt": "/0b/731ef91cbb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 59404,
+    "cache_read_tokens": 14495554,
+    "output_tokens": 26941,
+    "api_call_count": 37
+  }
+}
