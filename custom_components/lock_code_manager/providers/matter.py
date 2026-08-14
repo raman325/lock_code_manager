@@ -61,6 +61,15 @@ from .const import LOGGER
 # DoorLock cluster ID (0x0101 = 257)
 _DOOR_LOCK_CLUSTER_ID = 257
 
+# Thread Network Diagnostics cluster (0x0035 = 53) on the root endpoint, and
+# the three counters describe_link_health quotes. Every one is optional --
+# the cluster gates them behind feature bits -- so each is read on its own and
+# dropped when absent rather than probing the feature map.
+_THREAD_DIAGNOSTICS_CLUSTER_ID = 53
+_THREAD_DETACHED_ROLE_COUNT = 14
+_THREAD_TX_ACK_REQUESTED_COUNT = 25
+_THREAD_TX_ACKED_COUNT = 26
+
 # DoorLock cluster event IDs
 _LOCK_OPERATION_EVENT_ID = 2
 _LOCK_USER_CHANGE_EVENT_ID = 4
@@ -1085,6 +1094,75 @@ class MatterLock(BaseLock):
         return state is not None and state.state not in (
             STATE_UNAVAILABLE,
             STATE_UNKNOWN,
+        )
+
+    def describe_link_health(self) -> str | None:
+        """
+        Report the lock's own Thread radio counters.
+
+        Two numbers, both read straight from Thread Network Diagnostics:
+        acknowledged transmissions out of those that asked to be
+        acknowledged, and how many times the lock has dropped off the Thread
+        network. The first pair is safe to state as a proportion because
+        both counters are drawn from the same population -- unlike most
+        counter pairs in this cluster, where the numerator and denominator
+        count different traffic and a ratio would quietly mislead.
+
+        Every counter here is optional (the cluster gates them behind
+        feature bits), so each is read independently and simply omitted when
+        the lock does not keep it. That avoids having to model which feature
+        bit governs which attribute, and a lock keeping neither produces no
+        description at all rather than a sentence full of blanks.
+
+        The wording is explicit that these are the lock's own view of its
+        radio, not the hub's view of reaching the lock, and that they are
+        cumulative since the lock last restarted. Both caveats matter:
+        counters that survived a healthy month look alarming next to a
+        problem that started an hour ago.
+
+        Thread only. A Wi-Fi or Ethernet Matter lock exposes a different
+        diagnostics cluster whose semantics have not been verified against
+        real hardware, and guessing at them is exactly how a reassuring
+        sentence ends up pointing at the wrong cause.
+        """
+        _client, node, _device = self._resolve()
+        if node is None:
+            return None
+        try:
+            acked = node.get_attribute_value(
+                0, _THREAD_DIAGNOSTICS_CLUSTER_ID, _THREAD_TX_ACKED_COUNT
+            )
+            ack_requested = node.get_attribute_value(
+                0, _THREAD_DIAGNOSTICS_CLUSTER_ID, _THREAD_TX_ACK_REQUESTED_COUNT
+            )
+            detached = node.get_attribute_value(
+                0, _THREAD_DIAGNOSTICS_CLUSTER_ID, _THREAD_DETACHED_ROLE_COUNT
+            )
+        except (KeyError, AttributeError, MatterError, HomeAssistantError) as err:
+            LOGGER.debug(
+                "Lock %s: failed to read Thread diagnostics: %s",
+                self.lock.entity_id,
+                err,
+            )
+            return None
+        parts = []
+        if acked is not None and ack_requested:
+            parts.append(
+                f"{acked} of {ack_requested} transmissions that asked to be "
+                f"acknowledged were acknowledged"
+            )
+        if detached:
+            parts.append(
+                f"the lock has dropped off the Thread network {detached} times"
+            )
+        if not parts:
+            return None
+        return (
+            f"Thread link, from the lock's own radio counters since it last "
+            f"restarted: {', and '.join(parts)}. These are the lock's view of its "
+            f"own radio rather than the hub's view of reaching it; repeated drops "
+            f"or unacknowledged transmissions point to a Thread range or mesh "
+            f"problem rather than the lock refusing the code."
         )
 
     # -- Event subscription via push framework --------------------------------

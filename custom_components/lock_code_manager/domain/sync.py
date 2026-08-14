@@ -787,6 +787,11 @@ class SlotSyncManager:
                 self._slot_breaker.failure_count,
                 SYNC_ATTEMPT_WINDOW,
             )
+            # The sentence below can only guess between a silently rejected
+            # code and a lock whose replies never arrive. Whatever the
+            # provider can measure about its transport goes in verbatim so
+            # the reader can settle it at a glance (issue #1397).
+            link_health = self._lock.describe_link_health()
             self._suspend_slot(
                 slot_state,
                 f"Lock **{self._lock.lock.entity_id}**: slot "
@@ -796,7 +801,8 @@ class SlotSyncManager:
                 f"experiencing communication issues. "
                 f"Sync has been suspended for this slot. It will resume "
                 f"automatically once the lock accepts the code or you change "
-                f"the PIN for this slot.",
+                f"the PIN for this slot."
+                + (f"\n\n{link_health}" if link_health else ""),
             )
             return
 

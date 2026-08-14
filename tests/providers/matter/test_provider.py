@@ -147,6 +147,77 @@ class TestNativeTransportContract(ProviderNativeTransportContractTests):
         )
 
 
+class TestLinkHealth:
+    """Thread diagnostics quoted into the slot suspension repair (issue #1397)."""
+
+    @staticmethod
+    def _resolve(lock: MatterLock, values: dict[int, Any] | None):
+        """Patch node resolution to a node serving the given Thread counters."""
+        if values is None:
+            return patch.object(lock, "_resolve", return_value=(None, None, None))
+        node = MagicMock()
+        node.get_attribute_value.side_effect = lambda _endpoint, _cluster, attribute: (
+            values.get(attribute)
+        )
+        return patch.object(lock, "_resolve", return_value=(MagicMock(), node, None))
+
+    async def test_reports_acknowledgements_and_drops(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
+        """Counters taken from a real Aqara U300 on Thread."""
+        with self._resolve(matter_lock_simple, {25: 3611401, 26: 3608185, 14: 228}):
+            description = matter_lock_simple.describe_link_health()
+
+        assert description is not None
+        assert "3608185 of 3611401 transmissions" in description
+        assert "dropped off the Thread network 228 times" in description
+
+    async def test_omits_counters_the_lock_does_not_keep(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
+        """
+        Every Thread counter is optional, so a lock keeping only some of them
+        still describes those rather than reporting blanks.
+        """
+        with self._resolve(matter_lock_simple, {25: None, 26: None, 14: 228}):
+            description = matter_lock_simple.describe_link_health()
+
+        assert description is not None
+        assert "dropped off the Thread network 228 times" in description
+        assert "transmissions that asked to be" not in description
+
+    async def test_none_when_no_counters_kept(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
+        """A Wi-Fi lock, or one without the counter features, describes nothing."""
+        with self._resolve(matter_lock_simple, {25: None, 26: None, 14: None}):
+            assert matter_lock_simple.describe_link_health() is None
+
+    async def test_none_when_node_unresolved(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
+        """An unresolved node must not abort the suspension it is describing."""
+        with self._resolve(matter_lock_simple, None):
+            assert matter_lock_simple.describe_link_health() is None
+
+    @pytest.mark.parametrize(
+        "error", [UnknownError("boom"), KeyError(0), HomeAssistantError("boom")]
+    )
+    async def test_none_when_reading_counters_fails(
+        self, matter_lock_simple: MatterLock, error: Exception
+    ) -> None:
+        """
+        A failed diagnostics read must not cost the caller its repair: this runs
+        ahead of _suspend_slot, outside the tick's own error handling.
+        """
+        node = MagicMock()
+        node.get_attribute_value.side_effect = error
+        with patch.object(
+            matter_lock_simple, "_resolve", return_value=(MagicMock(), node, None)
+        ):
+            assert matter_lock_simple.describe_link_health() is None
+
+
 class TestDeviceAvailability:
     """Device availability tests for Matter provider."""
 

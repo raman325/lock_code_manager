@@ -156,6 +156,22 @@ async def test_unsubscribe_push_updates_suppresses_not_implemented(
     lock.unsubscribe_push_updates()  # must not raise
 
 
+async def test_describe_link_health_defaults_to_none(hass: HomeAssistant) -> None:
+    """A provider that cannot measure its transport describes nothing."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_link_health",
+        config_entry=config_entry,
+    )
+    lock = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+    assert lock.describe_link_health() is None
+
+
 class _PushSetupRaisesLock(MockLCMLock):
     """Mock lock whose setup_push_subscription raises a configurable error."""
 

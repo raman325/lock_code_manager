@@ -530,6 +530,26 @@ class BaseLock:
         """
         return False
 
+    def describe_link_health(self) -> str | None:
+        """
+        Describe how reliably the integration is reaching this lock, if it can.
+
+        Purely descriptive: the returned sentence is appended to the repair
+        raised when a slot suspends, and nothing reads it to make a decision.
+        A provider that cannot measure its transport returns None and the
+        repair keeps its generic wording.
+
+        The point is to state measurements, not conclusions. "Failed to sync"
+        cannot distinguish a lock that refuses a code from a lock whose
+        replies never arrive, and the integration has no reliable way to tell
+        those apart -- but a transport that reports how much traffic it is
+        losing lets the person reading the repair tell instantly. So report
+        counters and leave the diagnosis to the reader (issue #1397, where a
+        lock dropping roughly half its responses looked identical to a lock
+        rejecting the code).
+        """
+        return None
+
     @final
     @property
     def provider_setup_succeeded(self) -> bool:
