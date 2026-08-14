@@ -1,0 +1,48 @@
+run code review on this PR. While that's going on, can we look at other places in the codebase where we may have overcomplicated an implementation detail when taking a step back like we did here was the better answer?
+
+---
+
+<task-notification>
+<task-id>abc495f730aaf0cc4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbedac6c-2e2e-468e-8a6c-ae2e50ccf2f3/tasks/abc495f730aaf0cc4.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1410" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I reviewed PR #1410 (`fix/1397-surface-link-health`) — 3 source files, 3 test files. The feature is well-scoped and the tests pass, but I found one real crash path and several ways the emitted text can point the reader at the wrong diagnosis — which matters more than usual here since the message's whole purpose is to settle a diagnosis.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/providers/zwave_js.py:1083` — high: unguarded `self.node` can abort the suspension entirely**
+
+`self.node` raises `LockDisconnected` by design — its own docstring at line 192 says so, and the sibling method directly above (`async_is_device_available`, line 1058) wraps the identical access in `except Exception` for exactly this reason. `describe_link_health` accesses it bare, and `sync.py:791` calls it inside `_async_tick_impl`, which has no exception handling anywhere up the chain (`_async_tick` has only a `finally` that discards the task).
+
+Scenario: the slot breaker trips from repeated `LockOperationFailed`. That path does *not* feed the connectivity breaker, so `self._coordinator.unreachable` is still `False` and the earlier guard at sync.py:768 doesn't fire. If the zwave_js config entry is mid-reload at that moment, `async_get_node_from_entity_id` raises `ValueError` → `LockDisconnected` propagates out of the tick before `_suspend_slot` runs. Result: no repair issue is created, state stays `OUT_OF_SYNC`, `_code_suspend_target` is never recorded, and every subsequent tick re-logs "Sync attempts exceeded" and raises again. The user-visible suspension the PR is trying to enrich is replaced by a traceback loop. Wrap the body (or at least the `self.node` access) and return `None` on failure.
+
+**2. `custom_components/lock_code_manager/providers/zwave_js.py:1084` — medium: the counter that actually signals a mesh problem is the one left out**
+
+Per node-zwave-js `Driver.ts:6640-6650`, `commandsTX` increments *only* on an OK transmit report; a command the node never ACKs increments `commandsDroppedTX` instead. So for the exact failure this feature exists to expose — a lock that has drifted out of range — either:
+- nothing ever got through, `commands_tx == 0`, and the method returns `None`, i.e. no information precisely in the worst case; or
+- some commands got through earlier, and the repair prints *"0 of 20 commands sent to this lock went unanswered"* followed by *"A large proportion of unanswered commands points to a Z-Wave range or mesh problem rather than the lock refusing the code"* — which affirmatively steers the reader toward "the lock is silently rejecting the code" while the mesh is in fact broken.
+
+`statistics.commands_dropped_tx` should be part of the sentence.
+
+**3. `custom_components/lock_code_manager/providers/zwave_js.py:1090` — medium: "the last round trip" misdescribes `rtt`**
+
+node-zwave-js documents `rtt` as *"Average round-trip-time in ms of commands to this node. Consecutive measurements are combined using an exponential moving average"* (`NodeStatistics.ts:58-62`). Calling it "the last round trip took 1072 ms" tells the reader the most recent exchange was slow; in reality one old outlier keeps the EMA elevated long after the link recovered. This is the same staleness trap the PR carefully guards against for the other counters ("since Z-Wave JS last started") — it just isn't applied to this one. "recent round trips have averaged X ms" would be accurate.
+
+**4. `custom_components/lock_code_manager/providers/zwave_js.py:1087` — low: numerator and denominator count different populations**
+
+`timeoutResponse` increments only for Get-type commands whose response didn't arrive (`Driver.ts:7487`), but the denominator `commands_tx` counts every successfully-sent command, including Sets that never expect a reply. For a lock whose traffic is mostly Sets, the printed proportion systematically understates the response-failure rate, so "a large proportion" never appears even on a genuinely bad link. Either quote the two numbers without framing them as a rate, or ratio over comparable populations.
+
+**5. `custom_components/lock_code_manager/providers/zwave_js.py:1088` — low: the stated window is narrower than the truth**
+
+node-zwave-js describes these as "statistics about the communication with a node since the last reset **or** driver startup". zwave-js-ui exposes a statistics reset, after which "since Z-Wave JS last started" overstates the period the counters cover — the opposite of the misreading the wording was added to prevent.
+
+Nothing else in the diff concerned me: the `sync.py` append is correctly conditional and leaves the existing wording byte-identical when the provider returns `None`, `\n\n` in a `translation_placeholders` value matches existing usage in `_suspend_slot` callers, `rtt` formatting (`:.0f`) is correct, and the `commands_tx == 0` early return is sound on its own terms (see finding 2 for the caveat). The three new zwave tests pass locally in 0.34s.</result>
+<usage><subagent_tokens>90178</subagent_tokens><tool_uses>25</tool_uses><duration_ms>292086</duration_ms></usage>
+</task-notification>
+
+---
+
+when I say do finding 1 in a new PR, I am talking about changing the verified dict to a set. Let's table everything I've asked you to do except for the review for now just to keep things less complicated
