@@ -18,6 +18,7 @@ from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.access_control import UserCredentialType
 from zwave_js_server.const.command_class.lock import (
+    ATTR_CODE_SLOT,
     ATTR_IN_USE,
     LOCK_USERCODE_PROPERTY,
     LOCK_USERCODE_STATUS_PROPERTY,
@@ -29,7 +30,7 @@ from zwave_js_server.const.command_class.notification import (
 )
 from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode
+from zwave_js_server.util.lock import get_usercode, get_usercodes
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -313,6 +314,60 @@ class ZWaveJSLock(BaseLock):
                 Credential(type=domain_type, slot=cred.slot, state=state)
             )
         return list(users_by_id.values())
+
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+        """
+        Project to slots, then rescue occupied slots the unified read left valueless.
+
+        Deliberately overrides the projection rather than ``async_get_users``:
+        the user list also drives the write paths (delete-owner resolution
+        and ``async_set_user``'s adoption scan), and an occupancy inferred
+        from the value database must not redirect which user a write
+        targets. Read-repair belongs to the read.
+        """
+        codes = await super().async_get_usercodes()
+        return self._overlay_uc_occupancy(codes)
+
+    def _overlay_uc_occupancy(
+        self, codes: dict[int, SlotCredential]
+    ) -> dict[int, SlotCredential]:
+        """
+        Upgrade empty slots that User Code CC reports occupied to ``unreadable``.
+
+        When a lock reports ``userIdStatus`` occupied while withholding the
+        code itself, node-zwave-js's User Code CC adapter drops the
+        credential from the unified read rather than returning it with no
+        value. The slot then projects to ``empty()``, which tells the sync
+        layer the write definitively did not land -- so it rewrites, fails
+        to confirm again, and the circuit breaker suspends a slot whose
+        Personal Identification Number works on the keypad (issue #1397).
+
+        ``userIdStatus`` is the occupancy authority and the credential
+        supplies only the value, so an occupied slot with no credential is
+        ``unreadable`` -- "something is here, we cannot read it" -- never
+        ``empty``. Consequences of that split:
+
+        - A cleared slot reports ``AVAILABLE``, so clears still confirm.
+        - Only ``empty`` entries are upgraded; a readable credential always
+          outranks the fallback, so a healthy lock is untouched.
+        - ``in_use`` is compared against ``True`` explicitly: ``None`` means
+          the value database holds no status for the slot, which is absence
+          of evidence, not evidence of occupancy.
+
+        Read-only against the driver's value database (no device traffic),
+        and only for nodes advertising User Code CC -- a native User
+        Credential CC lock reports its own credentials and needs no
+        fallback.
+        """
+        if not self._node_advertises_user_code_cc():
+            return codes
+        for code_slot in get_usercodes(self.node):
+            slot = code_slot[ATTR_CODE_SLOT]
+            if code_slot.get(ATTR_IN_USE) is not True:
+                continue
+            if codes.get(slot, SlotCredential.empty()).is_empty:
+                codes[slot] = SlotCredential.unreadable()
+        return codes
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """
@@ -1010,6 +1065,61 @@ class ZWaveJSLock(BaseLock):
                 err,
             )
             return False
+
+    def describe_link_health(self) -> str | None:
+        """
+        Report how much of the traffic aimed at this node fails to complete.
+
+        Reports three counters side by side rather than a single ratio,
+        because each answers a different question and node-zwave-js counts
+        them over different populations. ``commandsTX`` counts only commands
+        that were *successfully sent*, so a lock that has drifted out of
+        range increments ``commandsDroppedTX`` instead and would otherwise
+        report a flawless link at the very moment it is unreachable.
+        ``timeoutResponse`` counts only Get-type commands whose reply never
+        arrived, so dividing it by every command sent -- Sets included --
+        would understate the failure rate on a lock that is mostly written
+        to. Quoting the raw numbers sidesteps both distortions.
+
+        The wording states the window ("since Z-Wave JS started or the
+        statistics were last reset") because the counters are cumulative and
+        resettable: a node that was unreachable last week and is healthy now
+        still reads badly, and a reader who assumed the numbers were recent
+        would draw the wrong conclusion. Round-trip time is reported as an
+        average for the same reason -- node-zwave-js keeps it as an
+        exponential moving average, so one old outlier holds it up long
+        after the link recovers.
+
+        Descriptive only, so an unresolvable node yields no description
+        rather than an error: this runs while a slot is already suspending,
+        and the repair matters more than the detail.
+        """
+        try:
+            statistics = self.node.statistics
+        except Exception as err:
+            _LOGGER.debug(
+                "Lock %s: failed to read Z-Wave node statistics: %s",
+                self.lock.entity_id,
+                err,
+            )
+            return None
+        sent = statistics.commands_tx
+        unsendable = statistics.commands_dropped_tx
+        if not (sent or unsendable):
+            return None
+        summary = (
+            f"Z-Wave link, counted since Z-Wave JS started or the statistics were "
+            f"last reset: {sent} commands reached this lock, {unsendable} could "
+            f"not be sent at all, and {statistics.timeout_response} read requests "
+            f"went unanswered"
+        )
+        if (round_trip := statistics.rtt) is not None:
+            summary += f"; recent round trips averaged {round_trip:.0f} ms"
+        return (
+            f"{summary}. Commands that cannot be sent, or that go unanswered, "
+            f"point to a Z-Wave range or mesh problem rather than the lock "
+            f"refusing the code."
+        )
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read users AND credentials fresh from the device, then project to slots."""

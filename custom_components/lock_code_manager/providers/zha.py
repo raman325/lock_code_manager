@@ -23,6 +23,7 @@ from homeassistant.components.zha.helpers import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
+from homeassistant.util import dt as dt_util
 
 from ..domain.credentials import (
     Credential,
@@ -174,6 +175,48 @@ class ZHALock(BaseLock):
 
         _LOGGER.warning("Could not find DoorLock cluster for %s", self.lock.entity_id)
         return None
+
+    def describe_link_health(self) -> str | None:
+        """
+        Report what the coordinator last heard from this lock.
+
+        Zigbee offers nothing equivalent to Z-Wave's per-node failure
+        counters -- zigpy tracks counters on the radio application, not per
+        device -- so this reports the other honest signal: the quality of
+        the most recent frame received *from* the lock, and how long ago
+        that was. The wording says "last frame" rather than "signal
+        strength" because that is literally what zigpy stores: ``lqi`` and
+        ``rssi`` are overwritten from each received packet, so they describe
+        one moment rather than an average.
+
+        Staleness carries most of the weight here. A lock that has not been
+        heard from in hours while Lock Code Manager is actively writing to
+        it is the Zigbee equivalent of the unanswered-command count, and it
+        stays meaningful even when the radio reports no signal metrics.
+
+        Descriptive only: an unresolvable device yields no description
+        rather than an error, because this runs while a slot is already
+        suspending and the repair matters more than the detail.
+        """
+        cluster = self._get_door_lock_cluster()
+        if cluster is None:
+            return None
+        device = cluster.endpoint.device
+        parts = []
+        if (lqi := device.lqi) is not None:
+            parts.append(f"signal quality {lqi} of 255")
+        if (rssi := device.rssi) is not None:
+            parts.append(f"{rssi} dBm")
+        if (last_seen := device.last_seen) is not None:
+            age = dt_util.get_age(dt_util.utc_from_timestamp(last_seen))
+            parts.append(f"last heard from {age} ago")
+        if not parts:
+            return None
+        return (
+            f"Zigbee link, from the last frame this lock sent: {', '.join(parts)}. "
+            f"A weak signal, or a lock not heard from recently, points to a Zigbee "
+            f"range or mesh problem rather than the lock refusing the code."
+        )
 
     async def _get_connected_cluster(self) -> DoorLock:
         """Return a connected DoorLock cluster or raise LockDisconnected."""

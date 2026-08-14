@@ -11,6 +11,7 @@ from zigpy.zcl.clusters.closures import DoorLock
 
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
@@ -104,6 +105,69 @@ async def test_get_door_lock_cluster_caches_result(
     cluster1 = zha_lock._get_door_lock_cluster()
     cluster2 = zha_lock._get_door_lock_cluster()
     assert cluster1 is cluster2
+
+
+async def test_describe_link_health_reports_last_frame(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Signal metrics and staleness describe the most recent frame received."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    device = cluster.endpoint.device
+    device.lqi = 12
+    device.rssi = -89
+    device.last_seen = dt_util.utcnow() - timedelta(hours=3)
+
+    description = zha_lock.describe_link_health()
+
+    assert description is not None
+    assert "signal quality 12 of 255" in description
+    assert "-89 dBm" in description
+    assert "last heard from 3 hours ago" in description
+
+
+async def test_describe_link_health_reports_staleness_without_signal(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """
+    A radio that reports no signal metrics still says when the lock was last
+    heard from -- the part that carries the diagnosis.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    device = cluster.endpoint.device
+    device.lqi = None
+    device.rssi = None
+    device.last_seen = dt_util.utcnow() - timedelta(minutes=45)
+
+    description = zha_lock.describe_link_health()
+
+    assert description is not None
+    assert "45 minutes ago" in description
+    assert "signal quality" not in description
+    assert "dBm" not in description
+
+
+async def test_describe_link_health_none_without_any_metrics(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Nothing measured means nothing truthful to report."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    device = cluster.endpoint.device
+    device.lqi = None
+    device.rssi = None
+    device.last_seen = None
+
+    assert zha_lock.describe_link_health() is None
+
+
+async def test_describe_link_health_none_when_cluster_unresolvable(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """An unresolvable device must not abort the suspension it is describing."""
+    with patch.object(zha_lock, "_get_door_lock_cluster", return_value=None):
+        assert zha_lock.describe_link_health() is None
 
 
 # ---------------------------------------------------------------------------

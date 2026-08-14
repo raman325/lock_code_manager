@@ -547,6 +547,77 @@ class TestLockOperationFailedRetry:
         assert manager._coordinator.unreachable is False
 
 
+class TestSuspensionRepairLinkHealth:
+    """The suspension repair carries whatever the provider can measure (#1397)."""
+
+    async def _suspend_via_breaker(self, hass: HomeAssistant, manager) -> None:
+        """Fail the slot until the breaker trips, then tick once more to suspend."""
+        manager._coordinator.data[1] = SlotCredential.empty()
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockOperationFailed("operation failed"),
+        ):
+            for _ in range(MAX_SYNC_ATTEMPTS):
+                manager._state = SyncState.OUT_OF_SYNC
+                await manager._async_tick()
+                await hass.async_block_till_done()
+        manager._state = SyncState.OUT_OF_SYNC
+        await manager._async_tick()
+        await hass.async_block_till_done()
+
+    def _suspension_reason(self, hass: HomeAssistant, manager, entry_id: str) -> str:
+        """Return the reason text of the slot's suspension repair."""
+        issue = async_get_issue_registry(hass).async_get_issue(
+            DOMAIN,
+            f"slot_suspended_{entry_id}_{manager._lock.lock.entity_id}"
+            f"_{manager._slot_num}",
+        )
+        assert issue is not None
+        return issue.translation_placeholders["reason"]
+
+    async def test_reason_appends_provider_link_health(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A provider that can measure its transport gets quoted verbatim."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+
+        with patch.object(
+            manager._lock,
+            "describe_link_health",
+            return_value="Radio link: 126 of 256 commands went unanswered.",
+        ):
+            await self._suspend_via_breaker(hass, manager)
+
+        reason = self._suspension_reason(
+            hass, manager, lock_code_manager_config_entry.entry_id
+        )
+        assert "126 of 256 commands went unanswered" in reason
+        # The generic wording still leads; the measurement is added, not swapped in.
+        assert "failed to sync after" in reason
+
+    async def test_reason_unchanged_when_provider_cannot_measure(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Providers with no transport insight keep the original wording."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+
+        with patch.object(manager._lock, "describe_link_health", return_value=None):
+            await self._suspend_via_breaker(hass, manager)
+
+        reason = self._suspension_reason(
+            hass, manager, lock_code_manager_config_entry.entry_id
+        )
+        assert reason.endswith("the PIN for this slot.")
+
+
 class TestLockOperationUnsupportedSuspend:
     """A permanently-invalid request suspends immediately (issue #1398)."""
 
