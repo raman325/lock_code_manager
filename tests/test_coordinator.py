@@ -255,7 +255,7 @@ async def test_verified_map_pruned_with_data(
     """The verified map drops slots no longer present in data."""
     push_coordinator.push_update({1: SlotCredential.known("1111")}, optimistic=True)
     # The internal map should only track slots still in data.
-    assert set(push_coordinator._verified) <= set(push_coordinator.data)
+    assert set(push_coordinator._unverified) <= set(push_coordinator.data)
 
 
 async def test_push_update_ignores_empty_updates(
