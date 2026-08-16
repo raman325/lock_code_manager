@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_CODE
 from .domain.coordinator import LockUsercodeUpdateCoordinator
+from .domain.credentials import pin_address
 from .domain.models import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
 from .providers import BaseLock
@@ -84,7 +85,9 @@ class LockCodeManagerCodeSlotSensorEntity(
             return credential.readable_pin
         # Unreadable code: fall back to the configured PIN so the sensor still
         # exposes the slot's intended value to consumers like the sync layer.
-        return self.coordinator.desired_credential(int(self.slot_num)).readable_pin
+        return self.coordinator.desired_credential(
+            pin_address(int(self.slot_num))
+        ).readable_pin
 
     @property
     def available(self) -> bool:

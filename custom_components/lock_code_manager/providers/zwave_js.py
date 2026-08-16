@@ -59,6 +59,7 @@ from ..domain.credentials import (
     SetUserResult,
     User,
     WriteResult,
+    pin_address,
 )
 from ..domain.exceptions import (
     CodeRejectedError,
@@ -885,7 +886,7 @@ class ZWaveJSLock(BaseLock):
         # set, which would cause infinite sync loops.
         if (
             self.coordinator is not None
-            and self.coordinator.desired_credential(code_slot).is_present
+            and self.coordinator.desired_credential(pin_address(code_slot)).is_present
         ):
             _LOGGER.debug(
                 "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "

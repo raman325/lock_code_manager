@@ -132,6 +132,38 @@ class CredentialRef(NamedTuple):
     slot: int
 
 
+class CredentialAddress(NamedTuple):
+    """
+    Address of one credential in Lock Code Manager's own keyspace.
+
+    Distinct from ``CredentialRef``, which addresses a credential on the
+    *device* using the identifiers the lock allocated. ``CredentialAddress``
+    is the integration-side handle the coordinator and the sync engine key
+    on: which managed user, and which kind of credential.
+
+    ``user_ref`` is deliberately loose. Today it is the managed slot number,
+    because the slot number is still the only user handle the configuration
+    has. Once the configuration migrates to named users it becomes the
+    user's name. Keeping both stages behind this one alias is what makes
+    that a one-place type change rather than a second re-key.
+    """
+
+    user_ref: int
+    credential_type: CredentialType
+
+
+def pin_address(user_ref: int) -> CredentialAddress:
+    """
+    Build the Personal Identification Number address for a managed user.
+
+    Every address in the integration is a PIN address today. This exists so
+    the call sites that assume that say so explicitly, and so adding a
+    second credential type surfaces each one as a place that needs a
+    decision rather than silently continuing to mean PIN.
+    """
+    return CredentialAddress(user_ref, CredentialType.PIN)
+
+
 @dataclass(slots=True)
 class User:
     """

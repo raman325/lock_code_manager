@@ -54,6 +54,7 @@ from ..domain.credentials import (
     User,
     WriteResult,
     credential_from_slot,
+    pin_address,
     user_from_slot,
 )
 from ..domain.exceptions import (
@@ -1205,7 +1206,7 @@ class BaseLock:
             # optimistic write, so it can converge instead of churning to a suspend.
             self._pending_writes.pop(code_slot, None)
             if self.coordinator is not None:
-                self.coordinator.mark_verified(code_slot)
+                self.coordinator.mark_verified(pin_address(code_slot))
         # Skip coordinator refresh for push providers — they update optimistically
         # via push_update(), and refreshing from cache could overwrite with stale
         # data when the driver defers cache updates until device confirmation.

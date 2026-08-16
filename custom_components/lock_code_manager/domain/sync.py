@@ -13,11 +13,12 @@ Circuit breaker: 3 attempts within 5 minutes (MAX_SYNC_ATTEMPTS, SYNC_ATTEMPT_WI
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import logging
 import time
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
@@ -54,6 +55,7 @@ from ..const import (
     TICK_INTERVAL,
 )
 from .config import build_slot_unique_id
+from .credentials import CredentialAddress, CredentialType
 from .exceptions import (
     CodeRejectedError,
     LockDisconnected,
@@ -73,23 +75,59 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class SlotState:
+# Which entity holds the desired value for each credential type.
+#
+# Only Personal Identification Number is mapped because it is the only type
+# with a value entity today -- not because the other value-writable types
+# (password, Radio Frequency Identification, Near Field Communication) are
+# excluded by category. Adding one here is NOT sufficient on its own: the
+# matching text entity has to exist first, or ``SlotSyncManager.__init__``
+# raises out of entity platform setup.
+#
+# Learn-at-device credentials (fingerprint, face) are the one category that
+# can never appear, because there is no value Lock Code Manager can author.
+_VALUE_ENTITY_KEYS: Mapping[CredentialType, str] = MappingProxyType(
+    {CredentialType.PIN: CONF_PIN}
+)
+
+
+def value_entity_key(credential_type: CredentialType) -> str:
     """
-    Snapshot of entity states for a slot on a specific lock.
+    Return the entity key holding the desired value for a credential type.
+
+    Raises rather than defaulting, so a credential type wired up without its
+    value entity fails at construction instead of silently converging against
+    the Personal Identification Number's entity.
+    """
+    try:
+        return _VALUE_ENTITY_KEYS[credential_type]
+    except KeyError:
+        raise ValueError(f"{credential_type} has no value entity key") from None
+
+
+@dataclass(frozen=True)
+class CredentialSyncState:
+    """
+    Snapshot of entity states for one credential on a specific lock.
 
     Used by SlotSyncManager to compare desired (entity) vs actual
     (coordinator) state. Includes raw HA state strings (rather than
     parsed values) because sync logic needs to distinguish between
     "off" and "unavailable" — both look like the same parsed bool but
     mean different things for retry decisions.
+
+    ``credential_state`` is the desired value read off the entity that holds
+    it, and ``coordinator_credential`` is what the lock actually reports.
+    Both are named for the credential rather than the Personal
+    Identification Number because a second credential type stored in a field
+    called ``pin_state`` would be actively misleading.
     """
 
     active_state: str
-    pin_state: str
+    credential_state: str
     name_state: str | None
     code_state: str
-    coordinator_code: SlotCredential | None
+    coordinator_credential: SlotCredential | None
 
 
 class SlotSyncManager:
@@ -131,7 +169,7 @@ class SlotSyncManager:
         config_entry: LockCodeManagerConfigEntry,
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
-        slot_num: int,
+        address: CredentialAddress,
         state_writer: Callable[[bool | None], None],
     ) -> None:
         """Initialize the sync manager."""
@@ -140,19 +178,29 @@ class SlotSyncManager:
         self._config_entry = config_entry
         self._coordinator = coordinator
         self._lock = lock
-        self._slot_num = int(slot_num)
+        self._address = address
+        # The slot number still addresses the device and identifies the
+        # entities. While the configuration is slot-keyed the user reference
+        # IS the slot number; the lease lookup replaces this once users are
+        # named.
+        self._slot_num = slot_num = int(address.user_ref)
         self._state_writer = state_writer
 
         self._log_prefix = (
             f"{config_entry.entry_id} ({config_entry.title}): "
-            f"{lock.lock.entity_id} slot {slot_num}"
+            f"{lock.lock.entity_id} slot {slot_num} "
+            f"{address.credential_type.value}"
         )
 
         # Unique ID components for entity discovery
         entry_id = config_entry.entry_id
         lock_entity_id = lock.lock.entity_id
+        self._value_key = value_entity_key(address.credential_type)
         self._unique_ids: dict[str, tuple[str, str]] = {
-            CONF_PIN: (TEXT_DOMAIN, build_slot_unique_id(entry_id, slot_num, CONF_PIN)),
+            self._value_key: (
+                TEXT_DOMAIN,
+                build_slot_unique_id(entry_id, slot_num, self._value_key),
+            ),
             CONF_NAME: (
                 TEXT_DOMAIN,
                 build_slot_unique_id(entry_id, slot_num, CONF_NAME),
@@ -194,7 +242,7 @@ class SlotSyncManager:
         )
         self._breaker_reset_requested: bool = False
 
-        # The desired target (active_state, pin_state) captured when the slot
+        # The desired target (active_state, credential_state) captured when the slot
         # is suspended for a non-converging code or an unexpected error. While
         # set, the slot stays suspended until that target changes (user edits
         # the PIN or toggles the slot) or it returns to sync -- it does NOT
@@ -329,7 +377,7 @@ class SlotSyncManager:
         """
         # Collect all states in a single pass
         states: dict[str, str | None] = {}
-        for key in (CONF_PIN, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
+        for key in (self._value_key, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
             if key not in self._entity_id_map:
                 return False
             state = self._get_entity_state(key)
@@ -346,14 +394,14 @@ class SlotSyncManager:
         # Name is always optional (STATE_UNKNOWN = no name configured)
         # PIN and code sensor can be unknown when the slot is inactive
         slot_inactive = states[ATTR_ACTIVE] == STATE_OFF
-        for key in (CONF_PIN, ATTR_CODE):
+        for key in (self._value_key, ATTR_CODE):
             if states[key] == STATE_UNKNOWN and not slot_inactive:
                 _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
                 return False
 
         return True
 
-    def _resolve_slot_state(self) -> SlotState | None:
+    def _resolve_credential_snapshot(self) -> CredentialSyncState | None:
         """
         Resolve slot state from current entity and coordinator data.
 
@@ -377,25 +425,25 @@ class SlotSyncManager:
         # entity is optional). No awaits run between that check and these reads,
         # so the states cannot change underneath us on the single-threaded loop.
         active_state = self._get_entity_state(ATTR_ACTIVE)
-        pin_state = self._get_entity_state(CONF_PIN)
+        credential_state = self._get_entity_state(self._value_key)
         name_state = self._get_entity_state(CONF_NAME)
         code_state = self._get_entity_state(ATTR_CODE)
         assert active_state is not None
-        assert pin_state is not None
+        assert credential_state is not None
         assert code_state is not None
 
-        coordinator_code = self._coordinator.data.get(self._slot_num)
-        return SlotState(
+        coordinator_credential = self._coordinator.data.get(self._slot_num)
+        return CredentialSyncState(
             active_state=active_state,
-            pin_state=pin_state,
+            credential_state=credential_state,
             name_state=name_state,
             code_state=code_state,
-            coordinator_code=coordinator_code,
+            coordinator_credential=coordinator_credential,
         )
 
     # -- Sync calculation ----------------------------------------------------
 
-    def calculate_in_sync(self, slot_state: SlotState) -> bool:
+    def calculate_in_sync(self, snapshot: CredentialSyncState) -> bool:
         """
         Calculate whether slot should be in sync.
 
@@ -415,10 +463,10 @@ class SlotSyncManager:
         than declare success. Slots with no recorded flag read as verified, so
         this is a no-op for providers that never write optimistically.
         """
-        if not self._coordinator.is_verified(self._slot_num):
+        if not self._coordinator.is_verified(self._address):
             return False
-        credential = slot_state.coordinator_code
-        if slot_state.active_state == STATE_ON:
+        credential = snapshot.coordinator_credential
+        if snapshot.active_state == STATE_ON:
             if credential is not None:
                 if credential.is_empty:
                     # If we recently set a PIN on this slot and it matches the
@@ -427,22 +475,22 @@ class SlotSyncManager:
                     # cloud API).
                     return (
                         self._last_set_pin is not None
-                        and slot_state.pin_state == self._last_set_pin
+                        and snapshot.credential_state == self._last_set_pin
                     )
                 if not credential.is_readable:
-                    return slot_state.pin_state == self._last_set_pin
-                return credential.matches(slot_state.pin_state)
+                    return snapshot.credential_state == self._last_set_pin
+                return credential.matches(snapshot.credential_state)
             # No coordinator data — fall back to the code sensor entity state.
-            return slot_state.pin_state == slot_state.code_state
+            return snapshot.credential_state == snapshot.code_state
         # active_state == STATE_OFF: slot should be cleared
         if credential is not None:
             return credential.is_empty
         # Code sensor entity returns "" for empty credential.
-        return slot_state.code_state == ""
+        return snapshot.code_state == ""
 
     # -- Sync execution ------------------------------------------------------
 
-    async def _perform_sync(self, slot_state: SlotState) -> bool:
+    async def _perform_sync(self, snapshot: CredentialSyncState) -> bool:
         """
         Execute sync operation (set or clear usercode).
 
@@ -452,14 +500,14 @@ class SlotSyncManager:
         propagates any other exception. Error handling and breaker accounting
         live in the caller (``_async_tick_impl``).
         """
-        if slot_state.active_state == STATE_ON:
+        if snapshot.active_state == STATE_ON:
             await self._lock.async_internal_set_usercode(
                 self._slot_num,
-                slot_state.pin_state,
-                slot_state.name_state,
+                snapshot.credential_state,
+                snapshot.name_state,
                 source="sync",
             )
-            self._last_set_pin = slot_state.pin_state
+            self._last_set_pin = snapshot.credential_state
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
             return True
         await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
@@ -502,7 +550,7 @@ class SlotSyncManager:
         finally:
             self._breaker_reset_requested = True
 
-    def _suspend_slot(self, slot_state: SlotState, reason: str) -> None:
+    def _suspend_slot(self, snapshot: CredentialSyncState, reason: str) -> None:
         """
         Suspend this lock and slot and create a per-slot repair issue.
 
@@ -511,7 +559,7 @@ class SlotSyncManager:
         unrelated coordinator updates.
         """
         self._state = SyncState.SUSPENDED
-        self._code_suspend_target = (slot_state.active_state, slot_state.pin_state)
+        self._code_suspend_target = (snapshot.active_state, snapshot.credential_state)
         self._breaker_reset_requested = True
         self._write_state()
 
@@ -535,7 +583,7 @@ class SlotSyncManager:
             },
         )
 
-    def _clear_resolved_issues(self, slot_state: SlotState) -> None:
+    def _clear_resolved_issues(self, snapshot: CredentialSyncState) -> None:
         """
         Clear repair issues that no longer apply now that the slot is in sync.
 
@@ -545,7 +593,7 @@ class SlotSyncManager:
         issue is cleared regardless of active state.
         """
         entry_id = self._config_entry.entry_id
-        if slot_state.active_state == STATE_ON:
+        if snapshot.active_state == STATE_ON:
             async_delete_issue(
                 self._hass,
                 DOMAIN,
@@ -583,8 +631,8 @@ class SlotSyncManager:
         ``_breaker_reset_requested`` and the next tick consumes it.
         """
         if self._state is SyncState.IN_SYNC:
-            slot_state = self._resolve_slot_state()
-            if slot_state is not None and not self.calculate_in_sync(slot_state):
+            snapshot = self._resolve_credential_snapshot()
+            if snapshot is not None and not self.calculate_in_sync(snapshot):
                 self._state = SyncState.OUT_OF_SYNC
                 self._breaker_reset_requested = True
                 self._write_state()
@@ -595,11 +643,11 @@ class SlotSyncManager:
                 # edits the PIN or toggles the slot) or the slot returns to
                 # sync on its own -- otherwise stay suspended so we don't
                 # hammer the lock with a code it keeps rejecting.
-                slot_state = self._resolve_slot_state()
-                if slot_state is not None and (
-                    (slot_state.active_state, slot_state.pin_state)
+                snapshot = self._resolve_credential_snapshot()
+                if snapshot is not None and (
+                    (snapshot.active_state, snapshot.credential_state)
                     != self._code_suspend_target
-                    or self.calculate_in_sync(slot_state)
+                    or self.calculate_in_sync(snapshot)
                 ):
                     self._breaker_reset_requested = True
                     self._code_suspend_target = None
@@ -675,22 +723,22 @@ class SlotSyncManager:
             self._breaker_reset_requested = False
             self._slot_breaker.reset()
 
-        slot_state = self._resolve_slot_state()
-        if slot_state is None:
+        snapshot = self._resolve_credential_snapshot()
+        if snapshot is None:
             # State resolution failed — stay in current state and retry.
             return
 
-        expected_in_sync = self.calculate_in_sync(slot_state)
+        expected_in_sync = self.calculate_in_sync(snapshot)
 
         # -- LOADING: detect initial sync state without performing operations --
         if self._state is SyncState.LOADING:
-            if slot_state.active_state not in (STATE_ON, STATE_OFF):
+            if snapshot.active_state not in (STATE_ON, STATE_OFF):
                 if not self._logged_invalid_state:
                     _LOGGER.debug(
                         "%s: Active entity has invalid state '%s', waiting "
                         "for valid state (ON/OFF)",
                         self._log_prefix,
-                        slot_state.active_state,
+                        snapshot.active_state,
                     )
                     self._logged_invalid_state = True
                 return
@@ -731,8 +779,8 @@ class SlotSyncManager:
             # reconcile the new target instead of holding PENDING_CONFIRMATION
             # (and re-syncing the old value) until the deadline.
             still_wanted = (
-                slot_state.active_state == STATE_ON
-                and slot_state.pin_state == believed_pin
+                snapshot.active_state == STATE_ON
+                and snapshot.credential_state == believed_pin
             )
             if still_wanted and time.monotonic() < deadline:
                 if self._state is not SyncState.PENDING_CONFIRMATION:
@@ -775,7 +823,7 @@ class SlotSyncManager:
             self._state = SyncState.IN_SYNC
             self._slot_breaker.reset()
             self._write_state()
-            self._clear_resolved_issues(slot_state)
+            self._clear_resolved_issues(snapshot)
             return
 
         # Circuit breaker check: too many failed sync attempts (a set that
@@ -793,7 +841,7 @@ class SlotSyncManager:
             # the reader can settle it at a glance (issue #1397).
             link_health = self._lock.describe_link_health()
             self._suspend_slot(
-                slot_state,
+                snapshot,
                 f"Lock **{self._lock.lock.entity_id}**: slot "
                 f"**{self._slot_num}** failed to sync after "
                 f"{self._slot_breaker.failure_count} consecutive attempts. "
@@ -811,7 +859,7 @@ class SlotSyncManager:
         self._write_state()
         was_set = False
         try:
-            was_set = await self._perform_sync(slot_state)
+            was_set = await self._perform_sync(snapshot)
         except CodeRejectedError as err:
             _LOGGER.error("%s: Code rejected: %s", self._log_prefix, err)
             await self._disable_slot(
@@ -829,7 +877,7 @@ class SlotSyncManager:
             _LOGGER.info(
                 "%s: Lock unreachable during %s usercode: %s. Will retry on next tick.",
                 self._log_prefix,
-                "set" if slot_state.active_state == STATE_ON else "clear",
+                "set" if snapshot.active_state == STATE_ON else "clear",
                 err,
             )
             # Connectivity failure: feed the lock breaker so repeated failures
@@ -848,11 +896,11 @@ class SlotSyncManager:
                 "%s: Lock cannot %s this slot: %s. Suspending sync until the "
                 "configuration changes.",
                 self._log_prefix,
-                "set" if slot_state.active_state == STATE_ON else "clear",
+                "set" if snapshot.active_state == STATE_ON else "clear",
                 err,
             )
             self._suspend_slot(
-                slot_state,
+                snapshot,
                 f"Lock **{self._lock.lock.entity_id}**: slot "
                 f"**{self._slot_num}** cannot be synced because the lock will "
                 f"not accept it.\n\n{err}",
@@ -862,7 +910,7 @@ class SlotSyncManager:
             _LOGGER.info(
                 "%s: Operation failed during %s usercode: %s. Will retry on next tick.",
                 self._log_prefix,
-                "set" if slot_state.active_state == STATE_ON else "clear",
+                "set" if snapshot.active_state == STATE_ON else "clear",
                 err,
             )
             # The lock is reachable but the operation failed. Count toward the
@@ -878,12 +926,12 @@ class SlotSyncManager:
                 "Sync suspended for this lock to prevent infinite retry loop. "
                 "Error: %s: %s",
                 self._log_prefix,
-                "set" if slot_state.active_state == STATE_ON else "clear",
+                "set" if snapshot.active_state == STATE_ON else "clear",
                 type(err).__name__,
                 err,
             )
             self._suspend_slot(
-                slot_state,
+                snapshot,
                 f"Lock **{self._lock.lock.entity_id}**: slot **{self._slot_num}** "
                 f"encountered an unexpected error during sync. This may indicate a bug "
                 f"in the lock code manager integration. Check logs for details and "
@@ -924,12 +972,12 @@ class SlotSyncManager:
             return
 
         # Check if sync actually worked.
-        slot_state = self._resolve_slot_state()
-        if slot_state is not None and self.calculate_in_sync(slot_state):
+        snapshot = self._resolve_credential_snapshot()
+        if snapshot is not None and self.calculate_in_sync(snapshot):
             self._state = SyncState.IN_SYNC
             self._slot_breaker.reset()
             self._write_state()
-            self._clear_resolved_issues(slot_state)
+            self._clear_resolved_issues(snapshot)
         else:
             # Count only unverified sets so eventually-consistent providers
             # don't accumulate spurious failures when the readback lags.

@@ -637,7 +637,7 @@ class Zigbee2MQTTLock(BaseLock):
         # Query one slot at a time so Zigbee2MQTT / firmware can answer each GET before
         # the next. Parallel gather + per-slot timeouts can fail the entire refresh and
         # leave coordinator.data empty -- sync then skips every slot (see
-        # SlotSyncManager._resolve_slot_state).
+        # SlotSyncManager._resolve_credential_snapshot).
         # Transient publish/timeout/read failures use the unreadable credential so sync
         # does not treat the slot as confirmed-empty and storm reprogramming after MQTT
         # recovery.
