@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     SetUserResult,
     User,
     WriteResult,
+    pin_address,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -1471,7 +1472,7 @@ class TestLockUserChangeEvent:
         index in dataIndex (which is now Matter-auto-allocated and opaque).
         """
         mock_coordinator = MagicMock()
-        mock_coordinator.data = {3: SlotCredential.empty()}
+        mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
@@ -1506,7 +1507,7 @@ class TestLockUserChangeEvent:
     ) -> None:
         """Modifying a PIN credential pushes SlotCredential.unreadable() to the LCM slot."""
         mock_coordinator = MagicMock()
-        mock_coordinator.data = {5: SlotCredential.unreadable()}
+        mock_coordinator.data = {pin_address(5): SlotCredential.unreadable()}
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
@@ -1541,7 +1542,7 @@ class TestLockUserChangeEvent:
     ) -> None:
         """Clearing a PIN credential pushes SlotCredential.empty() to the LCM slot."""
         mock_coordinator = MagicMock()
-        mock_coordinator.data = {2: SlotCredential.unreadable()}
+        mock_coordinator.data = {pin_address(2): SlotCredential.unreadable()}
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
@@ -1648,7 +1649,7 @@ class TestLockUserChangeEvent:
         slot comes from ``userIndex`` -> tag.
         """
         mock_coordinator = MagicMock()
-        mock_coordinator.data = {3: SlotCredential.empty()}
+        mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(

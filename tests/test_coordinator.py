@@ -175,16 +175,18 @@ async def test_push_update_updates_coordinator_data(
 ):
     """Test that push_update correctly updates coordinator data."""
     push_coordinator.data = {
-        1: SlotCredential.known("1111"),
-        2: SlotCredential.known("2222"),
+        pin_address(1): SlotCredential.known("1111"),
+        pin_address(2): SlotCredential.known("2222"),
     }
 
     # Push a single update
     push_coordinator.push_update({1: SlotCredential.known("9999")})
 
     # Verify data was updated
-    assert push_coordinator.data[1] == SlotCredential.known("9999")
-    assert push_coordinator.data[2] == SlotCredential.known("2222")  # Unchanged
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
+    assert push_coordinator.data[pin_address(2)] == SlotCredential.known(
+        "2222"
+    )  # Unchanged
 
 
 async def test_push_update_bulk_updates(
@@ -192,9 +194,9 @@ async def test_push_update_bulk_updates(
 ):
     """Test that push_update correctly handles bulk updates."""
     push_coordinator.data = {
-        1: SlotCredential.known("1111"),
-        2: SlotCredential.known("2222"),
-        3: SlotCredential.known("3333"),
+        pin_address(1): SlotCredential.known("1111"),
+        pin_address(2): SlotCredential.known("2222"),
+        pin_address(3): SlotCredential.known("3333"),
     }
 
     # Push bulk update
@@ -203,9 +205,11 @@ async def test_push_update_bulk_updates(
     )
 
     # Verify all updates applied
-    assert push_coordinator.data[1] == SlotCredential.known("9999")
-    assert push_coordinator.data[2] == SlotCredential.known("2222")  # Unchanged
-    assert push_coordinator.data[3] == SlotCredential.empty()  # Cleared
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
+    assert push_coordinator.data[pin_address(2)] == SlotCredential.known(
+        "2222"
+    )  # Unchanged
+    assert push_coordinator.data[pin_address(3)] == SlotCredential.empty()  # Cleared
 
 
 async def test_is_verified_defaults_true_for_absent_slot(
@@ -228,7 +232,7 @@ async def test_push_update_optimistic_marks_unverified(
 ):
     """An optimistic push marks the slot unverified."""
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-    assert push_coordinator.data[1] == SlotCredential.known("9999")
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
     assert push_coordinator.is_verified(pin_address(1)) is False
 
 
@@ -247,7 +251,7 @@ async def test_push_update_optimistic_same_value_flips_flag_without_notifying(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):
     """An optimistic re-push of the same value flips the flag but doesn't notify."""
-    push_coordinator.data = {1: SlotCredential.known("9999")}
+    push_coordinator.data = {pin_address(1): SlotCredential.known("9999")}
     with patch.object(push_coordinator, "async_set_updated_data") as mock_set_updated:
         push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
         mock_set_updated.assert_not_called()
@@ -267,7 +271,7 @@ async def test_push_update_ignores_empty_updates(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):
     """Test that push_update ignores empty update dict."""
-    push_coordinator.data = {1: SlotCredential.known("1111")}
+    push_coordinator.data = {pin_address(1): SlotCredential.known("1111")}
 
     # Track async_set_updated_data calls
     with patch.object(push_coordinator, "async_set_updated_data") as mock_set_updated:
@@ -281,7 +285,7 @@ async def test_push_update_notifies_listeners(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):
     """Test that push_update notifies coordinator listeners."""
-    push_coordinator.data = {1: SlotCredential.known("1111")}
+    push_coordinator.data = {pin_address(1): SlotCredential.known("1111")}
 
     # Track listener callbacks
     listener_called = [False]
@@ -452,7 +456,7 @@ async def test_drift_check_handles_hard_refresh_error(
 ):
     """Test that _async_drift_check handles hard refresh errors gracefully."""
     push_coordinator.last_update_success = True
-    push_coordinator.data = {1: SlotCredential.known("1234")}
+    push_coordinator.data = {pin_address(1): SlotCredential.known("1234")}
 
     # Mock hard refresh to raise an exception
     mock_hard_refresh = AsyncMock(side_effect=LockDisconnected("Lock offline"))
@@ -463,7 +467,7 @@ async def test_drift_check_handles_hard_refresh_error(
         await push_coordinator._async_drift_check(dt_util.utcnow())
 
         # Data should remain unchanged
-        assert push_coordinator.data == {1: SlotCredential.known("1234")}
+        assert push_coordinator.data == {pin_address(1): SlotCredential.known("1234")}
 
 
 # --- Backoff tests ---
@@ -634,7 +638,7 @@ async def test_backoff_resets_on_success(
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_success):
         result = await poll_coordinator.async_get_usercodes()
 
-    assert result == {1: "1234"}
+    assert result == {pin_address(1): "1234"}
     assert poll_coordinator._lock_breaker.failure_count == 0
     assert poll_coordinator.update_interval == original_interval
 
@@ -650,7 +654,7 @@ async def test_backoff_no_reset_when_no_prior_failures(
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
         result = await poll_coordinator.async_get_usercodes()
 
-    assert result == {1: "1234"}
+    assert result == {pin_address(1): "1234"}
     assert poll_coordinator._lock_breaker.failure_count == 0
     assert poll_coordinator.update_interval == original_interval
 
@@ -785,7 +789,7 @@ async def test_push_update_resets_backoff(
     assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 2
 
     # Push update with new data should reset backoff
-    push_coordinator.data = {1: SlotCredential.known("old")}
+    push_coordinator.data = {pin_address(1): SlotCredential.known("old")}
     push_coordinator.push_update({1: SlotCredential.known("1234")})
 
     assert push_coordinator._lock_breaker.failure_count == 0
@@ -808,7 +812,7 @@ async def test_push_update_no_reset_when_data_unchanged(
     assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 1
 
     # Push update with same data should NOT reset backoff
-    push_coordinator.data = {1: SlotCredential.known("1234")}
+    push_coordinator.data = {pin_address(1): SlotCredential.known("1234")}
     push_coordinator.push_update({1: SlotCredential.known("1234")})
 
     assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 1
@@ -1043,7 +1047,7 @@ async def test_confirm_pending_writes_confirms_present_masked(
     node-zwave-js never sends for a masked write: the slot reads back present
     (unreadable), so the believed PIN is confirmed and pending is cleared.
     """
-    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
     assert push_coordinator.is_verified(pin_address(1)) is False
 
@@ -1054,9 +1058,9 @@ async def test_confirm_pending_writes_confirms_present_masked(
     ):
         await push_coordinator.async_confirm_pending_writes()
 
-    assert 1 not in push_lock._pending_writes
+    assert pin_address(1) not in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is True
-    assert push_coordinator.data[1] == SlotCredential.known("9999")
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
 
 
 async def test_confirm_pending_writes_keeps_absent_slot_pending(
@@ -1064,7 +1068,7 @@ async def test_confirm_pending_writes_keeps_absent_slot_pending(
     push_lock: MockLCMPushLock,
 ) -> None:
     """A confirm read that finds the slot absent leaves it pending to re-sync."""
-    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
 
     with patch.object(
@@ -1074,7 +1078,7 @@ async def test_confirm_pending_writes_keeps_absent_slot_pending(
     ):
         await push_coordinator.async_confirm_pending_writes()
 
-    assert 1 in push_lock._pending_writes
+    assert pin_address(1) in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is False
 
 
@@ -1083,7 +1087,7 @@ async def test_confirm_pending_writes_tolerates_read_failure(
     push_lock: MockLCMPushLock,
 ) -> None:
     """A failed confirm read is non-fatal and leaves pending state untouched."""
-    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
 
     with patch.object(
@@ -1093,7 +1097,7 @@ async def test_confirm_pending_writes_tolerates_read_failure(
     ):
         await push_coordinator.async_confirm_pending_writes()
 
-    assert 1 in push_lock._pending_writes
+    assert pin_address(1) in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is False
 
 
@@ -1114,7 +1118,7 @@ async def test_confirm_pending_writes_swallows_unexpected_error(
     push_lock: MockLCMPushLock,
 ) -> None:
     """A non-LCM error from the confirm read must not escape (it would suspend the slot)."""
-    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
 
     with patch.object(
@@ -1125,7 +1129,7 @@ async def test_confirm_pending_writes_swallows_unexpected_error(
         # Must not raise: the seam awaits this and a raise would suspend the slot.
         await push_coordinator.async_confirm_pending_writes()
 
-    assert 1 in push_lock._pending_writes
+    assert pin_address(1) in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is False
 
 
@@ -1202,13 +1206,13 @@ async def test_apply_read_takes_differing_readable_external_change(
     Mirrors BaseLock._confirm_slot: a drift/poll read of an externally-changed
     readable code must not be masked by the believed value.
     """
-    push_lock._pending_writes[1] = ("1234", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("1234", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
 
-    out = push_coordinator._apply_read({1: SlotCredential.known("9999")})
+    out = push_coordinator._apply_read({pin_address(1): SlotCredential.known("9999")})
 
-    assert out[1] == SlotCredential.known("9999")
-    assert 1 not in push_lock._pending_writes
+    assert out[pin_address(1)] == SlotCredential.known("9999")
+    assert pin_address(1) not in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is True
 
 
@@ -1247,3 +1251,33 @@ async def test_string_slot_number_still_resolves(push_coordinator) -> None:
     assert push_coordinator.is_verified(pin_address("1")) is False
     push_coordinator.mark_verified(pin_address("1"))
     assert push_coordinator.is_verified(pin_address(1)) is True
+
+
+async def test_credentials_by_slot_filters_to_one_type(push_coordinator) -> None:
+    """The slot-keyed projection returns one credential type, never a blend.
+
+    Every stored credential is a Personal Identification Number today, so the
+    filter never excludes anything in practice and line coverage cannot pin
+    it. Seeding a second type directly is the only way to prove the websocket
+    and diagnostics boundaries will not start emitting, say, a Radio Frequency
+    Identification value under a PIN slot key once a second type is stored.
+    """
+    push_coordinator.data = {
+        pin_address(1): SlotCredential.known("1111"),
+        CredentialAddress(2, CredentialType.RFID): SlotCredential.known("A4B2C1"),
+    }
+
+    assert push_coordinator.credentials_by_slot() == {1: SlotCredential.known("1111")}
+    assert push_coordinator.credentials_by_slot(CredentialType.RFID) == {
+        2: SlotCredential.known("A4B2C1")
+    }
+
+
+async def test_credential_distinguishes_absent_from_empty(push_coordinator) -> None:
+    """None means "never reported"; empty() is a positive observation of no code."""
+    push_coordinator.data = {pin_address(1): SlotCredential.empty()}
+
+    assert push_coordinator.credential(pin_address(1)) is SlotCredential.empty()
+    assert push_coordinator.credential(pin_address(9)) is None
+    assert push_coordinator.has_credential(pin_address(1)) is True
+    assert push_coordinator.has_credential(pin_address(9)) is False

@@ -26,6 +26,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
@@ -557,7 +558,7 @@ async def test_credential_deleted_pin_pushes_empty(
 ) -> None:
     """Test that a 'credential deleted' event for a PIN pushes SlotCredential.empty()."""
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {5: SlotCredential.unreadable()}
+    mock_coordinator.data = {pin_address(5): SlotCredential.unreadable()}
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
@@ -609,7 +610,7 @@ async def test_credential_deleted_non_pin_ignored(
 ) -> None:
     """Test that 'credential deleted' for a non-PIN credential type is ignored."""
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {4: SlotCredential.unreadable()}
+    mock_coordinator.data = {pin_address(4): SlotCredential.unreadable()}
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
@@ -777,7 +778,7 @@ async def test_uc_shim_empty_code_pushes_empty(
 ) -> None:
     """An empty userCode value update pushes SlotCredential.empty()."""
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: SlotCredential.known("1234")}
+    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
@@ -801,7 +802,7 @@ async def test_uc_shim_status_available_pushes_empty(
 ) -> None:
     """A userIdStatus=AVAILABLE update pushes empty when no PIN is expected."""
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: SlotCredential.known("1234")}
+    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
     mock_coordinator.desired_credential.return_value = SlotCredential.empty()
     zwave_js_lock.coordinator = mock_coordinator
 
@@ -832,7 +833,7 @@ async def test_uc_shim_status_available_ignored_when_pin_expected(
     on them would cause infinite sync loops.
     """
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: SlotCredential.known("1234")}
+    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
     mock_coordinator.desired_credential.return_value = SlotCredential.known("1234")
     zwave_js_lock.coordinator = mock_coordinator
 
@@ -941,7 +942,7 @@ async def test_uc_shim_confirms_pending_optimistic_write(
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
-    zwave_js_lock._pending_writes[2] = ("8642", time.monotonic() + 60)
+    zwave_js_lock._pending_writes[pin_address(2)] = ("8642", time.monotonic() + 60)
 
     lock_schlage_be469.receive_event(
         _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
@@ -951,6 +952,6 @@ async def test_uc_shim_confirms_pending_optimistic_write(
     mock_coordinator.push_update.assert_called_once_with(
         {2: SlotCredential.known("8642")}
     )
-    assert 2 not in zwave_js_lock._pending_writes
+    assert pin_address(2) not in zwave_js_lock._pending_writes
 
     zwave_js_lock.unsubscribe_push_updates()

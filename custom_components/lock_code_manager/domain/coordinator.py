@@ -28,7 +28,7 @@ from ..const import (
     DOMAIN,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
-from .credentials import CredentialAddress, CredentialType
+from .credentials import CredentialAddress, CredentialType, pin_address
 from .exceptions import LockCodeManagerError
 from .models import SlotCredential
 from .queries import get_entry_config
@@ -41,29 +41,31 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-def _user_ref_of(address: CredentialAddress) -> int:
+def _checked(address: CredentialAddress) -> CredentialAddress:
     """
-    Unpack an address to the slot-keyed storage key.
+    Return ``address`` normalized, rejecting types the coordinator cannot serve.
 
-    The coordinator stores credentials slot-keyed and manages Personal
-    Identification Number credentials only, so a non-PIN address cannot be
-    served and is a programming error rather than a missing entry. Failing
-    here keeps a future second credential type from silently reading and
-    writing the PIN's storage.
+    The coordinator manages Personal Identification Number credentials only,
+    so another type is a programming error rather than a missing entry.
+    Failing here keeps a future second credential type from silently reading
+    and writing the PIN's storage.
+
+    ``user_ref`` is coerced for the same reason ``_normalize_keys`` coerces:
+    a slot number reaches entities as either ``int`` or ``str`` (see
+    ``EntryConfig.has_slot``), and an uncoerced ``"1"`` would miss every
+    ``int``-keyed entry -- ``is_verified`` would report True for a slot whose
+    optimistic write is still unconfirmed.
     """
     if address.credential_type != CredentialType.PIN:
         raise ValueError(
             f"Only PIN credentials are addressable today, got {address.credential_type}"
         )
-    # Coerce for the same reason ``_normalize_keys`` does: ``data`` and
-    # ``_unverified`` are int-keyed, and a slot number reaches entities as
-    # either ``int`` or ``str`` (see ``EntryConfig.has_slot``). An
-    # uncoerced ``"1"`` would miss every int key -- ``is_verified`` would
-    # report True for a slot whose optimistic write is still unconfirmed.
-    return int(address.user_ref)
+    return CredentialAddress(int(address.user_ref), address.credential_type)
 
 
-class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredential]]):
+class LockUsercodeUpdateCoordinator(
+    DataUpdateCoordinator[dict[CredentialAddress, SlotCredential]]
+):
     """Class to manage usercode updates."""
 
     def __init__(self, hass: HomeAssistant, lock: BaseLock, config_entry: Any) -> None:
@@ -82,7 +84,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             update_interval=update_interval,
             config_entry=config_entry,
         )
-        self.data: dict[int, SlotCredential] = {}
+        self.data: dict[CredentialAddress, SlotCredential] = {}
         # Slots awaiting confirmation, kept in lockstep with ``data``. A slot is
         # unverified only while an optimistic (ambiguous-but-treated-as-completed)
         # write awaits confirmation; every other source -- genuine push events,
@@ -93,7 +95,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         # ``dict[int, bool]`` admitted a third, redundant value -- an explicit
         # ``True`` that read identically to absence -- and every writer had to
         # remember which of the two to use. See the Phase 2 push-as-commit spec.
-        self._unverified: set[int] = set()
+        self._unverified: set[CredentialAddress] = set()
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -137,7 +139,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         ``SlotCredential.empty()``; an enabled slot with a configured PIN
         maps to ``SlotCredential.known(pin)``.
         """
-        slot_data = get_entry_config(self._config_entry).slot(_user_ref_of(address))
+        slot_data = get_entry_config(self._config_entry).slot(
+            _checked(address).user_ref
+        )
         if not slot_data.get(CONF_ENABLED):
             return SlotCredential.empty()
         pin = slot_data.get(CONF_PIN)
@@ -148,13 +152,19 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
     @staticmethod
     def _normalize_keys(
         data: dict[Any, SlotCredential],
-    ) -> dict[int, SlotCredential]:
-        """Coerce slot keys to ``int``. Raises ValueError/TypeError if a key cannot be cast."""
-        return {int(k): v for k, v in data.items()}
+    ) -> dict[CredentialAddress, SlotCredential]:
+        """
+        Lift a provider's slot-keyed read into the address keyspace.
+
+        Providers report what they found on the device, keyed by device slot,
+        and every credential they report today is a Personal Identification
+        Number. Raises ValueError/TypeError if a key cannot be cast to int.
+        """
+        return {pin_address(int(k)): v for k, v in data.items()}
 
     def _apply_read(
-        self, observed: dict[int, SlotCredential]
-    ) -> dict[int, SlotCredential]:
+        self, observed: dict[CredentialAddress, SlotCredential]
+    ) -> dict[CredentialAddress, SlotCredential]:
         """
         Resolve a genuine read (poll or hard refresh) against pending writes.
 
@@ -171,23 +181,23 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         genuine observations and are marked verified. See the Phase 2
         push-as-commit spec.
         """
-        out: dict[int, SlotCredential] = {}
-        for slot, cred in observed.items():
-            pending = self._lock._pending_writes.get(slot)
+        out: dict[CredentialAddress, SlotCredential] = {}
+        for address, cred in observed.items():
+            pending = self._lock._pending_writes.get(address)
             if pending is not None and cred.is_present:
                 pin, _deadline = pending
-                del self._lock._pending_writes[slot]
+                del self._lock._pending_writes[address]
                 if cred.is_readable and cred.readable_pin != pin:
-                    out[slot] = cred
+                    out[address] = cred
                 else:
-                    out[slot] = SlotCredential.known(pin)
-                self._unverified.discard(slot)
+                    out[address] = SlotCredential.known(pin)
+                self._unverified.discard(address)
             elif pending is not None:
-                out[slot] = cred
-                self._unverified.add(slot)
+                out[address] = cred
+                self._unverified.add(address)
             else:
-                out[slot] = cred
-                self._unverified.discard(slot)
+                out[address] = cred
+                self._unverified.discard(address)
         # Keep the unverified set in lockstep with the read.
         self._unverified &= out.keys()
         return out
@@ -199,7 +209,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         Unlisted addresses are verified: an address is only unverified while
         an optimistic write awaits confirmation (push event or hard refresh).
         """
-        return _user_ref_of(address) not in self._unverified
+        return _checked(address) not in self._unverified
 
     @callback
     def mark_verified(self, address: CredentialAddress) -> None:
@@ -210,7 +220,41 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         ``WriteResult.CONFIRMED``), so an address left unverified by a prior
         optimistic write on the same address cannot strand it.
         """
-        self._unverified.discard(_user_ref_of(address))
+        self._unverified.discard(_checked(address))
+
+    def credential(self, address: CredentialAddress) -> SlotCredential | None:
+        """
+        Return the credential the lock reports at an address, or ``None``.
+
+        ``None`` means the lock has not reported anything for this address --
+        distinct from ``SlotCredential.empty()``, which is a positive
+        observation that the slot holds no code.
+        """
+        return self.data.get(_checked(address))
+
+    def has_credential(self, address: CredentialAddress) -> bool:
+        """Return whether the lock has reported anything at an address."""
+        return _checked(address) in self.data
+
+    def credentials_by_slot(
+        self, credential_type: CredentialType = CredentialType.PIN
+    ) -> dict[int, SlotCredential]:
+        """
+        Project the stored credentials of one type into a slot-keyed view.
+
+        The websocket payload and the diagnostics output are contracts with
+        things outside this integration -- the dashboard card reads one, and
+        people paste the other into issue reports -- so both keep their
+        slot-keyed shape while the storage underneath moves to addresses.
+        Lossless while Personal Identification Number is the only type
+        stored; when a second type arrives, those boundaries choose which
+        type they are projecting instead of silently flattening both.
+        """
+        return {
+            address.user_ref: credential
+            for address, credential in self.data.items()
+            if address.credential_type is credential_type
+        }
 
     async def async_confirm_pending_writes(self) -> None:
         """
@@ -392,7 +436,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             per_lock_issue_id("lock_offline", self._lock.lock.entity_id),
         )
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def async_get_usercodes(self) -> dict[CredentialAddress, SlotCredential]:
         """Fetch usercodes from the provider, normalize slot keys, and apply backoff handling."""
         try:
             data = await self._lock.async_internal_get_usercodes()

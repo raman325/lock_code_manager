@@ -24,7 +24,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
-from custom_components.lock_code_manager.domain.credentials import WriteResult
+from custom_components.lock_code_manager.domain.credentials import (
+    WriteResult,
+    pin_address,
+)
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.providers.zwave_js.conftest import ZWAVE_JS_LCM_CONFIG_SLOTS
@@ -273,7 +276,10 @@ class TestEvents:
 
         # Credential events push unreadable (the lock doesn't expose the Personal
         # Identification Number value in the event; a coordinator refresh reads it).
-        assert e2e_zwave_lock.coordinator.data.get(1) == SlotCredential.unreadable()
+        assert (
+            e2e_zwave_lock.coordinator.data.get(pin_address(1))
+            == SlotCredential.unreadable()
+        )
 
 
 class TestColdStartRace:

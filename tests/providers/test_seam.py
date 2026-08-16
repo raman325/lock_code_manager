@@ -23,6 +23,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     User,
     WriteResult,
     credential_from_slot,
+    pin_address,
     user_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
@@ -1070,8 +1071,8 @@ async def test_record_optimistic_write_pushes_unverified_and_tracks_pending(
     lock._record_optimistic_write(4, "1234")
 
     assert pushed == [({4: SlotCredential.known("1234")}, True)]
-    assert 4 in lock._pending_writes
-    assert lock._pending_writes[4][0] == "1234"
+    assert pin_address(4) in lock._pending_writes
+    assert lock._pending_writes[pin_address(4)][0] == "1234"
 
 
 async def test_clear_usercode_drops_stale_pending_write(
@@ -1081,12 +1082,12 @@ async def test_clear_usercode_drops_stale_pending_write(
     lock, _pushed = _slot_only_lock_with_coordinator(hass)
     lock._min_operation_delay = 0.0
     lock._record_optimistic_write(4, "1234")
-    assert 4 in lock._pending_writes
+    assert pin_address(4) in lock._pending_writes
 
     with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
         await lock.async_internal_clear_usercode(4)
 
-    assert 4 not in lock._pending_writes
+    assert pin_address(4) not in lock._pending_writes
 
 
 async def test_optimistic_set_actively_confirms_instead_of_waiting(
@@ -1109,7 +1110,7 @@ async def test_optimistic_set_actively_confirms_instead_of_waiting(
     ):
         await lock.async_internal_set_usercode(4, "1234", "carol")
 
-    assert 4 in lock._pending_writes
+    assert pin_address(4) in lock._pending_writes
     lock.coordinator.async_confirm_pending_writes.assert_awaited_once()
 
 
@@ -1125,7 +1126,7 @@ async def test_confirm_slot_keeps_believed_value_on_present_observation(
     lock._confirm_slot(4, SlotCredential.unreadable())
 
     assert pushed == [({4: SlotCredential.known("1234")}, False)]
-    assert 4 not in lock._pending_writes
+    assert pin_address(4) not in lock._pending_writes
 
 
 async def test_confirm_slot_takes_observation_when_no_pending(
@@ -1149,7 +1150,7 @@ async def test_confirm_slot_empty_observation_clears_pending(
     lock._confirm_slot(4, SlotCredential.empty())
 
     assert pushed == [({4: SlotCredential.empty()}, False)]
-    assert 4 not in lock._pending_writes
+    assert pin_address(4) not in lock._pending_writes
 
 
 async def test_confirm_slot_takes_differing_readable_external_change(
@@ -1165,7 +1166,7 @@ async def test_confirm_slot_takes_differing_readable_external_change(
     lock._confirm_slot(4, SlotCredential.known("9999"))
 
     assert pushed == [({4: SlotCredential.known("9999")}, False)]
-    assert 4 not in lock._pending_writes
+    assert pin_address(4) not in lock._pending_writes
 
 
 async def test_confirm_slot_keeps_belief_when_readable_matches(
@@ -1179,7 +1180,7 @@ async def test_confirm_slot_keeps_belief_when_readable_matches(
     lock._confirm_slot(4, SlotCredential.known("1234"))
 
     assert pushed == [({4: SlotCredential.known("1234")}, False)]
-    assert 4 not in lock._pending_writes
+    assert pin_address(4) not in lock._pending_writes
 
 
 # Slot capacity pre-flight (issue #1398)

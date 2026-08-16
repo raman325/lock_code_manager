@@ -77,7 +77,7 @@ class CredentialMachine(RuleBasedStateMachine):
         # which may lag lock.codes until the next refresh.
         return any(
             other_slot != slot and credential.matches(pin)
-            for other_slot, credential in self.coordinator.data.items()
+            for other_slot, credential in self.coordinator.credentials_by_slot().items()
         )
 
     @rule(slot=SLOTS, pin=PINS)
@@ -138,7 +138,7 @@ class CredentialMachine(RuleBasedStateMachine):
         self._run(self.coordinator.async_refresh())
         observed = {
             slot: credential.readable_pin
-            for slot, credential in self.coordinator.data.items()
+            for slot, credential in self.coordinator.credentials_by_slot().items()
             if credential.is_present
         }
         assert observed == self.expected
