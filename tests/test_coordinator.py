@@ -26,6 +26,11 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
+from custom_components.lock_code_manager.domain.credentials import (
+    CredentialAddress,
+    CredentialType,
+    pin_address,
+)
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
@@ -207,7 +212,7 @@ async def test_is_verified_defaults_true_for_absent_slot(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):
     """A slot with no recorded verified flag reads as verified."""
-    assert push_coordinator.is_verified(7) is True
+    assert push_coordinator.is_verified(pin_address(7)) is True
 
 
 async def test_push_update_default_marks_verified(
@@ -215,7 +220,7 @@ async def test_push_update_default_marks_verified(
 ):
     """The default (optimistic=False) push marks the slot verified."""
     push_coordinator.push_update({1: SlotCredential.known("9999")})
-    assert push_coordinator.is_verified(1) is True
+    assert push_coordinator.is_verified(pin_address(1)) is True
 
 
 async def test_push_update_optimistic_marks_unverified(
@@ -224,7 +229,7 @@ async def test_push_update_optimistic_marks_unverified(
     """An optimistic push marks the slot unverified."""
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
     assert push_coordinator.data[1] == SlotCredential.known("9999")
-    assert push_coordinator.is_verified(1) is False
+    assert push_coordinator.is_verified(pin_address(1)) is False
 
 
 async def test_push_update_verified_push_clears_unverified(
@@ -232,10 +237,10 @@ async def test_push_update_verified_push_clears_unverified(
 ):
     """A later verified push of a new value re-verifies the slot."""
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-    assert push_coordinator.is_verified(1) is False
+    assert push_coordinator.is_verified(pin_address(1)) is False
 
     push_coordinator.push_update({1: SlotCredential.unreadable()})
-    assert push_coordinator.is_verified(1) is True
+    assert push_coordinator.is_verified(pin_address(1)) is True
 
 
 async def test_push_update_optimistic_same_value_flips_flag_without_notifying(
@@ -246,7 +251,7 @@ async def test_push_update_optimistic_same_value_flips_flag_without_notifying(
     with patch.object(push_coordinator, "async_set_updated_data") as mock_set_updated:
         push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
         mock_set_updated.assert_not_called()
-    assert push_coordinator.is_verified(1) is False
+    assert push_coordinator.is_verified(pin_address(1)) is False
 
 
 async def test_verified_map_pruned_with_data(
@@ -1040,7 +1045,7 @@ async def test_confirm_pending_writes_confirms_present_masked(
     """
     push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-    assert push_coordinator.is_verified(1) is False
+    assert push_coordinator.is_verified(pin_address(1)) is False
 
     with patch.object(
         push_lock,
@@ -1050,7 +1055,7 @@ async def test_confirm_pending_writes_confirms_present_masked(
         await push_coordinator.async_confirm_pending_writes()
 
     assert 1 not in push_lock._pending_writes
-    assert push_coordinator.is_verified(1) is True
+    assert push_coordinator.is_verified(pin_address(1)) is True
     assert push_coordinator.data[1] == SlotCredential.known("9999")
 
 
@@ -1070,7 +1075,7 @@ async def test_confirm_pending_writes_keeps_absent_slot_pending(
         await push_coordinator.async_confirm_pending_writes()
 
     assert 1 in push_lock._pending_writes
-    assert push_coordinator.is_verified(1) is False
+    assert push_coordinator.is_verified(pin_address(1)) is False
 
 
 async def test_confirm_pending_writes_tolerates_read_failure(
@@ -1089,7 +1094,7 @@ async def test_confirm_pending_writes_tolerates_read_failure(
         await push_coordinator.async_confirm_pending_writes()
 
     assert 1 in push_lock._pending_writes
-    assert push_coordinator.is_verified(1) is False
+    assert push_coordinator.is_verified(pin_address(1)) is False
 
 
 async def test_confirm_pending_writes_noop_without_pending(
@@ -1121,7 +1126,7 @@ async def test_confirm_pending_writes_swallows_unexpected_error(
         await push_coordinator.async_confirm_pending_writes()
 
     assert 1 in push_lock._pending_writes
-    assert push_coordinator.is_verified(1) is False
+    assert push_coordinator.is_verified(pin_address(1)) is False
 
 
 async def test_desired_credential_disabled_slot_is_empty(
@@ -1137,7 +1142,7 @@ async def test_desired_credential_disabled_slot_is_empty(
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "1234", CONF_ENABLED: False}},
         },
     )
-    assert poll_coordinator.desired_credential(1) == SlotCredential.empty()
+    assert poll_coordinator.desired_credential(pin_address(1)) == SlotCredential.empty()
 
 
 async def test_desired_credential_enabled_blank_pin_is_empty(
@@ -1153,7 +1158,7 @@ async def test_desired_credential_enabled_blank_pin_is_empty(
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "", CONF_ENABLED: True}},
         },
     )
-    assert poll_coordinator.desired_credential(1) == SlotCredential.empty()
+    assert poll_coordinator.desired_credential(pin_address(1)) == SlotCredential.empty()
 
 
 async def test_desired_credential_enabled_with_pin_is_known(
@@ -1169,7 +1174,9 @@ async def test_desired_credential_enabled_with_pin_is_known(
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "4242", CONF_ENABLED: True}},
         },
     )
-    assert poll_coordinator.desired_credential(1) == SlotCredential.known("4242")
+    assert poll_coordinator.desired_credential(pin_address(1)) == SlotCredential.known(
+        "4242"
+    )
 
 
 async def test_connection_check_swallows_lock_code_manager_error(
@@ -1202,4 +1209,27 @@ async def test_apply_read_takes_differing_readable_external_change(
 
     assert out[1] == SlotCredential.known("9999")
     assert 1 not in push_lock._pending_writes
-    assert push_coordinator.is_verified(1) is True
+    assert push_coordinator.is_verified(pin_address(1)) is True
+
+
+async def test_accessors_are_addressed_not_slot_numbered(push_coordinator) -> None:
+    """The credential accessors round-trip through a CredentialAddress."""
+    address = pin_address(1)
+    push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
+    assert push_coordinator.is_verified(address) is False
+    push_coordinator.mark_verified(address)
+    assert push_coordinator.is_verified(address) is True
+
+
+@pytest.mark.parametrize(
+    "accessor", ["is_verified", "mark_verified", "desired_credential"]
+)
+async def test_non_pin_address_is_rejected(push_coordinator, accessor) -> None:
+    """A non-PIN address is a programming error, not a missing entry.
+
+    Storage is still slot-keyed and PIN-only, so serving another credential
+    type would silently read and write the PIN's storage.
+    """
+    address = CredentialAddress(1, CredentialType.RFID)
+    with pytest.raises(ValueError, match="Only PIN credentials are addressable"):
+        getattr(push_coordinator, accessor)(address)

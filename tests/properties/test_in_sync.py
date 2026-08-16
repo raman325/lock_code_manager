@@ -9,7 +9,10 @@ from hypothesis import given, strategies as st
 from homeassistant.const import STATE_OFF, STATE_ON
 
 from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.sync import SlotState, SlotSyncManager
+from custom_components.lock_code_manager.domain.sync import (
+    CredentialSyncState,
+    SlotSyncManager,
+)
 
 PINS = st.text(alphabet="0123456789", min_size=4, max_size=8)
 LAST_SET = st.one_of(st.none(), PINS)
@@ -20,12 +23,12 @@ CREDENTIALS = st.one_of(
     PINS.map(SlotCredential.known),
 )
 SLOT_STATES = st.builds(
-    SlotState,
+    CredentialSyncState,
     active_state=st.sampled_from([STATE_ON, STATE_OFF]),
-    pin_state=PINS,
+    credential_state=PINS,
     name_state=st.one_of(st.none(), st.text(max_size=20)),
     code_state=st.one_of(st.just(""), PINS),
-    coordinator_code=CREDENTIALS,
+    coordinator_credential=CREDENTIALS,
 )
 
 
@@ -39,13 +42,13 @@ def _manager(*, verified: bool, last_set_pin: str | None) -> SlotSyncManager:
     return manager
 
 
-@given(slot_state=SLOT_STATES, last_set_pin=LAST_SET)
+@given(snapshot=SLOT_STATES, last_set_pin=LAST_SET)
 def test_unverified_slot_is_never_in_sync(
-    slot_state: SlotState, last_set_pin: str | None
+    snapshot: CredentialSyncState, last_set_pin: str | None
 ) -> None:
     """An optimistic write awaiting confirmation can never read as in sync."""
     manager = _manager(verified=False, last_set_pin=last_set_pin)
-    assert manager.calculate_in_sync(slot_state) is False
+    assert manager.calculate_in_sync(snapshot) is False
 
 
 @given(pin=PINS, credential_pin=PINS, last_set_pin=LAST_SET)
@@ -54,7 +57,9 @@ def test_active_readable_credential_syncs_iff_pin_matches(
 ) -> None:
     """Active slot with a readable code: in sync exactly when PINs match."""
     manager = _manager(verified=True, last_set_pin=last_set_pin)
-    state = SlotState(STATE_ON, pin, None, "", SlotCredential.known(credential_pin))
+    state = CredentialSyncState(
+        STATE_ON, pin, None, "", SlotCredential.known(credential_pin)
+    )
     assert manager.calculate_in_sync(state) is (pin == credential_pin)
 
 
@@ -64,7 +69,7 @@ def test_active_empty_credential_trusts_recent_set_only(
 ) -> None:
     """Active + lock reports empty: in sync only if we just set this exact PIN."""
     manager = _manager(verified=True, last_set_pin=last_set_pin)
-    state = SlotState(STATE_ON, pin, None, "", SlotCredential.empty())
+    state = CredentialSyncState(STATE_ON, pin, None, "", SlotCredential.empty())
     assert manager.calculate_in_sync(state) is (
         last_set_pin is not None and pin == last_set_pin
     )
@@ -76,7 +81,7 @@ def test_active_unreadable_credential_compares_last_set(
 ) -> None:
     """Active + write-only code: in sync iff configured PIN equals last set."""
     manager = _manager(verified=True, last_set_pin=last_set_pin)
-    state = SlotState(STATE_ON, pin, None, "", SlotCredential.unreadable())
+    state = CredentialSyncState(STATE_ON, pin, None, "", SlotCredential.unreadable())
     assert manager.calculate_in_sync(state) is (pin == last_set_pin)
 
 
@@ -86,23 +91,23 @@ def test_active_without_coordinator_data_falls_back_to_code_sensor(
 ) -> None:
     """No coordinator data: the code sensor entity is the comparison source."""
     manager = _manager(verified=True, last_set_pin=last_set_pin)
-    state = SlotState(STATE_ON, pin, None, code, None)
+    state = CredentialSyncState(STATE_ON, pin, None, code, None)
     assert manager.calculate_in_sync(state) is (pin == code)
 
 
-@given(slot_state=SLOT_STATES, last_set_pin=LAST_SET)
+@given(snapshot=SLOT_STATES, last_set_pin=LAST_SET)
 def test_inactive_slot_syncs_iff_lock_side_empty(
-    slot_state: SlotState, last_set_pin: str | None
+    snapshot: CredentialSyncState, last_set_pin: str | None
 ) -> None:
     """Inactive slot: in sync exactly when the lock side shows no code."""
     manager = _manager(verified=True, last_set_pin=last_set_pin)
-    state = SlotState(
+    state = CredentialSyncState(
         STATE_OFF,
-        slot_state.pin_state,
-        slot_state.name_state,
-        slot_state.code_state,
-        slot_state.coordinator_code,
+        snapshot.credential_state,
+        snapshot.name_state,
+        snapshot.code_state,
+        snapshot.coordinator_credential,
     )
-    credential = state.coordinator_code
+    credential = state.coordinator_credential
     expected = credential.is_empty if credential is not None else state.code_state == ""
     assert manager.calculate_in_sync(state) is expected

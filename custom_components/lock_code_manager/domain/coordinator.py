@@ -28,6 +28,7 @@ from ..const import (
     DOMAIN,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
+from .credentials import CredentialAddress, CredentialType
 from .exceptions import LockCodeManagerError
 from .models import SlotCredential
 from .queries import get_entry_config
@@ -38,6 +39,23 @@ if TYPE_CHECKING:
     from ..providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _user_ref_of(address: CredentialAddress) -> int:
+    """
+    Unpack an address to the slot-keyed storage key.
+
+    The coordinator stores credentials slot-keyed and manages Personal
+    Identification Number credentials only, so a non-PIN address cannot be
+    served and is a programming error rather than a missing entry. Failing
+    here keeps a future second credential type from silently reading and
+    writing the PIN's storage.
+    """
+    if address.credential_type is not CredentialType.PIN:
+        raise ValueError(
+            f"Only PIN credentials are addressable today, got {address.credential_type}"
+        )
+    return address.user_ref
 
 
 class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredential]]):
@@ -106,15 +124,15 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         """Return the lock."""
         return self._lock
 
-    def desired_credential(self, slot_num: int) -> SlotCredential:
+    def desired_credential(self, address: CredentialAddress) -> SlotCredential:
         """
-        Return the credential LCM wants on a slot.
+        Return the credential LCM wants at an address.
 
         Disabled slots and enabled-but-blank slots map to
         ``SlotCredential.empty()``; an enabled slot with a configured PIN
         maps to ``SlotCredential.known(pin)``.
         """
-        slot_data = get_entry_config(self._config_entry).slot(slot_num)
+        slot_data = get_entry_config(self._config_entry).slot(_user_ref_of(address))
         if not slot_data.get(CONF_ENABLED):
             return SlotCredential.empty()
         pin = slot_data.get(CONF_PIN)
@@ -169,25 +187,25 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         self._unverified &= out.keys()
         return out
 
-    def is_verified(self, slot: int) -> bool:
+    def is_verified(self, address: CredentialAddress) -> bool:
         """
-        Return whether the slot's credential is a confirmed observation.
+        Return whether the address's credential is a confirmed observation.
 
-        Unlisted slots are verified: a slot is only unverified while an
-        optimistic write awaits confirmation (push event or hard refresh).
+        Unlisted addresses are verified: an address is only unverified while
+        an optimistic write awaits confirmation (push event or hard refresh).
         """
-        return slot not in self._unverified
+        return _user_ref_of(address) not in self._unverified
 
     @callback
-    def mark_verified(self, slot: int) -> None:
+    def mark_verified(self, address: CredentialAddress) -> None:
         """
-        Drop a slot from the unverified set.
+        Drop an address from the unverified set.
 
         Called when a write is confirmed by the lock (an authoritative
-        ``WriteResult.CONFIRMED``), so a slot left unverified by a prior
-        optimistic write on the same slot cannot strand it.
+        ``WriteResult.CONFIRMED``), so an address left unverified by a prior
+        optimistic write on the same address cannot strand it.
         """
-        self._unverified.discard(slot)
+        self._unverified.discard(_user_ref_of(address))
 
     async def async_confirm_pending_writes(self) -> None:
         """

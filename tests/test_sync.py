@@ -22,7 +22,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
 )
-from custom_components.lock_code_manager.domain.credentials import WriteResult
+from custom_components.lock_code_manager.domain.credentials import (
+    WriteResult,
+    pin_address,
+)
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
@@ -30,7 +33,10 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationUnsupported,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
-from custom_components.lock_code_manager.domain.sync import SlotState, SlotSyncManager
+from custom_components.lock_code_manager.domain.sync import (
+    CredentialSyncState,
+    SlotSyncManager,
+)
 
 from .common import (
     LOCK_1_ENTITY_ID,
@@ -48,17 +54,17 @@ def _slot(
     pin: str = "1234",
     name: str | None = "Test",
     code: str = "",
-    coordinator_code: str | SlotCredential | None = None,
-) -> SlotState:
-    """Build a SlotState for testing; raw strings are wrapped as known credentials."""
-    if isinstance(coordinator_code, str):
-        coordinator_code = SlotCredential.known(coordinator_code)
-    return SlotState(
+    coordinator_credential: str | SlotCredential | None = None,
+) -> CredentialSyncState:
+    """Build a CredentialSyncState for testing; raw strings are wrapped as known credentials."""
+    if isinstance(coordinator_credential, str):
+        coordinator_credential = SlotCredential.known(coordinator_credential)
+    return CredentialSyncState(
         active_state=active,
-        pin_state=pin,
+        credential_state=pin,
         name_state=name,
         code_state=code,
-        coordinator_code=coordinator_code,
+        coordinator_credential=coordinator_credential,
     )
 
 
@@ -84,13 +90,13 @@ class TestCalculateInSync:
             # -- Active (ON) + various lock codes --
             pytest.param(
                 None,
-                {"active": STATE_ON, "pin": "1234", "coordinator_code": "1234"},
+                {"active": STATE_ON, "pin": "1234", "coordinator_credential": "1234"},
                 True,
                 id="active-matching-pin",
             ),
             pytest.param(
                 None,
-                {"active": STATE_ON, "pin": "1234", "coordinator_code": "5678"},
+                {"active": STATE_ON, "pin": "1234", "coordinator_credential": "5678"},
                 False,
                 id="active-mismatched-pin",
             ),
@@ -99,7 +105,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCredential.unreadable(),
+                    "coordinator_credential": SlotCredential.unreadable(),
                 },
                 True,
                 id="active-unknown-code-matching-last-set",
@@ -109,7 +115,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "5678",
-                    "coordinator_code": SlotCredential.unreadable(),
+                    "coordinator_credential": SlotCredential.unreadable(),
                 },
                 False,
                 id="active-unknown-code-pin-changed",
@@ -119,7 +125,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCredential.unreadable(),
+                    "coordinator_credential": SlotCredential.unreadable(),
                 },
                 False,
                 id="active-unknown-code-never-set",
@@ -129,7 +135,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCredential.empty(),
+                    "coordinator_credential": SlotCredential.empty(),
                 },
                 False,
                 id="active-empty-code",
@@ -139,7 +145,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCredential.empty(),
+                    "coordinator_credential": SlotCredential.empty(),
                 },
                 True,
                 id="active-empty-code-matching-last-set",
@@ -149,7 +155,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCredential.empty(),
+                    "coordinator_credential": SlotCredential.empty(),
                 },
                 False,
                 id="active-empty-code-mismatched-last-set",
@@ -159,7 +165,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": None,
+                    "coordinator_credential": None,
                     "code": "1234",
                 },
                 True,
@@ -170,7 +176,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": None,
+                    "coordinator_credential": None,
                     "code": "5678",
                 },
                 False,
@@ -179,31 +185,34 @@ class TestCalculateInSync:
             # -- Inactive (OFF) + various lock codes --
             pytest.param(
                 None,
-                {"active": STATE_OFF, "coordinator_code": SlotCredential.empty()},
+                {"active": STATE_OFF, "coordinator_credential": SlotCredential.empty()},
                 True,
                 id="inactive-empty-code",
             ),
             pytest.param(
                 None,
-                {"active": STATE_OFF, "coordinator_code": SlotCredential.unreadable()},
+                {
+                    "active": STATE_OFF,
+                    "coordinator_credential": SlotCredential.unreadable(),
+                },
                 False,
                 id="inactive-unknown-code",
             ),
             pytest.param(
                 None,
-                {"active": STATE_OFF, "coordinator_code": "1234"},
+                {"active": STATE_OFF, "coordinator_credential": "1234"},
                 False,
                 id="inactive-has-pin",
             ),
             pytest.param(
                 None,
-                {"active": STATE_OFF, "coordinator_code": None, "code": ""},
+                {"active": STATE_OFF, "coordinator_credential": None, "code": ""},
                 True,
                 id="inactive-empty-string-fallback",
             ),
             pytest.param(
                 None,
-                {"active": STATE_OFF, "coordinator_code": None, "code": "1234"},
+                {"active": STATE_OFF, "coordinator_credential": None, "code": "1234"},
                 False,
                 id="inactive-nonempty-string-fallback",
             ),
@@ -228,7 +237,7 @@ class TestCalculateInSync:
         value in the coordinator, but the lock has not confirmed it, so the
         tick must keep watching / re-sync rather than declare success.
         """
-        slot = _slot(active=STATE_ON, pin="1234", coordinator_code="1234")
+        slot = _slot(active=STATE_ON, pin="1234", coordinator_credential="1234")
         assert (
             _manager(last_set_pin="1234", verified=True).calculate_in_sync(slot) is True
         )
@@ -887,7 +896,7 @@ class TestSyncStateMachine:
         # marked verified, pending cleared.
         manager._lock._confirm_slot(1, SlotCredential.unreadable())
         assert 1 not in manager._lock._pending_writes
-        assert manager._coordinator.is_verified(1) is True
+        assert manager._coordinator.is_verified(pin_address(1)) is True
 
         manager.request_sync_check()
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
@@ -949,7 +958,7 @@ class TestSyncStateMachine:
         # changed it while the write was outstanding. The stale entry must not
         # hold the slot in PENDING_CONFIRMATION (re-syncing the old value) until
         # the deadline; it is dropped and the new target re-syncs.
-        desired = manager._resolve_slot_state().pin_state
+        desired = manager._resolve_credential_snapshot().credential_state
         stale_pin = f"{desired}9"
         manager._lock._pending_writes[1] = (stale_pin, time.monotonic() + 60.0)
         manager._coordinator.push_update(
@@ -1731,14 +1740,14 @@ class TestBreakerTickSoleMutatorInvariant:
             manager._slot_breaker.record_failure()
         seeded_count = manager._slot_breaker.failure_count
 
-        slot_state = SlotState(
+        snapshot = CredentialSyncState(
             active_state=STATE_ON,
-            pin_state="1234",
+            credential_state="1234",
             name_state="Test",
             code_state="",
-            coordinator_code=SlotCredential.empty(),
+            coordinator_credential=SlotCredential.empty(),
         )
-        manager._suspend_slot(slot_state, "test reason")
+        manager._suspend_slot(snapshot, "test reason")
 
         # Synchronous: counter is unchanged, flag is set.
         assert manager._slot_breaker.failure_count == seeded_count
@@ -1995,7 +2004,7 @@ class TestOptimisticSetPendingConfirmation:
 
         assert manager._state is SyncState.PENDING_CONFIRMATION
         assert 1 in manager._lock._pending_writes
-        assert manager._coordinator.is_verified(1) is False
+        assert manager._coordinator.is_verified(pin_address(1)) is False
 
 
 class TestAsyncTickDefensiveGuards:
