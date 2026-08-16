@@ -23,6 +23,7 @@ from custom_components.lock_code_manager.const import (
     MAX_SYNC_ATTEMPTS,
 )
 from custom_components.lock_code_manager.domain.credentials import (
+    CredentialType,
     WriteResult,
     pin_address,
 )
@@ -36,6 +37,7 @@ from custom_components.lock_code_manager.domain.models import SlotCredential, Sy
 from custom_components.lock_code_manager.domain.sync import (
     CredentialSyncState,
     SlotSyncManager,
+    value_entity_key,
 )
 
 from .common import (
@@ -75,6 +77,7 @@ def _manager(
     mgr = MagicMock(spec=SlotSyncManager)
     mgr._last_set_pin = last_set_pin
     mgr._slot_num = slot_num
+    mgr._address = pin_address(slot_num)
     mgr._coordinator = MagicMock()
     mgr._coordinator.is_verified.return_value = verified
     mgr.calculate_in_sync = SlotSyncManager.calculate_in_sync.__get__(mgr)
@@ -2111,3 +2114,27 @@ class TestEntityStateHelpers:
         manager._entity_id_map.pop(CONF_PIN, None)
 
         assert manager._ensure_entities_ready() is False
+
+
+class TestValueEntityKey:
+    """Tests for the credential-type to value-entity-key mapping."""
+
+    def test_pin_maps_to_the_pin_entity(self) -> None:
+        """The Personal Identification Number's desired value lives on the pin entity."""
+        assert value_entity_key(CredentialType.PIN) == CONF_PIN
+
+    @pytest.mark.parametrize(
+        "credential_type",
+        [CredentialType.FACE, CredentialType.FINGERPRINT, CredentialType.RFID],
+    )
+    def test_unmapped_type_raises_rather_than_defaulting(
+        self, credential_type: CredentialType
+    ) -> None:
+        """An unmapped type fails loud instead of converging against the PIN entity.
+
+        Defaulting would make a credential type wired up without its value
+        entity silently read and write the Personal Identification Number's
+        state.
+        """
+        with pytest.raises(ValueError, match="has no value entity key"):
+            value_entity_key(credential_type)

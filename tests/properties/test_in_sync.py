@@ -8,6 +8,7 @@ from hypothesis import given, strategies as st
 
 from homeassistant.const import STATE_OFF, STATE_ON
 
+from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.sync import (
     CredentialSyncState,
@@ -34,10 +35,11 @@ SLOT_STATES = st.builds(
 
 def _manager(*, verified: bool, last_set_pin: str | None) -> SlotSyncManager:
     # __new__ skips the heavyweight __init__ (hass, registries, entities);
-    # calculate_in_sync only touches these three attributes.
+    # calculate_in_sync only touches these four attributes.
     manager = SlotSyncManager.__new__(SlotSyncManager)
     manager._slot_num = 1
-    manager._coordinator = SimpleNamespace(is_verified=lambda slot_num: verified)
+    manager._address = pin_address(1)
+    manager._coordinator = SimpleNamespace(is_verified=lambda address: verified)
     manager._last_set_pin = last_set_pin
     return manager
 

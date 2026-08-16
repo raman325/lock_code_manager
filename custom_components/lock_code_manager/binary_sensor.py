@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
 from .domain.coordinator import LockUsercodeUpdateCoordinator
+from .domain.credentials import pin_address
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.sync import SlotSyncManager
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
@@ -146,7 +147,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             config_entry,
             coordinator,
             lock,
-            slot_num,
+            pin_address(slot_num),
             state_writer=_sync_and_write_state,
         )
 

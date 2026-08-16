@@ -13,11 +13,12 @@ Circuit breaker: 3 attempts within 5 minutes (MAX_SYNC_ATTEMPTS, SYNC_ATTEMPT_WI
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import logging
 import time
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
@@ -54,7 +55,7 @@ from ..const import (
     TICK_INTERVAL,
 )
 from .config import build_slot_unique_id
-from .credentials import pin_address
+from .credentials import CredentialAddress, CredentialType
 from .exceptions import (
     CodeRejectedError,
     LockDisconnected,
@@ -72,6 +73,29 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Which entity holds the desired value for each credential type. Only the
+# value-writable types appear: a learn-at-device credential (fingerprint,
+# face) has no value entity because there is no value Lock Code Manager can
+# author for it.
+_VALUE_ENTITY_KEYS: Mapping[CredentialType, str] = MappingProxyType(
+    {CredentialType.PIN: CONF_PIN}
+)
+
+
+def value_entity_key(credential_type: CredentialType) -> str:
+    """
+    Return the entity key holding the desired value for a credential type.
+
+    Raises rather than defaulting, so a credential type wired up without its
+    value entity fails at construction instead of silently converging against
+    the Personal Identification Number's entity.
+    """
+    try:
+        return _VALUE_ENTITY_KEYS[credential_type]
+    except KeyError:
+        raise ValueError(f"{credential_type} has no value entity key") from None
 
 
 @dataclass(frozen=True)
@@ -138,7 +162,7 @@ class SlotSyncManager:
         config_entry: LockCodeManagerConfigEntry,
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
-        slot_num: int,
+        address: CredentialAddress,
         state_writer: Callable[[bool | None], None],
     ) -> None:
         """Initialize the sync manager."""
@@ -147,19 +171,29 @@ class SlotSyncManager:
         self._config_entry = config_entry
         self._coordinator = coordinator
         self._lock = lock
-        self._slot_num = int(slot_num)
+        self._address = address
+        # The slot number still addresses the device and identifies the
+        # entities. While the configuration is slot-keyed the user reference
+        # IS the slot number; the lease lookup replaces this once users are
+        # named.
+        self._slot_num = slot_num = int(address.user_ref)
         self._state_writer = state_writer
 
         self._log_prefix = (
             f"{config_entry.entry_id} ({config_entry.title}): "
-            f"{lock.lock.entity_id} slot {slot_num}"
+            f"{lock.lock.entity_id} slot {slot_num} "
+            f"{address.credential_type.value}"
         )
 
         # Unique ID components for entity discovery
         entry_id = config_entry.entry_id
         lock_entity_id = lock.lock.entity_id
+        self._value_key = value_entity_key(address.credential_type)
         self._unique_ids: dict[str, tuple[str, str]] = {
-            CONF_PIN: (TEXT_DOMAIN, build_slot_unique_id(entry_id, slot_num, CONF_PIN)),
+            self._value_key: (
+                TEXT_DOMAIN,
+                build_slot_unique_id(entry_id, slot_num, self._value_key),
+            ),
             CONF_NAME: (
                 TEXT_DOMAIN,
                 build_slot_unique_id(entry_id, slot_num, CONF_NAME),
@@ -336,7 +370,7 @@ class SlotSyncManager:
         """
         # Collect all states in a single pass
         states: dict[str, str | None] = {}
-        for key in (CONF_PIN, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
+        for key in (self._value_key, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
             if key not in self._entity_id_map:
                 return False
             state = self._get_entity_state(key)
@@ -353,7 +387,7 @@ class SlotSyncManager:
         # Name is always optional (STATE_UNKNOWN = no name configured)
         # PIN and code sensor can be unknown when the slot is inactive
         slot_inactive = states[ATTR_ACTIVE] == STATE_OFF
-        for key in (CONF_PIN, ATTR_CODE):
+        for key in (self._value_key, ATTR_CODE):
             if states[key] == STATE_UNKNOWN and not slot_inactive:
                 _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
                 return False
@@ -384,7 +418,7 @@ class SlotSyncManager:
         # entity is optional). No awaits run between that check and these reads,
         # so the states cannot change underneath us on the single-threaded loop.
         active_state = self._get_entity_state(ATTR_ACTIVE)
-        credential_state = self._get_entity_state(CONF_PIN)
+        credential_state = self._get_entity_state(self._value_key)
         name_state = self._get_entity_state(CONF_NAME)
         code_state = self._get_entity_state(ATTR_CODE)
         assert active_state is not None
@@ -422,7 +456,7 @@ class SlotSyncManager:
         than declare success. Slots with no recorded flag read as verified, so
         this is a no-op for providers that never write optimistically.
         """
-        if not self._coordinator.is_verified(pin_address(self._slot_num)):
+        if not self._coordinator.is_verified(self._address):
             return False
         credential = snapshot.coordinator_credential
         if snapshot.active_state == STATE_ON:
