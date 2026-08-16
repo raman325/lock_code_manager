@@ -75,3 +75,39 @@ cleared and set and it worked
 ---
 
 merge it and start B
+
+---
+
+run code review on 1416
+
+---
+
+<task-notification>
+<task-id>a17b6253172c17564</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a17b6253172c17564.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1416" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The `ReportFindings` tool is not available in this environment (searched; no match), so I'm reporting inline.
+
+## Review: PR #1416 — `refactor: key coordinator storage by CredentialAddress`
+
+**Verification performed on the branch:** full suite `1494 passed, 3 skipped`; `ruff check`/`ruff format` clean; coverage `100.00%` (coordinator.py, sync.py, websocket.py, diagnostics.py, sensor.py, binary_sensor.py, `_base.py` all at 100%).
+
+**Correctness of the migration itself: clean.** I traced every call site of the old int-keyed `coordinator.data` and each one is either migrated or provably equivalent:
+
+- `sync.py:414/435`, `sensor.py:79/96`, `binary_sensor.py:158` — `_checked()` coerces `user_ref` to `int`, matching what the old direct `int(...)` lookups did. No behavior change.
+- `websocket.py:851` dropped the `and coordinator.data` guard, but `self.data` is initialized to `{}` in `__init__` and HA only reassigns it on successful refresh, so `{}.get(...)` → `None` is identical to the old short-circuit.
+- `_normalize_keys` is the sole producer of storage keys in every production path (`async_get_usercodes`, `push_update`, `_async_drift_check`, `async_confirm_pending_writes`), so stored `user_ref` is always `int` and `credentials_by_slot()`'s `sorted(data.items())` in the websocket payload stays sortable.
+- I checked the `StrEnum` hash/eq trap (`CredentialAddress(1, "pin")` vs `CredentialAddress(1, CredentialType.PIN)`): hashes match, so the loose `!=` guard in `_checked` vs the `is` comparison in `credentials_by_slot` is not a live inconsistency.
+
+### Findings (3, all low)
+
+`tests/test_diagnostics.py:214` — `assert 3 not in coordinator.data` is now vacuously true. The key flip makes `coordinator.data` `CredentialAddress`-keyed, so a bare `int` can never be a member; this pre-condition guard, which used to pin "slot 3 was never reported by the lock," can no longer fail regardless of coordinator state. It's the one `coordinator.data` key usage in `tests/` the mechanical re-key missed (grep-confirmed). Should be `pin_address(3) not in coordinator.data`. The test's real assertion (`slot_3_lock_1["coordinator_code"] is None`) still holds, so nothing is broken today — just an assertion that silently stopped guarding.
+
+`tests/providers/zwave_js/test_events.py:561` (and `:481`, `:781`, `:805`, `:836`; same pattern at `tests/providers/matter/test_provider.py:1475`, `:1510`, `:1545`, `:1652`) — the re-keyed `mock_coordinator.data = {pin_address(N): ...}` seeds are dead. Neither `zwave_js.py` nor `matter.py` reads `coordinator.data` (only `desired_credential` at `zwave_js.py:889`). I verified empirically: replacing the seed with `{}` leaves all 27 tests in `test_events.py` passing. The re-key is churn that reads as if it pins a storage-shape contract but pins nothing — worth either deleting the seeds or converting one into a real assertion, given this repo's 100%-line-but-unasserted history.
+
+`custom_components/lock_code_manager/domain/coordinator.py:186` — the new comment says `_pending_writes` is device-slot-keyed and "today the two coincide," and the PR body goes further: slot-keying there is "correct permanently, not pending migration." That claim doesn't hold for the capability this PR exists to enable. Once a slot stores two credential types, `_apply_read` iterates both `(5, PIN)` and `(5, RFID)`, both index `_pending_writes[5]`, and the first one processed executes `del self._lock._pending_writes[slot]`. The second address then sees `pending is None`, falls into the `else` branch, and gets `self._unverified.discard(address)` — an optimistic write that was never confirmed is silently marked verified, and `calculate_in_sync` will report success for it. Not reachable today (PIN-only), but it means `_pending_writes` does need to become address-keyed before a second type lands, contrary to the PR description.</result>
+<usage><subagent_tokens>146047</subagent_tokens><tool_uses>41</tool_uses><duration_ms>485896</duration_ms></usage>
+</task-notification>
