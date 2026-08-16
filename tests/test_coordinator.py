@@ -1233,3 +1233,17 @@ async def test_non_pin_address_is_rejected(push_coordinator, accessor) -> None:
     address = CredentialAddress(1, CredentialType.RFID)
     with pytest.raises(ValueError, match="Only PIN credentials are addressable"):
         getattr(push_coordinator, accessor)(address)
+
+
+async def test_string_slot_number_still_resolves(push_coordinator) -> None:
+    """A str user_ref indexes the int-keyed storage.
+
+    Slot numbers reach entities as either int or str, which is why the
+    integration is littered with int(self.slot_num). Without coercion here,
+    is_verified would miss every int key and report True for a slot whose
+    optimistic write is still unconfirmed.
+    """
+    push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
+    assert push_coordinator.is_verified(pin_address("1")) is False
+    push_coordinator.mark_verified(pin_address("1"))
+    assert push_coordinator.is_verified(pin_address(1)) is True

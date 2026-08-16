@@ -75,10 +75,17 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-# Which entity holds the desired value for each credential type. Only the
-# value-writable types appear: a learn-at-device credential (fingerprint,
-# face) has no value entity because there is no value Lock Code Manager can
-# author for it.
+# Which entity holds the desired value for each credential type.
+#
+# Only Personal Identification Number is mapped because it is the only type
+# with a value entity today -- not because the other value-writable types
+# (password, Radio Frequency Identification, Near Field Communication) are
+# excluded by category. Adding one here is NOT sufficient on its own: the
+# matching text entity has to exist first, or ``SlotSyncManager.__init__``
+# raises out of entity platform setup.
+#
+# Learn-at-device credentials (fingerprint, face) are the one category that
+# can never appear, because there is no value Lock Code Manager can author.
 _VALUE_ENTITY_KEYS: Mapping[CredentialType, str] = MappingProxyType(
     {CredentialType.PIN: CONF_PIN}
 )

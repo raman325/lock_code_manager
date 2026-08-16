@@ -51,11 +51,16 @@ def _user_ref_of(address: CredentialAddress) -> int:
     here keeps a future second credential type from silently reading and
     writing the PIN's storage.
     """
-    if address.credential_type is not CredentialType.PIN:
+    if address.credential_type != CredentialType.PIN:
         raise ValueError(
             f"Only PIN credentials are addressable today, got {address.credential_type}"
         )
-    return address.user_ref
+    # Coerce for the same reason ``_normalize_keys`` does: ``data`` and
+    # ``_unverified`` are int-keyed, and a slot number reaches entities as
+    # either ``int`` or ``str`` (see ``EntryConfig.has_slot``). An
+    # uncoerced ``"1"`` would miss every int key -- ``is_verified`` would
+    # report True for a slot whose optimistic write is still unconfirmed.
+    return int(address.user_ref)
 
 
 class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredential]]):

@@ -1985,14 +1985,14 @@ async def test_slot_disabled_during_sync_resolves_correctly(
 
     # Ensure coordinator data reflects the cleared slot. The mock lock
     # removes the key on clear, but the coordinator needs it present
-    # (as empty/SlotCredential.empty()) for _resolve_slot_state to work.
+    # (as empty/SlotCredential.empty()) for _resolve_credential_snapshot to work.
     # Refresh coordinator to pick up the current state.
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
     # After clearing, slot 1 may not be in coordinator data (provider-dependent).
     # If present with empty value, the next tick resolves to IN_SYNC.
-    # If absent, _resolve_slot_state returns None and the tick is a no-op.
+    # If absent, _resolve_credential_snapshot returns None and the tick is a no-op.
     # Either way, the important thing is that clear was called, not set.
     if mgr._slot_num in coordinator.data:
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
