@@ -91,6 +91,7 @@ from .domain.models import (
     LockCodeManagerConfigEntry,
     LockCodeManagerConfigEntryRuntimeData,
 )
+from .domain.names import normalize_slot_names
 from .domain.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
@@ -205,6 +206,32 @@ async def async_migrate_entry(
                 "Use the Slot Usage Limiter blueprint instead.",
                 config_entry.title,
                 ", ".join(impacted_slots),
+            )
+
+    if config_entry.version == 3:
+        # Give every slot a present, separator-free, entry-unique name. The
+        # name is becoming the identity Lock Code Manager keys on, so these
+        # three properties stop being cosmetic and start being load-bearing.
+        new_data = {**config_entry.data}
+        new_options = {**config_entry.options}
+        renamed: set[str] = set()
+        for data_dict in (new_data, new_options):
+            if CONF_SLOTS not in data_dict:
+                continue
+            repaired, changed = normalize_slot_names(data_dict[CONF_SLOTS])
+            data_dict[CONF_SLOTS] = repaired
+            renamed.update(changed)
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, options=new_options, version=4
+        )
+        if renamed:
+            _LOGGER.info(
+                "%s (%s): named %d previously-unnamed or conflicting slot(s): %s. "
+                "Locks that store a user name will pick this up on the next sync",
+                config_entry.entry_id,
+                config_entry.title,
+                len(renamed),
+                ", ".join(sorted(renamed, key=int)),
             )
 
     return True

@@ -37,6 +37,7 @@ from .domain.config import EntryConfig
 from .domain.credentials import CredentialType
 from .domain.exceptions import LockCodeManagerError
 from .domain.models import SlotCredential
+from .domain.names import name_error
 from .domain.queries import get_entry_config
 from .providers import INTEGRATIONS_CLASS_MAP
 
@@ -44,7 +45,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CODE_SLOT_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_NAME): cv.string,
+        vol.Required(CONF_NAME): cv.string,
         vol.Optional(CONF_PIN): cv.string,
         vol.Required(CONF_ENABLED, default=True): cv.boolean,
         vol.Optional(CONF_ENTITY_ID): sel.EntitySelector(
@@ -379,7 +380,7 @@ class LockCodeManagerFlowHandler(
 ):
     """Config flow for Lock Code Manager."""
 
-    VERSION = 3
+    VERSION = 4
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self) -> None:
@@ -487,6 +488,18 @@ class LockCodeManagerFlowHandler(
         if user_input is not None:
             if _slot_enabled_without_pin(user_input):
                 errors[CONF_PIN] = "missing_pin_if_enabled"
+
+            # The name is on its way to becoming the identity Lock Code
+            # Manager keys on, so it must be present, separator-free, and
+            # unique within the entry.
+            if error := name_error(user_input.get(CONF_NAME)):
+                errors[CONF_NAME] = error
+            elif any(
+                slot.get(CONF_NAME, "").casefold()
+                == user_input[CONF_NAME].strip().casefold()
+                for slot in self.data[CONF_SLOTS].values()
+            ):
+                errors[CONF_NAME] = "name_not_unique"
 
             # Check for excluded platforms with a single registry lookup
             # self.ent_reg is set in async_step_user which always runs first
