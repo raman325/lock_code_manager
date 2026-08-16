@@ -37,7 +37,7 @@ from .domain.config import EntryConfig
 from .domain.credentials import CredentialType
 from .domain.exceptions import LockCodeManagerError
 from .domain.models import SlotCredential
-from .domain.names import name_error
+from .domain.names import name_error, normalize_name, validate_slot_names
 from .domain.queries import get_entry_config
 from .providers import INTEGRATIONS_CLASS_MAP
 
@@ -190,7 +190,18 @@ async def _async_validate_slots_yaml(
         parsed_slots = CODE_SLOTS_SCHEMA(raw_slots)
     except vol.Invalid as err:
         _LOGGER.error("Invalid YAML: %s", err)
+        # A missing name is now the most likely reason a previously-valid
+        # slots block fails, so name it rather than sending the user to the
+        # logs for the one error we can predict.
+        if CONF_NAME in str(err):
+            return None, {"base": "name_required"}, {}
         return None, {"base": "invalid_config"}, {}
+
+    # The single-slot flow checks one name at a time; these paths submit the
+    # whole set, so the set has to be checked together.
+    if problem := validate_slot_names(parsed_slots):
+        slot_num, error = problem
+        return None, {"base": error}, {"slot_num": slot_num}
 
     errors, placeholders = _check_common_slots(hass, locks, parsed_slots, config_entry)
     if not errors:
@@ -494,12 +505,17 @@ class LockCodeManagerFlowHandler(
             # unique within the entry.
             if error := name_error(user_input.get(CONF_NAME)):
                 errors[CONF_NAME] = error
-            elif any(
-                slot.get(CONF_NAME, "").casefold()
-                == user_input[CONF_NAME].strip().casefold()
-                for slot in self.data[CONF_SLOTS].values()
-            ):
-                errors[CONF_NAME] = "name_not_unique"
+            else:
+                # Normalize BOTH sides. Comparing a stripped candidate
+                # against unstripped stored names lets "Raman " and "Raman"
+                # both through in one order but not the other.
+                user_input[CONF_NAME] = normalize_name(user_input[CONF_NAME])
+                if any(
+                    normalize_name(slot.get(CONF_NAME)).casefold()
+                    == user_input[CONF_NAME].casefold()
+                    for slot in self.data[CONF_SLOTS].values()
+                ):
+                    errors[CONF_NAME] = "name_not_unique"
 
             # Check for excluded platforms with a single registry lookup
             # self.ent_reg is set in async_step_user which always runs first

@@ -9,6 +9,7 @@ from custom_components.lock_code_manager.domain.names import (
     fallback_name,
     name_error,
     normalize_slot_names,
+    validate_slot_names,
 )
 
 
@@ -137,4 +138,55 @@ def test_normalize_accepts_string_slot_keys() -> None:
     repaired, changed = normalize_slot_names({"1": {CONF_ENABLED: True}})
 
     assert repaired["1"][CONF_NAME] == "User 1"
+    assert changed == ["1"]
+
+
+@pytest.mark.parametrize(
+    ("slots", "expected"),
+    [
+        ({1: {CONF_NAME: "Raman"}, 2: {CONF_NAME: "Alice"}}, None),
+        ({1: {CONF_ENABLED: True}}, ("1", "name_required")),
+        ({1: {CONF_NAME: "  "}}, ("1", "name_required")),
+        ({1: {CONF_NAME: "Ra|man"}}, ("1", "name_has_separator")),
+        ({1: {CONF_NAME: "Raman"}, 2: {CONF_NAME: "raman"}}, ("2", "name_not_unique")),
+        # Whitespace-padded duplicates must be caught in BOTH orders. Comparing
+        # a stripped candidate against unstripped stored names caught only one.
+        ({1: {CONF_NAME: "Raman "}, 2: {CONF_NAME: "Raman"}}, ("2", "name_not_unique")),
+        (
+            {1: {CONF_NAME: "Raman"}, 2: {CONF_NAME: " Raman "}},
+            ("2", "name_not_unique"),
+        ),
+    ],
+)
+def test_validate_slot_names(slots, expected) -> None:
+    """Whole-set validation reports the offending slot and why."""
+    assert validate_slot_names(slots) == expected
+
+
+def test_normalize_does_not_steal_a_later_slots_valid_name() -> None:
+    """Repairing a duplicate must not push an innocent slot off its name.
+
+    A single pass renames slot 2 to "Raman 2" and then finds slot 3 already
+    holds that, pushing it to "Raman 2 2" -- renaming a user who did nothing
+    wrong, and costing a write on every lock that stores names.
+    """
+    slots = {
+        1: {CONF_NAME: "Raman"},
+        2: {CONF_NAME: "Raman"},
+        3: {CONF_NAME: "Raman 2"},
+    }
+
+    repaired, changed = normalize_slot_names(slots)
+
+    assert repaired[1][CONF_NAME] == "Raman"
+    assert repaired[3][CONF_NAME] == "Raman 2"  # untouched
+    assert repaired[2][CONF_NAME] == "Raman 3"  # took the next free suffix
+    assert changed == ["2"]
+
+
+def test_normalize_strips_whitespace_from_otherwise_valid_names() -> None:
+    """Padding is normalized away so two identical-looking names cannot coexist."""
+    repaired, changed = normalize_slot_names({1: {CONF_NAME: "  Raman  "}})
+
+    assert repaired[1][CONF_NAME] == "Raman"
     assert changed == ["1"]

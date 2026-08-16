@@ -42,6 +42,7 @@ from homeassistant.helpers.issue_registry import (
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
 from .config import EntryConfig
+from .names import NAME_SEPARATOR, name_error, normalize_name
 from .queries import get_entry_config
 
 if TYPE_CHECKING:
@@ -204,8 +205,33 @@ class SlotEntityCoordinator:
     # -- Intent dispatch -----------------------------------------------------
 
     async def async_request_name_update(self, value: str) -> None:
-        """Apply a slot name write requested by the text entity."""
-        self._write_config_fields({CONF_NAME: value})
+        """
+        Apply a slot name write requested by the text entity.
+
+        The name is the identity Lock Code Manager is moving to key on, so
+        this path enforces the same rules the config flow does. Without it
+        the ordinary way to rename a slot in the frontend would be a hole
+        straight through them: an empty name, one containing the reserved
+        separator, or a duplicate of another slot's would land in the
+        config entry unchallenged.
+        """
+        name = normalize_name(value)
+        if error := name_error(name):
+            raise InvalidNameError(error, self._slot_num)
+
+        conflict = next(
+            (
+                other
+                for other, slot in get_entry_config(self._config_entry).slots.items()
+                if other != self._slot_num
+                and normalize_name(slot.get(CONF_NAME)).casefold() == name.casefold()
+            ),
+            None,
+        )
+        if conflict is not None:
+            raise InvalidNameError("name_not_unique", self._slot_num, conflict)
+
+        self._write_config_fields({CONF_NAME: name})
 
     async def async_request_pin_update(self, value: str) -> None:
         """
@@ -428,3 +454,31 @@ class SlotEntityCoordinator:
 
 class PinRequiredError(Exception):
     """Raised when a slot cannot be enabled because no PIN is configured."""
+
+
+class InvalidNameError(Exception):
+    """
+    Raised when a slot name write would break the name rules.
+
+    Carries the translation key so the entity can render the same message
+    the config flow shows, rather than inventing a second wording.
+    """
+
+    def __init__(
+        self, error_key: str, slot_num: int, conflicting_slot: int | None = None
+    ) -> None:
+        """Store the error key and the slots involved."""
+        self.error_key = error_key
+        self.slot_num = slot_num
+        self.conflicting_slot = conflicting_slot
+        messages = {
+            "name_required": "A code slot name cannot be empty",
+            "name_has_separator": (
+                f"A code slot name cannot contain '{NAME_SEPARATOR}'"
+            ),
+            "name_not_unique": (
+                f"Slot {conflicting_slot} already uses that name; "
+                "names must be unique within a Lock Code Manager entry"
+            ),
+        }
+        super().__init__(messages[error_key])

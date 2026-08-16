@@ -2,6 +2,8 @@
 
 import logging
 
+import pytest
+
 from homeassistant.components.text import (
     ATTR_VALUE,
     DOMAIN as TEXT_DOMAIN,
@@ -9,8 +11,14 @@ from homeassistant.components.text import (
 )
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 
-from .common import SLOT_2_ENABLED_ENTITY, SLOT_2_NAME_ENTITY, SLOT_2_PIN_ENTITY
+from .common import (
+    SLOT_1_NAME_ENTITY,
+    SLOT_2_ENABLED_ENTITY,
+    SLOT_2_NAME_ENTITY,
+    SLOT_2_PIN_ENTITY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -109,3 +117,73 @@ async def test_whitespace_pin_normalized_to_empty(
     state = hass.states.get(SLOT_2_ENABLED_ENTITY)
     assert state
     assert state.state == STATE_OFF
+
+
+@pytest.mark.parametrize(
+    ("value", "message_fragment"),
+    [
+        ("", "cannot be empty"),
+        ("   ", "cannot be empty"),
+        ("Ra|man", "cannot contain"),
+    ],
+)
+async def test_set_name_rejects_invalid_names(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    value: str,
+    message_fragment: str,
+):
+    """The name text entity enforces the name rules.
+
+    This is the ordinary way to rename a slot in the frontend. If it did not
+    validate, the "present, unique, encodable" invariant the migration
+    establishes would not survive first contact with the UI.
+    """
+    original = hass.states.get(SLOT_2_NAME_ENTITY).state
+
+    with pytest.raises(ServiceValidationError, match=message_fragment):
+        await hass.services.async_call(
+            TEXT_DOMAIN,
+            SERVICE_SET_VALUE,
+            service_data={ATTR_VALUE: value},
+            target={ATTR_ENTITY_ID: SLOT_2_NAME_ENTITY},
+            blocking=True,
+        )
+
+    assert hass.states.get(SLOT_2_NAME_ENTITY).state == original
+
+
+async def test_set_name_rejects_another_slots_name(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Renaming a slot onto another slot's name is refused, ignoring case."""
+    other = hass.states.get(SLOT_1_NAME_ENTITY).state
+
+    with pytest.raises(ServiceValidationError, match="already uses that name"):
+        await hass.services.async_call(
+            TEXT_DOMAIN,
+            SERVICE_SET_VALUE,
+            service_data={ATTR_VALUE: f"  {other.upper()}  "},
+            target={ATTR_ENTITY_ID: SLOT_2_NAME_ENTITY},
+            blocking=True,
+        )
+
+
+async def test_set_name_normalizes_whitespace(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A padded name is stored stripped, so it cannot shadow an existing one."""
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "  Raman  "},
+        target={ATTR_ENTITY_ID: SLOT_2_NAME_ENTITY},
+        blocking=True,
+    )
+
+    assert hass.states.get(SLOT_2_NAME_ENTITY).state == "Raman"

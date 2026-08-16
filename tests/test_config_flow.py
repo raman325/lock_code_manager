@@ -1375,3 +1375,58 @@ async def test_config_flow_ui_rejects_duplicate_name(hass: HomeAssistant):
 
     assert result["type"] == "form"
     assert result["errors"] == {CONF_NAME: "name_not_unique"}
+
+
+@pytest.mark.parametrize(
+    ("slots", "expected_error"),
+    [
+        (
+            {
+                1: {CONF_NAME: "Ra|man", CONF_ENABLED: True, CONF_PIN: "1234"},
+            },
+            "name_has_separator",
+        ),
+        (
+            {
+                1: {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: " raman ", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+            "name_not_unique",
+        ),
+    ],
+)
+async def test_config_flow_yaml_enforces_name_rules(
+    hass: HomeAssistant, mock_lock_config_entry, slots, expected_error
+):
+    """The YAML path enforces the same name rules as the single-slot path.
+
+    Without this the migration's repair could be undone by the very next
+    submission, and the options flow -- the only way to edit slots after
+    setup -- goes through the same validator.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_SLOTS: slots}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": expected_error}
+
+
+async def test_config_flow_yaml_missing_name_says_so(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A slots block predating the name requirement names the actual problem.
+
+    Falling through to the generic invalid_config would send the user to the
+    logs for the one failure we can predict.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}}}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "name_required"}

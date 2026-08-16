@@ -18,35 +18,44 @@ from typing import Any
 
 from homeassistant.const import CONF_NAME
 
-# Reserved because it delimits both the entity unique identifier
-# (``{entry_id}|{name}|{key}``) and the device identifier
-# (``{entry_id}|{name}``). A name containing it would split into the wrong
-# fields on the way back out -- see ``parse_slot_device_identifier``.
+# Reserved because it delimits the identifiers Lock Code Manager builds from
+# entry-scoped parts: today the entity unique identifier
+# (``{entry_id}|{slot_num}|{key}``) and the device identifier
+# (``{entry_id}|{slot_num}``), and the name takes the slot number's place in
+# both once the configuration is keyed by user. A name containing it would
+# split into the wrong fields on the way back out -- see
+# ``parse_slot_device_identifier``.
 NAME_SEPARATOR = "|"
+
+
+def normalize_name(name: str | None) -> str:
+    """
+    Return ``name`` in the form Lock Code Manager stores and compares.
+
+    Surrounding whitespace is removed so two names that differ only by
+    padding cannot both be stored. An identity that can differ invisibly is
+    worse than useless -- the user would see two identical rows and Lock
+    Code Manager would treat them as distinct users.
+    """
+    return (name or "").strip()
 
 
 def name_error(name: str | None) -> str | None:
     """
     Return the validation error key for ``name``, or ``None`` when valid.
 
-    Returns a translation key rather than a message so the config flow can
-    surface it in the user's language.
+    Returns a translation key rather than a message so callers can surface
+    it in the user's language.
     """
-    if name is None or not name.strip():
+    if not normalize_name(name):
         return "name_required"
-    if NAME_SEPARATOR in name:
+    if NAME_SEPARATOR in name:  # type: ignore[operator]
         return "name_has_separator"
     return None
 
 
 def fallback_name(slot_num: int) -> str:
-    """
-    Return the name given to a slot that has none.
-
-    Deliberately mirrors the "Code slot N" language users already see in the
-    frontend, so an auto-named slot reads as the same thing it was rather
-    than as something new.
-    """
+    """Return the name given to a slot that has none."""
     return f"User {slot_num}"
 
 
@@ -78,31 +87,52 @@ def normalize_slot_names(
     order so the result does not depend on mapping iteration order, which
     would make the migration non-deterministic across restarts.
 
-    Names already valid and unique are left exactly as they are: this runs
-    over live user configuration, and rewriting a name the user chose would
-    also rename the user on every lock that stores one.
+    A name that is already valid and unique keeps its text; the only change
+    it can undergo is whitespace normalization. That restraint matters
+    because this runs over live user configuration, and every rewrite here
+    renames that user on every lock that stores user names -- so a rewrite
+    is a device write, not a config edit.
+
+    Whitespace is the one exception worth paying for: ``"Raman "`` and
+    ``"Raman"`` are indistinguishable on screen, so leaving both storable
+    would let two rows that look identical be two different users.
     """
+    ordered = sorted(slots, key=int)
+
+    # Two passes, because a single pass lets a repaired name consume a later
+    # slot's name and force that slot to be renamed too. With
+    # {1: "Raman", 2: "Raman", 3: "Raman 2"}, one pass renames slot 2 to
+    # "Raman 2" and then pushes slot 3 -- which was valid and unique all
+    # along -- to "Raman 2 2". Reserving the already-good names first means
+    # only the slots that actually needed repairing are touched, and each
+    # avoided rewrite is an avoided rename on every lock storing user names.
+    reserved: list[str] = []
+    needs_repair: set[Any] = set()
+    for slot_num in ordered:
+        name = slots[slot_num].get(CONF_NAME)
+        if name_error(name) is None and normalize_name(name).casefold() not in {
+            existing.casefold() for existing in reserved
+        }:
+            reserved.append(normalize_name(name))
+        else:
+            needs_repair.add(slot_num)
+
     repaired: dict[Any, dict[str, Any]] = {}
     changed: list[str] = []
-    taken: list[str] = []
+    taken = list(reserved)
 
-    for slot_num in sorted(slots, key=int):
+    for slot_num in ordered:
         slot = dict(slots[slot_num])
         original = slot.get(CONF_NAME)
 
-        name = original
-        if name_error(name) == "name_required":
-            name = fallback_name(int(slot_num))
-        elif name is not None:
-            name = name.replace(NAME_SEPARATOR, " ").strip()
-
-        # ``name`` is non-empty by construction here, but a name consisting
-        # only of separators collapses to empty after the replacement above.
-        if not name:
-            name = fallback_name(int(slot_num))
-
-        name = deduplicate(name, taken)
-        taken.append(name)
+        if slot_num not in needs_repair:
+            name = normalize_name(original)
+        else:
+            name = normalize_name(
+                (original or "").replace(NAME_SEPARATOR, " ")
+            ) or fallback_name(int(slot_num))
+            name = deduplicate(name, taken)
+            taken.append(name)
 
         if name != original:
             slot[CONF_NAME] = name
@@ -110,3 +140,31 @@ def normalize_slot_names(
         repaired[slot_num] = slot
 
     return repaired, changed
+
+
+def validate_slot_names(
+    slots: Mapping[Any, Mapping[str, Any]],
+) -> tuple[str, str] | None:
+    """
+    Return the first ``(slot_num, error_key)`` problem in ``slots``, else None.
+
+    The single-slot config flow validates one name at a time against the
+    slots already accepted, but the YAML and options flows submit every slot
+    at once and need the whole set checked together. Returning the offending
+    slot number lets the caller name it in the error, since "one of your
+    slots has a duplicate name" is not actionable.
+
+    Uniqueness is compared on the normalized, case-folded name, matching how
+    the migration deduplicates -- otherwise a pair the migration would repair
+    could be re-entered by hand.
+    """
+    seen: dict[str, str] = {}
+    for slot_num in sorted(slots, key=int):
+        name = slots[slot_num].get(CONF_NAME)
+        if error := name_error(name):
+            return str(slot_num), error
+        key = normalize_name(name).casefold()
+        if key in seen:
+            return str(slot_num), "name_not_unique"
+        seen[key] = str(slot_num)
+    return None
