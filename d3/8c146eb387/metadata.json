@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "d38c146eb387",
+  "strategy": "manual-commit",
+  "branch": "feat/credential-addressing",
+  "checkpoints_count": 5,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d3/8c146eb387/0/metadata.json",
+      "transcript": "/d3/8c146eb387/0/full.jsonl",
+      "compact_transcript": "/d3/8c146eb387/0/transcript.jsonl",
+      "content_hash": "/d3/8c146eb387/0/content_hash.txt",
+      "prompt": "/d3/8c146eb387/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 62,
+    "cache_creation_tokens": 287387,
+    "cache_read_tokens": 8524757,
+    "output_tokens": 28066,
+    "api_call_count": 31
+  }
+}

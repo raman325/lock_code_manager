@@ -1,0 +1,33 @@
+I'm thinking we need to move away from a slot based perspective to a user based perspective. That matches the HA unified credential API and also allows us to support e.g. multiple input types right?
+
+---
+
+yes
+
+---
+
+I don't think users should have to manage ids. If i create a user named, raman, do I care what slot they fill into?
+
+---
+
+I don't think users should have to manage ids. If i create a user named, raman, do I care what slot they fill into? thta's why list semantics seem reasonable. We need a set really because order doesn't matter and there's a uniqueness to each user
+
+---
+
+yes
+
+---
+
+move forward until all work is done and then open a PR
+
+---
+
+I think the reason I am struggling with the design is because we allow users to update the config directly. There's a way to make this smart such that users don't have to add an extra dimension they don't care about. I realize though that we also want to consider guest situations, so it's almost like we need a hybrid of users and slots, but not really because users tdon't care about slots. Help?
+
+---
+
+remember this shouldn't be a breaking change for users in the sense that things should just work when we migrate them
+
+---
+
+we can look up the old unique ID and update it
