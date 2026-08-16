@@ -4,6 +4,7 @@ import pytest
 
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
+    CredentialAddress,
     CredentialRef,
     CredentialRule,
     CredentialState,
@@ -15,6 +16,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     UserType,
     WriteResult,
     credential_from_slot,
+    pin_address,
     slot_credential_of,
     user_from_slot,
 )
@@ -478,3 +480,22 @@ def test_max_user_name_length_defaults_to_zero() -> None:
         supports_user_management=True, max_users=30, credential_types={}
     )
     assert caps.max_user_name_length == 0
+
+
+def test_credential_address_is_hashable_and_destructures() -> None:
+    """CredentialAddress works as a dict key and unpacks positionally."""
+    address = CredentialAddress(3, CredentialType.PIN)
+    user_ref, credential_type = address
+    assert user_ref == 3
+    assert credential_type is CredentialType.PIN
+    assert {address: "x"}[CredentialAddress(3, CredentialType.PIN)] == "x"
+
+
+def test_pin_address_builds_a_pin_credential_address() -> None:
+    """pin_address is the sub-project A shorthand for the PIN-only world."""
+    assert pin_address(5) == CredentialAddress(5, CredentialType.PIN)
+
+
+def test_credential_address_distinguishes_types_at_the_same_user_ref() -> None:
+    """Two credential types on one user are different addresses."""
+    assert pin_address(1) != CredentialAddress(1, CredentialType.RFID)
