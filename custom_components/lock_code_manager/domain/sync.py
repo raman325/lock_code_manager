@@ -770,7 +770,7 @@ class SlotSyncManager:
         # (clearing the pending entry). On timeout, count a breaker failure and
         # fall through to re-sync -- so a write the lock never committed ends in
         # a visible suspend, never a silent in-sync.
-        pending = self._lock._pending_writes.get(self._slot_num)
+        pending = self._lock._pending_writes.get(self._address)
         if pending is not None:
             believed_pin, deadline = pending
             # A pending write only gates reconciliation while it still reflects
@@ -791,7 +791,7 @@ class SlotSyncManager:
             # than falling through to _perform_sync this tick) lets a confirming
             # push that lands between ticks resolve the slot first, and avoids
             # double-charging the breaker when the re-sync itself also fails.
-            del self._lock._pending_writes[self._slot_num]
+            del self._lock._pending_writes[self._address]
             if still_wanted:
                 # Genuine timeout: the write we still want never confirmed.
                 self._slot_breaker.record_failure()
@@ -966,7 +966,7 @@ class SlotSyncManager:
         # in PENDING_CONFIRMATION. The breaker is only charged when that wait
         # times out (handled at the top of the tick), so a masked-but-accepted
         # write is not penalised before its confirming event arrives.
-        if self._slot_num in self._lock._pending_writes:
+        if self._address in self._lock._pending_writes:
             self._state = SyncState.PENDING_CONFIRMATION
             self._write_state()
             return

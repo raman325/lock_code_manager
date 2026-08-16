@@ -1047,7 +1047,7 @@ async def test_confirm_pending_writes_confirms_present_masked(
     node-zwave-js never sends for a masked write: the slot reads back present
     (unreadable), so the believed PIN is confirmed and pending is cleared.
     """
-    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
     assert push_coordinator.is_verified(pin_address(1)) is False
 
@@ -1058,7 +1058,7 @@ async def test_confirm_pending_writes_confirms_present_masked(
     ):
         await push_coordinator.async_confirm_pending_writes()
 
-    assert 1 not in push_lock._pending_writes
+    assert pin_address(1) not in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is True
     assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
 
@@ -1068,7 +1068,7 @@ async def test_confirm_pending_writes_keeps_absent_slot_pending(
     push_lock: MockLCMPushLock,
 ) -> None:
     """A confirm read that finds the slot absent leaves it pending to re-sync."""
-    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
 
     with patch.object(
@@ -1078,7 +1078,7 @@ async def test_confirm_pending_writes_keeps_absent_slot_pending(
     ):
         await push_coordinator.async_confirm_pending_writes()
 
-    assert 1 in push_lock._pending_writes
+    assert pin_address(1) in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is False
 
 
@@ -1087,7 +1087,7 @@ async def test_confirm_pending_writes_tolerates_read_failure(
     push_lock: MockLCMPushLock,
 ) -> None:
     """A failed confirm read is non-fatal and leaves pending state untouched."""
-    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
 
     with patch.object(
@@ -1097,7 +1097,7 @@ async def test_confirm_pending_writes_tolerates_read_failure(
     ):
         await push_coordinator.async_confirm_pending_writes()
 
-    assert 1 in push_lock._pending_writes
+    assert pin_address(1) in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is False
 
 
@@ -1118,7 +1118,7 @@ async def test_confirm_pending_writes_swallows_unexpected_error(
     push_lock: MockLCMPushLock,
 ) -> None:
     """A non-LCM error from the confirm read must not escape (it would suspend the slot)."""
-    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
 
     with patch.object(
@@ -1129,7 +1129,7 @@ async def test_confirm_pending_writes_swallows_unexpected_error(
         # Must not raise: the seam awaits this and a raise would suspend the slot.
         await push_coordinator.async_confirm_pending_writes()
 
-    assert 1 in push_lock._pending_writes
+    assert pin_address(1) in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is False
 
 
@@ -1206,13 +1206,13 @@ async def test_apply_read_takes_differing_readable_external_change(
     Mirrors BaseLock._confirm_slot: a drift/poll read of an externally-changed
     readable code must not be masked by the believed value.
     """
-    push_lock._pending_writes[1] = ("1234", time.monotonic() + 60.0)
+    push_lock._pending_writes[pin_address(1)] = ("1234", time.monotonic() + 60.0)
     push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
 
     out = push_coordinator._apply_read({pin_address(1): SlotCredential.known("9999")})
 
     assert out[pin_address(1)] == SlotCredential.known("9999")
-    assert 1 not in push_lock._pending_writes
+    assert pin_address(1) not in push_lock._pending_writes
     assert push_coordinator.is_verified(pin_address(1)) is True
 
 

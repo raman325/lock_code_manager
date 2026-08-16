@@ -942,7 +942,7 @@ async def test_uc_shim_confirms_pending_optimistic_write(
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
-    zwave_js_lock._pending_writes[2] = ("8642", time.monotonic() + 60)
+    zwave_js_lock._pending_writes[pin_address(2)] = ("8642", time.monotonic() + 60)
 
     lock_schlage_be469.receive_event(
         _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
@@ -952,6 +952,6 @@ async def test_uc_shim_confirms_pending_optimistic_write(
     mock_coordinator.push_update.assert_called_once_with(
         {2: SlotCredential.known("8642")}
     )
-    assert 2 not in zwave_js_lock._pending_writes
+    assert pin_address(2) not in zwave_js_lock._pending_writes
 
     zwave_js_lock.unsubscribe_push_updates()

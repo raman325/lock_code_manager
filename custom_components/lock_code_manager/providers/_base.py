@@ -47,6 +47,7 @@ from ..domain.config import build_slot_unique_id
 from ..domain.coordinator import LockUsercodeUpdateCoordinator
 from ..domain.credentials import (
     Credential,
+    CredentialAddress,
     CredentialRef,
     CredentialType,
     LockCapabilities,
@@ -230,7 +231,12 @@ class BaseLock:
     # present -- clears the entry and re-pushes the believed value as verified;
     # if none arrives before the deadline, the sync layer re-syncs. See the
     # Phase 2 push-as-commit spec.
-    _pending_writes: dict[int, tuple[str, float]] = field(
+    # Keyed by CredentialAddress, NOT by device slot. One slot can hold a
+    # credential of each type, so a slot-keyed map would let two addresses
+    # sharing a slot collide: the first read processed would consume the
+    # other's pending entry, apply its believed value to the wrong
+    # credential, and leave the second silently marked verified.
+    _pending_writes: dict[CredentialAddress, tuple[str, float]] = field(
         default_factory=dict, init=False
     )
     # Reconnect task spawned by the config-entry state listener when the lock
@@ -430,7 +436,10 @@ class BaseLock:
         a confirmation (push event or hard-refresh presence) via
         ``_confirm_slot``, or re-syncs once the deadline passes.
         """
-        self._pending_writes[code_slot] = (pin, time.monotonic() + PENDING_WRITE_TTL)
+        self._pending_writes[pin_address(code_slot)] = (
+            pin,
+            time.monotonic() + PENDING_WRITE_TTL,
+        )
         self._push_credential_update(
             code_slot, SlotCredential.known(pin), optimistic=True
         )
@@ -450,7 +459,7 @@ class BaseLock:
         observation as the verified state. Either way the pending entry is
         cleared.
         """
-        pending = self._pending_writes.pop(code_slot, None)
+        pending = self._pending_writes.pop(pin_address(code_slot), None)
         if pending is not None and observed.is_present:
             pin, _deadline = pending
             if observed.is_readable and observed.readable_pin != pin:
@@ -1204,7 +1213,7 @@ class BaseLock:
             # The lock acknowledged the write: supersede any pending optimistic
             # state and drop the slot from the unverified set left by a prior
             # optimistic write, so it can converge instead of churning to a suspend.
-            self._pending_writes.pop(code_slot, None)
+            self._pending_writes.pop(pin_address(code_slot), None)
             if self.coordinator is not None:
                 self.coordinator.mark_verified(pin_address(code_slot))
         # Skip coordinator refresh for push providers — they update optimistically
@@ -1299,7 +1308,7 @@ class BaseLock:
         # A clear supersedes any outstanding optimistic set on this slot, so the
         # stale pending entry must not keep gating reconciliation (the sync tick
         # keys PENDING_CONFIRMATION on this dict).
-        self._pending_writes.pop(code_slot, None)
+        self._pending_writes.pop(pin_address(code_slot), None)
         changed = await self._execute_rate_limited(
             "clear", self.async_clear_usercode, code_slot
         )

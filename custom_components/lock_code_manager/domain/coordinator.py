@@ -183,14 +183,10 @@ class LockUsercodeUpdateCoordinator(
         """
         out: dict[CredentialAddress, SlotCredential] = {}
         for address, cred in observed.items():
-            # ``_pending_writes`` is keyed by DEVICE slot, not by address: it
-            # tracks a write aimed at a slot on the lock. Today the two
-            # coincide, which is why ``user_ref`` indexes it directly.
-            slot = address.user_ref
-            pending = self._lock._pending_writes.get(slot)
+            pending = self._lock._pending_writes.get(address)
             if pending is not None and cred.is_present:
                 pin, _deadline = pending
-                del self._lock._pending_writes[slot]
+                del self._lock._pending_writes[address]
                 if cred.is_readable and cred.readable_pin != pin:
                     out[address] = cred
                 else:

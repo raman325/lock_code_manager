@@ -855,7 +855,10 @@ class TestSyncStateMachine:
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
 
         # Arrange an outstanding (unexpired) optimistic write.
-        manager._lock._pending_writes[1] = ("1234", time.monotonic() + 100.0)
+        manager._lock._pending_writes[pin_address(1)] = (
+            "1234",
+            time.monotonic() + 100.0,
+        )
         manager._coordinator.push_update(
             {1: SlotCredential.known("1234")}, optimistic=True
         )
@@ -886,7 +889,10 @@ class TestSyncStateMachine:
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
 
         # Optimistic write outstanding (unexpired).
-        manager._lock._pending_writes[1] = ("1234", time.monotonic() + 100.0)
+        manager._lock._pending_writes[pin_address(1)] = (
+            "1234",
+            time.monotonic() + 100.0,
+        )
         manager._coordinator.push_update(
             {1: SlotCredential.known("1234")}, optimistic=True
         )
@@ -898,7 +904,7 @@ class TestSyncStateMachine:
         # The lock confirms the slot present but masked -> believed value kept,
         # marked verified, pending cleared.
         manager._lock._confirm_slot(1, SlotCredential.unreadable())
-        assert 1 not in manager._lock._pending_writes
+        assert pin_address(1) not in manager._lock._pending_writes
         assert manager._coordinator.is_verified(pin_address(1)) is True
 
         manager.request_sync_check()
@@ -920,7 +926,7 @@ class TestSyncStateMachine:
         # cannot confirm it. Arrange an already-expired optimistic write whose
         # value is NOT present on the lock.
         manager._lock.codes.pop(1, None)
-        manager._lock._pending_writes[1] = ("1234", time.monotonic() - 1.0)
+        manager._lock._pending_writes[pin_address(1)] = ("1234", time.monotonic() - 1.0)
         manager._coordinator.push_update(
             {1: SlotCredential.known("1234")}, optimistic=True
         )
@@ -935,7 +941,7 @@ class TestSyncStateMachine:
             # tick (so a concurrent confirming push could still land, and so the
             # breaker is not double-charged by a same-tick sync failure).
             await manager._async_tick()
-            assert 1 not in manager._lock._pending_writes
+            assert pin_address(1) not in manager._lock._pending_writes
             assert manager._slot_breaker.failure_count > before
             assert manager._state is SyncState.OUT_OF_SYNC
             mock_sync.assert_not_called()
@@ -963,7 +969,10 @@ class TestSyncStateMachine:
         # the deadline; it is dropped and the new target re-syncs.
         desired = manager._resolve_credential_snapshot().credential_state
         stale_pin = f"{desired}9"
-        manager._lock._pending_writes[1] = (stale_pin, time.monotonic() + 60.0)
+        manager._lock._pending_writes[pin_address(1)] = (
+            stale_pin,
+            time.monotonic() + 60.0,
+        )
         manager._coordinator.push_update(
             {1: SlotCredential.known(stale_pin)}, optimistic=True
         )
@@ -977,7 +986,7 @@ class TestSyncStateMachine:
 
         # Stale entry dropped; a desired-state change is not a sync failure, so
         # the breaker is not charged; the slot leaves PENDING_CONFIRMATION.
-        assert 1 not in manager._lock._pending_writes
+        assert pin_address(1) not in manager._lock._pending_writes
         assert manager._slot_breaker.failure_count == before
         assert manager._state is SyncState.OUT_OF_SYNC
         mock_sync.assert_not_called()
@@ -2006,7 +2015,7 @@ class TestOptimisticSetPendingConfirmation:
             await manager._async_tick()
 
         assert manager._state is SyncState.PENDING_CONFIRMATION
-        assert 1 in manager._lock._pending_writes
+        assert pin_address(1) in manager._lock._pending_writes
         assert manager._coordinator.is_verified(pin_address(1)) is False
 
 
