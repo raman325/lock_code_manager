@@ -1,0 +1,17 @@
+I'm thinking we need to move away from a slot based perspective to a user based perspective. That matches the HA unified credential API and also allows us to support e.g. multiple input types right?
+
+---
+
+yes
+
+---
+
+I don't think users should have to manage ids. If i create a user named, raman, do I care what slot they fill into?
+
+---
+
+I don't think users should have to manage ids. If i create a user named, raman, do I care what slot they fill into? thta's why list semantics seem reasonable. We need a set really because order doesn't matter and there's a uniqueness to each user
+
+---
+
+yes
