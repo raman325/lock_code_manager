@@ -155,7 +155,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
     def available(self) -> bool:
         """Return whether binary sensor is available or not."""
         return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
-            int(self.slot_num) in self.coordinator.data
+            self.coordinator.has_credential(pin_address(int(self.slot_num)))
         )
 
     @property

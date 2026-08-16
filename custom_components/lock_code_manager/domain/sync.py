@@ -411,7 +411,7 @@ class SlotSyncManager:
         if not self._build_entity_id_map():
             return None
 
-        if self._slot_num not in self._coordinator.data:
+        if not self._coordinator.has_credential(self._address):
             _LOGGER.debug(
                 "%s: Slot not in coordinator data, skipping",
                 self._log_prefix,
@@ -432,7 +432,7 @@ class SlotSyncManager:
         assert credential_state is not None
         assert code_state is not None
 
-        coordinator_credential = self._coordinator.data.get(self._slot_num)
+        coordinator_credential = self._coordinator.credential(self._address)
         return CredentialSyncState(
             active_state=active_state,
             credential_state=credential_state,

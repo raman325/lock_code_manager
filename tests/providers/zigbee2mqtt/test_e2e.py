@@ -8,6 +8,7 @@ import pytest
 
 from homeassistant.core import HomeAssistant
 
+from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
@@ -78,7 +79,9 @@ class TestPushUpdatesViaMqtt:
         await hass.async_block_till_done()
         await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(1) == SlotCredential.known("1234")
+        assert z2m_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
+            "1234"
+        )
 
     async def test_multiple_slots_in_single_message(
         self,
@@ -100,9 +103,13 @@ class TestPushUpdatesViaMqtt:
         await hass.async_block_till_done()
         await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(1) == SlotCredential.known("1111")
-        assert z2m_lock.coordinator.data.get(2) == SlotCredential.known("2222")
-        assert z2m_lock.coordinator.data.get(3) is SlotCredential.empty()
+        assert z2m_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
+            "1111"
+        )
+        assert z2m_lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
+            "2222"
+        )
+        assert z2m_lock.coordinator.data.get(pin_address(3)) is SlotCredential.empty()
 
     async def test_disabled_slot_maps_to_empty(
         self,
@@ -118,7 +125,7 @@ class TestPushUpdatesViaMqtt:
         await hass.async_block_till_done()
         await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(5) is SlotCredential.empty()
+        assert z2m_lock.coordinator.data.get(pin_address(5)) is SlotCredential.empty()
 
 
 class TestSetAndClearUsercodes:
@@ -153,7 +160,9 @@ class TestSetAndClearUsercodes:
         """After set, the coordinator has the optimistic value."""
         await z2m_lock.async_set_usercode(1, "9999")
 
-        assert z2m_lock.coordinator.data.get(1) == SlotCredential.known("9999")
+        assert z2m_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
+            "9999"
+        )
 
     async def test_clear_usercode_publishes_disable_payload(
         self,
@@ -182,7 +191,7 @@ class TestSetAndClearUsercodes:
         """After clear, the coordinator has SlotCredential.empty()."""
         await z2m_lock.async_clear_usercode(1)
 
-        assert z2m_lock.coordinator.data.get(1) is SlotCredential.empty()
+        assert z2m_lock.coordinator.data.get(pin_address(1)) is SlotCredential.empty()
 
 
 class TestGetUsercodes:

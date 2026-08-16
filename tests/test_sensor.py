@@ -5,6 +5,7 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
@@ -40,21 +41,21 @@ async def test_sensor_native_value_with_slot_code(
     assert coordinator is not None
 
     # Empty credential -> sensor shows empty string
-    coordinator.async_set_updated_data({1: SlotCredential.empty()})
+    coordinator.async_set_updated_data({pin_address(1): SlotCredential.empty()})
     await hass.async_block_till_done()
     state = hass.states.get("sensor.test_1_code_slot_1")
     assert state is not None
     assert state.state == ""
 
     # Unreadable credential -> sensor resolves to expected PIN from config
-    coordinator.async_set_updated_data({1: SlotCredential.unreadable()})
+    coordinator.async_set_updated_data({pin_address(1): SlotCredential.unreadable()})
     await hass.async_block_till_done()
     state = hass.states.get("sensor.test_1_code_slot_1")
     assert state is not None
     assert state.state == "1234"
 
     # Known credential -> sensor shows the code
-    coordinator.async_set_updated_data({1: SlotCredential.known("5678")})
+    coordinator.async_set_updated_data({pin_address(1): SlotCredential.known("5678")})
     await hass.async_block_till_done()
     state = hass.states.get("sensor.test_1_code_slot_1")
     assert state is not None

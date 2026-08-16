@@ -31,6 +31,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    pin_address,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
@@ -1598,9 +1599,9 @@ async def test_check_duplicate_code_raises_on_match(
 
     coordinator.async_set_updated_data(
         {
-            1: SlotCredential.known("1234"),
-            2: SlotCredential.known("5678"),
-            3: SlotCredential.empty(),
+            pin_address(1): SlotCredential.known("1234"),
+            pin_address(2): SlotCredential.known("5678"),
+            pin_address(3): SlotCredential.empty(),
         }
     )
 
@@ -1622,7 +1623,10 @@ async def test_check_duplicate_code_skips_masked(
     assert coordinator is not None
 
     coordinator.async_set_updated_data(
-        {1: SlotCredential.unreadable(), 3: SlotCredential.empty()}
+        {
+            pin_address(1): SlotCredential.unreadable(),
+            pin_address(3): SlotCredential.empty(),
+        }
     )
 
     lock._check_duplicate_code(3, "1234")
@@ -1638,7 +1642,7 @@ async def test_check_duplicate_code_skips_same_slot(
     coordinator = lock.coordinator
     assert coordinator is not None
 
-    coordinator.async_set_updated_data({1: SlotCredential.known("1234")})
+    coordinator.async_set_updated_data({pin_address(1): SlotCredential.known("1234")})
 
     lock._check_duplicate_code(1, "1234")
 
@@ -1654,7 +1658,7 @@ async def test_check_duplicate_code_no_op_on_empty_usercode(
     assert coordinator is not None
 
     coordinator.async_set_updated_data(
-        {1: SlotCredential.empty(), 2: SlotCredential.empty()}
+        {pin_address(1): SlotCredential.empty(), pin_address(2): SlotCredential.empty()}
     )
 
     lock._check_duplicate_code(3, "")

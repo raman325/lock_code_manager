@@ -10,6 +10,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import DOMAIN
 from .domain.config import build_slot_device_identifier
+from .domain.credentials import pin_address
 from .domain.models import SlotCode, SlotCredential
 from .domain.queries import get_entry_config
 from .domain.util import mask_pin
@@ -97,7 +98,7 @@ def _lock_diagnostic(
     coordinator_data = (
         {
             str(slot): _mask_code(code, slot, instance_id)
-            for slot, code in coordinator.data.items()
+            for slot, code in coordinator.credentials_by_slot().items()
         }
         if coordinator and coordinator.data
         else {}
@@ -152,7 +153,9 @@ def _slot_diagnostic(
         lock_id: (
             {
                 "coordinator_code": _mask_code(
-                    lock.coordinator.data.get(slot_num), slot_num, instance_id
+                    lock.coordinator.credential(pin_address(slot_num)),
+                    slot_num,
+                    instance_id,
                 )
             }
             if lock.coordinator and lock.coordinator.data

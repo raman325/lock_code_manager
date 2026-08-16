@@ -95,6 +95,7 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
 )
+from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
 from .domain.queries import get_entry_config, get_managed_slots
@@ -595,7 +596,7 @@ def _serialize_lock_coordinator(
 ) -> dict[str, Any]:
     """Serialize coordinator data for a lock."""
     coordinator = lock.coordinator
-    data = coordinator.data if coordinator is not None else {}
+    data = coordinator.credentials_by_slot() if coordinator is not None else {}
     managed_slots = get_managed_slots(hass, lock.lock.entity_id)
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
     slot_metadata = _get_slot_metadata(hass, slot_entity_ids)
@@ -847,9 +848,7 @@ def _build_lock_status(
 
     # Get code from coordinator — SlotCode sentinels pass through as strings
     coordinator = lock.coordinator
-    raw_code = (
-        coordinator.data.get(slot_num) if coordinator and coordinator.data else None
-    )
+    raw_code = coordinator.credential(pin_address(slot_num)) if coordinator else None
 
     lock_status: dict[str, Any] = {
         ATTR_ENTITY_ID: lock_entity_id,

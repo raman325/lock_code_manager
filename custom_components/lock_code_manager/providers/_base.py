@@ -477,7 +477,7 @@ class BaseLock:
         try:
             other_code_slot = next(
                 other_code_slot
-                for other_code_slot, other_credential in self.coordinator.data.items()
+                for other_code_slot, other_credential in self.coordinator.credentials_by_slot().items()
                 if other_code_slot != code_slot and other_credential.matches(usercode)
             )
         except StopIteration:

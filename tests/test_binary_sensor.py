@@ -43,6 +43,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
+from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
@@ -489,10 +490,10 @@ async def test_entities_track_availability(
     assert in_sync_entity_obj.available
 
     # The per-lock entity should also reflect missing coordinator data
-    coordinator.data.pop(1)
+    coordinator.data.pop(pin_address(1))
     assert not in_sync_entity_obj.available
 
-    coordinator.data[1] = SlotCredential.known("1234")
+    coordinator.data[pin_address(1)] = SlotCredential.known("1234")
     assert in_sync_entity_obj.available
 
 
@@ -1124,8 +1125,8 @@ async def test_unexpected_error_during_sync_suspends_slot(
     ):
         # Force out-of-sync state
         in_sync_entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
-        in_sync_entity_obj._sync_manager._coordinator.data[1] = SlotCredential.known(
-            "wrong_code"
+        in_sync_entity_obj._sync_manager._coordinator.data[pin_address(1)] = (
+            SlotCredential.known("wrong_code")
         )
 
         # Trigger tick to attempt sync (which will fail with unexpected error)
@@ -1147,7 +1148,7 @@ async def test_sync_manager_handles_string_slot_num(
     manager = in_sync_entity_obj._sync_manager
 
     assert isinstance(manager._slot_num, int)
-    assert manager._slot_num in manager._coordinator.data
+    assert pin_address(manager._slot_num) in manager._coordinator.data
 
 
 # ---------------------------------------------------------------------------
@@ -1197,7 +1198,7 @@ async def test_coordinator_poll_detects_external_change_and_syncs(
     await hass.async_block_till_done()
 
     # Coordinator data should now reflect the external change
-    assert coordinator.data[1] == SlotCredential.known("9999")
+    assert coordinator.data[pin_address(1)] == SlotCredential.known("9999")
 
     # Fire the tick timer to let the sync manager detect the mismatch
     await async_advance_time(hass, TICK_INTERVAL * 2)
@@ -1329,7 +1330,7 @@ async def test_slot_suspension_isolated_from_other_slots(
         side_effect=ValueError("Unexpected hardware error"),
     ):
         mgr_2._state = SyncState.OUT_OF_SYNC
-        coordinator.data[2] = SlotCredential.known("0000")
+        coordinator.data[pin_address(2)] = SlotCredential.known("0000")
         await mgr_2._async_tick()
         await hass.async_block_till_done()
 
@@ -1382,7 +1383,7 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     await hass.async_block_till_done()
 
     # Coordinator data should now have the drifted value
-    assert coordinator.data[1] == SlotCredential.known("5555")
+    assert coordinator.data[pin_address(1)] == SlotCredential.known("5555")
 
     # Fire tick to let the sync manager detect and correct
     await async_advance_time(hass, TICK_INTERVAL * 2)
@@ -1994,7 +1995,7 @@ async def test_slot_disabled_during_sync_resolves_correctly(
     # If present with empty value, the next tick resolves to IN_SYNC.
     # If absent, _resolve_credential_snapshot returns None and the tick is a no-op.
     # Either way, the important thing is that clear was called, not set.
-    if mgr._slot_num in coordinator.data:
+    if pin_address(mgr._slot_num) in coordinator.data:
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert mgr._state is SyncState.IN_SYNC
 
@@ -2035,7 +2036,7 @@ async def test_rapid_coordinator_updates_coalesce(
     assert mgr._state is SyncState.OUT_OF_SYNC
 
     # The coordinator should have the latest value
-    assert coordinator.data[1] == SlotCredential.known("0009")
+    assert coordinator.data[pin_address(1)] == SlotCredential.known("0009")
 
     # Clear service calls to track only what the tick does
     lock_provider.service_calls["set_usercode"].clear()

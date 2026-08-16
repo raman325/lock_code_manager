@@ -14,6 +14,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     WriteResult,
     credential_from_slot,
+    pin_address,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.schlage import (
@@ -146,8 +147,14 @@ class TestSetAndClearCredentials:
 
         await e2e_schlage_lock.coordinator.async_refresh()
 
-        assert e2e_schlage_lock.coordinator.data.get(1) is SlotCredential.unreadable()
-        assert e2e_schlage_lock.coordinator.data.get(2) is SlotCredential.empty()
+        assert (
+            e2e_schlage_lock.coordinator.data.get(pin_address(1))
+            is SlotCredential.unreadable()
+        )
+        assert (
+            e2e_schlage_lock.coordinator.data.get(pin_address(2))
+            is SlotCredential.empty()
+        )
 
     async def test_coordinator_reflects_clear_credential(
         self,
@@ -167,8 +174,14 @@ class TestSetAndClearCredentials:
 
         await e2e_schlage_lock.coordinator.async_refresh()
 
-        assert e2e_schlage_lock.coordinator.data.get(1) is SlotCredential.empty()
-        assert e2e_schlage_lock.coordinator.data.get(2) is SlotCredential.empty()
+        assert (
+            e2e_schlage_lock.coordinator.data.get(pin_address(1))
+            is SlotCredential.empty()
+        )
+        assert (
+            e2e_schlage_lock.coordinator.data.get(pin_address(2))
+            is SlotCredential.empty()
+        )
 
 
 class TestGetUsers:

@@ -76,7 +76,7 @@ class LockCodeManagerCodeSlotSensorEntity(
     @property
     def native_value(self) -> str | None:
         """Return native value."""
-        credential = self.coordinator.data.get(int(self.slot_num))
+        credential = self.coordinator.credential(pin_address(int(self.slot_num)))
         if credential is None:
             return None
         if credential.is_empty:
@@ -93,7 +93,7 @@ class LockCodeManagerCodeSlotSensorEntity(
     def available(self) -> bool:
         """Return whether sensor is available or not."""
         return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
-            int(self.slot_num) in self.coordinator.data
+            self.coordinator.has_credential(pin_address(int(self.slot_num)))
         )
 
     async def async_added_to_hass(self) -> None:

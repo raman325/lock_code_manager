@@ -9,7 +9,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.domain.credentials import WriteResult
+from custom_components.lock_code_manager.domain.credentials import (
+    WriteResult,
+    pin_address,
+)
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
@@ -129,7 +132,10 @@ class TestSetAndClearUsercodes:
         ):
             await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
 
-        assert e2e_matter_lock.coordinator.data.get(4) is SlotCredential.unreadable()
+        assert (
+            e2e_matter_lock.coordinator.data.get(pin_address(4))
+            is SlotCredential.unreadable()
+        )
 
     async def test_clear_usercode_optimistic_update(
         self,
@@ -154,7 +160,10 @@ class TestSetAndClearUsercodes:
         ):
             await e2e_matter_lock.async_clear_usercode(2)
 
-        assert e2e_matter_lock.coordinator.data.get(2) is SlotCredential.empty()
+        assert (
+            e2e_matter_lock.coordinator.data.get(pin_address(2))
+            is SlotCredential.empty()
+        )
 
 
 class TestGetUsercodes:
