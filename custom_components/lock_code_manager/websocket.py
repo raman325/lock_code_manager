@@ -100,6 +100,7 @@ from .domain.config import build_user_unique_id
 from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
+from .domain.names import normalize_name
 from .domain.queries import (
     get_entry_config,
     get_managed_slots,
@@ -421,8 +422,13 @@ async def get_config_entry_data(
             # name carries the slot's CONDITION ENTITY. The frontend needs
             # the name to map entities back to slots now that identifiers key
             # on it, and there is no other source for it client-side.
+            # Normalized, because the frontend matches these against segment 1
+            # of the unique id, which is normalized. A version 4 entry can
+            # still hold a padded name; sending it raw made every entity
+            # resolve to NaN and every slot section render empty.
             ATTR_SLOT_NAMES: {
-                k: v.get(CONF_NAME) for k, v in entry_config.slots.items()
+                k: normalize_name(v.get(CONF_NAME))
+                for k, v in entry_config.slots.items()
             },
         },
     )

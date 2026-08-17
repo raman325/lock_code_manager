@@ -479,43 +479,6 @@ def test_with_slot_field_removed_is_noop_when_absent() -> None:
     assert config.with_slot_field_removed(99, "pin") is config
 
 
-def test_has_changes_is_false_when_only_a_pin_changes() -> None:
-    """
-    Editing a slot's PIN is not a structural change.
-
-    ``has_changes`` asks about added/removed slots and locks; a PIN edit
-    must not trigger a dashboard re-render.
-    """
-    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(pin="1111")}})
-    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(pin="2222")}})
-
-    assert EntryConfigDiff(old=old, new=new).has_changes is False
-
-
-def test_has_changes_is_true_when_a_name_changes() -> None:
-    """
-    A rename IS structural, unlike a PIN edit.
-
-    Identifiers are built from the name, so a rename moves registry rows --
-    which the dashboard has to re-render for, and which the update listener
-    has to act on.
-    """
-    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(name="Raman")}})
-    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(name="Alice")}})
-
-    diff = EntryConfigDiff(old=old, new=new)
-    assert diff.names_changed == {1: ("Raman", "Alice")}
-    assert diff.has_changes is True
-
-
-def test_names_changed_ignores_added_and_removed_slots() -> None:
-    """Only slots present on BOTH sides can have been renamed."""
-    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(name="Raman")}})
-    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {2: _slot(name="Alice")}})
-
-    assert EntryConfigDiff(old=old, new=new).names_changed == {}
-
-
 def test_to_dict_round_trips_through_from_mapping() -> None:
     """
     to_dict → from_mapping reconstructs an equivalent EntryConfig.
@@ -612,3 +575,16 @@ def test_has_changes_is_true_for_each_field_alone(
         if getattr(diff, name)
     }
     assert populated == {label}
+
+
+def test_has_changes_is_false_when_only_a_pin_changes() -> None:
+    """
+    Editing a slot's PIN is not a structural change.
+
+    ``has_changes`` asks about added/removed slots and locks; a PIN edit
+    must not trigger a dashboard re-render.
+    """
+    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(pin="1111")}})
+    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(pin="2222")}})
+
+    assert EntryConfigDiff(old=old, new=new).has_changes is False

@@ -2,10 +2,13 @@
 Move registry identifiers between key segments, in place.
 
 Entity and device identifiers carry the user's name in their second segment.
-Two operations move them: the version 4 to 5 migration, which moves slot
-numbers to names, and a rename, which moves one name to another. Both are the
-same problem -- remap segment 2 across a set of rows -- so both go through
-``_async_remap_segment``.
+The version 4 to 5 migration moves slot numbers into that segment.
+
+``_async_remap_segment`` is deliberately general -- it remaps segment 2 across
+a set of rows, given any old-to-new mapping -- because renaming a user is the
+same problem and will reuse it. Rename itself is not here: it has to resolve
+against slot removals in the same update, which is a design question of its
+own rather than a second caller.
 
 Rewriting **in place** is what makes either invisible: a registry row found
 by its old identifier and updated keeps its entity identifier, so every
@@ -173,33 +176,4 @@ def async_migrate_identifiers_to_names(
         entry_id,
         mapping,
         {old: build_slot_device_identifier(entry_id, int(old)) for old in mapping},
-    )
-
-
-@callback
-def async_rename_identifiers(
-    hass: HomeAssistant, entry_id: str, renames: dict[str, str]
-) -> int:
-    """
-    Move users' registry identifiers from their old names to their new ones.
-
-    Takes every rename in the update at once rather than one at a time, so a
-    submission that swaps or chains names resolves instead of stranding the
-    ones whose targets are momentarily occupied.
-
-    Driven by the config entry update listener, the only place that observes
-    renames from BOTH write paths -- the name text entity and the options
-    flow. Entity identifiers are untouched, which is the point: renaming a
-    user must not break the automations that reference them.
-    """
-    mapping = {
-        normalize_name(old): normalize_name(new)
-        for old, new in renames.items()
-        if normalize_name(old) and normalize_name(new)
-    }
-    return _async_remap_segment(
-        hass,
-        entry_id,
-        mapping,
-        {old: build_user_device_identifier(entry_id, old) for old in mapping},
     )

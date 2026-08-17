@@ -128,7 +128,7 @@ def slot_for_name(entry: ConfigEntry, name: str) -> int | None:
         (
             slot_num
             for slot_num, slot in get_entry_config(entry).slots.items()
-            if slot.get(CONF_NAME) == name
+            if normalize_name(slot.get(CONF_NAME)) == normalize_name(name)
         ),
         None,
     )

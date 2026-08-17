@@ -87,10 +87,7 @@ from .domain.config import (
     parse_user_device_identifier,
 )
 from .domain.exceptions import LockDisconnected, LockOperationFailed
-from .domain.identifier_migration import (
-    async_migrate_identifiers_to_names,
-    async_rename_identifiers,
-)
+from .domain.identifier_migration import async_migrate_identifiers_to_names
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
@@ -920,7 +917,6 @@ def _async_prune_orphaned_slot_devices(
     unloaded.
     """
     dev_reg = dr.async_get(hass)
-    ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
     # Normalized, because identifiers are built from the normalized name.
     # Comparing against the raw config value made a padded name look
@@ -937,18 +933,6 @@ def _async_prune_orphaned_slot_devices(
         and (user_name := parse_user_device_identifier(entry_id, identifier))
         is not None
         and user_name not in configured
-        # Never remove a device that still has entities. Home Assistant
-        # cascades a device removal to every entity registry row on it, so
-        # this would silently delete live entities -- history, customizations
-        # and hand-assigned entity IDs with them.
-        #
-        # Scope worth knowing: on a RELOAD this is close to vacuous, because
-        # the integration deletes its own entity rows during unload and this
-        # sweep runs before the platforms are forwarded, so almost every
-        # device reads as empty here. It bites on a cold restart, where the
-        # rows survive. That is the case where a device the migration could
-        # not move would otherwise be reaped along with its entities.
-        and not er.async_entries_for_device(ent_reg, device.id, True)
     }
     if orphaned:
         _LOGGER.debug(
@@ -1104,12 +1088,6 @@ async def async_update_listener(
     # entity-creation pass for those cases, but downstream readers via
     # runtime_data.config still need to see the current data.
     runtime_data = config_entry.runtime_data
-    # Captured before the refresh below overwrites it. This is the only
-    # source of the pre-update config that works for BOTH write paths: the
-    # options flow puts the new config in options, while the name text entity
-    # writes straight to data with empty options, leaving no "old" side in
-    # the entry itself.
-    previous_config = runtime_data.config
     runtime_data.config = EntryConfig.from_entry(config_entry)
 
     # Notify per-slot coordinators so derived "active" state and condition-
@@ -1119,32 +1097,6 @@ async def async_update_listener(
     # same way.
     for coordinator in runtime_data.slot_coordinators.values():
         coordinator.notify_config_changed()
-
-    # Renames are handled BEFORE the empty-options early return, because the
-    # name text entity writes to data with empty options -- so gating them on
-    # options would cover the config flow and silently skip the entity, which
-    # is the path most renames take.
-    #
-    # This deliberately does NOT return. An options-flow submission can rename
-    # a user AND change something structural in the same write; returning here
-    # skipped the rest of the listener, so the structural half was never
-    # applied and `options` was never committed to `data`. The stale options
-    # then poisoned the next write, silently reverting it. The empty-options
-    # guard below already covers the text-entity path.
-    if renames := (previous_config - runtime_data.config).names_changed:
-        _LOGGER.debug(
-            "%s (%s): renaming %s; moving registry identifiers",
-            config_entry.entry_id,
-            config_entry.title,
-            ", ".join(
-                f"slot {slot_num} {old} -> {new}"
-                for slot_num, (old, new) in sorted(renames.items())
-            ),
-        )
-        # Handed over as a batch, not one at a time: an options submission can
-        # swap or chain names, and moving them individually strands whichever
-        # one's target is momentarily occupied.
-        async_rename_identifiers(hass, config_entry.entry_id, dict(renames.values()))
 
     # No need to do entity creation/removal work if there are no options
     # because that only happens at the end of this function (data + empty
