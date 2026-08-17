@@ -87,6 +87,7 @@ from .domain.config import (
     parse_user_device_identifier,
 )
 from .domain.exceptions import LockDisconnected, LockOperationFailed
+from .domain.identifier_migration import async_migrate_identifiers_to_names
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
@@ -233,6 +234,31 @@ async def async_migrate_entry(
                 config_entry.title,
                 len(renamed),
                 ", ".join(sorted(renamed, key=int)),
+            )
+
+    if config_entry.version == 4:
+        # Entity and device identifiers move from the slot number to the
+        # user's name. Rewritten IN PLACE so registry rows -- and with them
+        # entity IDs -- survive: every automation, dashboard, and blueprint
+        # reference keeps resolving. Version 4 guarantees every slot has a
+        # unique name to move to.
+        slots = {
+            int(slot_num): dict(slot)
+            for slot_num, slot in (
+                config_entry.options.get(
+                    CONF_SLOTS, config_entry.data.get(CONF_SLOTS, {})
+                )
+            ).items()
+        }
+        changed = async_migrate_identifiers_to_names(hass, config_entry.entry_id, slots)
+        hass.config_entries.async_update_entry(config_entry, version=5)
+        if changed:
+            _LOGGER.info(
+                "%s (%s): rewrote %d registry identifier(s) from slot numbers "
+                "to user names; entity IDs are unchanged",
+                config_entry.entry_id,
+                config_entry.title,
+                changed,
             )
 
     return True

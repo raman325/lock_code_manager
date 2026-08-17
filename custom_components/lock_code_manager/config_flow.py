@@ -397,7 +397,7 @@ class LockCodeManagerFlowHandler(
 ):
     """Config flow for Lock Code Manager."""
 
-    VERSION = 4
+    VERSION = 5
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self) -> None:

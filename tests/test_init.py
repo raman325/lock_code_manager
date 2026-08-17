@@ -581,7 +581,7 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     await hass.async_block_till_done()
 
     # Verify migration happened (v1 -> v2 calendar, then v2 -> v3 number_of_uses)
-    assert config_entry.version == 4
+    assert config_entry.version == 5
 
     # Get the migrated data (should be in .data after setup moves options to data)
     migrated_data = config_entry.data
@@ -1916,7 +1916,7 @@ async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert config_entry.version == 4
+    assert config_entry.version == 5
     slots = config_entry.data[CONF_SLOTS]
     assert slots[1][CONF_NAME] == "User 1"  # was unnamed
     assert slots[2][CONF_NAME] == "Raman"  # user's choice, untouched
@@ -1924,3 +1924,44 @@ async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
     assert slots[4][CONF_NAME] == "Ra man"  # separator stripped
     # Every other field survives.
     assert slots[1][CONF_PIN] == "1234"
+
+
+async def test_migration_v4_to_v5_rewrites_identifiers_end_to_end(
+    hass: HomeAssistant, mock_lock_config_entry, caplog
+) -> None:
+    """A real upgrade rewrites registry identifiers and keeps entity IDs.
+
+    Exercises the full async_migrate_entry path against a registry seeded
+    with pre-migration rows -- the shape every other test lacks, because
+    they start empty and so never touch the upgrade path at all.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1234"},
+            },
+        },
+        unique_id="Identifier Migration",
+        version=4,
+    )
+    config_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    stale = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|1|pin", config_entry=config_entry
+    )
+    original_entity_id = stale.entity_id
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert config_entry.version == 5
+    # The registry row survived, so the entity ID automations reference is
+    # unchanged -- only the unique ID moved.
+    survivor = ent_reg.async_get(original_entity_id)
+    assert survivor is not None
+    assert survivor.unique_id == f"{entry_id}|Raman|pin"
+    assert "entity IDs are unchanged" in caplog.text

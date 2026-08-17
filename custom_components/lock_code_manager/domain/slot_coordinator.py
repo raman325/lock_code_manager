@@ -43,6 +43,7 @@ from homeassistant.helpers.issue_registry import (
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
 from .config import EntryConfig
+from .identifier_migration import async_rename_identifiers_for_slot
 from .names import name_error, normalize_name
 from .queries import get_entry_config
 
@@ -232,6 +233,13 @@ class SlotEntityCoordinator:
         if conflict is not None:
             raise InvalidNameError("name_not_unique", self._slot_num, conflict)
 
+        # Move the registry identifiers BEFORE writing the configuration, so
+        # a failure leaves both on the old name rather than splitting them.
+        # Entity IDs are untouched, which is the point of renaming this way:
+        # automations referencing this user keep working.
+        async_rename_identifiers_for_slot(
+            self._hass, self._config_entry.entry_id, self._slot_num, name
+        )
         self._write_config_fields({CONF_NAME: name})
 
     async def async_request_pin_update(self, value: str) -> None:
