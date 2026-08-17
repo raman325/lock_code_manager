@@ -385,3 +385,11 @@ two random thoughts:
 ---
 
 fix the spec, fold both into b2c design then run codee review on 1422
+
+---
+
+what version do we start at in the current release and end at with this release? It feels like we're treating these PRs as separate releases, but the version only needs to bump once for the entire release
+
+---
+
+I am talking about hte config entry version
