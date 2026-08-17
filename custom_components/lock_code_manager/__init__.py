@@ -226,9 +226,10 @@ async def async_migrate_entry(
             repaired, changed = normalize_slot_names(data_dict[CONF_SLOTS])
             data_dict[CONF_SLOTS] = repaired
             renamed.update(changed)
-        hass.config_entries.async_update_entry(
-            config_entry, data=new_data, options=new_options, version=4
-        )
+        # Read the REPAIRED slots, not the entry, because the repair has not
+        # been written back yet -- the identifiers must move to the names the
+        # entry is about to hold, not the ones it currently holds.
+        new_slots_source = new_options.get(CONF_SLOTS) or new_data.get(CONF_SLOTS, {})
         if renamed:
             _LOGGER.info(
                 "%s (%s): named %d previously-unnamed or conflicting slot(s): %s. "
@@ -239,22 +240,25 @@ async def async_migrate_entry(
                 ", ".join(sorted(renamed, key=int)),
             )
 
-    if config_entry.version == 4:
-        # Entity and device identifiers move from the slot number to the
-        # user's name. Rewritten IN PLACE so registry rows -- and with them
-        # entity IDs -- survive: every automation, dashboard, and blueprint
-        # reference keeps resolving. Version 4 guarantees every slot has a
-        # unique name to move to.
+        # Second half of the SAME version bump: entity and device identifiers
+        # move from the slot number to the user's name, which the name repair
+        # above just guaranteed is present and unique.
+        #
+        # One bump for the whole release, not one per pull request. The steps
+        # are sequenced as separate pull requests because that is how they are
+        # reviewable; the config entry version tracks released schemas, and no
+        # release ever had a schema between these two.
+        #
+        # Rewritten IN PLACE so registry rows -- and with them entity IDs --
+        # survive: every automation, dashboard, and blueprint reference keeps
+        # resolving.
         slots = {
-            int(slot_num): dict(slot)
-            for slot_num, slot in (
-                config_entry.options.get(
-                    CONF_SLOTS, config_entry.data.get(CONF_SLOTS, {})
-                )
-            ).items()
+            int(slot_num): dict(slot) for slot_num, slot in new_slots_source.items()
         }
         changed = async_migrate_identifiers_to_names(hass, config_entry.entry_id, slots)
-        hass.config_entries.async_update_entry(config_entry, version=5)
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, options=new_options, version=4
+        )
         if changed:
             _LOGGER.info(
                 "%s (%s): rewrote %d registry identifier(s) from slot numbers "

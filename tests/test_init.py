@@ -581,7 +581,7 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     await hass.async_block_till_done()
 
     # Verify migration happened (v1 -> v2 calendar, then v2 -> v3 number_of_uses)
-    assert config_entry.version == 5
+    assert config_entry.version == 4
 
     # Get the migrated data (should be in .data after setup moves options to data)
     migrated_data = config_entry.data
@@ -1916,7 +1916,7 @@ async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert config_entry.version == 5
+    assert config_entry.version == 4
     slots = config_entry.data[CONF_SLOTS]
     assert slots[1][CONF_NAME] == "User 1"  # was unnamed
     assert slots[2][CONF_NAME] == "Raman"  # user's choice, untouched
@@ -1926,7 +1926,7 @@ async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
     assert slots[1][CONF_PIN] == "1234"
 
 
-async def test_migration_v4_to_v5_rewrites_identifiers_end_to_end(
+async def test_migration_v3_to_v4_rewrites_identifiers_end_to_end(
     hass: HomeAssistant, mock_lock_config_entry, caplog
 ) -> None:
     """A real upgrade rewrites registry identifiers and keeps entity IDs.
@@ -1944,7 +1944,7 @@ async def test_migration_v4_to_v5_rewrites_identifiers_end_to_end(
             },
         },
         unique_id="Identifier Migration",
-        version=4,
+        version=3,
     )
     config_entry.add_to_hass(hass)
 
@@ -1958,7 +1958,7 @@ async def test_migration_v4_to_v5_rewrites_identifiers_end_to_end(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert config_entry.version == 5
+    assert config_entry.version == 4
     # The registry row survived, so the entity ID automations reference is
     # unchanged -- only the unique ID moved.
     survivor = ent_reg.async_get(original_entity_id)
@@ -2015,3 +2015,41 @@ async def test_rename_reassigning_a_removed_users_name(
     survivor = ent_reg.async_get(pin_entity)
     assert survivor is not None
     assert survivor.unique_id == f"{config_entry.entry_id}|test2|pin"
+
+
+async def test_migration_uses_repaired_names_for_identifiers(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The identifier rewrite must use the names the repair just produced.
+
+    Both halves of the version 3 to 4 migration run in one pass: unnamed and
+    conflicting slots are given names, and identifiers then move onto those
+    names. Reading the entry instead of the repaired slots would move
+    identifiers onto the names the entry still holds -- for an unnamed slot,
+    no name at all.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            # No name: the repair assigns "User 1", and the identifier must
+            # land on that.
+            CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}},
+        },
+        unique_id="Repaired Name Migration",
+        version=3,
+    )
+    config_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    seeded = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|1|pin", config_entry=config_entry
+    ).entity_id
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert config_entry.version == 4
+    assert config_entry.data[CONF_SLOTS][1][CONF_NAME] == "User 1"
+    assert ent_reg.async_get(seeded).unique_id == f"{entry_id}|User 1|pin"
