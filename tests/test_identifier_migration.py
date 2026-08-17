@@ -18,9 +18,10 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import ATTR_IN_SYNC, DOMAIN
 from custom_components.lock_code_manager.domain.identifier_migration import (
     async_migrate_identifiers_to_names,
+    async_rename_identifiers,
 )
 
 SLOTS = {
@@ -301,3 +302,108 @@ async def test_device_chain_resolves(hass: HomeAssistant, entry) -> None:
         dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Bob")}).id == slot_2.id
     )
     assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|2")}).id == slot_1.id
+
+
+async def test_rename_moves_entities_and_device(hass: HomeAssistant, entry) -> None:
+    """Renaming moves a user's identifiers and leaves everyone else's alone."""
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    pin = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Raman|pin")
+    per_lock = _seed_entity(
+        hass, entry, BINARY_SENSOR_DOMAIN, f"{eid}|Raman|{ATTR_IN_SYNC}|lock.front"
+    )
+    untouched = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Alice|pin")
+    device = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Raman")}, name="Raman"
+    )
+
+    async_rename_identifiers(hass, eid, {"Raman": "Raman Smith"})
+
+    assert ent_reg.async_get(pin).unique_id == f"{eid}|Raman Smith|pin"
+    assert (
+        ent_reg.async_get(per_lock).unique_id
+        == f"{eid}|Raman Smith|{ATTR_IN_SYNC}|lock.front"
+    )
+    assert ent_reg.async_get(untouched).unique_id == f"{eid}|Alice|pin"
+    moved = dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Raman Smith")})
+    assert moved is not None and moved.id == device.id
+
+
+async def test_rename_does_not_match_a_name_prefix(hass: HomeAssistant, entry) -> None:
+    """Renaming "Ram" must not drag "Raman" along with it."""
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    longer = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Raman|pin")
+    exact = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Ram|pin")
+
+    async_rename_identifiers(hass, eid, {"Ram": "Bob"})
+
+    assert ent_reg.async_get(exact).unique_id == f"{eid}|Bob|pin"
+    assert ent_reg.async_get(longer).unique_id == f"{eid}|Raman|pin"
+
+
+async def test_rename_resolves_a_chain(hass: HomeAssistant, entry) -> None:
+    """a -> b alongside b -> c must resolve, not strand a.
+
+    The options flow rewrites the whole slots block, so this is one update.
+    Applying the pairs one at a time strands whichever one's target is
+    occupied when its turn comes.
+    """
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    a = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|test1|pin")
+    b = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|test2|pin")
+    dev_a = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|test1")}, name="a"
+    )
+    dev_b = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|test2")}, name="b"
+    )
+
+    async_rename_identifiers(hass, eid, {"test1": "test2", "test2": "test3"})
+
+    assert ent_reg.async_get(b).unique_id == f"{eid}|test3|pin"
+    assert ent_reg.async_get(a).unique_id == f"{eid}|test2|pin"
+    # Devices too -- these used to strand while the entity rows moved.
+    assert (
+        dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|test3")}).id == dev_b.id
+    )
+    assert (
+        dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|test2")}).id == dev_a.id
+    )
+
+
+async def test_rename_never_moves_a_row_twice(hass: HomeAssistant, entry) -> None:
+    """With {a: b, b: c}, a's row must land on b and stop."""
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    a = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|test1|pin")
+
+    async_rename_identifiers(hass, eid, {"test1": "test2", "test2": "test3"})
+
+    assert ent_reg.async_get(a).unique_id == f"{eid}|test2|pin"
+
+
+async def test_rename_ignores_an_identity_mapping(hass: HomeAssistant, entry) -> None:
+    """Writing the same name back is not a rename and logs nothing."""
+    eid = entry.entry_id
+    _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Raman|pin")
+
+    assert async_rename_identifiers(hass, eid, {"Raman": "  Raman  "}) == 0
+
+
+async def test_rename_leaves_a_row_alone_on_collision(
+    hass: HomeAssistant, entry, caplog
+) -> None:
+    """An unrelated occupant is reported, not evicted."""
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    old = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Raman|pin")
+    _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Bob|pin")
+
+    async_rename_identifiers(hass, eid, {"Raman": "Bob"})
+
+    assert ent_reg.async_get(old).unique_id == f"{eid}|Raman|pin"
+    assert "already in use" in caplog.text

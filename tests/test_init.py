@@ -1965,3 +1965,53 @@ async def test_migration_v4_to_v5_rewrites_identifiers_end_to_end(
     assert survivor is not None
     assert survivor.unique_id == f"{entry_id}|Raman|pin"
     assert "entity IDs are unchanged" in caplog.text
+
+
+async def test_rename_reassigning_a_removed_users_name(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Removing a user and giving their name to another slot, in one update.
+
+    The ordering case the whole rename design exists for. Renames applied
+    before removals find the freed name still occupied and strand the rows;
+    worse, the removal pass then deletes the device at that name, which by
+    then belongs to the renamed slot. Removals must complete first.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "test1", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "test2", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+        },
+        unique_id="Rename Over Removed",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    ent_reg = er.async_get(hass)
+    pin_entity = ent_reg.async_get_entity_id(
+        "text", DOMAIN, f"{config_entry.entry_id}|test1|pin"
+    )
+    assert pin_entity is not None
+
+    # Drop slot 2 and hand its name to slot 1, in a single submission.
+    hass.config_entries.async_update_entry(
+        config_entry,
+        options={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "test2", CONF_ENABLED: True, CONF_PIN: "1234"},
+            },
+        },
+    )
+    await hass.async_block_till_done()
+
+    # Slot 1's row moved onto the freed name, and it is the SAME row, so the
+    # entity ID automations reference is unchanged.
+    survivor = ent_reg.async_get(pin_entity)
+    assert survivor is not None
+    assert survivor.unique_id == f"{config_entry.entry_id}|test2|pin"

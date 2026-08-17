@@ -87,7 +87,10 @@ from .domain.config import (
     parse_user_device_identifier,
 )
 from .domain.exceptions import LockDisconnected, LockOperationFailed
-from .domain.identifier_migration import async_migrate_identifiers_to_names
+from .domain.identifier_migration import (
+    async_migrate_identifiers_to_names,
+    async_rename_identifiers,
+)
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
@@ -1078,6 +1081,35 @@ async def _async_setup_new_locks(
         callbacks.invoke_lock_added_handlers(added_locks)
 
 
+@callback
+def _async_apply_renames(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    previous_config: EntryConfig,
+) -> None:
+    """
+    Move registry identifiers for every user renamed in this update.
+
+    Identifiers key on the name, so a rename that does not move them leaves
+    the registry on a name nothing configures -- which the orphan sweep then
+    reaps, cascading to the entity rows and the automations that reference
+    them.
+    """
+    renames = (previous_config - config_entry.runtime_data.config).names_changed
+    if not renames:
+        return
+    _LOGGER.debug(
+        "%s (%s): renaming %s; moving registry identifiers",
+        config_entry.entry_id,
+        config_entry.title,
+        ", ".join(
+            f"slot {slot_num} {old} -> {new}"
+            for slot_num, (old, new) in sorted(renames.items())
+        ),
+    )
+    async_rename_identifiers(hass, config_entry.entry_id, dict(renames.values()))
+
+
 async def async_update_listener(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
@@ -1088,6 +1120,11 @@ async def async_update_listener(
     # entity-creation pass for those cases, but downstream readers via
     # runtime_data.config still need to see the current data.
     runtime_data = config_entry.runtime_data
+    # Captured before the refresh below overwrites it. The only source of the
+    # pre-update config that works for BOTH write paths: the options flow puts
+    # the new config in options, while the name text entity writes straight to
+    # data with empty options, leaving no "old" side in the entry itself.
+    previous_config = runtime_data.config
     runtime_data.config = EntryConfig.from_entry(config_entry)
 
     # Notify per-slot coordinators so derived "active" state and condition-
@@ -1102,6 +1139,10 @@ async def async_update_listener(
     # because that only happens at the end of this function (data + empty
     # options = the post-listener state we just wrote ourselves).
     if not config_entry.options:
+        # A data-only write is the name text entity. No slot can be added or
+        # removed on this path, so there is nothing to sequence against and
+        # the rename can be applied immediately.
+        _async_apply_renames(hass, config_entry, previous_config)
         return
 
     ent_reg = er.async_get(hass)
@@ -1221,6 +1262,13 @@ async def async_update_listener(
         await async_unload_lock(
             hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
         )
+
+    # Renames run AFTER removals and BEFORE additions. The three interact
+    # through the name space: a removal frees a name a rename may want, and an
+    # addition claims one a rename is about to vacate. Renaming first would
+    # also let the removal pass above delete the device a rename just moved
+    # into, because it resolves the departing slot's device BY NAME.
+    _async_apply_renames(hass, config_entry, previous_config)
 
     # Create per-slot coordinators for new slots BEFORE setting up new
     # locks. _async_setup_new_locks awaits per-lock connection checks,

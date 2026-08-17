@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_NAME
 
 from ..const import CONF_LOCKS, CONF_SLOTS
 
@@ -228,6 +229,7 @@ class EntryConfigDiff:
     locks_removed: tuple[str, ...] = field(init=False)
     pairs_added: frozenset[tuple[str, int]] = field(init=False)
     pairs_removed: frozenset[tuple[str, int]] = field(init=False)
+    names_changed: Mapping[int, tuple[str, str]] = field(init=False)
 
     def __post_init__(self) -> None:
         """Compute and freeze the diff fields."""
@@ -279,6 +281,24 @@ class EntryConfigDiff:
             "locks_removed",
             tuple(lock for lock in self.old.locks if lock not in new_lock_set),
         )
+        # Renames, as {slot: (old_name, new_name)}. A rename has to be a
+        # first-class part of the diff because BOTH write paths land here --
+        # the name text entity and the options flow, which rewrites the whole
+        # slots block and so is invisible to any per-field hook.
+        set_field(
+            self,
+            "names_changed",
+            MappingProxyType(
+                {
+                    slot_num: (old_name, new_name)
+                    for slot_num, old_slot in old_slots.items()
+                    if slot_num in new_slots
+                    and (old_name := old_slot.get(CONF_NAME))
+                    and (new_name := new_slots[slot_num].get(CONF_NAME))
+                    and old_name != new_name
+                }
+            ),
+        )
         set_field(self, "pairs_added", frozenset(new_pairs - old_pairs))
         set_field(self, "pairs_removed", frozenset(old_pairs - new_pairs))
 
@@ -290,6 +310,7 @@ class EntryConfigDiff:
             or self.slots_removed
             or self.locks_added
             or self.locks_removed
+            or self.names_changed
         )
 
 

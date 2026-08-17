@@ -4,11 +4,10 @@ Move registry identifiers between key segments, in place.
 Entity and device identifiers carry the user's name in their second segment.
 The version 4 to 5 migration moves slot numbers into that segment.
 
-``_async_remap_segment`` is deliberately general -- it remaps segment 2 across
-a set of rows, given any old-to-new mapping -- because renaming a user is the
-same problem and will reuse it. Rename itself is not here: it has to resolve
-against slot removals in the same update, which is a design question of its
-own rather than a second caller.
+Two operations move them: the version 4 to 5 migration, which moves slot
+numbers into that segment, and a rename, which moves one name to another.
+Both are the same problem -- remap segment 2 across a set of rows -- so both
+go through ``_async_remap_segment``.
 
 Rewriting **in place** is what makes either invisible: a registry row found
 by its old identifier and updated keeps its entity identifier, so every
@@ -190,4 +189,39 @@ def async_migrate_identifiers_to_names(
         entry_id,
         mapping,
         {old: build_slot_device_identifier(entry_id, int(old)) for old in mapping},
+    )
+
+
+@callback
+def async_rename_identifiers(
+    hass: HomeAssistant, entry_id: str, renames: dict[str, str]
+) -> int:
+    """
+    Move users' registry identifiers from their old names to their new ones.
+
+    Takes every rename in the update at once. Passing pairs one at a time
+    reintroduces the chain problem at the call site however correct the
+    callee is: renaming ``a -> b`` alongside ``b -> c`` strands ``a`` unless
+    both are resolved together.
+
+    **Must run after slot removals and before slot additions.** Those three
+    interact through the name space -- a removal frees a name a rename may
+    want, an addition claims one a rename is about to vacate. Running renames
+    first also lets the removal pass delete the device a rename just moved
+    into, because it resolves the departing slot's device by name.
+    """
+    mapping = {
+        normalize_name(old): normalize_name(new)
+        for old, new in renames.items()
+        # An identity mapping is not a rename; it would only log a spurious
+        # "target already exists" for the device it is already on.
+        if normalize_name(old)
+        and normalize_name(new)
+        and normalize_name(old) != normalize_name(new)
+    }
+    return _async_remap_segment(
+        hass,
+        entry_id,
+        mapping,
+        {old: build_user_device_identifier(entry_id, old) for old in mapping},
     )
