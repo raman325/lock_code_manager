@@ -293,6 +293,28 @@ class EntryConfigDiff:
         )
 
 
+def build_user_unique_id(
+    entry_id: str,
+    name: str,
+    key: str,
+    lock_entity_id: str | None = None,
+) -> str:
+    """
+    Build the unique ID for a user's entity.
+
+    Standard: {entry_id}|{name}|{key}
+    Per-lock:  {entry_id}|{name}|{key}|{lock_entity_id}
+
+    Keyed on the user's name rather than the slot number, because the name
+    is the identity the configuration is moving to. ``|`` is rejected in
+    names (see :mod:`..domain.names`) precisely so this stays parseable.
+    """
+    uid = f"{entry_id}|{name}|{key}"
+    if lock_entity_id:
+        uid = f"{uid}|{lock_entity_id}"
+    return uid
+
+
 def build_slot_unique_id(
     entry_id: str,
     slot_num: int,
@@ -300,7 +322,10 @@ def build_slot_unique_id(
     lock_entity_id: str | None = None,
 ) -> str:
     """
-    Build the unique ID for a slot entity.
+    Build the pre-migration unique ID for a slot entity.
+
+    Retained only so the migration can find the entries it needs to rewrite.
+    Nothing constructs new identifiers with it.
 
     Standard: {entry_id}|{slot_num}|{key}
     Per-lock:  {entry_id}|{slot_num}|{key}|{lock_entity_id}
@@ -311,14 +336,42 @@ def build_slot_unique_id(
     return uid
 
 
+def build_user_device_identifier(entry_id: str, name: str) -> str:
+    """
+    Build the device registry identifier for a user's device.
+
+    Format: {entry_id}|{name}. Deliberately distinct from the entry's own
+    device identifier, which is the bare entry_id.
+    """
+    return f"{entry_id}|{name}"
+
+
 def build_slot_device_identifier(entry_id: str, slot_num: int) -> str:
     """
-    Build the device registry identifier for a slot's device.
+    Build the pre-migration device identifier for a slot's device.
 
-    Format: {entry_id}|{slot_num}. Deliberately distinct from the entry's
-    own device identifier, which is the bare entry_id.
+    Retained only so the migration can find the devices it needs to rewrite.
     """
     return f"{entry_id}|{slot_num}"
+
+
+def parse_user_device_identifier(entry_id: str, identifier: str) -> str | None:
+    """
+    Recover the user name from a device identifier, else ``None``.
+
+    The inverse of :func:`build_user_device_identifier`, used to tell a
+    user's device apart from the entry's own device when sweeping the
+    registry. ``None`` covers both the entry device (bare entry_id, no
+    separator) and anything that does not belong to this entry.
+
+    Unlike the slot-number form this replaces, no round-trip check is needed:
+    a name is stored verbatim, and the ``|`` that would make the split
+    ambiguous is rejected at every write path.
+    """
+    prefix = f"{entry_id}|"
+    if not identifier.startswith(prefix):
+        return None
+    return identifier.removeprefix(prefix) or None
 
 
 def parse_slot_device_identifier(entry_id: str, identifier: str) -> int | None:

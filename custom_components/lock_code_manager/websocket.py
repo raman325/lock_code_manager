@@ -95,10 +95,15 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
 )
+from .domain.config import build_user_unique_id
 from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
-from .domain.queries import get_entry_config, get_managed_slots
+from .domain.queries import (
+    get_entry_config,
+    get_managed_slots,
+    slot_name_by_entry_id,
+)
 from .domain.services import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -146,9 +151,17 @@ def _slot_code_payload(
     return {code_key: None, length_key: len(code)}
 
 
-def _slot_unique_id(entry_id: str, slot_num: int, key: str) -> str:
-    """Build the unique ID for a per-slot LCM entity."""
-    return f"{entry_id}|{slot_num}|{key}"
+def _slot_unique_id(hass: HomeAssistant, entry_id: str, slot_num: int, key: str) -> str:
+    """
+    Build the unique ID for a per-slot Lock Code Manager entity.
+
+    Delegates to the shared builder rather than repeating the format. This
+    file used to interpolate it inline in three places, which meant a change
+    to the identifier shape silently missed the websocket API.
+    """
+    return build_user_unique_id(
+        entry_id, slot_name_by_entry_id(hass, entry_id, slot_num), key
+    )
 
 
 def _setup_dynamic_state_tracking(
@@ -489,7 +502,7 @@ class SlotMetadata:
 
 
 def _build_slot_entities(
-    ent_reg: er.EntityRegistry, entry_id: str, slot_num: int
+    hass: HomeAssistant, ent_reg: er.EntityRegistry, entry_id: str, slot_num: int
 ) -> SlotEntities:
     """
     Build a fully-populated SlotEntities for a given (entry, slot) pair.
@@ -501,7 +514,7 @@ def _build_slot_entities(
 
     def _id(domain: str, key: str) -> str | None:
         return ent_reg.async_get_entity_id(
-            domain, DOMAIN, _slot_unique_id(entry_id, slot_num, key)
+            domain, DOMAIN, _slot_unique_id(hass, entry_id, slot_num, key)
         )
 
     return SlotEntities(
@@ -521,7 +534,7 @@ def _get_slot_entity_ids(
     """Return a dict of slot number to SlotEntities for every slot LCM manages on a lock."""
     ent_reg = er.async_get(hass)
     return {
-        slot_int: _build_slot_entities(ent_reg, entry.entry_id, slot_int)
+        slot_int: _build_slot_entities(hass, ent_reg, entry.entry_id, slot_int)
         for entry in hass.config_entries.async_entries(DOMAIN)
         if get_entry_config(entry).has_lock(lock_entity_id)
         for slot_int in get_entry_config(entry).slots
@@ -550,10 +563,19 @@ def _get_slot_metadata(
 
 
 def _in_sync_entity_id(
-    ent_reg: er.EntityRegistry, entry_id: str, slot_num: int, lock_entity_id: str
+    hass: HomeAssistant,
+    ent_reg: er.EntityRegistry,
+    entry_id: str,
+    slot_num: int,
+    lock_entity_id: str,
 ) -> str | None:
     """Resolve the in_sync binary sensor entity id for a (slot, lock) pair."""
-    unique_id = f"{entry_id}|{slot_num}|{ATTR_IN_SYNC}|{lock_entity_id}"
+    unique_id = build_user_unique_id(
+        entry_id,
+        slot_name_by_entry_id(hass, entry_id, slot_num),
+        ATTR_IN_SYNC,
+        lock_entity_id,
+    )
     return ent_reg.async_get_entity_id(BINARY_SENSOR_DOMAIN, DOMAIN, unique_id)
 
 
@@ -573,7 +595,7 @@ def _get_slot_state_entity_ids(hass: HomeAssistant, lock_entity_id: str) -> list
         entity_ids.extend(ids.all_entity_ids())
         if ids.config_entry_id and (
             in_sync_id := _in_sync_entity_id(
-                ent_reg, ids.config_entry_id, slot_num, lock_entity_id
+                hass, ent_reg, ids.config_entry_id, slot_num, lock_entity_id
             )
         ):
             entity_ids.append(in_sync_id)
@@ -614,7 +636,7 @@ def _serialize_lock_coordinator(
             entry_title = entry.title if entry else None
             in_sync = _get_bool_state(
                 hass,
-                _in_sync_entity_id(ent_reg, entry_id, slot, lock.lock.entity_id),
+                _in_sync_entity_id(hass, ent_reg, entry_id, slot, lock.lock.entity_id),
             )
         slots.append(
             _serialize_slot(
@@ -730,7 +752,12 @@ def _get_slot_in_sync_entity_ids(
 
     in_sync_map: dict[str, str] = {}
     for lock_entity_id in lock_entity_ids:
-        unique_id = f"{entry_id}|{slot_num}|{ATTR_IN_SYNC}|{lock_entity_id}"
+        unique_id = build_user_unique_id(
+            entry_id,
+            slot_name_by_entry_id(hass, entry_id, slot_num),
+            ATTR_IN_SYNC,
+            lock_entity_id,
+        )
         if entity_id := ent_reg.async_get_entity_id(
             BINARY_SENSOR_DOMAIN, DOMAIN, unique_id
         ):
@@ -1043,7 +1070,9 @@ async def subscribe_code_slot(
     def _resolve_entity_ids() -> tuple[SlotEntities, dict[str, str], str | None]:
         """Resolve current entity IDs for this slot from the entity registry."""
         return (
-            _build_slot_entities(er.async_get(hass), config_entry.entry_id, slot_num),
+            _build_slot_entities(
+                hass, er.async_get(hass), config_entry.entry_id, slot_num
+            ),
             _get_slot_in_sync_entity_ids(hass, config_entry, slot_num),
             _get_slot_condition_entity_id(config_entry, slot_num),
         )

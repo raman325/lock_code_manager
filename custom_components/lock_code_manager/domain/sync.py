@@ -54,7 +54,7 @@ from ..const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
-from .config import build_slot_unique_id
+from .config import build_user_unique_id
 from .credentials import CredentialAddress, CredentialType
 from .exceptions import (
     CodeRejectedError,
@@ -63,6 +63,7 @@ from .exceptions import (
     LockOperationUnsupported,
 )
 from .models import SlotCredential, SyncState
+from .queries import slot_name
 from .resilience import CircuitBreaker
 from .util import async_disable_slot
 
@@ -195,23 +196,24 @@ class SlotSyncManager:
         # Unique ID components for entity discovery
         entry_id = config_entry.entry_id
         lock_entity_id = lock.lock.entity_id
+        user_name = slot_name(config_entry, slot_num)
         self._value_key = value_entity_key(address.credential_type)
         self._unique_ids: dict[str, tuple[str, str]] = {
             self._value_key: (
                 TEXT_DOMAIN,
-                build_slot_unique_id(entry_id, slot_num, self._value_key),
+                build_user_unique_id(entry_id, user_name, self._value_key),
             ),
             CONF_NAME: (
                 TEXT_DOMAIN,
-                build_slot_unique_id(entry_id, slot_num, CONF_NAME),
+                build_user_unique_id(entry_id, user_name, CONF_NAME),
             ),
             ATTR_ACTIVE: (
                 BINARY_SENSOR_DOMAIN,
-                build_slot_unique_id(entry_id, slot_num, ATTR_ACTIVE),
+                build_user_unique_id(entry_id, user_name, ATTR_ACTIVE),
             ),
             ATTR_CODE: (
                 SENSOR_DOMAIN,
-                build_slot_unique_id(entry_id, slot_num, ATTR_CODE, lock_entity_id),
+                build_user_unique_id(entry_id, user_name, ATTR_CODE, lock_entity_id),
             ),
         }
 

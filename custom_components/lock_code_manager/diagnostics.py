@@ -9,10 +9,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import DOMAIN
-from .domain.config import build_slot_device_identifier
+from .domain.config import (
+    build_user_device_identifier,
+    parse_user_device_identifier,
+)
 from .domain.credentials import pin_address
 from .domain.models import SlotCode, SlotCredential
-from .domain.queries import get_entry_config
+from .domain.queries import get_entry_config, slot_for_name, slot_name
 from .domain.util import mask_pin
 from .providers._base import BaseLock
 
@@ -168,7 +171,9 @@ def _slot_diagnostic(
     # Find the slot device and its entities
     slot_identifier = (
         DOMAIN,
-        build_slot_device_identifier(config_entry.entry_id, slot_num),
+        build_user_device_identifier(
+            config_entry.entry_id, slot_name(config_entry, slot_num)
+        ),
     )
     device = dev_reg.async_get_device(identifiers={slot_identifier})
     if device:
@@ -223,16 +228,15 @@ async def async_get_device_diagnostics(
         dict(runtime_data.locks) if runtime_data is not None else {}
     )
 
-    # Check if this is a slot device: (DOMAIN, entry_id|slot_num)
-    for identifier in device.identifiers:
-        if identifier[0] == DOMAIN and "|" in str(identifier[1]):
-            parts = str(identifier[1]).split("|", 1)
-            if (
-                len(parts) == 2
-                and parts[0] == config_entry.entry_id
-                and parts[1].isdigit()
-            ):
-                slot_num = int(parts[1])
+    # Check if this is a user's device: (DOMAIN, entry_id|name)
+    for domain, identifier in device.identifiers:
+        if domain == DOMAIN and (
+            user_name := parse_user_device_identifier(
+                config_entry.entry_id, str(identifier)
+            )
+        ):
+            slot_num = slot_for_name(config_entry, user_name)
+            if slot_num is not None:
                 return _slot_diagnostic(
                     hass,
                     config_entry,

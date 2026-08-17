@@ -2222,6 +2222,6 @@ async def test_add_standard_entity_for_slot_without_coordinator_logs_warning(
         for entry in er.async_entries_for_config_entry(
             ent_reg, lock_code_manager_config_entry.entry_id
         )
-        if "|99|" in entry.unique_id
+        if "|User 99|" in entry.unique_id
     ]
     assert slot_99_entities

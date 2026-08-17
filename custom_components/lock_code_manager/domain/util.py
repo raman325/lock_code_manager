@@ -16,7 +16,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 
 from ..const import DOMAIN
-from .config import EntryConfig, build_slot_unique_id
+from .config import EntryConfig, build_user_unique_id
+from .queries import slot_name_by_entry_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -137,7 +138,11 @@ async def async_disable_slot(
     enabled_entity_id = ent_reg.async_get_entity_id(
         SWITCH_DOMAIN,
         DOMAIN,
-        build_slot_unique_id(config_entry_id, slot_num, CONF_ENABLED),
+        build_user_unique_id(
+            config_entry_id,
+            slot_name_by_entry_id(hass, config_entry_id, slot_num),
+            CONF_ENABLED,
+        ),
     )
     if not enabled_entity_id:
         lock_context = f" on {lock_name} ({lock_entity_id})" if lock_name else ""

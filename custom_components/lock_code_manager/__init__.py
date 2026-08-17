@@ -26,6 +26,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENTITY_ID,
     CONF_ID,
+    CONF_NAME,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
     EVENT_LOVELACE_UPDATED,
@@ -82,8 +83,8 @@ from .const import (
 )
 from .domain.config import (
     EntryConfig,
-    build_slot_device_identifier,
-    parse_slot_device_identifier,
+    build_user_device_identifier,
+    parse_user_device_identifier,
 )
 from .domain.exceptions import LockDisconnected, LockOperationFailed
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
@@ -849,7 +850,7 @@ async def async_remove_entry(
 def _async_remove_slot_devices(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
-    slot_nums: Iterable[int],
+    user_names: Iterable[str],
 ) -> None:
     """
     Remove the per-slot devices for slots that are no longer configured.
@@ -860,15 +861,18 @@ def _async_remove_slot_devices(
     attached to this entry forever. Left alone it lingers in the UI with
     no way to delete it short of removing the whole entry (issue #1399).
     """
+    # Takes names, not slot numbers: these slots are already gone from the
+    # configuration, so their names can no longer be looked up there -- and a
+    # fallback name would not match the device the real name created.
     dev_reg = dr.async_get(hass)
-    for slot_num in slot_nums:
-        identifier = build_slot_device_identifier(config_entry.entry_id, slot_num)
+    for user_name in user_names:
+        identifier = build_user_device_identifier(config_entry.entry_id, user_name)
         if device := dev_reg.async_get_device(identifiers={(DOMAIN, identifier)}):
             _LOGGER.debug(
-                "%s (%s): Removing device for slot %s",
+                "%s (%s): Removing device for user %s",
                 config_entry.entry_id,
                 config_entry.title,
-                slot_num,
+                user_name,
             )
             dev_reg.async_remove_device(device.id)
 
@@ -888,18 +892,21 @@ def _async_prune_orphaned_slot_devices(
     """
     dev_reg = dr.async_get(hass)
     entry_id = config_entry.entry_id
-    configured = get_entry_config(config_entry).slots
+    configured = {
+        slot.get(CONF_NAME) for slot in get_entry_config(config_entry).slots.values()
+    }
     orphaned = {
-        slot_num
+        user_name
         for device in dr.async_entries_for_config_entry(dev_reg, entry_id)
         for domain, identifier in device.identifiers
         if domain == DOMAIN
-        and (slot_num := parse_slot_device_identifier(entry_id, identifier)) is not None
-        and slot_num not in configured
+        and (user_name := parse_user_device_identifier(entry_id, identifier))
+        is not None
+        and user_name not in configured
     }
     if orphaned:
         _LOGGER.debug(
-            "%s (%s): Pruning devices for unconfigured slots %s",
+            "%s (%s): Pruning devices for unconfigured users %s",
             entry_id,
             config_entry.title,
             sorted(orphaned),
@@ -922,17 +929,20 @@ async def async_remove_config_entry_device(
     recreate it anyway.
     """
     entry_id = config_entry.entry_id
-    slot_nums = {
-        slot_num
+    user_names = {
+        user_name
         for domain, identifier in device_entry.identifiers
         if domain == DOMAIN
-        and (slot_num := parse_slot_device_identifier(entry_id, identifier)) is not None
+        and (user_name := parse_user_device_identifier(entry_id, identifier))
+        is not None
     }
     # No slot identifier means this is the entry's own device, which has to
     # outlive every slot -- it is what the slot devices hang off of.
-    if not slot_nums:
+    if not user_names:
         return False
-    return slot_nums.isdisjoint(get_entry_config(config_entry).slots)
+    return user_names.isdisjoint(
+        slot.get(CONF_NAME) for slot in get_entry_config(config_entry).slots.values()
+    )
 
 
 async def _async_setup_new_locks(
@@ -1118,9 +1128,15 @@ async def async_update_listener(
                 for slot_num in slots_to_remove
             )
         )
+        # Names come from the OLD slot config carried in the diff: these
+        # slots are gone from the new config, so their names cannot be looked
+        # up there, and the device was created under the real name.
+        removed_user_names = {
+            slot.get(CONF_NAME) for slot in slots_to_remove.values()
+        } - {None}
         # After the entity removers have run, so the registry teardown order
         # matches a normal removal (entities first, then their device).
-        _async_remove_slot_devices(hass, config_entry, slots_to_remove)
+        _async_remove_slot_devices(hass, config_entry, removed_user_names)
         for slot_num in slots_to_remove:
             coordinator = runtime_data.slot_coordinators.pop(slot_num, None)
             if coordinator is None:

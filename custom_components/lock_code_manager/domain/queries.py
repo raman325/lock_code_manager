@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
 from ..const import DOMAIN
 from .config import EntryConfig
+from .names import fallback_name, normalize_name
 
 
 def get_entry_config(entry: ConfigEntry) -> EntryConfig:
@@ -87,3 +89,46 @@ def get_loaded_config_entry(hass: HomeAssistant, config_entry_id: str) -> Config
     if config_entry.state is not ConfigEntryState.LOADED:
         raise ServiceValidationError(f"Config entry {config_entry.entry_id} not loaded")
     return config_entry
+
+
+def slot_name(entry: ConfigEntry, slot_num: int | str) -> str:
+    """
+    Return the configured name for a slot.
+
+    The name is the identity entity and device identifiers are built from,
+    so every builder call site needs this lookup while the configuration is
+    still keyed by slot number. Once it is keyed by user, callers hold the
+    name already and this goes away.
+
+    Falls back to the slot's generated name for a slot that is not in the
+    configuration. That happens transiently -- an entity outliving a removed
+    slot during a config update, or a lock event naming a slot Lock Code
+    Manager no longer manages -- and returning a deterministic identifier is
+    better than raising into an event handler or a registry sweep.
+    """
+    name = get_entry_config(entry).slot(slot_num).get(CONF_NAME)
+    return normalize_name(name) or fallback_name(int(slot_num))
+
+
+def slot_name_by_entry_id(hass: HomeAssistant, entry_id: str, slot_num: int) -> str:
+    """Return :func:`slot_name` for an entry known only by its identifier."""
+    entry = hass.config_entries.async_get_entry(entry_id)
+    return slot_name(entry, slot_num) if entry else fallback_name(slot_num)
+
+
+def slot_for_name(entry: ConfigEntry, name: str) -> int | None:
+    """
+    Return the slot number configured under ``name``, or ``None``.
+
+    The reverse of :func:`slot_name`, needed wherever an identifier is being
+    read back rather than built -- device diagnostics, registry sweeps. Names
+    are unique within an entry, so the first match is the only match.
+    """
+    return next(
+        (
+            slot_num
+            for slot_num, slot in get_entry_config(entry).slots.items()
+            if slot.get(CONF_NAME) == name
+        ),
+        None,
+    )

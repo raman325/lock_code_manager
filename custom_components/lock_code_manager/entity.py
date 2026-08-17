@@ -25,9 +25,9 @@ from .const import (
     ATTR_TO,
     DOMAIN,
 )
-from .domain.config import build_slot_device_identifier, build_slot_unique_id
+from .domain.config import build_user_device_identifier, build_user_unique_id
 from .domain.models import LockCodeManagerConfigEntry
-from .domain.queries import get_entry_config
+from .domain.queries import get_entry_config, slot_name
 from .domain.slot_coordinator import SlotEntityCoordinator
 from .providers import BaseLock
 
@@ -59,6 +59,10 @@ class BaseLockCodeManagerEntity(Entity):
         self.locks: list[BaseLock] = list(config_entry.runtime_data.locks.values())
         self.slot_num = slot_num
         self.key = key
+        # Identifiers key on the user's name, so resolve it once here rather
+        # than at each builder call. Frozen for this entity's lifetime: a
+        # rename tears the entity down and rebuilds it.
+        self.user_name = slot_name(config_entry, slot_num)
         self.ent_reg = ent_reg
 
         self._attr_translation_key = key
@@ -66,7 +70,7 @@ class BaseLockCodeManagerEntity(Entity):
 
         self._attr_device_info = DeviceInfo(
             identifiers={
-                (DOMAIN, build_slot_device_identifier(self.entry_id, slot_num))
+                (DOMAIN, build_user_device_identifier(self.entry_id, self.user_name))
             },
             name=f"{config_entry.title} Code slot {slot_num}",
             manufacturer="Lock Code Manager",
@@ -74,7 +78,9 @@ class BaseLockCodeManagerEntity(Entity):
             via_device=(DOMAIN, self.entry_id),
         )
 
-        self._attr_unique_id = build_slot_unique_id(self.base_unique_id, slot_num, key)
+        self._attr_unique_id = build_user_unique_id(
+            self.base_unique_id, self.user_name, key
+        )
         self._attr_extra_state_attributes: dict[str, int | list[str]] = {
             ATTR_CODE_SLOT: int(slot_num)
         }
@@ -336,8 +342,8 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
             self._attr_device_info = None
             self.device_entry = lock.device_entry
 
-        self._attr_unique_id = build_slot_unique_id(
-            self.base_unique_id, slot_num, self.key, lock.lock.entity_id
+        self._attr_unique_id = build_user_unique_id(
+            self.base_unique_id, self.user_name, self.key, lock.lock.entity_id
         )
 
     def _get_removal_uid(self) -> str:

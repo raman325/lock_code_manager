@@ -43,7 +43,7 @@ from ..const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
-from ..domain.config import build_slot_unique_id
+from ..domain.config import build_user_unique_id
 from ..domain.coordinator import LockUsercodeUpdateCoordinator
 from ..domain.credentials import (
     Credential,
@@ -69,7 +69,7 @@ from ..domain.exceptions import (
     ProviderNotImplementedError,
 )
 from ..domain.models import SlotCredential
-from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
+from ..domain.queries import find_entry_for_lock_slot, get_managed_slots, slot_name
 from ..domain.util import mask_pin, per_lock_issue_id
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
@@ -1870,7 +1870,11 @@ class BaseLock:
             name_entity_id = self.ent_reg.async_get_entity_id(
                 TEXT_DOMAIN,
                 DOMAIN,
-                build_slot_unique_id(config_entry_id, int(code_slot), CONF_NAME),
+                build_user_unique_id(
+                    config_entry_id,
+                    slot_name(config_entry, int(code_slot)),
+                    CONF_NAME,
+                ),
             )
             if name_entity_id:
                 name_state = self.hass.states.get(name_entity_id)

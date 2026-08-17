@@ -2748,7 +2748,7 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
 
     # Get real entity data for the initial call
     real_entity_data = _build_slot_entities(
-        er.async_get(hass), lock_code_manager_config_entry.entry_id, 1
+        hass, er.async_get(hass), lock_code_manager_config_entry.entry_id, 1
     )
 
     # Create a synthetic new entity that will appear on subsequent calls
@@ -2758,7 +2758,7 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
 
     counter = {"calls": 0}
 
-    def _mock_build_slot_entities(ent_reg_arg, entry_id_arg, slot_num_arg):
+    def _mock_build_slot_entities(hass_arg, ent_reg_arg, entry_id_arg, slot_num_arg):
         """Return growing entity data to simulate entities appearing."""
         counter["calls"] += 1
         if counter["calls"] <= 1:

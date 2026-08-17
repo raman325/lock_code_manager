@@ -115,8 +115,8 @@ async def test_entry_setup_and_unload(
             if entry.config_entry_id == lcm_entry_id
         }
         assert lcm_device_entities == {
-            f"{lcm_entry_id}|{slot}|{key}|{entity_id}"
-            for slot in range(1, 3)
+            f"{lcm_entry_id}|{name}|{key}|{entity_id}"
+            for name in ("test1", "test2")
             for key in (ATTR_CODE, ATTR_IN_SYNC)
         }
 
@@ -124,7 +124,7 @@ async def test_entry_setup_and_unload(
     for slot in range(1, 3):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
             for key in (ATTR_CODE, ATTR_IN_SYNC):
-                unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
+                unique_ids.add(f"{lcm_entry_id}|test{slot}|{key}|{entity_id}")
 
         for key in (
             CONF_ENABLED,
@@ -133,7 +133,7 @@ async def test_entry_setup_and_unload(
             ATTR_ACTIVE,
             EVENT_PIN_USED,
         ):
-            unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
+            unique_ids.add(f"{lcm_entry_id}|test{slot}|{key}")
 
     # BASE_CONFIG slot 2 includes number_of_uses, but the migration strips it
     # before platform forwarding so the number entity is never created.
@@ -189,7 +189,7 @@ async def test_entry_setup_and_unload(
     for slot in range(1, 4):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
             for key in (ATTR_CODE, ATTR_IN_SYNC):
-                unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
+                unique_ids.add(f"{lcm_entry_id}|test{slot}|{key}|{entity_id}")
 
         for key in (
             CONF_ENABLED,
@@ -198,7 +198,7 @@ async def test_entry_setup_and_unload(
             ATTR_ACTIVE,
             EVENT_PIN_USED,
         ):
-            unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
+            unique_ids.add(f"{lcm_entry_id}|test{slot}|{key}")
 
     assert unique_ids == {
         entity.unique_id
@@ -236,7 +236,7 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 3):
         for key in (ATTR_CODE, ATTR_IN_SYNC):
-            unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{LOCK_1_ENTITY_ID}")
+            unique_ids.add(f"{lcm_entry_id}|test{slot}|{key}|{LOCK_1_ENTITY_ID}")
 
         for key in (
             CONF_ENABLED,
@@ -245,7 +245,7 @@ async def test_entry_setup_and_unload(
             ATTR_ACTIVE,
             EVENT_PIN_USED,
         ):
-            unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
+            unique_ids.add(f"{lcm_entry_id}|test{slot}|{key}")
 
     assert unique_ids == {
         entity.unique_id
@@ -1538,7 +1538,7 @@ async def test_removing_slot_removes_its_device(
     """
     entry_id = lock_code_manager_config_entry.entry_id
     dev_reg = dr.async_get(hass)
-    slot_2_identifiers = {(DOMAIN, f"{entry_id}|2")}
+    slot_2_identifiers = {(DOMAIN, f"{entry_id}|test2")}
     assert dev_reg.async_get_device(slot_2_identifiers) is not None
 
     new_config = copy.deepcopy(dict(lock_code_manager_config_entry.data))
@@ -1550,7 +1550,7 @@ async def test_removing_slot_removes_its_device(
 
     assert dev_reg.async_get_device(slot_2_identifiers) is None
     # The surviving slot and the entry's own device are untouched.
-    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|1")}) is not None
+    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|test1")}) is not None
     assert dev_reg.async_get_device({(DOMAIN, entry_id)}) is not None
 
 
@@ -1586,7 +1586,7 @@ async def test_setup_prunes_devices_for_unconfigured_slots(
     await hass.async_block_till_done()
 
     assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|{stale_slot}")}) is None
-    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|1")}) is not None
+    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|test1")}) is not None
 
 
 async def test_remove_config_entry_device_allows_only_unconfigured_slots(
@@ -1603,7 +1603,7 @@ async def test_remove_config_entry_device_allows_only_unconfigured_slots(
     entry_id = lock_code_manager_config_entry.entry_id
     dev_reg = dr.async_get(hass)
 
-    configured = dev_reg.async_get_device({(DOMAIN, f"{entry_id}|1")})
+    configured = dev_reg.async_get_device({(DOMAIN, f"{entry_id}|test1")})
     assert configured is not None
     assert (
         await async_remove_config_entry_device(
