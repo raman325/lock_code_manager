@@ -164,3 +164,7 @@ Findings, all in the low/medium band — I found no hard correctness bug:
 ---
 
 is it a breaking change for handwritten YAML? The YAML has to be input using the options flow or config flow right? so it gets converted automatically. The shape will change for users but nothing breaks
+
+---
+
+1417 merged
