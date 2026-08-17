@@ -10,7 +10,10 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_mqtt_message,
+)
 
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.config_entries import ConfigEntryState
@@ -31,6 +34,93 @@ Z2M_FULL_TOPIC = f"zigbee2mqtt/{Z2M_TOPIC_NAME}"
 Z2M_GET_TOPIC = f"{Z2M_FULL_TOPIC}/get"
 Z2M_SET_TOPIC = f"{Z2M_FULL_TOPIC}/set"
 Z2M_LOCK_UNIQUE_ID = "test_z2m"
+
+Z2M_IEEE = "0xc0ffee"
+Z2M_DISCOVERY_TOPIC = f"homeassistant/lock/{Z2M_IEEE}/lock/config"
+
+
+def z2m_lock_discovery_payload(
+    *,
+    ieee: str = Z2M_IEEE,
+    name: str = Z2M_TOPIC_NAME,
+    base_topic: str = "zigbee2mqtt",
+    include_state_topic: bool = True,
+) -> dict[str, Any]:
+    """
+    Build a Zigbee2MQTT-shaped Home Assistant discovery payload for a lock.
+
+    Mirrors what zigbee-herdsman-converters publishes: the device topic is
+    ``<base_topic>/<friendly_name>`` and commands go to ``<device topic>/set``.
+    """
+    device_topic = f"{base_topic}/{name}"
+    payload: dict[str, Any] = {
+        "name": None,
+        "command_topic": f"{device_topic}/set",
+        "payload_lock": "LOCK",
+        "payload_unlock": "UNLOCK",
+        "state_locked": "LOCKED",
+        "state_unlocked": "UNLOCKED",
+        "value_template": "{{ value_json.state }}",
+        "unique_id": f"{ieee}_lock_zigbee2mqtt",
+        "device": {
+            "identifiers": [f"zigbee2mqtt_{ieee}"],
+            "name": name,
+            "manufacturer": "Test",
+            "model": "Test lock",
+        },
+    }
+    if include_state_topic:
+        payload["state_topic"] = device_topic
+    return payload
+
+
+async def async_discover_z2m_lock(
+    hass: HomeAssistant,
+    *,
+    ieee: str = Z2M_IEEE,
+    name: str = Z2M_TOPIC_NAME,
+    base_topic: str = "zigbee2mqtt",
+    include_state_topic: bool = True,
+) -> er.RegistryEntry:
+    """Fire a Z2M-style discovery config and return the created lock entity."""
+    discovery_topic = f"homeassistant/lock/{ieee}/lock/config"
+    async_fire_mqtt_message(
+        hass,
+        discovery_topic,
+        json.dumps(
+            z2m_lock_discovery_payload(
+                ieee=ieee,
+                name=name,
+                base_topic=base_topic,
+                include_state_topic=include_state_topic,
+            )
+        ),
+    )
+    await hass.async_block_till_done()
+    ent_reg = er.async_get(hass)
+    entity_id = ent_reg.async_get_entity_id("lock", "mqtt", f"{ieee}_lock_zigbee2mqtt")
+    assert entity_id is not None, "discovery did not create the lock entity"
+    # Seed a state so the entity is available.
+    async_fire_mqtt_message(hass, f"{base_topic}/{name}", '{"state": "LOCKED"}')
+    await hass.async_block_till_done()
+    entry = ent_reg.async_get(entity_id)
+    assert entry is not None
+    return entry
+
+
+@pytest.fixture
+async def mqtt_lock_discovered(
+    hass: HomeAssistant, mqtt_mock, mqtt_client_mock
+) -> AsyncGenerator[er.RegistryEntry]:
+    """Z2M lock entity created through real MQTT discovery (default base topic)."""
+    yield await async_discover_z2m_lock(hass)
+    # HA's MQTT client cancels its misc periodic timer only on socket close,
+    # which the paho client mock never fires. Fire it here so teardown does
+    # not trip the lingering-timer check in verify_cleanup.
+    mqtt_client_mock.on_socket_close(
+        mqtt_client_mock, None, MagicMock(fileno=MagicMock(return_value=-1))
+    )
+    await hass.async_block_till_done()
 
 
 @dataclass
