@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "cad64350ef9a",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-name-unique-ids",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ca/d64350ef9a/0/metadata.json",
+      "transcript": "/ca/d64350ef9a/0/full.jsonl",
+      "compact_transcript": "/ca/d64350ef9a/0/transcript.jsonl",
+      "content_hash": "/ca/d64350ef9a/0/content_hash.txt",
+      "prompt": "/ca/d64350ef9a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 25749,
+    "cache_read_tokens": 15740491,
+    "output_tokens": 21945,
+    "api_call_count": 19
+  }
+}
