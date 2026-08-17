@@ -85,6 +85,9 @@ repos:
     hooks:
       - id: mypy
         files: ^(custom_components)/.+\.py$
+        # The repo requires Python >=3.14 (PEP 758 except syntax); an older
+        # hook-env interpreter cannot even parse the sources.
+        language_version: python3.14
 
   - repo: https://github.com/rhysd/actionlint
     rev: 914e7df21a07ef503a81201c76d2b11c789d3fca  # frozen: v1.7.12
