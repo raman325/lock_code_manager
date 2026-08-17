@@ -156,7 +156,7 @@ class _BridgeTopicRegistry:
         base_topic = topic.rsplit("/bridge/devices", 1)[0]
         try:
             devices = json.loads(payload)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             return
         if not isinstance(devices, list):
             return
