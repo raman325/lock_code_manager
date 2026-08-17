@@ -262,3 +262,33 @@ With slots `{1: "2", 2: "Bob"}` and registry order slot 1 first, `entry|1|pin` �
 `test_to_dict_round_trips_through_from_mapping`, `test_to_dict_produces_plain_mutable_dicts`, `test_has_changes_is_true_for_each_field_alone` (explicitly written to close a mutation-testing gap on the `has_changes` disjuncts) and the property test `test_parse_is_total` are all gone; none of them touch the slot→name codecs this PR replaces. `to_dict`/`from_mapping` and the four `has_changes` disjuncts are unchanged code that is now unpinned.</result>
 <usage><subagent_tokens>169410</subagent_tokens><tool_uses>56</tool_uses><duration_ms>647150</duration_ms></usage>
 </task-notification>
+
+---
+
+do a fourth review
+
+---
+
+<task-notification>
+<task-id>a1c1a57adf0103863</task-id>
+<tool-use-id>toolu_01Fd2ETNYYeQFsUsQmF8zCGn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a1c1a57adf0103863.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1422 (`feat/v3-name-unique-ids`) at its actual head `6544ead5` — note the local `pr-1422` branch is two commits stale (`626e57c9`), so I fetched the PR head into `refs/remotes/pr/1422` and reviewed in a throwaway worktree (since removed). Full suite passes there (1541 passed, 3 skipped). Findings 1 and 2 were confirmed empirically with throwaway probe tests, not just by reading.
+
+No `ReportFindings` tool is available in this environment, so the findings are below.
+
+**Findings**
+
+- `custom_components/lock_code_manager/domain/identifier_migration.py:148` — **high**: `async_rename_identifiers` is single-pass with no collision retry, and `__init__.py:1127` calls it per slot in slot order, before slot removals. Verified: an options submission renaming slot 1 `test1`→`test2` and slot 2 `test2`→`test3` logs 10 "target already in use" warnings and leaves all 9 of slot 1's entity rows plus its device stranded on `…|test1…` while its configured name is `test2`. Until a reload that slot silently stops converging (`SlotSyncManager._unique_ids_for_current_name` resolves nothing), `async_disable_slot` can't find its `enabled` switch, and the frontend resolves no entities for that user. Across a restart (rows survive shutdown; they're only deleted on unload) the fresh entities register under `…|test2…`, collide on entity_id and get `_2` suffixes — the duplicate this module exists to prevent — plus a stale device the prune now refuses to reap. The migration has an explicit repeat-until-stable loop for exactly this; the rename path needs the same, or must run after `slots_to_remove` processing.
+- `custom_components/lock_code_manager/domain/identifier_migration.py:88` — **medium**: the repeat-until-stable loop can rewrite one slot's rows onto a *different* slot's identifier when a name is a decimal string. Verified with `slots={1:{name:"2"}, 2:{name:"Bob"}}` and only slot 1's rows seeded: pass 1 moves `…|1|pin`→`…|2|pin`, pass 2 reads segment `2`, maps it to `Bob`, and moves it again to `…|Bob|pin`. Slot 1's registry row — its entity_id, history, and every automation targeting it — becomes Bob's PIN entity. The docstring at :65-69 claims this "cannot happen in practice because the config entry version gates this to a single run"; the double rewrite happens *within* one run. Fix: track entity ids already moved this run and skip them on later passes.
+- `custom_components/lock_code_manager/domain/identifier_migration.py:71` — **low**: the mapping uses the raw `slot[CONF_NAME]`, while every runtime builder resolves through `queries.slot_name()`, which applies `normalize_name()`. A v4 entry whose YAML-entered name has surrounding whitespace (the v4 flow did not normalize — this PR adds that at `config_flow.py:216`) migrates to `…|Raman |pin` while the entities that register are `…|Raman|pin`: every row orphaned and duplicated. Same raw-vs-normalized divergence at `__init__.py:925` and `__init__.py:983`, which compare identifier-derived names against the raw config value.
+- `custom_components/lock_code_manager/__init__.py:936` — **low**: the new "never remove a device that still has entities" guard is vacuous on the reload path. LCM deletes its own entity registry rows during unload, and the prune runs at the top of `async_setup_entry` before platforms are forwarded, so `er.async_entries_for_device` returns 0 for every device there (confirmed by instrumenting the prune across a reload). It only bites on a cold restart; the comment reads as if it protects both.
+- `ts/generate-view.ts:210` — **low**: the new strip and its comment assert "the device is named after the user now", but `entity.py:76` still sets `name=f"{config_entry.title} Code slot {slot_num}"` — the device name was never changed. So `^{userName}\s*` strips a prefix HA never prepends, and mangles labels when a name prefixes the entity name: a user named `P` renders the PIN entity as "IN" (only an exactly-empty result is rescued by the `if (!name)` fallback).
+- `custom_components/lock_code_manager/domain/names.py:23` — **nit**: the `NAME_SEPARATOR` comment still documents identifiers as `{entry_id}|{slot_num}` and refers readers to `parse_slot_device_identifier`, which this PR deletes.
+
+One environment note: early on I ran `git checkout refs/remotes/pr/1422 -- .` in your main checkout, which reverted the uncommitted change to `.entire/.gitignore` before I switched to a worktree. The file is tool-managed and currently matches HEAD; the rest of the tree is restored and clean.</result>
+<usage><subagent_tokens>202259</subagent_tokens><tool_uses>75</tool_uses><duration_ms>947308</duration_ms></usage>
+</task-notification>
