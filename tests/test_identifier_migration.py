@@ -193,7 +193,7 @@ async def test_rename_moves_entities_and_device(hass: HomeAssistant, entry) -> N
         config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Raman")}, name="Raman"
     )
 
-    async_rename_identifiers(hass, eid, "Raman", "Raman Smith")
+    async_rename_identifiers(hass, eid, {"Raman": "Raman Smith"})
 
     assert ent_reg.async_get(pin_entity).unique_id == f"{eid}|Raman Smith|pin"
     assert (
@@ -216,7 +216,7 @@ async def test_rename_does_not_match_a_name_prefix(hass: HomeAssistant, entry) -
     longer = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Raman|pin")
     exact = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Ram|pin")
 
-    async_rename_identifiers(hass, eid, "Ram", "Bob")
+    async_rename_identifiers(hass, eid, {"Ram": "Bob"})
 
     assert ent_reg.async_get(exact).unique_id == f"{eid}|Bob|pin"
     assert ent_reg.async_get(longer).unique_id == f"{eid}|Raman|pin"
@@ -236,7 +236,7 @@ async def test_rename_leaves_entity_alone_on_collision(
     old = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Raman|pin")
     _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Bob|pin")
 
-    async_rename_identifiers(hass, eid, "Raman", "Bob")
+    async_rename_identifiers(hass, eid, {"Raman": "Bob"})
 
     assert ent_reg.async_get(old).unique_id == f"{eid}|Raman|pin"
     assert "already in use" in caplog.text
@@ -259,7 +259,7 @@ async def test_rename_leaves_device_alone_on_collision(
         config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Bob")}, name="Bob"
     )
 
-    async_rename_identifiers(hass, eid, "Raman", "Bob")
+    async_rename_identifiers(hass, eid, {"Raman": "Bob"})
 
     assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Raman")}) is not None
     assert "already exists" in caplog.text
@@ -306,3 +306,75 @@ async def test_rewrite_gives_up_on_a_true_cycle(
     assert ent_reg.async_get(slot_1).unique_id == f"{eid}|1|pin"
     assert ent_reg.async_get(slot_2).unique_id == f"{eid}|2|pin"
     assert "already in use" in caplog.text
+
+
+async def test_rename_resolves_a_chain_within_one_submission(
+    hass: HomeAssistant, entry
+) -> None:
+    """Renaming a -> b and b -> c in one update must resolve, not strand a.
+
+    The options flow rewrites the whole slots block, so this is a single
+    update. Moving the pairs one at a time leaves "a" stranded because its
+    target is occupied when its turn comes -- and a stranded row silently
+    stops converging, then re-registers under a fresh entity ID on the next
+    restart.
+    """
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    a = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|test1|pin")
+    b = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|test2|pin")
+
+    async_rename_identifiers(hass, eid, {"test1": "test2", "test2": "test3"})
+
+    assert ent_reg.async_get(b).unique_id == f"{eid}|test3|pin"
+    assert ent_reg.async_get(a).unique_id == f"{eid}|test2|pin"
+
+
+async def test_rename_never_moves_a_row_twice(hass: HomeAssistant, entry) -> None:
+    """A row moved this run is never moved again by a later pass.
+
+    With {a: b, b: c}, a naive repeat-until-stable walks a's row to b and
+    then on to c -- handing a's entity ID, its history, and every automation
+    targeting it to a different user.
+    """
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    a = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|test1|pin")
+
+    async_rename_identifiers(hass, eid, {"test1": "test2", "test2": "test3"})
+
+    assert ent_reg.async_get(a).unique_id == f"{eid}|test2|pin"
+
+
+async def test_migration_never_moves_a_row_twice(hass: HomeAssistant, entry) -> None:
+    """Same hazard in the migration when a name is a decimal string.
+
+    slots {1: "2", 2: "Bob"} walked slot 1's row to "…|2|pin" and then, on the
+    next pass, read segment "2", mapped it to "Bob", and moved it again.
+    """
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    slot_1 = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|1|pin")
+
+    async_migrate_identifiers_to_names(
+        hass, eid, {1: {CONF_NAME: "2"}, 2: {CONF_NAME: "Bob"}}
+    )
+
+    assert ent_reg.async_get(slot_1).unique_id == f"{eid}|2|pin"
+
+
+async def test_migration_normalizes_names(hass: HomeAssistant, entry) -> None:
+    """A padded v4 name migrates to the normalized identifier.
+
+    The YAML path only started normalizing on store in this change, so a v4
+    entry can hold "Raman ". Migrating to "…|Raman |pin" would orphan every
+    row, because the entities that register afterwards resolve through
+    slot_name(), which normalizes.
+    """
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    seeded = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|1|pin")
+
+    async_migrate_identifiers_to_names(hass, eid, {1: {CONF_NAME: "  Raman  "}})
+
+    assert ent_reg.async_get(seeded).unique_id == f"{eid}|Raman|pin"

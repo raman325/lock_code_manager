@@ -137,11 +137,6 @@ export function compareAndSortEntities(
     return 1;
 }
 
-/** Escape a user-supplied string for safe use inside a RegExp. */
-function escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /** @internal - exported for testing via generate-view.internal.ts */
 export function createLockCodeManagerEntity(
     entity: EntityRegistryEntry,
@@ -209,13 +204,12 @@ export function getEntityDisplayName(
 ): string {
     const baseName = entity.name ?? entity.original_name ?? '';
     const configTitle = configEntry.title ?? '';
-    // The device is named after the user now, so that is the prefix Home
-    // Assistant prepends and the one to strip. The legacy "Code slot N" form
-    // is still stripped for installs whose entities predate the rename.
-    let name = baseName
-        .replace(new RegExp(`^${escapeRegExp(entity.userName ?? '')}\\s*`, 'i'), '')
-        .replace(new RegExp(`^Code slot ${entity.slotNum}\\s*`, 'i'), '')
-        .trim();
+    // Strips the device-name prefix Home Assistant prepends. The device is
+    // still named "Code slot N" -- identifiers moved to the user name, the
+    // device name did not. Stripping the user name here would remove a
+    // prefix HA never adds and mangle labels that merely start with it: a
+    // user named "P" would render the PIN entity as "IN".
+    let name = baseName.replace(new RegExp(`^Code slot ${entity.slotNum}\\s*`, 'i'), '').trim();
     if (configTitle && name.toLowerCase().startsWith(configTitle.toLowerCase())) {
         name = name.slice(configTitle.length).trim();
     }

@@ -96,7 +96,7 @@ from .domain.models import (
     LockCodeManagerConfigEntry,
     LockCodeManagerConfigEntryRuntimeData,
 )
-from .domain.names import normalize_slot_names
+from .domain.names import normalize_name, normalize_slot_names
 from .domain.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
@@ -922,8 +922,12 @@ def _async_prune_orphaned_slot_devices(
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
+    # Normalized, because identifiers are built from the normalized name.
+    # Comparing against the raw config value made a padded name look
+    # unconfigured, so its device was pruned on every setup.
     configured = {
-        slot.get(CONF_NAME) for slot in get_entry_config(config_entry).slots.values()
+        normalize_name(slot.get(CONF_NAME))
+        for slot in get_entry_config(config_entry).slots.values()
     }
     orphaned = {
         user_name
@@ -938,10 +942,12 @@ def _async_prune_orphaned_slot_devices(
         # this would silently delete live entities -- history, customizations
         # and hand-assigned entity IDs with them.
         #
-        # A genuine orphan has none: slot removal deletes the entities first
-        # and the device after (issue #1399), so the case this sweep exists
-        # for is unaffected. What it now spares is a device the migration
-        # could not move, which still has its entities attached.
+        # Scope worth knowing: on a RELOAD this is close to vacuous, because
+        # the integration deletes its own entity rows during unload and this
+        # sweep runs before the platforms are forwarded, so almost every
+        # device reads as empty here. It bites on a cold restart, where the
+        # rows survive. That is the case where a device the migration could
+        # not move would otherwise be reaped along with its entities.
         and not er.async_entries_for_device(ent_reg, device.id, True)
     }
     if orphaned:
@@ -981,7 +987,8 @@ async def async_remove_config_entry_device(
     if not user_names:
         return False
     return user_names.isdisjoint(
-        slot.get(CONF_NAME) for slot in get_entry_config(config_entry).slots.values()
+        normalize_name(slot.get(CONF_NAME))
+        for slot in get_entry_config(config_entry).slots.values()
     )
 
 
@@ -1125,16 +1132,19 @@ async def async_update_listener(
     # then poisoned the next write, silently reverting it. The empty-options
     # guard below already covers the text-entity path.
     if renames := (previous_config - runtime_data.config).names_changed:
-        for slot_num, (old_name, new_name) in renames.items():
-            _LOGGER.debug(
-                "%s (%s): slot %s renamed %s -> %s; moving registry identifiers",
-                config_entry.entry_id,
-                config_entry.title,
-                slot_num,
-                old_name,
-                new_name,
-            )
-            async_rename_identifiers(hass, config_entry.entry_id, old_name, new_name)
+        _LOGGER.debug(
+            "%s (%s): renaming %s; moving registry identifiers",
+            config_entry.entry_id,
+            config_entry.title,
+            ", ".join(
+                f"slot {slot_num} {old} -> {new}"
+                for slot_num, (old, new) in sorted(renames.items())
+            ),
+        )
+        # Handed over as a batch, not one at a time: an options submission can
+        # swap or chain names, and moving them individually strands whichever
+        # one's target is momentarily occupied.
+        async_rename_identifiers(hass, config_entry.entry_id, dict(renames.values()))
 
     # No need to do entity creation/removal work if there are no options
     # because that only happens at the end of this function (data + empty
@@ -1201,8 +1211,8 @@ async def async_update_listener(
         # slots are gone from the new config, so their names cannot be looked
         # up there, and the device was created under the real name.
         removed_user_names = {
-            slot.get(CONF_NAME) for slot in slots_to_remove.values()
-        } - {None}
+            normalize_name(slot.get(CONF_NAME)) for slot in slots_to_remove.values()
+        } - {""}
         # After the entity removers have run, so the registry teardown order
         # matches a normal removal (entities first, then their device).
         _async_remove_slot_devices(hass, config_entry, removed_user_names)

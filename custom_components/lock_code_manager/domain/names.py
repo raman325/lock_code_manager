@@ -18,13 +18,12 @@ from typing import Any
 
 from homeassistant.const import CONF_NAME
 
-# Reserved because it delimits the identifiers Lock Code Manager builds from
-# entry-scoped parts: today the entity unique identifier
-# (``{entry_id}|{slot_num}|{key}``) and the device identifier
-# (``{entry_id}|{slot_num}``), and the name takes the slot number's place in
-# both once the configuration is keyed by user. A name containing it would
-# split into the wrong fields on the way back out -- see
-# ``parse_slot_device_identifier``.
+# Reserved because it delimits every identifier Lock Code Manager builds:
+# the entity unique identifier (``{entry_id}|{name}|{key}``, plus a trailing
+# ``|{lock_entity_id}`` for per-lock entities) and the device identifier
+# (``{entry_id}|{name}``). A name containing it would split into the wrong
+# fields on the way back out -- see ``parse_user_device_identifier`` and the
+# segment remapping in ``domain.identifier_migration``.
 NAME_SEPARATOR = "|"
 
 

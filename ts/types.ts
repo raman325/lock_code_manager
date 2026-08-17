@@ -127,10 +127,10 @@ export interface LockCodeManagerConfigEntryDataResponse {
     config_entry: ConfigEntryJSONFragment;
     entities: EntityRegistryEntry[];
     locks: LockInfo[];
-    /** Slot -> CONDITION ENTITY id. Despite the name, NOT the user name. */
-    slots: { [key: number]: string | null };
     /** Slot -> user name. Identifiers key on this. */
     slot_names: { [key: number]: string | null };
+    /** Slot -> CONDITION ENTITY id. Despite the name, NOT the user name. */
+    slots: { [key: number]: string | null };
 }
 
 export interface LockCoordinatorSlotData {

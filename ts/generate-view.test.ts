@@ -8,8 +8,8 @@ import {
     CONDITION_KEYS,
     DIVIDER_CARD,
     IN_SYNC_KEY,
-    compareAndSortEntities,
     buildSlotNumForName,
+    compareAndSortEntities,
     createLockCodeManagerEntity,
     generateEntityCards,
     generateNewSlotCard,
@@ -1261,5 +1261,26 @@ describe('buildSlotNumForName', () => {
 
     it('tolerates a payload with no slot_names', () => {
         expect(buildSlotNumForName({})).toEqual(new Map());
+    });
+});
+
+describe('getEntityDisplayName with a short user name', () => {
+    it('does not strip the user name out of the entity label', () => {
+        // The device is still named "Code slot N"; identifiers moved to the
+        // user name but the device name did not. Stripping the name here
+        // would turn "PIN" into "IN" for a user called "P".
+        const entity = {
+            entity_id: 'text.lcm_p_pin',
+            key: 'pin',
+            name: null,
+            original_name: 'PIN',
+            slotNum: 1,
+            unique_id: 'config123|P|pin',
+            userName: 'P'
+        } as LockCodeManagerEntityEntry;
+
+        expect(getEntityDisplayName({ title: 'LCM' } as ConfigEntryJSONFragment, entity)).toBe(
+            'PIN'
+        );
     });
 });
