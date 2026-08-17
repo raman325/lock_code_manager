@@ -10,9 +10,9 @@
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
-      "name_has_separator": "A name cannot contain the “|” character.",
-      "name_not_unique": "Another code slot in this entry already uses that name. Names must be unique.",
-      "name_required": "Every code slot needs a name. The name identifies this user on your locks.",
+      "name_has_separator": "The name for code slot {slot_num} cannot contain the “|” character.",
+      "name_not_unique": "The name for code slot {slot_num} is already used by another code slot in this entry. Names must be unique.",
+      "name_required": "Code slot {slot_num} needs a name. The name identifies this user on your locks.",
       "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}"
     },
@@ -132,10 +132,11 @@
     "error": {
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
       "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}.",
-      "name_has_separator": "A name cannot contain the “|” character.",
-      "name_not_unique": "Another code slot in this entry already uses that name. Names must be unique.",
-      "name_required": "Every code slot needs a name. The name identifies this user on your locks.",
-      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity."
+      "name_has_separator": "The name for code slot {slot_num} cannot contain the “|” character.",
+      "name_not_unique": "The name for code slot {slot_num} is already used by another code slot in this entry. Names must be unique.",
+      "name_required": "Code slot {slot_num} needs a name. The name identifies this user on your locks.",
+      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}"
     },
     "step": {
       "init": {
@@ -234,6 +235,17 @@
     "lock_setup_failed": {
       "title": "Lock setup failed: {lock_entity_id}",
       "description": "Lock Code Manager could not set up `{lock_entity_id}`: {error}\n\nIts entities are created but unavailable, and code synchronization is paused for this lock. After addressing the cause, reload the lock's integration (or Lock Code Manager) to retry. This issue will be automatically dismissed when setup succeeds."
+    }
+  },
+  "exceptions": {
+    "name_has_separator": {
+      "message": "The name for code slot {slot_num} cannot contain the “|” character."
+    },
+    "name_not_unique": {
+      "message": "Code slot {conflicting_slot} already uses that name. Names must be unique within a Lock Code Manager entry."
+    },
+    "name_required": {
+      "message": "Code slot {slot_num} needs a name. The name identifies this user on your locks."
     }
   }
 }

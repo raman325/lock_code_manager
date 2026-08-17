@@ -33,6 +33,7 @@ from homeassistant.core import (
     HomeAssistant,
     callback,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -42,7 +43,7 @@ from homeassistant.helpers.issue_registry import (
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
 from .config import EntryConfig
-from .names import NAME_SEPARATOR, name_error, normalize_name
+from .names import name_error, normalize_name
 from .queries import get_entry_config
 
 if TYPE_CHECKING:
@@ -456,12 +457,15 @@ class PinRequiredError(Exception):
     """Raised when a slot cannot be enabled because no PIN is configured."""
 
 
-class InvalidNameError(Exception):
+class InvalidNameError(HomeAssistantError):
     """
     Raised when a slot name write would break the name rules.
 
-    Carries the translation key so the entity can render the same message
-    the config flow shows, rather than inventing a second wording.
+    Subclasses ``HomeAssistantError`` so a caller that forgets to translate
+    it still surfaces as a validation refusal rather than an unknown-error
+    500. Carries the translation key and placeholders so the entity renders
+    the same localized message the config flow shows for the same rule,
+    instead of inventing a second English-only wording.
     """
 
     def __init__(
@@ -471,14 +475,8 @@ class InvalidNameError(Exception):
         self.error_key = error_key
         self.slot_num = slot_num
         self.conflicting_slot = conflicting_slot
-        messages = {
-            "name_required": "A code slot name cannot be empty",
-            "name_has_separator": (
-                f"A code slot name cannot contain '{NAME_SEPARATOR}'"
-            ),
-            "name_not_unique": (
-                f"Slot {conflicting_slot} already uses that name; "
-                "names must be unique within a Lock Code Manager entry"
-            ),
+        self.placeholders = {
+            "slot_num": str(slot_num),
+            "conflicting_slot": str(conflicting_slot),
         }
-        super().__init__(messages[error_key])
+        super().__init__(f"{error_key} (slot {slot_num})")

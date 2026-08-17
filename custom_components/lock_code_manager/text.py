@@ -11,6 +11,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .const import DOMAIN
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.slot_coordinator import InvalidNameError
 from .entity import BaseLockCodeManagerEntity
@@ -80,7 +81,11 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
             try:
                 await coordinator.async_request_name_update(value)
             except InvalidNameError as err:
-                raise ServiceValidationError(str(err)) from err
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key=err.error_key,
+                    translation_placeholders=err.placeholders,
+                ) from err
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:

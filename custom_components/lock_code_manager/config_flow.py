@@ -193,7 +193,13 @@ async def _async_validate_slots_yaml(
         # A missing name is now the most likely reason a previously-valid
         # slots block fails, so name it rather than sending the user to the
         # logs for the one error we can predict.
-        if CONF_NAME in str(err):
+        #
+        # Match on the error PATH, not the rendered text. CONF_NAME is
+        # "name", which is a substring of any key containing it
+        # ("friendly_name", "username"), so a text match reports an
+        # unrelated schema failure as a missing name -- sending the user to
+        # exactly the logs this branch exists to avoid.
+        if CONF_NAME in getattr(err, "path", []):
             return None, {"base": "name_required"}, {}
         return None, {"base": "invalid_config"}, {}
 

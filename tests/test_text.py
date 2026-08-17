@@ -120,11 +120,11 @@ async def test_whitespace_pin_normalized_to_empty(
 
 
 @pytest.mark.parametrize(
-    ("value", "message_fragment"),
+    ("value", "translation_key"),
     [
-        ("", "cannot be empty"),
-        ("   ", "cannot be empty"),
-        ("Ra|man", "cannot contain"),
+        ("", "name_required"),
+        ("   ", "name_required"),
+        ("Ra|man", "name_has_separator"),
     ],
 )
 async def test_set_name_rejects_invalid_names(
@@ -132,7 +132,7 @@ async def test_set_name_rejects_invalid_names(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     value: str,
-    message_fragment: str,
+    translation_key: str,
 ):
     """The name text entity enforces the name rules.
 
@@ -142,7 +142,10 @@ async def test_set_name_rejects_invalid_names(
     """
     original = hass.states.get(SLOT_2_NAME_ENTITY).state
 
-    with pytest.raises(ServiceValidationError, match=message_fragment):
+    # Assert the translation key, not the English text: the message is
+    # localized, and pinning the wording would make every translation edit a
+    # test failure.
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             TEXT_DOMAIN,
             SERVICE_SET_VALUE,
@@ -150,6 +153,7 @@ async def test_set_name_rejects_invalid_names(
             target={ATTR_ENTITY_ID: SLOT_2_NAME_ENTITY},
             blocking=True,
         )
+    assert err.value.translation_key == translation_key
 
     assert hass.states.get(SLOT_2_NAME_ENTITY).state == original
 
@@ -162,7 +166,7 @@ async def test_set_name_rejects_another_slots_name(
     """Renaming a slot onto another slot's name is refused, ignoring case."""
     other = hass.states.get(SLOT_1_NAME_ENTITY).state
 
-    with pytest.raises(ServiceValidationError, match="already uses that name"):
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             TEXT_DOMAIN,
             SERVICE_SET_VALUE,
@@ -170,6 +174,8 @@ async def test_set_name_rejects_another_slots_name(
             target={ATTR_ENTITY_ID: SLOT_2_NAME_ENTITY},
             blocking=True,
         )
+    assert err.value.translation_key == "name_not_unique"
+    assert err.value.translation_placeholders["conflicting_slot"] == "1"
 
 
 async def test_set_name_normalizes_whitespace(
