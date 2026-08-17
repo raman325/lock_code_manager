@@ -400,7 +400,9 @@ async def test_two_entries_same_locks(
 ):
     """Test two entries that use same locks but different slots set up successfully."""
     new_config = copy.deepcopy(BASE_CONFIG)
-    new_config[CONF_SLOTS] = {3: {CONF_ENABLED: False, CONF_PIN: "0123"}}
+    new_config[CONF_SLOTS] = {
+        3: {CONF_NAME: "User 3", CONF_ENABLED: False, CONF_PIN: "0123"}
+    }
     new_entry = MockConfigEntry(
         domain=DOMAIN, data=new_config, unique_id="Mock Title 2", title="Mock Title 2"
     )
@@ -579,7 +581,7 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     await hass.async_block_till_done()
 
     # Verify migration happened (v1 -> v2 calendar, then v2 -> v3 number_of_uses)
-    assert config_entry.version == 3
+    assert config_entry.version == 4
 
     # Get the migrated data (should be in .data after setup moves options to data)
     migrated_data = config_entry.data
@@ -1885,3 +1887,40 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     assert LOCK_1_ENTITY_ID in caplog.text
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
+    """v4 gives every slot a present, separator-free, entry-unique name.
+
+    The name is becoming the identity Lock Code Manager keys on, so these
+    three properties stop being cosmetic. A name the user already chose is
+    left exactly as-is, because rewriting one would also rename that user on
+    every lock that stores a user name.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "5678"},
+                3: {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "9012"},
+                4: {CONF_NAME: "Ra|man", CONF_ENABLED: True, CONF_PIN: "3456"},
+            },
+        },
+        unique_id="Name Migration Test",
+        version=3,
+    )
+    config_entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert config_entry.version == 4
+    slots = config_entry.data[CONF_SLOTS]
+    assert slots[1][CONF_NAME] == "User 1"  # was unnamed
+    assert slots[2][CONF_NAME] == "Raman"  # user's choice, untouched
+    assert slots[3][CONF_NAME] == "Raman 2"  # collided with slot 2
+    assert slots[4][CONF_NAME] == "Ra man"  # separator stripped
+    # Every other field survives.
+    assert slots[1][CONF_PIN] == "1234"

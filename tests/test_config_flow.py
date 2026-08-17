@@ -131,7 +131,8 @@ async def test_config_flow_ui(hass: HomeAssistant):
         is_last = slot_num == len(pins)
 
         result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_ENABLED: True, CONF_PIN: pin}
+            flow_id,
+            {CONF_NAME: f"User {slot_num}", CONF_ENABLED: True, CONF_PIN: pin},
         )
 
         if is_last:
@@ -146,10 +147,10 @@ async def test_config_flow_ui(hass: HomeAssistant):
     assert result["data"] == {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
-            1: {CONF_ENABLED: True, CONF_PIN: "1234"},
-            2: {CONF_ENABLED: True, CONF_PIN: "5678"},
-            3: {CONF_ENABLED: True, CONF_PIN: "9012"},
-            4: {CONF_ENABLED: True, CONF_PIN: "3456"},
+            1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"},
+            2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"},
+            3: {CONF_NAME: "User 3", CONF_ENABLED: True, CONF_PIN: "9012"},
+            4: {CONF_NAME: "User 4", CONF_ENABLED: True, CONF_PIN: "3456"},
         },
     }
 
@@ -159,7 +160,7 @@ async def test_config_flow_ui_error(hass: HomeAssistant):
     flow_id = await _start_ui_config_flow(hass)
 
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_ENABLED: True, CONF_PIN: ""}
+        flow_id, {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: ""}
     )
 
     assert result["type"] == "form"
@@ -176,8 +177,8 @@ async def test_config_flow_yaml(hass: HomeAssistant):
         flow_id,
         {
             CONF_SLOTS: {
-                1: {CONF_ENABLED: True, CONF_PIN: "1234"},
-                2: {CONF_ENABLED: True, CONF_PIN: "5678"},
+                1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"},
             }
         },
     )
@@ -187,8 +188,8 @@ async def test_config_flow_yaml(hass: HomeAssistant):
     assert result["data"] == {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
-            1: {CONF_ENABLED: True, CONF_PIN: "1234"},
-            2: {CONF_ENABLED: True, CONF_PIN: "5678"},
+            1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"},
+            2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"},
         },
     }
 
@@ -199,7 +200,7 @@ async def test_config_flow_yaml_error(hass: HomeAssistant):
 
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: ""}}},
+        {CONF_SLOTS: {1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: ""}}},
     )
 
     assert result["type"] == "form"
@@ -224,7 +225,7 @@ async def test_options_flow(hass: HomeAssistant):
                 CONF_ENABLED: True,
                 CONF_ENTITY_ID: "calendar.test_1",
             },
-            3: {CONF_ENABLED: True, CONF_PIN: ""},
+            3: {CONF_NAME: "User 3", CONF_ENABLED: True, CONF_PIN: ""},
         },
     }
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -241,7 +242,11 @@ async def test_options_flow(hass: HomeAssistant):
     assert result["step_id"] == "init"
     assert result["errors"] == {"base": "invalid_config"}
 
-    new_config[CONF_SLOTS][3] = {CONF_ENABLED: True, CONF_PIN: "1234"}
+    new_config[CONF_SLOTS][3] = {
+        CONF_NAME: "User 1",
+        CONF_ENABLED: True,
+        CONF_PIN: "1234",
+    }
     result = await hass.config_entries.options.async_configure(
         flow_id, user_input=new_config
     )
@@ -344,7 +349,7 @@ async def test_config_flow_slots_already_configured(
 
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_SLOTS: {2: {CONF_ENABLED: False, CONF_PIN: "0123"}}},
+        {CONF_SLOTS: {2: {CONF_NAME: "User 2", CONF_ENABLED: False, CONF_PIN: "0123"}}},
     )
     assert result["errors"] == {"base": "slots_already_configured"}
 
@@ -357,7 +362,7 @@ async def test_config_flow_two_entries_same_locks(
 
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_SLOTS: {3: {CONF_ENABLED: False, CONF_PIN: "0123"}}},
+        {CONF_SLOTS: {3: {CONF_NAME: "User 3", CONF_ENABLED: False, CONF_PIN: "0123"}}},
     )
     assert result["type"] == "create_entry"
 
@@ -380,7 +385,12 @@ async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
     # Try to configure slot 1 with a scheduler entity as condition
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_ENABLED: True, CONF_PIN: "1234", CONF_ENTITY_ID: "switch.my_schedule"},
+        {
+            CONF_NAME: "User 1",
+            CONF_ENABLED: True,
+            CONF_PIN: "1234",
+            CONF_ENTITY_ID: "switch.my_schedule",
+        },
     )
 
     # Should show error for excluded platform
@@ -432,14 +442,14 @@ async def test_ui_existing_codes_confirm_continue(hass: HomeAssistant):
 
     # Configure slot 1
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_ENABLED: True, CONF_PIN: "1234"}
+        flow_id, {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "1234"}
     )
 
     assert result["step_id"] == "code_slot"
 
     # Configure slot 2 -> create entry (sync manager handles reconciliation)
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_ENABLED: True, CONF_PIN: "5678"}
+        flow_id, {CONF_NAME: "User 3", CONF_ENABLED: True, CONF_PIN: "5678"}
     )
 
     assert result["type"] == "create_entry"
@@ -493,7 +503,7 @@ async def test_yaml_existing_codes_confirm_continue(hass: HomeAssistant):
 
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+        {CONF_SLOTS: {1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}}},
     )
 
     assert result["type"] == "menu"
@@ -524,7 +534,7 @@ async def test_yaml_existing_codes_confirm_cancel(hass: HomeAssistant):
     )
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+        {CONF_SLOTS: {1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}}},
     )
 
     assert result["type"] == "menu"
@@ -574,7 +584,7 @@ async def test_yaml_no_existing_codes_skips_confirm(hass: HomeAssistant):
     )
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+        {CONF_SLOTS: {1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}}},
     )
 
     # Goes directly to create_entry, no confirm step
@@ -765,7 +775,13 @@ async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):
         domain=DOMAIN,
         data={
             CONF_LOCKS: [LOCK_1_ENTITY_ID],
-            CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234", CONF_NAME: "S1"}},
+            CONF_SLOTS: {
+                1: {
+                    CONF_NAME: "S1",
+                    CONF_ENABLED: True,
+                    CONF_PIN: "1234",
+                }
+            },
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -859,7 +875,7 @@ async def test_existing_codes_detected_across_multiple_locks(hass: HomeAssistant
     )
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "5678"}}},
+        {CONF_SLOTS: {1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "5678"}}},
     )
 
     # Confirm step shown because slot 1 has existing codes on some locks
@@ -905,7 +921,8 @@ async def _start_options_flow(
         title="test",
         data={
             CONF_LOCKS: locks or [LOCK_1_ENTITY_ID],
-            CONF_SLOTS: slots or {1: {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOTS: slots
+            or {1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}},
         },
     )
     entry.add_to_hass(hass)
@@ -924,7 +941,9 @@ async def test_options_flow_no_added_pairs_persists_immediately(hass: HomeAssist
             flow_id,
             {
                 CONF_LOCKS: [LOCK_1_ENTITY_ID],
-                CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}},
+                CONF_SLOTS: {
+                    1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}
+                },
             },
         )
 
@@ -947,8 +966,8 @@ async def test_options_flow_added_pair_no_existing_code_persists(hass: HomeAssis
             {
                 CONF_LOCKS: [LOCK_1_ENTITY_ID],
                 CONF_SLOTS: {
-                    1: {CONF_ENABLED: True, CONF_PIN: "1234"},
-                    2: {CONF_ENABLED: True, CONF_PIN: "5678"},
+                    1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"},
+                    2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"},
                 },
             },
         )
@@ -978,8 +997,8 @@ async def test_options_flow_added_pair_with_existing_code_confirm(
             {
                 CONF_LOCKS: [LOCK_1_ENTITY_ID],
                 CONF_SLOTS: {
-                    1: {CONF_ENABLED: True, CONF_PIN: "1234"},
-                    2: {CONF_ENABLED: True, CONF_PIN: "5678"},
+                    1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"},
+                    2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"},
                 },
             },
         )
@@ -1014,7 +1033,9 @@ async def test_options_flow_added_lock_with_existing_code_confirm(
             flow_id,
             {
                 CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
-                CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}},
+                CONF_SLOTS: {
+                    1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}
+                },
             },
         )
 
@@ -1040,8 +1061,8 @@ async def test_options_flow_existing_codes_cancel_aborts(hass: HomeAssistant):
             {
                 CONF_LOCKS: [LOCK_1_ENTITY_ID],
                 CONF_SLOTS: {
-                    1: {CONF_ENABLED: True, CONF_PIN: "1234"},
-                    2: {CONF_ENABLED: True, CONF_PIN: "5678"},
+                    1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"},
+                    2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"},
                 },
             },
         )
@@ -1069,8 +1090,8 @@ async def test_options_flow_added_pair_empty_code_persists(hass: HomeAssistant):
             {
                 CONF_LOCKS: [LOCK_1_ENTITY_ID],
                 CONF_SLOTS: {
-                    1: {CONF_ENABLED: True, CONF_PIN: "1234"},
-                    2: {CONF_ENABLED: True, CONF_PIN: "5678"},
+                    1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"},
+                    2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"},
                 },
             },
         )
@@ -1151,7 +1172,11 @@ async def test_config_flow_yaml_rejects_slot_beyond_lock_capacity(
     with probe_registered, probe_capabilities:
         result = await hass.config_entries.flow.async_configure(
             flow_id,
-            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+            {
+                CONF_SLOTS: {
+                    50: {CONF_NAME: "User 50", CONF_ENABLED: True, CONF_PIN: "2222"}
+                }
+            },
         )
 
     assert result["type"] == "form"
@@ -1172,7 +1197,11 @@ async def test_config_flow_yaml_accepts_slot_within_capacity(
     with probe_registered, probe_capabilities:
         result = await hass.config_entries.flow.async_configure(
             flow_id,
-            {CONF_SLOTS: {30: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+            {
+                CONF_SLOTS: {
+                    30: {CONF_NAME: "User 30", CONF_ENABLED: True, CONF_PIN: "2222"}
+                }
+            },
         )
 
     assert result["type"] == "create_entry"
@@ -1219,7 +1248,11 @@ async def test_config_flow_capacity_check_skipped_when_lock_unreachable(
     with probe_registered, probe_capabilities:
         result = await hass.config_entries.flow.async_configure(
             flow_id,
-            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+            {
+                CONF_SLOTS: {
+                    50: {CONF_NAME: "User 50", CONF_ENABLED: True, CONF_PIN: "2222"}
+                }
+            },
         )
 
     assert result["type"] == "create_entry"
@@ -1237,7 +1270,11 @@ async def test_config_flow_capacity_check_skipped_when_capacity_unknown(
     with probe_registered, probe_capabilities:
         result = await hass.config_entries.flow.async_configure(
             flow_id,
-            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+            {
+                CONF_SLOTS: {
+                    50: {CONF_NAME: "User 50", CONF_ENABLED: True, CONF_PIN: "2222"}
+                }
+            },
         )
 
     assert result["type"] == "create_entry"
@@ -1270,7 +1307,11 @@ async def test_config_flow_capacity_check_skipped_when_lock_allocates_index(
     ):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
-            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+            {
+                CONF_SLOTS: {
+                    50: {CONF_NAME: "User 50", CONF_ENABLED: True, CONF_PIN: "2222"}
+                }
+            },
         )
 
     assert result["type"] == "create_entry"
@@ -1295,8 +1336,97 @@ async def test_config_flow_capacity_check_survives_unexpected_error(
     with probe_registered, probe_capabilities:
         result = await hass.config_entries.flow.async_configure(
             flow_id,
-            {CONF_SLOTS: {50: {CONF_ENABLED: True, CONF_PIN: "2222"}}},
+            {
+                CONF_SLOTS: {
+                    50: {CONF_NAME: "User 50", CONF_ENABLED: True, CONF_PIN: "2222"}
+                }
+            },
         )
 
     assert result["type"] == "create_entry"
     assert "provider blew up" in caplog.text
+
+
+async def test_config_flow_ui_rejects_name_with_separator(hass: HomeAssistant):
+    """A name containing the identifier separator is rejected up front."""
+    flow_id = await _start_ui_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "Ra|man", CONF_ENABLED: True, CONF_PIN: "1234"}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_NAME: "name_has_separator"}
+
+
+async def test_config_flow_ui_rejects_duplicate_name(hass: HomeAssistant):
+    """Two slots in one entry cannot share a name, ignoring case."""
+    flow_id = await _start_ui_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1234"}
+    )
+    assert result["type"] == "form"
+    assert not result["errors"]
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "  raman  ", CONF_ENABLED: True, CONF_PIN: "5678"}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_NAME: "name_not_unique"}
+
+
+@pytest.mark.parametrize(
+    ("slots", "expected_error"),
+    [
+        (
+            {
+                1: {CONF_NAME: "Ra|man", CONF_ENABLED: True, CONF_PIN: "1234"},
+            },
+            "name_has_separator",
+        ),
+        (
+            {
+                1: {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: " raman ", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+            "name_not_unique",
+        ),
+    ],
+)
+async def test_config_flow_yaml_enforces_name_rules(
+    hass: HomeAssistant, mock_lock_config_entry, slots, expected_error
+):
+    """The YAML path enforces the same name rules as the single-slot path.
+
+    Without this the migration's repair could be undone by the very next
+    submission, and the options flow -- the only way to edit slots after
+    setup -- goes through the same validator.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_SLOTS: slots}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": expected_error}
+
+
+async def test_config_flow_yaml_missing_name_says_so(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A slots block predating the name requirement names the actual problem.
+
+    Falling through to the generic invalid_config would send the user to the
+    logs for the one failure we can predict.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}}}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "name_required"}
