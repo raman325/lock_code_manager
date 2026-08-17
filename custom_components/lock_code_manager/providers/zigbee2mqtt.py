@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import json
@@ -17,10 +16,9 @@ from homeassistant.components.mqtt import (
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..const import DOMAIN
 from ..domain.credentials import (
     Credential,
     CredentialRef,
@@ -34,15 +32,8 @@ from ._base import BaseLock
 from ._util import parse_slot_num
 from .const import LOGGER
 
-# Default Zigbee2MQTT base topic, used as a fallback until (or unless) the
-# bridge-topic registry resolves a device's actual base topic.
+# Default Zigbee2MQTT base topic
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
-
-# Every Zigbee2MQTT bridge publishes a retained device list under its own
-# base topic; subscribing with a wildcard lets one Home Assistant instance
-# learn the base topic of every bridge it can see, however many there are.
-_BRIDGE_DEVICES_WILDCARD_TOPIC = "+/bridge/devices"
-_BRIDGE_REGISTRY_DATA_KEY = "z2m_bridge_registry"
 
 # Zigbee2MQTT action values for lock/unlock events triggered by PIN entry.
 # These come from the DoorLock cluster's OperatingEventNotification and
@@ -113,123 +104,12 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
     return SlotCredential.unreadable()
 
 
-@dataclass
-class _BridgeTopicRegistry:
-    """
-    Map Zigbee2MQTT IEEE addresses to their bridge's base topic.
-
-    A Home Assistant instance may have more than one Zigbee2MQTT bridge,
-    each publishing under its own base topic (e.g. ``zigbee2mqtt`` and
-    ``zigbee2mqtt_outbuilding``). Every bridge publishes a retained device
-    list under ``<base_topic>/bridge/devices``, so subscribing to the
-    wildcard ``+/bridge/devices`` and indexing each entry's
-    ``ieee_address`` lets every ``Zigbee2MQTTLock`` resolve its own
-    bridge's base topic instead of assuming the single default one.
-
-    Shared (one instance per Home Assistant instance, via
-    ``_get_bridge_registry``) and refcounted across every
-    ``Zigbee2MQTTLock`` so the wildcard subscription is set up once and
-    torn down only once the last lock releases it.
-    """
-
-    hass: HomeAssistant
-    _ieee_to_base_topic: dict[str, str] = field(default_factory=dict, init=False)
-    _listeners: dict[str, list[Callable[[], None]]] = field(
-        default_factory=dict, init=False
-    )
-    _unsub: Callable[[], None] | None = field(default=None, init=False)
-    _refcount: int = field(default=0, init=False)
-    # Multiple locks under one config entry acquire concurrently
-    # (asyncio.gather in _async_setup_new_locks); without this, two
-    # acquires could both observe ``_unsub is None`` before either
-    # finishes awaiting ``async_subscribe``, double-subscribing and
-    # leaking the first unsub callable.
-    _acquire_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
-
-    def _handle_message(self, msg: ReceiveMessage) -> None:
-        """Hand a bridge/devices message to the event loop (may run off it)."""
-        self.hass.add_job(self._process_message, msg.topic, msg.payload)
-
-    @callback
-    def _process_message(self, topic: str, payload: Any) -> None:
-        """Index a bridge/devices payload's IEEE addresses under its base topic."""
-        base_topic = topic.rsplit("/bridge/devices", 1)[0]
-        try:
-            devices = json.loads(payload)
-        except json.JSONDecodeError, TypeError:
-            return
-        if not isinstance(devices, list):
-            return
-
-        newly_resolved: list[Callable[[], None]] = []
-        for device in devices:
-            if not isinstance(device, dict):
-                continue
-            ieee_address = device.get("ieee_address")
-            if not isinstance(ieee_address, str):
-                continue
-            if self._ieee_to_base_topic.get(ieee_address) == base_topic:
-                continue
-            self._ieee_to_base_topic[ieee_address] = base_topic
-            newly_resolved.extend(self._listeners.pop(ieee_address, []))
-
-        for listener in newly_resolved:
-            listener()
-
-    async def async_acquire(self) -> None:
-        """Register interest in the registry, subscribing on first use."""
-        async with self._acquire_lock:
-            self._refcount += 1
-            if self._unsub is None:
-                self._unsub = await async_subscribe(
-                    self.hass, _BRIDGE_DEVICES_WILDCARD_TOPIC, self._handle_message
-                )
-
-    @callback
-    def async_release(self) -> None:
-        """Release interest in the registry, unsubscribing once nothing else needs it."""
-        self._refcount -= 1
-        if self._refcount <= 0 and self._unsub is not None:
-            self._unsub()
-            self._unsub = None
-            self._ieee_to_base_topic.clear()
-            self._listeners.clear()
-
-    def get_base_topic(self, ieee_address: str) -> str | None:
-        """Return the resolved base topic for an IEEE address, if known."""
-        return self._ieee_to_base_topic.get(ieee_address)
-
-    @callback
-    def async_add_resolved_listener(
-        self, ieee_address: str, listener: Callable[[], None]
-    ) -> None:
-        """
-        Call ``listener`` once ``ieee_address`` resolves to a base topic.
-
-        Fires immediately if already resolved.
-        """
-        if ieee_address in self._ieee_to_base_topic:
-            listener()
-            return
-        self._listeners.setdefault(ieee_address, []).append(listener)
-
-
-def _get_bridge_registry(hass: HomeAssistant) -> _BridgeTopicRegistry:
-    """Return the hass-wide bridge-topic registry, creating it on first use."""
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    registry = domain_data.get(_BRIDGE_REGISTRY_DATA_KEY)
-    if registry is None:
-        registry = domain_data[_BRIDGE_REGISTRY_DATA_KEY] = _BridgeTopicRegistry(hass)
-    return registry
-
-
 @dataclass(repr=False, eq=False)
 class Zigbee2MQTTLock(BaseLock):
     """Class to represent Zigbee2MQTT lock."""
 
+    _base_topic: str = field(init=False, default=DEFAULT_BASE_TOPIC)
     _friendly_name: str | None = field(init=False, default=None)
-    _registry: _BridgeTopicRegistry | None = field(init=False, default=None)
-    _registry_acquired: bool = field(init=False, default=False)
     _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
         init=False, default_factory=dict
     )
@@ -270,58 +150,8 @@ class Zigbee2MQTTLock(BaseLock):
         return timedelta(hours=1)
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """
-        Acquire the bridge-topic registry, then subscribe to the device topic.
-
-        The registry is acquired once per instance (guarded so repeat calls
-        on reconnect stay idempotent) and a resolved-topic listener is
-        registered for this device's IEEE address so a subscription made
-        before the owning bridge's retained ``bridge/devices`` message
-        arrives gets corrected once it does.
-        """
-        if not self._registry_acquired:
-            self._registry = _get_bridge_registry(self.hass)
-            await self._registry.async_acquire()
-            self._registry_acquired = True
-            if (ieee_address := self._get_ieee_address()) is not None:
-                self._registry.async_add_resolved_listener(
-                    ieee_address, self._async_resubscribe_on_topic_resolved
-                )
+        """Subscribe to the device topic before the coordinator runs its first poll."""
         await self._async_ensure_device_subscription()
-
-    async def async_unload(self, remove_permanently: bool) -> None:
-        """Tear down push subscriptions, then release the shared bridge registry."""
-        await super().async_unload(remove_permanently)
-        if self._registry_acquired and self._registry is not None:
-            self._registry.async_release()
-            self._registry_acquired = False
-
-    @callback
-    def _async_resubscribe_on_topic_resolved(self) -> None:
-        """
-        Re-subscribe to the device topic once its bridge's base topic is known.
-
-        Read/write topics (``_get_topic``) are resolved fresh on every call
-        and self-correct automatically as the registry learns more, but the
-        device-state subscription made in ``async_setup`` is cached at
-        subscribe time -- if it ran before this device's bridge published
-        its retained ``bridge/devices`` message, it stays pinned to the
-        wrong (default) topic until nudged.
-        """
-        self._clear_push_unsubs()
-        self.hass.async_create_task(
-            self._async_ensure_device_subscription(),
-            f"Re-subscribe Zigbee2MQTT device topic for {self.lock.entity_id}",
-        )
-
-    def _get_ieee_address(self) -> str | None:
-        """Return this device's Zigbee2MQTT IEEE address, or None if not a Z2M device."""
-        if not self.device_entry:
-            return None
-        for identifier in self.device_entry.identifiers:
-            if len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_"):
-                return str(identifier[1])[len("zigbee2mqtt_") :]
-        return None
 
     def _get_friendly_name(self) -> str | None:
         """
@@ -334,7 +164,13 @@ class Zigbee2MQTTLock(BaseLock):
             LOGGER.debug("No device entry for %s", self.lock.entity_id)
             return None
 
-        if self._get_ieee_address() is None:
+        # Check if this is a Zigbee2MQTT device by identifiers
+        is_z2m = any(
+            len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_")
+            for identifier in self.device_entry.identifiers
+        )
+
+        if not is_z2m:
             LOGGER.debug("Device %s is not a Zigbee2MQTT device", self.lock.entity_id)
             return None
 
@@ -348,38 +184,23 @@ class Zigbee2MQTTLock(BaseLock):
             )
         return name
 
-    def _get_base_topic(self) -> str:
-        """
-        Return the Zigbee2MQTT base topic for this device's bridge.
-
-        Resolved fresh on every call from the shared bridge-topic registry
-        so a mapping learned after this lock was set up is picked up
-        immediately, without needing a cache invalidation path. Falls back
-        to ``DEFAULT_BASE_TOPIC`` when unresolved (e.g. registry not yet
-        acquired, or this bridge hasn't published ``bridge/devices`` yet) --
-        the same behavior as before multi-bridge support existed.
-        """
-        ieee_address = self._get_ieee_address()
-        if ieee_address is not None and self._registry is not None:
-            if (base_topic := self._registry.get_base_topic(ieee_address)) is not None:
-                return base_topic
-        return DEFAULT_BASE_TOPIC
-
     def _get_topic(self, suffix: str = "") -> str | None:
         """Get the MQTT topic for this device."""
         friendly_name = self._get_friendly_name()
         if not friendly_name:
             return None
-        base_topic = self._get_base_topic()
         if suffix:
-            return f"{base_topic}/{friendly_name}/{suffix}"
-        return f"{base_topic}/{friendly_name}"
+            return f"{self._base_topic}/{friendly_name}/{suffix}"
+        return f"{self._base_topic}/{friendly_name}"
 
     def _maybe_raise_wrong_bridge_disconnect(self) -> None:
         """Raise when MQTT works but this entity cannot map to a Zigbee2MQTT topic."""
         if self.device_entry is None:
             return
-        if self._get_ieee_address() is not None:
+        if any(
+            len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_")
+            for identifier in self.device_entry.identifiers
+        ):
             return
         raise LockDisconnected(
             "This entity is not a Zigbee2MQTT lock (device registry lacks a "
