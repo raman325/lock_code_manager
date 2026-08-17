@@ -87,7 +87,10 @@ from .domain.config import (
     parse_user_device_identifier,
 )
 from .domain.exceptions import LockDisconnected, LockOperationFailed
-from .domain.identifier_migration import async_migrate_identifiers_to_names
+from .domain.identifier_migration import (
+    async_migrate_identifiers_to_names,
+    async_rename_identifiers,
+)
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
@@ -1083,6 +1086,12 @@ async def async_update_listener(
     # entity-creation pass for those cases, but downstream readers via
     # runtime_data.config still need to see the current data.
     runtime_data = config_entry.runtime_data
+    # Captured before the refresh below overwrites it. This is the only
+    # source of the pre-update config that works for BOTH write paths: the
+    # options flow puts the new config in options, while the name text entity
+    # writes straight to data with empty options, leaving no "old" side in
+    # the entry itself.
+    previous_config = runtime_data.config
     runtime_data.config = EntryConfig.from_entry(config_entry)
 
     # Notify per-slot coordinators so derived "active" state and condition-
@@ -1092,6 +1101,27 @@ async def async_update_listener(
     # same way.
     for coordinator in runtime_data.slot_coordinators.values():
         coordinator.notify_config_changed()
+
+    # Renames are handled BEFORE the empty-options early return, because the
+    # name text entity writes to data with empty options -- so gating them on
+    # options would cover the config flow and silently skip the entity, which
+    # is the path most renames take.
+    if renames := (previous_config - runtime_data.config).names_changed:
+        for slot_num, (old_name, new_name) in renames.items():
+            _LOGGER.debug(
+                "%s (%s): slot %s renamed %s -> %s; moving registry identifiers",
+                config_entry.entry_id,
+                config_entry.title,
+                slot_num,
+                old_name,
+                new_name,
+            )
+            async_rename_identifiers(hass, config_entry.entry_id, old_name, new_name)
+        # No reload needed. Entities keep working because a rename leaves
+        # their entity IDs alone, and SlotSyncManager resolves unique IDs
+        # from the current name on every tick rather than caching them at
+        # construction.
+        return
 
     # No need to do entity creation/removal work if there are no options
     # because that only happens at the end of this function (data + empty

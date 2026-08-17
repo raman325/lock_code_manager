@@ -1,14 +1,18 @@
 """
-Property-based tests for the slot identifier codecs.
+Property-based tests for the user identifier codecs.
 
 The sibling tag codec in ``providers/_util.py`` has had round-trip properties
-since the property suite was created; these codecs did not, and the asymmetry
-cost a real bug. ``parse_slot_device_identifier`` gated on ``str.isdigit()``,
-which rejects the negative slot the builder will happily encode, so such a
-device parsed to ``None`` and became invisible to both the orphan sweep and
-the removal hook (issue #1399). A round-trip property finds it in well under a
-second; the example-based tests that shipped alongside the builder did not,
-because nobody thinks to write down slot ``-1`` by hand.
+since the property suite was created; the slot codecs these replaced did not,
+and the asymmetry cost a real bug -- ``parse_slot_device_identifier`` gated on
+``str.isdigit()``, which rejects the negative slot the builder would happily
+encode, so such a device became invisible to both the orphan sweep and the
+removal hook (issue #1399).
+
+Keying on the **name** widens the input space enormously: a slot number was a
+bounded integer, a name is an arbitrary user-supplied string. The single thing
+holding the codec together is that ``|`` is rejected at every write path, and
+that is exactly the kind of invariant an example-based test states and a
+property test actually exercises.
 """
 
 from __future__ import annotations
@@ -16,98 +20,106 @@ from __future__ import annotations
 from hypothesis import given, strategies as st
 
 from custom_components.lock_code_manager.domain.config import (
-    build_slot_device_identifier,
-    build_slot_unique_id,
-    parse_slot_device_identifier,
+    build_user_device_identifier,
+    build_user_unique_id,
+    parse_user_device_identifier,
 )
+from custom_components.lock_code_manager.domain.names import NAME_SEPARATOR
 
 # Home Assistant generates entry ids as fixed-length lowercase alphanumerics.
-# Fixed length matters to the codec: it is what makes one entry id incapable
-# of being a prefix of another.
 ENTRY_IDS = st.text(
-    alphabet="0123456789abcdefghijklmnopqrstuvwxyz", min_size=26, max_size=26
+    alphabet=st.characters(whitelist_categories=("Ll", "Nd")), min_size=26, max_size=26
 )
 
-# Deliberately unbounded, including negative and zero. The slots YAML schema
-# puts no lower bound on the key, so the codec must survive whatever a user
-# can configure -- constraining this strategy to "sensible" slots would
-# reproduce exactly the blind spot that let the bug through.
-SLOT_NUMS = st.integers()
+# Every name the write paths can actually produce: non-empty, separator-free.
+# Whitespace-only names are excluded because ``normalize_name`` rejects them
+# before storage, so no identifier is ever built from one.
+NAMES = st.text(min_size=1, max_size=40).filter(
+    lambda name: NAME_SEPARATOR not in name and name.strip()
+)
 
-KEYS = st.text(min_size=1, max_size=20).filter(lambda s: "|" not in s)
+KEYS = st.sampled_from(["pin", "name", "enabled", "active", "code", "in_sync"])
+LOCK_ENTITY_IDS = st.sampled_from(["lock.front_door", "lock.back_door", "lock.a"])
 
 
-@given(entry_id=ENTRY_IDS, slot=SLOT_NUMS)
-def test_device_identifier_round_trips(entry_id: str, slot: int) -> None:
-    """Anything the builder encodes, the parser recovers unchanged."""
-    identifier = build_slot_device_identifier(entry_id, slot)
-    assert parse_slot_device_identifier(entry_id, identifier) == slot
+@given(entry_id=ENTRY_IDS, name=NAMES)
+def test_device_identifier_round_trips(entry_id: str, name: str) -> None:
+    """Any storable name survives a build/parse round trip unchanged."""
+    identifier = build_user_device_identifier(entry_id, name)
+    assert parse_user_device_identifier(entry_id, identifier) == name
+
+
+@given(entry_id=ENTRY_IDS, other_entry_id=ENTRY_IDS, name=NAMES)
+def test_device_identifier_rejects_a_foreign_entry(
+    entry_id: str, other_entry_id: str, name: str
+) -> None:
+    """An identifier belonging to another entry never parses as this one's.
+
+    This is what keeps one entry's registry sweep from deleting another
+    entry's devices.
+    """
+    identifier = build_user_device_identifier(other_entry_id, name)
+    if other_entry_id != entry_id:
+        assert parse_user_device_identifier(entry_id, identifier) is None
 
 
 @given(entry_id=ENTRY_IDS)
-def test_entry_device_is_not_a_slot_device(entry_id: str) -> None:
+def test_bare_entry_id_is_not_a_user_device(entry_id: str) -> None:
+    """The entry's own device must not look like a user's.
+
+    It has to outlive every user -- it is what their devices hang off of.
     """
-    The entry's own device carries a bare entry id and must not parse.
+    assert parse_user_device_identifier(entry_id, entry_id) is None
 
-    The removal hook distinguishes the two by exactly this: a ``None`` here
-    means "the hub device", which must outlive every slot hanging off it.
+
+@given(entry_id=ENTRY_IDS, name=NAMES, key=KEYS)
+def test_unique_id_recovers_its_parts(entry_id: str, name: str, key: str) -> None:
+    """The migration recovers name and key by splitting; that must be exact.
+
+    ``_rewritten_unique_id`` and the rename path both split on the
+    separator, so an identifier whose parts do not come back out in order
+    would be rewritten into the wrong shape.
     """
-    assert parse_slot_device_identifier(entry_id, entry_id) is None
+    unique_id = build_user_unique_id(entry_id, name, key)
+    parts = unique_id.split(NAME_SEPARATOR)
+
+    assert parts == [entry_id, name, key]
 
 
-@given(entry_id=ENTRY_IDS, other_id=ENTRY_IDS, slot=SLOT_NUMS)
-def test_other_entrys_device_never_parses(
-    entry_id: str, other_id: str, slot: int
+@given(entry_id=ENTRY_IDS, name=NAMES, key=KEYS, lock=LOCK_ENTITY_IDS)
+def test_per_lock_unique_id_recovers_its_parts(
+    entry_id: str, name: str, key: str, lock: str
 ) -> None:
-    """A device belonging to a different entry is never claimed as ours."""
-    if entry_id == other_id:
-        return
-    foreign = build_slot_device_identifier(other_id, slot)
-    assert parse_slot_device_identifier(entry_id, foreign) is None
+    """The per-lock variant keeps the lock in its own trailing segment."""
+    unique_id = build_user_unique_id(entry_id, name, key, lock)
+
+    assert unique_id.split(NAME_SEPARATOR) == [entry_id, name, key, lock]
 
 
-@given(entry_id=ENTRY_IDS, identifier=st.text(max_size=60))
-def test_parse_is_total(entry_id: str, identifier: str) -> None:
+@given(entry_id=ENTRY_IDS, name=NAMES, key=KEYS, lock=LOCK_ENTITY_IDS)
+def test_unique_id_variants_never_collide(
+    entry_id: str, name: str, key: str, lock: str
+) -> None:
+    """The standard and per-lock forms are always distinguishable.
+
+    If they could collide, a per-lock entity and its entry-level sibling
+    would fight over one registry row.
     """
-    The parser never raises, whatever it is handed.
+    assert build_user_unique_id(entry_id, name, key) != build_user_unique_id(
+        entry_id, name, key, lock
+    )
 
-    It runs over every device already in the registry, including ones written
-    by older versions and by other integrations, so a crash here would take
-    out setup for the whole entry.
+
+@given(entry_id=ENTRY_IDS, name_a=NAMES, name_b=NAMES, key=KEYS)
+def test_distinct_names_give_distinct_unique_ids(
+    entry_id: str, name_a: str, name_b: str, key: str
+) -> None:
+    """Two users can never share a registry row.
+
+    Name uniqueness is enforced case-insensitively at the write paths, but
+    the codec itself must not merge two names that differ at all.
     """
-    result = parse_slot_device_identifier(entry_id, identifier)
-    assert result is None or isinstance(result, int)
-
-
-@given(entry_id=ENTRY_IDS, slot=SLOT_NUMS)
-def test_parse_accepts_only_the_builders_own_spelling(entry_id: str, slot: int) -> None:
-    """
-    Int-parseable spellings the builder never emits are rejected.
-
-    ``int()`` happily accepts ``+1``, ``1_0``, ``01`` and surrounding
-    whitespace. Admitting those would map several distinct identifiers onto
-    one slot, so two registry devices could both claim to be slot 1.
-    """
-    canonical = build_slot_device_identifier(entry_id, slot)
-    for alias in (f"+{slot}", f"0{slot}", f" {slot}", f"{slot} "):
-        candidate = f"{entry_id}|{alias}"
-        if candidate == canonical:
-            continue
-        assert parse_slot_device_identifier(entry_id, candidate) is None
-
-
-@given(entry_id=ENTRY_IDS, slot=SLOT_NUMS, key=KEYS)
-def test_slot_unique_id_is_injective(entry_id: str, slot: int, key: str) -> None:
-    """
-    Distinct (slot, key) pairs never collide into one unique id.
-
-    A collision would make two entities fight over one registry row. The
-    per-lock variant must also stay distinct from the standard one, which is
-    what the trailing lock entity id buys.
-    """
-    standard = build_slot_unique_id(entry_id, slot, key)
-    assert standard == f"{entry_id}|{slot}|{key}"
-
-    per_lock = build_slot_unique_id(entry_id, slot, key, "lock.front_door")
-    assert per_lock == f"{standard}|lock.front_door"
-    assert per_lock != standard
+    if name_a != name_b:
+        assert build_user_unique_id(entry_id, name_a, key) != build_user_unique_id(
+            entry_id, name_b, key
+        )

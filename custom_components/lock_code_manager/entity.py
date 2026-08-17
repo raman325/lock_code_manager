@@ -60,8 +60,10 @@ class BaseLockCodeManagerEntity(Entity):
         self.slot_num = slot_num
         self.key = key
         # Identifiers key on the user's name, so resolve it once here rather
-        # than at each builder call. Frozen for this entity's lifetime: a
-        # rename tears the entity down and rebuilds it.
+        # than at each builder call. This is NOT refreshed on rename -- a
+        # rename does not rebuild entities -- but it does not need to be:
+        # the registry row is what identifier lookups consult, and the
+        # rename moves that. A restart reconstructs this from the new name.
         self.user_name = slot_name(config_entry, slot_num)
         self.ent_reg = ent_reg
 

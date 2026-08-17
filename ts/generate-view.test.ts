@@ -28,48 +28,85 @@ import {
 } from './types';
 
 describe('createLockCodeManagerEntity', () => {
+    // Segment 1 of the unique id holds the user NAME. It used to hold the
+    // slot number, and these fixtures used to say so -- which is why the
+    // suite stayed green while the strategy rendered every section empty.
+    const slotNumForName = new Map([
+        ['Raman', 1],
+        ['Alice', 42]
+    ]);
+
     it('parses unique_id correctly', () => {
         const entity: EntityRegistryEntry = {
-            entity_id: 'switch.test_slot_1_enabled',
-            unique_id: 'config123|1|enabled',
+            entity_id: 'switch.test_raman_enabled',
+            unique_id: 'config123|Raman|enabled',
             name: 'Test',
             original_name: 'Original'
         } as EntityRegistryEntry;
 
-        const result = createLockCodeManagerEntity(entity);
+        const result = createLockCodeManagerEntity(entity, slotNumForName);
 
         expect(result.slotNum).toBe(1);
+        expect(result.userName).toBe('Raman');
         expect(result.key).toBe('enabled');
         expect(result.lockEntityId).toBeUndefined();
-        expect(result.entity_id).toBe('switch.test_slot_1_enabled');
+        expect(result.entity_id).toBe('switch.test_raman_enabled');
     });
 
     it('parses unique_id with lock entity_id', () => {
         const entity: EntityRegistryEntry = {
-            entity_id: 'sensor.test_slot_1_code',
-            unique_id: 'config123|1|code_slot|lock.front_door',
+            entity_id: 'sensor.test_raman_code',
+            unique_id: 'config123|Raman|code_slot|lock.front_door',
             name: null,
-            original_name: 'Code Slot 1'
+            original_name: 'Raman Code Slot'
         } as EntityRegistryEntry;
 
-        const result = createLockCodeManagerEntity(entity);
+        const result = createLockCodeManagerEntity(entity, slotNumForName);
 
         expect(result.slotNum).toBe(1);
         expect(result.key).toBe('code_slot');
         expect(result.lockEntityId).toBe('lock.front_door');
     });
 
-    it('handles multi-digit slot numbers', () => {
+    it('resolves the slot number from the name map, not the segment', () => {
         const entity: EntityRegistryEntry = {
-            entity_id: 'switch.test_slot_42_enabled',
-            unique_id: 'config123|42|enabled',
-            name: 'Slot 42',
+            entity_id: 'switch.test_alice_enabled',
+            unique_id: 'config123|Alice|enabled',
+            name: 'Alice',
             original_name: null
         } as EntityRegistryEntry;
 
-        const result = createLockCodeManagerEntity(entity);
+        const result = createLockCodeManagerEntity(entity, slotNumForName);
 
         expect(result.slotNum).toBe(42);
+    });
+
+    it('handles a name containing spaces', () => {
+        const entity: EntityRegistryEntry = {
+            entity_id: 'switch.test_raman_smith_enabled',
+            unique_id: 'config123|Raman Smith|enabled',
+            name: null,
+            original_name: null
+        } as EntityRegistryEntry;
+
+        const result = createLockCodeManagerEntity(entity, new Map([['Raman Smith', 7]]));
+
+        expect(result.slotNum).toBe(7);
+        expect(result.userName).toBe('Raman Smith');
+        expect(result.key).toBe('enabled');
+    });
+
+    it('yields NaN for a name the entry does not configure', () => {
+        const entity: EntityRegistryEntry = {
+            entity_id: 'switch.test_ghost_enabled',
+            unique_id: 'config123|Ghost|enabled',
+            name: null,
+            original_name: null
+        } as EntityRegistryEntry;
+
+        const result = createLockCodeManagerEntity(entity, slotNumForName);
+
+        expect(result.slotNum).toBeNaN();
     });
 });
 

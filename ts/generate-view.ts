@@ -137,17 +137,40 @@ export function compareAndSortEntities(
     return 1;
 }
 
+/** Escape a user-supplied string for safe use inside a RegExp. */
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /** @internal - exported for testing via generate-view.internal.ts */
 export function createLockCodeManagerEntity(
-    entity: EntityRegistryEntry
+    entity: EntityRegistryEntry,
+    slotNumForName?: Map<string, number>
 ): LockCodeManagerEntityEntry {
     const split = entity.unique_id.split('|');
+    const [, userName] = split;
     return {
         ...entity,
         key: split[2],
         lockEntityId: split[3],
-        slotNum: parseInt(split[1], 10)
+        // Segment 1 holds the user NAME, not the slot number. It used to hold
+        // the number, and reading it as one now yields NaN -- which silently
+        // matches no slot and renders every section empty. The slot number is
+        // recovered from the entry's slot map instead.
+        slotNum: slotNumForName ? (slotNumForName.get(userName) ?? NaN) : NaN,
+        userName
     };
+}
+
+/** Build the name -> slot number lookup the unique id no longer encodes. */
+export function buildSlotNumForName(configEntryData: {
+    slots: { [key: number]: string | null };
+}): Map<string, number> {
+    return new Map(
+        Object.entries(configEntryData.slots)
+            .filter(([, name]) => name != null)
+            .map(([slotNum, name]) => [name as string, parseInt(slotNum, 10)])
+    );
 }
 
 /** @internal - exported for testing via generate-view.internal.ts */
@@ -179,7 +202,13 @@ export function getEntityDisplayName(
 ): string {
     const baseName = entity.name ?? entity.original_name ?? '';
     const configTitle = configEntry.title ?? '';
-    let name = baseName.replace(new RegExp(`^Code slot ${entity.slotNum}\\s*`, 'i'), '').trim();
+    // The device is named after the user now, so that is the prefix Home
+    // Assistant prepends and the one to strip. The legacy "Code slot N" form
+    // is still stripped for installs whose entities predate the rename.
+    let name = baseName
+        .replace(new RegExp(`^${escapeRegExp(entity.userName ?? '')}\\s*`, 'i'), '')
+        .replace(new RegExp(`^Code slot ${entity.slotNum}\\s*`, 'i'), '')
+        .trim();
     if (configTitle && name.toLowerCase().startsWith(configTitle.toLowerCase())) {
         name = name.slice(configTitle.length).trim();
     }

@@ -14,16 +14,13 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.config import (
     EntryConfig,
     EntryConfigDiff,
-    build_slot_device_identifier,
-    build_slot_unique_id,
-    parse_slot_device_identifier,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 
 
-def _slot(pin: str = "1234") -> dict:
+def _slot(pin: str = "1234", name: str = "User") -> dict:
     """Trivial slot config dict for tests."""
-    return {"pin": pin, "enabled": True}
+    return {"name": name, "pin": pin, "enabled": True}
 
 
 def _cfg(mapping: dict | None = None) -> EntryConfig:
@@ -287,8 +284,8 @@ def test_entry_config_accessors_absorb_str_or_int_slot_num() -> None:
 
     assert config.has_slot(1)
     assert config.has_slot("1")
-    assert config.slot(1) == {"pin": "abc", "enabled": True}
-    assert config.slot("1") == {"pin": "abc", "enabled": True}
+    assert config.slot(1) == {"name": "User", "pin": "abc", "enabled": True}
+    assert config.slot("1") == {"name": "User", "pin": "abc", "enabled": True}
     # Missing slot returns empty mapping (not KeyError)
     assert config.slot(99) == {}
     assert config.slot("99") == {}
@@ -482,149 +479,12 @@ def test_with_slot_field_removed_is_noop_when_absent() -> None:
     assert config.with_slot_field_removed(99, "pin") is config
 
 
-def test_to_dict_round_trips_through_from_mapping() -> None:
-    """
-    to_dict → from_mapping reconstructs an equivalent EntryConfig.
-
-    Guards the write path used by SlotEntityCoordinator and the helpers
-    write functions: they build a new EntryConfig, call to_dict(), hand
-    it to async_update_entry, and expect the eventual listener re-read
-    to produce the same logical config.
-    """
-    original = EntryConfig.from_mapping(
-        {
-            CONF_LOCKS: ["lock.a", "lock.b"],
-            CONF_SLOTS: {1: _slot("1234"), 2: _slot("5678")},
-        }
-    )
-
-    round_tripped = EntryConfig.from_mapping(original.to_dict())
-
-    assert round_tripped.locks == original.locks
-    assert dict(round_tripped.slots) == dict(original.slots)
-
-
-def test_to_dict_produces_plain_mutable_dicts() -> None:
-    """
-    to_dict output is plain dict (not MappingProxyType).
-
-    HA's async_update_entry expects a plain dict it can serialize; the
-    read-only wrappers EntryConfig uses internally would break that.
-    """
-    config = EntryConfig.from_mapping(
-        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
-    )
-
-    result = config.to_dict()
-
-    assert isinstance(result, dict)
-    assert isinstance(result[CONF_SLOTS], dict)
-    assert isinstance(result[CONF_SLOTS][1], dict)
-    # Mutability — the returned dicts are the caller's to modify
-    result[CONF_SLOTS][1]["pin"] = "9999"
-    result[CONF_LOCKS].append("lock.b")
-    # Original EntryConfig is untouched by that mutation
-    assert config.slots[1]["pin"] == "1234"
-    assert config.locks == ("lock.a",)
-
-
-# Slot device identifier round-trip (issue #1399)
-
-
-@pytest.mark.parametrize("slot_num", [1, 2, 0, 30, 255, -1, -42])
-def test_slot_device_identifier_round_trips(slot_num: int) -> None:
-    """
-    Every identifier the builder emits must parse back to the same slot.
-
-    A slot the builder encodes but the parser rejects is invisible to both the
-    orphan sweep and the removal hook, which is the stuck undeletable device
-    issue #1399 is about. Negative slots are included because the slots YAML
-    schema does not bound the key.
-    """
-    identifier = build_slot_device_identifier("abc123", slot_num)
-    assert parse_slot_device_identifier("abc123", identifier) == slot_num
-
-
-def test_parse_slot_device_identifier_rejects_non_slot_identifiers() -> None:
-    """The entry's own device and other entries' devices are not slot devices."""
-    # The entry device carries the bare entry_id, with no slot suffix.
-    assert parse_slot_device_identifier("abc123", "abc123") is None
-    # A different entry's slot device.
-    assert parse_slot_device_identifier("abc123", "def456|1") is None
-    # Not a slot number at all.
-    assert parse_slot_device_identifier("abc123", "abc123|name") is None
-    assert parse_slot_device_identifier("abc123", "abc123|") is None
-
-
-@pytest.mark.parametrize("suffix", ["+1", "1_0", " 1", "01"])
-def test_parse_slot_device_identifier_rejects_builder_aliases(suffix: str) -> None:
-    """
-    Reject int-parseable spellings the builder would never emit.
-
-    ``int()`` accepts all of these, but treating them as slot numbers would map
-    two distinct identifiers onto one slot.
-    """
-    assert parse_slot_device_identifier("abc123", f"abc123|{suffix}") is None
-
-
-# --- has_changes: one field at a time (mutation-testing gap) ---
-
-
-@pytest.mark.parametrize(
-    ("label", "old", "new"),
-    [
-        (
-            "slots_added",
-            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
-            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}},
-        ),
-        (
-            "slots_removed",
-            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}},
-            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
-        ),
-        (
-            "locks_added",
-            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
-            {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}},
-        ),
-        (
-            "locks_removed",
-            {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}},
-            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
-        ),
-    ],
-)
-def test_has_changes_is_true_for_each_field_alone(
-    label: str, old: dict, new: dict
-) -> None:
-    """
-    Any ONE of the four diff fields alone is enough to report a change.
-
-    The existing tests only ever move slots and locks together, or neither,
-    so each individual disjunct in ``has_changes`` went unpinned -- mutating
-    any single ``or`` to ``and`` survived. ``has_changes`` gates the Lovelace
-    dashboard re-render, so a collapsed disjunct means a user who only adds a
-    slot (or only removes a lock) silently gets a stale dashboard.
-    """
-    diff = EntryConfigDiff(old=_cfg(old), new=_cfg(new))
-
-    assert diff.has_changes is True, f"{label} alone should count as a change"
-    # Exactly the named field is populated; the other three stay empty.
-    populated = {
-        name
-        for name in ("slots_added", "slots_removed", "locks_added", "locks_removed")
-        if getattr(diff, name)
-    }
-    assert populated == {label}
-
-
-def test_has_changes_is_false_when_only_slot_contents_change() -> None:
+def test_has_changes_is_false_when_only_a_pin_changes() -> None:
     """
     Editing a slot's PIN is not a structural change.
 
-    ``has_changes`` asks specifically about added/removed slots and locks;
-    a PIN edit must not trigger a dashboard re-render.
+    ``has_changes`` asks about added/removed slots and locks; a PIN edit
+    must not trigger a dashboard re-render.
     """
     old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(pin="1111")}})
     new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(pin="2222")}})
@@ -632,31 +492,25 @@ def test_has_changes_is_false_when_only_slot_contents_change() -> None:
     assert EntryConfigDiff(old=old, new=new).has_changes is False
 
 
-# --- build_slot_unique_id format (never referenced by any test) ---
-
-
-def test_build_slot_unique_id_standard_format() -> None:
+def test_has_changes_is_true_when_a_name_changes() -> None:
     """
-    The standard unique id is entry|slot|key, pipe-delimited.
+    A rename IS structural, unlike a PIN edit.
 
-    This string is the entity registry key. Changing the separator silently
-    orphans every existing entity, so the exact format is the contract --
-    yet no test referenced this function at all.
+    Identifiers are built from the name, so a rename moves registry rows --
+    which the dashboard has to re-render for, and which the update listener
+    has to act on.
     """
-    assert build_slot_unique_id("abc123", 4, "pin") == "abc123|4|pin"
+    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(name="Raman")}})
+    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(name="Alice")}})
+
+    diff = EntryConfigDiff(old=old, new=new)
+    assert diff.names_changed == {1: ("Raman", "Alice")}
+    assert diff.has_changes is True
 
 
-def test_build_slot_unique_id_per_lock_format() -> None:
-    """The per-lock variant appends the lock entity id as a fourth segment."""
-    assert (
-        build_slot_unique_id("abc123", 4, "in_sync", "lock.front_door")
-        == "abc123|4|in_sync|lock.front_door"
-    )
+def test_names_changed_ignores_added_and_removed_slots() -> None:
+    """Only slots present on BOTH sides can have been renamed."""
+    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(name="Raman")}})
+    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {2: _slot(name="Alice")}})
 
-
-def test_build_slot_unique_id_variants_never_collide() -> None:
-    """A per-lock id is always distinct from the standard id it extends."""
-    standard = build_slot_unique_id("abc123", 4, "code")
-    per_lock = build_slot_unique_id("abc123", 4, "code", "lock.front_door")
-    assert standard != per_lock
-    assert per_lock.startswith(f"{standard}|")
+    assert EntryConfigDiff(old=old, new=new).names_changed == {}

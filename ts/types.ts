@@ -20,6 +20,8 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
     key: string;
     lockEntityId?: string;
     slotNum: number;
+    /** The user name segment of the unique id, which identifiers key on. */
+    userName: string;
 }
 
 export interface LockCodeManagerStrategyConfig {

@@ -193,29 +193,7 @@ class SlotSyncManager:
             f"{address.credential_type.value}"
         )
 
-        # Unique ID components for entity discovery
-        entry_id = config_entry.entry_id
-        lock_entity_id = lock.lock.entity_id
-        user_name = slot_name(config_entry, slot_num)
         self._value_key = value_entity_key(address.credential_type)
-        self._unique_ids: dict[str, tuple[str, str]] = {
-            self._value_key: (
-                TEXT_DOMAIN,
-                build_user_unique_id(entry_id, user_name, self._value_key),
-            ),
-            CONF_NAME: (
-                TEXT_DOMAIN,
-                build_user_unique_id(entry_id, user_name, CONF_NAME),
-            ),
-            ATTR_ACTIVE: (
-                BINARY_SENSOR_DOMAIN,
-                build_user_unique_id(entry_id, user_name, ATTR_ACTIVE),
-            ),
-            ATTR_CODE: (
-                SENSOR_DOMAIN,
-                build_user_unique_id(entry_id, user_name, ATTR_CODE, lock_entity_id),
-            ),
-        }
 
         # Sync state machine — single source of truth replacing _dirty,
         # _in_sync, and _tick_in_sync.
@@ -350,10 +328,45 @@ class SlotSyncManager:
         state = self._hass.states.get(entity_id)
         return state.state if state else None
 
+    def _unique_ids_for_current_name(self) -> dict[str, tuple[str, str]]:
+        """
+        Build this slot's unique IDs from the name it has *right now*.
+
+        Resolved lazily rather than frozen at construction, because a rename
+        moves the registry rows to the new name. Any entity still unresolved
+        when that happens -- most likely during startup -- would otherwise be
+        looked up forever under a name nothing carries any more, and the slot
+        would silently stop converging until the entry reloaded.
+
+        Already-resolved entries are unaffected either way: the cache holds
+        entity IDs, and a rename deliberately leaves those alone.
+        """
+        entry_id = self._config_entry.entry_id
+        lock_entity_id = self._lock.lock.entity_id
+        user_name = slot_name(self._config_entry, self._slot_num)
+        return {
+            self._value_key: (
+                TEXT_DOMAIN,
+                build_user_unique_id(entry_id, user_name, self._value_key),
+            ),
+            CONF_NAME: (
+                TEXT_DOMAIN,
+                build_user_unique_id(entry_id, user_name, CONF_NAME),
+            ),
+            ATTR_ACTIVE: (
+                BINARY_SENSOR_DOMAIN,
+                build_user_unique_id(entry_id, user_name, ATTR_ACTIVE),
+            ),
+            ATTR_CODE: (
+                SENSOR_DOMAIN,
+                build_user_unique_id(entry_id, user_name, ATTR_CODE, lock_entity_id),
+            ),
+        }
+
     def _build_entity_id_map(self) -> bool:
         """Build and cache entity IDs for this slot from the entity registry."""
         missing = False
-        for key, (domain, unique_id) in self._unique_ids.items():
+        for key, (domain, unique_id) in self._unique_ids_for_current_name().items():
             if key in self._entity_id_map:
                 continue
             ent_id = self._ent_reg.async_get_entity_id(domain, DOMAIN, unique_id)

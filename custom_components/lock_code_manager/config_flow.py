@@ -209,6 +209,15 @@ async def _async_validate_slots_yaml(
         slot_num, error = problem
         return None, {"base": error}, {"slot_num": slot_num}
 
+    # Store the normalized name. Identifiers are built from the normalized
+    # form, so storing a padded one makes every comparison against the raw
+    # config value miss -- and a device whose name does not match anything
+    # configured is pruned on the next setup, taking its entities with it.
+    parsed_slots = {
+        slot_num: {**slot, CONF_NAME: normalize_name(slot.get(CONF_NAME))}
+        for slot_num, slot in parsed_slots.items()
+    }
+
     errors, placeholders = _check_common_slots(hass, locks, parsed_slots, config_entry)
     if not errors:
         errors, placeholders = await _async_check_slot_capacity(

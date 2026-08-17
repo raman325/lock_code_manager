@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_NAME
 
 from ..const import CONF_LOCKS, CONF_SLOTS
 
@@ -228,6 +229,7 @@ class EntryConfigDiff:
     locks_removed: tuple[str, ...] = field(init=False)
     pairs_added: frozenset[tuple[str, int]] = field(init=False)
     pairs_removed: frozenset[tuple[str, int]] = field(init=False)
+    names_changed: Mapping[int, tuple[str, str]] = field(init=False)
 
     def __post_init__(self) -> None:
         """Compute and freeze the diff fields."""
@@ -279,6 +281,24 @@ class EntryConfigDiff:
             "locks_removed",
             tuple(lock for lock in self.old.locks if lock not in new_lock_set),
         )
+        # Renames, as {slot: (old_name, new_name)}. A rename has to be a
+        # first-class part of the diff because BOTH write paths land here --
+        # the name text entity and the options flow, which rewrites the whole
+        # slots block and so is invisible to any per-field hook.
+        set_field(
+            self,
+            "names_changed",
+            MappingProxyType(
+                {
+                    slot_num: (old_name, new_name)
+                    for slot_num, old_slot in old_slots.items()
+                    if slot_num in new_slots
+                    and (old_name := old_slot.get(CONF_NAME))
+                    and (new_name := new_slots[slot_num].get(CONF_NAME))
+                    and old_name != new_name
+                }
+            ),
+        )
         set_field(self, "pairs_added", frozenset(new_pairs - old_pairs))
         set_field(self, "pairs_removed", frozenset(old_pairs - new_pairs))
 
@@ -290,6 +310,7 @@ class EntryConfigDiff:
             or self.slots_removed
             or self.locks_added
             or self.locks_removed
+            or self.names_changed
         )
 
 
@@ -315,27 +336,6 @@ def build_user_unique_id(
     return uid
 
 
-def build_slot_unique_id(
-    entry_id: str,
-    slot_num: int,
-    key: str,
-    lock_entity_id: str | None = None,
-) -> str:
-    """
-    Build the pre-migration unique ID for a slot entity.
-
-    Retained only so the migration can find the entries it needs to rewrite.
-    Nothing constructs new identifiers with it.
-
-    Standard: {entry_id}|{slot_num}|{key}
-    Per-lock:  {entry_id}|{slot_num}|{key}|{lock_entity_id}
-    """
-    uid = f"{entry_id}|{slot_num}|{key}"
-    if lock_entity_id:
-        uid = f"{uid}|{lock_entity_id}"
-    return uid
-
-
 def build_user_device_identifier(entry_id: str, name: str) -> str:
     """
     Build the device registry identifier for a user's device.
@@ -350,7 +350,11 @@ def build_slot_device_identifier(entry_id: str, slot_num: int) -> str:
     """
     Build the pre-migration device identifier for a slot's device.
 
-    Retained only so the migration can find the devices it needs to rewrite.
+    The only surviving slot-based builder, retained because the migration
+    needs it to find the devices it rewrites. The unique-ID equivalent is
+    gone: the migration matches those by splitting rather than building, so
+    keeping a builder for them would be a second source of truth for a
+    format only one place reads.
     """
     return f"{entry_id}|{slot_num}"
 
@@ -372,32 +376,3 @@ def parse_user_device_identifier(entry_id: str, identifier: str) -> str | None:
     if not identifier.startswith(prefix):
         return None
     return identifier.removeprefix(prefix) or None
-
-
-def parse_slot_device_identifier(entry_id: str, identifier: str) -> int | None:
-    """
-    Recover the slot number from a slot device identifier, else ``None``.
-
-    The inverse of :func:`build_slot_device_identifier`, used to tell a slot
-    device apart from the entry's own device when sweeping the registry.
-    ``None`` covers both the entry device (bare entry_id, no separator) and
-    anything that does not belong to this entry.
-
-    Accepts exactly what the builder emits, verified by round-tripping the
-    parsed number back to a string. Anything looser breaks the pairing in one
-    direction or the other: ``str.isdigit()`` rejects the negative slot the
-    builder will happily encode (the slots YAML schema does not bound the key),
-    while a bare ``int()`` accepts ``+1`` and ``1_0`` as aliases the builder
-    would never produce. Either way the device becomes invisible to the sweep
-    AND to the removal hook -- the exact stuck, undeletable device this pairing
-    exists to clean up.
-    """
-    prefix = f"{entry_id}|"
-    if not identifier.startswith(prefix):
-        return None
-    suffix = identifier.removeprefix(prefix)
-    try:
-        slot_num = int(suffix)
-    except ValueError:
-        return None
-    return slot_num if str(slot_num) == suffix else None

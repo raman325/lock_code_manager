@@ -10,7 +10,12 @@ import {
     DEFAULT_USE_SLOT_CARDS,
     FOLD_ENTITY_ROW_SEARCH_STRING
 } from './const';
-import { createLockCodeManagerEntity, generateSlotCard, getSlotMapping } from './generate-view';
+import {
+    buildSlotNumForName,
+    createLockCodeManagerEntity,
+    generateSlotCard,
+    getSlotMapping
+} from './generate-view';
 import {
     EntityRegistryEntry,
     HomeAssistant,
@@ -81,8 +86,11 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
             })
         ]);
 
+        const slotNumForName = buildSlotNumForName(configEntryData);
         const sortedEntities = configEntryData.entities
-            .map((entity: EntityRegistryEntry) => createLockCodeManagerEntity(entity))
+            .map((entity: EntityRegistryEntry) =>
+                createLockCodeManagerEntity(entity, slotNumForName)
+            )
             .sort((a, b) => a.slotNum - b.slotNum);
 
         const slotMapping = getSlotMapping(slot, sortedEntities, configEntryData);

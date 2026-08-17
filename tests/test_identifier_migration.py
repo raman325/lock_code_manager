@@ -18,11 +18,10 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.const import ATTR_IN_SYNC, CONF_SLOTS, DOMAIN
+from custom_components.lock_code_manager.const import ATTR_IN_SYNC, DOMAIN
 from custom_components.lock_code_manager.domain.identifier_migration import (
     async_migrate_identifiers_to_names,
     async_rename_identifiers,
-    async_rename_identifiers_for_slot,
 )
 
 SLOTS = {
@@ -223,28 +222,44 @@ async def test_rename_does_not_match_a_name_prefix(hass: HomeAssistant, entry) -
     assert ent_reg.async_get(longer).unique_id == f"{eid}|Raman|pin"
 
 
-async def test_rename_for_slot_noop_when_entry_is_gone(hass: HomeAssistant) -> None:
-    """A rename racing entry removal is a no-op, not an exception.
-
-    This runs from the text entity's write path, which can fire while the
-    entry is being torn down.
-    """
-    async_rename_identifiers_for_slot(hass, "does-not-exist", 1, "Whoever")
-
-
-async def test_rename_for_slot_noop_when_name_is_unchanged(
-    hass: HomeAssistant,
+async def test_rename_leaves_entity_alone_on_collision(
+    hass: HomeAssistant, entry, caplog
 ) -> None:
-    """Writing the same name back touches no registry rows."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_SLOTS: {1: {CONF_NAME: "Raman"}}},
-        unique_id="rename-noop",
-    )
-    entry.add_to_hass(hass)
+    """A taken target during rename is skipped, not raised.
+
+    Without this the loop would raise part-way, leaving some of the user's
+    rows on the new name and the rest on the old -- a split the migration
+    path explicitly guards against and this path used not to.
+    """
+    ent_reg = er.async_get(hass)
     eid = entry.entry_id
-    pin_entity = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Raman|pin")
+    old = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Raman|pin")
+    _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Bob|pin")
 
-    async_rename_identifiers_for_slot(hass, eid, 1, "Raman")
+    async_rename_identifiers(hass, eid, "Raman", "Bob")
 
-    assert er.async_get(hass).async_get(pin_entity).unique_id == f"{eid}|Raman|pin"
+    assert ent_reg.async_get(old).unique_id == f"{eid}|Raman|pin"
+    assert "already in use" in caplog.text
+
+
+async def test_rename_leaves_device_alone_on_collision(
+    hass: HomeAssistant, entry, caplog
+) -> None:
+    """Device renames are pre-checked, because HA does not check them.
+
+    ``async_update_device`` just assigns new identifiers, so two devices
+    would end up sharing one and every lookup after that would be wrong.
+    """
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Raman")}, name="Raman"
+    )
+    dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Bob")}, name="Bob"
+    )
+
+    async_rename_identifiers(hass, eid, "Raman", "Bob")
+
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Raman")}) is not None
+    assert "already exists" in caplog.text

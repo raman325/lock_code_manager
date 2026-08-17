@@ -21,8 +21,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import DOMAIN
-from .config import build_user_device_identifier
-from .queries import get_entry_config
+from .config import build_slot_device_identifier, build_user_device_identifier
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -102,7 +101,7 @@ def async_migrate_identifiers_to_names(
 
     dev_reg = dr.async_get(hass)
     for slot_num, name in mapping.items():
-        old = f"{entry_id}|{slot_num}"
+        old = build_slot_device_identifier(entry_id, int(slot_num))
         device = dev_reg.async_get_device(identifiers={(DOMAIN, old)})
         if device is None:
             continue
@@ -135,45 +134,53 @@ def async_rename_identifiers(
     """
     Move a user's registry identifiers from ``old_name`` to ``new_name``.
 
-    Runs before the configuration is written, so a failure leaves both the
-    registry and the configuration on the old name rather than splitting
-    them. Entity identifiers are untouched, which is the point: renaming a
-    user must not break the automations that reference their entities.
+    Driven by the config entry update listener, which is the only place that
+    observes renames from BOTH write paths -- the name text entity and the
+    options flow. Entity identifiers are untouched, which is the point:
+    renaming a user must not break the automations that reference them.
 
-    Live entity objects keep the name they were constructed with until the
-    entry reloads. That is harmless -- the registry is what identifier
-    lookups consult, and a restart rebuilds them from the new name.
+    A collision on either registry is logged and skipped rather than raised,
+    so one unmovable row cannot leave the rest half-renamed.
     """
     ent_reg = er.async_get(hass)
     old_prefix = f"{entry_id}|{old_name}|"
+    new_prefix = f"{entry_id}|{new_name}|"
     for entity in list(er.async_entries_for_config_entry(ent_reg, entry_id)):
         if not entity.unique_id.startswith(old_prefix):
             continue
-        new_unique_id = f"{entry_id}|{new_name}|{entity.unique_id[len(old_prefix) :]}"
-        ent_reg.async_update_entity(entity.entity_id, new_unique_id=new_unique_id)
+        new_unique_id = new_prefix + entity.unique_id.removeprefix(old_prefix)
+        try:
+            ent_reg.async_update_entity(entity.entity_id, new_unique_id=new_unique_id)
+        except ValueError:
+            # Same reasoning as the migration: a taken target is skipped, not
+            # resolved by deleting. Without this the loop would raise
+            # part-way, leaving some rows renamed and some not.
+            _LOGGER.warning(
+                "%s: cannot rename %s to %s -- target already in use; leaving as-is",
+                entry_id,
+                entity.unique_id,
+                new_unique_id,
+            )
 
     dev_reg = dr.async_get(hass)
     old = build_user_device_identifier(entry_id, old_name)
     if device := dev_reg.async_get_device(identifiers={(DOMAIN, old)}):
         new = build_user_device_identifier(entry_id, new_name)
-        dev_reg.async_update_device(
-            device.id,
-            new_identifiers={
-                (DOMAIN, new) if identifier == (DOMAIN, old) else identifier
-                for identifier in device.identifiers
-            },
-        )
-
-
-@callback
-def async_rename_identifiers_for_slot(
-    hass: HomeAssistant, entry_id: str, slot_num: int, new_name: str
-) -> None:
-    """Rename a slot's identifiers, reading the current name from config."""
-    entry = hass.config_entries.async_get_entry(entry_id)
-    if entry is None:
-        return
-    old_name = get_entry_config(entry).slot(slot_num).get(CONF_NAME)
-    if not old_name or old_name == new_name:
-        return
-    async_rename_identifiers(hass, entry_id, old_name, new_name)
+        # Pre-checked because async_update_device does NOT validate identifier
+        # collisions -- it just assigns. Two devices sharing one identifier
+        # would corrupt every async_get_device lookup that follows.
+        if dev_reg.async_get_device(identifiers={(DOMAIN, new)}) is not None:
+            _LOGGER.warning(
+                "%s: cannot rename device %s to %s -- target already exists",
+                entry_id,
+                old,
+                new,
+            )
+        else:
+            dev_reg.async_update_device(
+                device.id,
+                new_identifiers={
+                    (DOMAIN, new) if identifier == (DOMAIN, old) else identifier
+                    for identifier in device.identifiers
+                },
+            )
