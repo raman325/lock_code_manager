@@ -337,3 +337,40 @@ There is no `ReportFindings` tool available in this session, so the findings are
 ---
 
 ,ick off the review and then write the design while its ongoing
+
+---
+
+<task-notification>
+<task-id>a24f3a7e25dd6c2b3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a24f3a7e25dd6c2b3.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The `ReportFindings` tool is not available in this environment (searched; no match), so findings are below.
+
+## Review: PR #1422 — `feat: key entity and device identifiers by user name`
+
+Two of these are reproduced with runnable tests (I wrote them in a scratch worktree, ran them against the branch, and deleted them).
+
+### Findings
+
+**1. `custom_components/lock_code_manager/domain/identifier_migration.py:124` — HIGH.** The device remap loop has neither of the two guards the entity loop above it has: no "already moved this run" tracking and no repeat-until-stable pass. Two concrete failures, both reproduced against the branch with `{1: {name: "2"}, 2: {name: "Bob"}}`:
+- *Double move.* If slot 2 has no device row yet, iteration 1 moves slot 1's device `{eid}|1` → `{eid}|2`; iteration 2 then looks up `{eid}|2`, finds the device it just moved, and moves it again to `{eid}|Bob`. Slot 1's device row — with its area, name "Code slot 1", and entity rows — ends up as Bob's device. This is the exact hazard the docstring says is prevented ("Rows already moved this run are never moved again"); that sentence is only true of entities.
+- *Strand.* If slot 2's device does exist, iteration 1 hits the collision check and skips, iteration 2 frees `{eid}|2`, and nothing retries slot 1 — it stays on `{eid}|1` forever. `test_rewrite_resolves_a_collision_chain` covers this for entities; there is no device equivalent.
+
+**2. `custom_components/lock_code_manager/__init__.py:928` — HIGH.** `_async_prune_orphaned_slot_devices` deletes any device whose parsed name is not in the configured set, and Home Assistant cascades a device removal to every entity registry row on that device belonging to the same config entry (`homeassistant/helpers/entity_registry.py`, `_handle_device_registry_update`). So every device the migration deliberately *skipped* on collision (finding 1, and `test_rewrite_leaves_device_alone_on_collision`) is reaped on the very next `async_setup_entry`, taking its entities' IDs, history, and customizations with it. That inverts the stated design: "Collisions are logged and skipped, never resolved by deleting." Reproduced: seed a device `{eid}|Bob` with one entity, config name `Bobby`, call the function — both device and entity row are gone. The guard reverted in commit `9289cf1f` was what prevented this; its removal needs a different fix than reinstating it wholesale (e.g. only prune devices whose identifier no longer parses to *any* live entity's unique-ID segment).
+
+**3. `custom_components/lock_code_manager/domain/slot_coordinator.py:236` — HIGH.** The comment says "The registry rewrite is NOT done here. It runs from the config entry update listener," but commit `9289cf1f` removed the rename block from `async_update_listener` entirely. As shipped, renaming a user (name text entity or options flow) writes the new name to config and moves nothing in the registry. On the next restart the slot's device is still identified by the old name, so finding 2 fires: device pruned, entity rows cascaded away, and the entities re-register under fresh unique IDs and fresh entity IDs — breaking every automation/dashboard reference. Rename is a routine operation and was harmless before this PR (identifiers were slot-keyed). The PR body still claims "Renaming a user runs the same rewrite, before the config write," which is no longer true. At minimum this needs to be called out as a known regression, and ideally rename should be blocked or the prune neutered until the follow-up lands.
+
+**4. `custom_components/lock_code_manager/entity.py:63` — LOW.** Same stale claim: "This is NOT refreshed on rename … the rename moves that [registry row]." Nothing moves the registry row any more. Comment should be corrected alongside finding 3 so the next reader doesn't conclude rename is handled.
+
+**5. `ts/generate-view.ts:141` — LOW.** `slotNumForName` is optional, and when omitted every entity silently gets `slotNum: NaN` — which is precisely the failure this change was fixing (NaN matches no slot, sections render empty). There is one production caller today and it passes the map, but the optional parameter re-arms the same silent trap for the next caller. Making it required would make the mistake a compile error.
+
+### Verified as correct
+- All callers of the renamed builders (`build_user_unique_id`, `build_user_device_identifier`, `parse_user_device_identifier`) and of the re-signatured websocket helpers (`_slot_unique_id`, `_build_slot_entities`, `_in_sync_entity_id`) are updated; no stragglers.
+- No import cycle from `domain/util.py` → `domain/queries.py`.
+- Entity-side chain resolution, cycle termination, and normalization on migrate are all correct and well covered.
+- `slot_names` normalization on the websocket side matches what the frontend compares against, and the generated JS bundle is in sync with `ts/`.</result>
+<usage><subagent_tokens>160176</subagent_tokens><tool_uses>48</tool_uses><duration_ms>456082</duration_ms></usage>
+</task-notification>
