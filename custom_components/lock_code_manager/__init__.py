@@ -920,6 +920,7 @@ def _async_prune_orphaned_slot_devices(
     unloaded.
     """
     dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
     configured = {
         slot.get(CONF_NAME) for slot in get_entry_config(config_entry).slots.values()
@@ -932,6 +933,16 @@ def _async_prune_orphaned_slot_devices(
         and (user_name := parse_user_device_identifier(entry_id, identifier))
         is not None
         and user_name not in configured
+        # Never remove a device that still has entities. Home Assistant
+        # cascades a device removal to every entity registry row on it, so
+        # this would silently delete live entities -- history, customizations
+        # and hand-assigned entity IDs with them.
+        #
+        # A genuine orphan has none: slot removal deletes the entities first
+        # and the device after (issue #1399), so the case this sweep exists
+        # for is unaffected. What it now spares is a device the migration
+        # could not move, which still has its entities attached.
+        and not er.async_entries_for_device(ent_reg, device.id, True)
     }
     if orphaned:
         _LOGGER.debug(
@@ -1106,6 +1117,13 @@ async def async_update_listener(
     # name text entity writes to data with empty options -- so gating them on
     # options would cover the config flow and silently skip the entity, which
     # is the path most renames take.
+    #
+    # This deliberately does NOT return. An options-flow submission can rename
+    # a user AND change something structural in the same write; returning here
+    # skipped the rest of the listener, so the structural half was never
+    # applied and `options` was never committed to `data`. The stale options
+    # then poisoned the next write, silently reverting it. The empty-options
+    # guard below already covers the text-entity path.
     if renames := (previous_config - runtime_data.config).names_changed:
         for slot_num, (old_name, new_name) in renames.items():
             _LOGGER.debug(
@@ -1117,11 +1135,6 @@ async def async_update_listener(
                 new_name,
             )
             async_rename_identifiers(hass, config_entry.entry_id, old_name, new_name)
-        # No reload needed. Entities keep working because a rename leaves
-        # their entity IDs alone, and SlotSyncManager resolves unique IDs
-        # from the current name on every tick rather than caching them at
-        # construction.
-        return
 
     # No need to do entity creation/removal work if there are no options
     # because that only happens at the end of this function (data + empty

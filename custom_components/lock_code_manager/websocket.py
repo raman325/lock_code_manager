@@ -82,6 +82,7 @@ from .const import (
     ATTR_SCHEDULE,
     ATTR_SCHEDULE_NEXT_EVENT,
     ATTR_SLOT,
+    ATTR_SLOT_NAMES,
     ATTR_SLOT_NUM,
     ATTR_SYNC_STATUS,
     ATTR_USERCODE,
@@ -415,6 +416,13 @@ async def get_config_entry_data(
             ],
             CONF_SLOTS: {
                 k: v.get(CONF_ENTITY_ID) for k, v in entry_config.slots.items()
+            },
+            # Slot -> user name. Separate from CONF_SLOTS, which despite its
+            # name carries the slot's CONDITION ENTITY. The frontend needs
+            # the name to map entities back to slots now that identifiers key
+            # on it, and there is no other source for it client-side.
+            ATTR_SLOT_NAMES: {
+                k: v.get(CONF_NAME) for k, v in entry_config.slots.items()
             },
         },
     )

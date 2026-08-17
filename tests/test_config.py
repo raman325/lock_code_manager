@@ -514,3 +514,101 @@ def test_names_changed_ignores_added_and_removed_slots() -> None:
     new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {2: _slot(name="Alice")}})
 
     assert EntryConfigDiff(old=old, new=new).names_changed == {}
+
+
+def test_to_dict_round_trips_through_from_mapping() -> None:
+    """
+    to_dict → from_mapping reconstructs an equivalent EntryConfig.
+
+    Guards the write path used by SlotEntityCoordinator and the helpers
+    write functions: they build a new EntryConfig, call to_dict(), hand
+    it to async_update_entry, and expect the eventual listener re-read
+    to produce the same logical config.
+    """
+    original = EntryConfig.from_mapping(
+        {
+            CONF_LOCKS: ["lock.a", "lock.b"],
+            CONF_SLOTS: {1: _slot("1234"), 2: _slot("5678")},
+        }
+    )
+
+    round_tripped = EntryConfig.from_mapping(original.to_dict())
+
+    assert round_tripped.locks == original.locks
+    assert dict(round_tripped.slots) == dict(original.slots)
+
+
+def test_to_dict_produces_plain_mutable_dicts() -> None:
+    """
+    to_dict output is plain dict (not MappingProxyType).
+
+    HA's async_update_entry expects a plain dict it can serialize; the
+    read-only wrappers EntryConfig uses internally would break that.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
+    )
+
+    result = config.to_dict()
+
+    assert isinstance(result, dict)
+    assert isinstance(result[CONF_SLOTS], dict)
+    assert isinstance(result[CONF_SLOTS][1], dict)
+    # Mutability — the returned dicts are the caller's to modify
+    result[CONF_SLOTS][1]["pin"] = "9999"
+    result[CONF_LOCKS].append("lock.b")
+    # Original EntryConfig is untouched by that mutation
+    assert config.slots[1]["pin"] == "1234"
+    assert config.locks == ("lock.a",)
+
+
+# Slot device identifier round-trip (issue #1399)
+
+
+@pytest.mark.parametrize(
+    ("label", "old", "new"),
+    [
+        (
+            "slots_added",
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}},
+        ),
+        (
+            "slots_removed",
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}},
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+        ),
+        (
+            "locks_added",
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+            {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}},
+        ),
+        (
+            "locks_removed",
+            {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}},
+            {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+        ),
+    ],
+)
+def test_has_changes_is_true_for_each_field_alone(
+    label: str, old: dict, new: dict
+) -> None:
+    """
+    Any ONE of the four diff fields alone is enough to report a change.
+
+    The existing tests only ever move slots and locks together, or neither,
+    so each individual disjunct in ``has_changes`` went unpinned -- mutating
+    any single ``or`` to ``and`` survived. ``has_changes`` gates the Lovelace
+    dashboard re-render, so a collapsed disjunct means a user who only adds a
+    slot (or only removes a lock) silently gets a stale dashboard.
+    """
+    diff = EntryConfigDiff(old=_cfg(old), new=_cfg(new))
+
+    assert diff.has_changes is True, f"{label} alone should count as a change"
+    # Exactly the named field is populated; the other three stay empty.
+    populated = {
+        name
+        for name in ("slots_added", "slots_removed", "locks_added", "locks_removed")
+        if getattr(diff, name)
+    }
+    assert populated == {label}

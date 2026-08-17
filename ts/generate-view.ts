@@ -162,12 +162,19 @@ export function createLockCodeManagerEntity(
     };
 }
 
-/** Build the name -> slot number lookup the unique id no longer encodes. */
+/**
+ * Build the name -> slot number lookup the unique id no longer encodes.
+ *
+ * Reads `slot_names`, NOT `slots`. `slots` carries each slot's condition
+ * entity id despite its name -- reading it here yielded a map keyed on
+ * calendar entity ids, so every entity resolved to NaN and every section
+ * rendered empty.
+ */
 export function buildSlotNumForName(configEntryData: {
-    slots: { [key: number]: string | null };
+    slot_names?: { [key: number]: string | null };
 }): Map<string, number> {
     return new Map(
-        Object.entries(configEntryData.slots)
+        Object.entries(configEntryData.slot_names ?? {})
             .filter(([, name]) => name != null)
             .map(([slotNum, name]) => [name as string, parseInt(slotNum, 10)])
     );

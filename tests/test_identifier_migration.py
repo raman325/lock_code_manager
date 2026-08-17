@@ -263,3 +263,46 @@ async def test_rename_leaves_device_alone_on_collision(
 
     assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Raman")}) is not None
     assert "already exists" in caplog.text
+
+
+async def test_rewrite_resolves_a_collision_chain(hass: HomeAssistant, entry) -> None:
+    """One rewrite can unblock another, so the pass repeats until it settles.
+
+    Slots {1: "2", 2: "Bob"}: slot 1's target collides with slot 2's live row
+    on the first pass. Once slot 2 moves to "Bob", that target frees up. A
+    single pass would leave slot 1 orphaned and let it re-register under a
+    new entity ID -- the duplicate this module exists to prevent.
+    """
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    slot_1 = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|1|pin")
+    slot_2 = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|2|pin")
+
+    async_migrate_identifiers_to_names(
+        hass, eid, {1: {CONF_NAME: "2"}, 2: {CONF_NAME: "Bob"}}
+    )
+
+    assert ent_reg.async_get(slot_2).unique_id == f"{eid}|Bob|pin"
+    assert ent_reg.async_get(slot_1).unique_id == f"{eid}|2|pin"
+
+
+async def test_rewrite_gives_up_on_a_true_cycle(
+    hass: HomeAssistant, entry, caplog
+) -> None:
+    """A cycle stops making progress and is logged, rather than looping.
+
+    Slots {1: "2", 2: "1"} can never both move without a temporary name.
+    Both rows stay put and keep working under their old identifiers.
+    """
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    slot_1 = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|1|pin")
+    slot_2 = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|2|pin")
+
+    async_migrate_identifiers_to_names(
+        hass, eid, {1: {CONF_NAME: "2"}, 2: {CONF_NAME: "1"}}
+    )
+
+    assert ent_reg.async_get(slot_1).unique_id == f"{eid}|1|pin"
+    assert ent_reg.async_get(slot_2).unique_id == f"{eid}|2|pin"
+    assert "already in use" in caplog.text

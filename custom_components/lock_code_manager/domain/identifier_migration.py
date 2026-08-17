@@ -78,26 +78,43 @@ def async_migrate_identifiers_to_names(
 
     changed = 0
     ent_reg = er.async_get(hass)
+    # Repeated until a pass moves nothing, because one rewrite can unblock
+    # another. With slots {1: "2", 2: "Bob"}, slot 1's target "…|2|pin" is
+    # occupied by slot 2's live row on the first pass; once slot 2 moves to
+    # "…|Bob|pin" that target frees up. A single pass would leave slot 1
+    # orphaned and let it re-register under a new entity ID -- the duplicate
+    # this module exists to prevent. A true cycle simply stops making
+    # progress and is logged, rather than looping.
+    while True:
+        moved_this_pass = 0
+        for entity in list(er.async_entries_for_config_entry(ent_reg, entry_id)):
+            new_unique_id = _rewritten_unique_id(entity.unique_id, entry_id, mapping)
+            if new_unique_id is None or new_unique_id == entity.unique_id:
+                continue
+            if (
+                ent_reg.async_get_entity_id(entity.domain, DOMAIN, new_unique_id)
+                is not None
+            ):
+                continue
+            ent_reg.async_update_entity(entity.entity_id, new_unique_id=new_unique_id)
+            moved_this_pass += 1
+        changed += moved_this_pass
+        if not moved_this_pass:
+            break
+
+    # Anything still on an old identifier could not be moved at all.
     for entity in list(er.async_entries_for_config_entry(ent_reg, entry_id)):
         new_unique_id = _rewritten_unique_id(entity.unique_id, entry_id, mapping)
-        if new_unique_id is None or new_unique_id == entity.unique_id:
-            continue
-        try:
-            ent_reg.async_update_entity(entity.entity_id, new_unique_id=new_unique_id)
-        except ValueError:
-            # Home Assistant raises when the target identifier is already
-            # taken. Leaving the old row alone is strictly better than
-            # removing it: the entity keeps working under its old
-            # identifier, where a delete would take the user's automations
-            # with it.
+        if new_unique_id is not None and new_unique_id != entity.unique_id:
+            # Left alone deliberately: the entity keeps working under its
+            # old identifier, where deleting the row to free the target would
+            # take the user's automations with it.
             _LOGGER.warning(
                 "%s: cannot rewrite %s to %s -- target already in use; leaving as-is",
                 entry_id,
                 entity.unique_id,
                 new_unique_id,
             )
-            continue
-        changed += 1
 
     dev_reg = dr.async_get(hass)
     for slot_num, name in mapping.items():

@@ -15,6 +15,7 @@ export {
     KEY_ORDER
 } from './const';
 export {
+    buildSlotNumForName,
     compareAndSortEntities,
     createLockCodeManagerEntity,
     generateEntityCards,

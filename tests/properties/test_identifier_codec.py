@@ -123,3 +123,30 @@ def test_distinct_names_give_distinct_unique_ids(
         assert build_user_unique_id(entry_id, name_a, key) != build_user_unique_id(
             entry_id, name_b, key
         )
+
+
+@given(entry_id=ENTRY_IDS, identifier=st.text(max_size=60))
+def test_parse_is_total(entry_id: str, identifier: str) -> None:
+    """
+    The parser never raises, whatever it is handed.
+
+    It runs over every device already in the registry, including ones written
+    by older versions and by other integrations, so a crash here would take
+    out setup for the whole entry. Carried over from the slot-codec suite
+    this replaced -- the hazard is unchanged, and arbitrary names make the
+    input space wider rather than narrower.
+    """
+    result = parse_user_device_identifier(entry_id, identifier)
+    assert result is None or isinstance(result, str)
+
+
+@given(entry_id=ENTRY_IDS, identifier=st.text(max_size=60))
+def test_parse_never_returns_an_empty_name(entry_id: str, identifier: str) -> None:
+    """
+    A parsed name is never empty.
+
+    An empty result would compare equal to no configured user and mark the
+    device an orphan, so the prune would delete it along with its entities.
+    """
+    result = parse_user_device_identifier(entry_id, identifier)
+    assert result is None or result != ""

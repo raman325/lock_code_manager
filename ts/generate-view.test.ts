@@ -9,6 +9,7 @@ import {
     DIVIDER_CARD,
     IN_SYNC_KEY,
     compareAndSortEntities,
+    buildSlotNumForName,
     createLockCodeManagerEntity,
     generateEntityCards,
     generateNewSlotCard,
@@ -1217,5 +1218,48 @@ describe('generateNewSlotCard', () => {
         expect(result.slot).toBe(5);
         expect(result.show_code_sensors).toBe(true);
         expect(result.show_lock_sync).toBe(true);
+    });
+});
+
+describe('buildSlotNumForName', () => {
+    // Built from a payload shaped like the real one, NOT a hand-made Map.
+    // The previous version of this fix read `slots` -- which carries each
+    // slot's CONDITION ENTITY, not its name -- and every test passed because
+    // it constructed the lookup directly instead of deriving it.
+    const payload = {
+        slot_names: { 1: 'Raman', 2: 'Alice', 3: null },
+        slots: { 1: 'calendar.raman', 2: null, 3: null }
+    };
+
+    it('maps names to slot numbers', () => {
+        expect(buildSlotNumForName(payload)).toEqual(
+            new Map([
+                ['Raman', 1],
+                ['Alice', 2]
+            ])
+        );
+    });
+
+    it('does not read the condition entity field', () => {
+        const map = buildSlotNumForName(payload);
+
+        expect(map.has('calendar.raman')).toBe(false);
+    });
+
+    it('resolves a real entity through the derived map', () => {
+        const entity = {
+            entity_id: 'text.lcm_raman_pin',
+            unique_id: 'config123|Raman|pin',
+            name: null,
+            original_name: null
+        } as EntityRegistryEntry;
+
+        const result = createLockCodeManagerEntity(entity, buildSlotNumForName(payload));
+
+        expect(result.slotNum).toBe(1);
+    });
+
+    it('tolerates a payload with no slot_names', () => {
+        expect(buildSlotNumForName({})).toEqual(new Map());
     });
 });
