@@ -81,11 +81,19 @@ def _async_remap_segment(
         return 0
 
     ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
     moved_entity_ids: set[str] = set()
+    moved_device_ids: set[str] = set()
     changed = 0
 
+    # Entities and devices are remapped in the SAME repeat-until-stable loop.
+    # They were separate passes, and the device pass had neither guard: it
+    # could move one device twice (walking slot 1's device through "2" and on
+    # to "Bob", handing its area and entities to another user) and it never
+    # retried a device whose target was freed by a later move.
     while True:
         moved_this_pass = 0
+
         for entity in list(er.async_entries_for_config_entry(ent_reg, entry_id)):
             if entity.entity_id in moved_entity_ids:
                 continue
@@ -100,6 +108,29 @@ def _async_remap_segment(
             ent_reg.async_update_entity(entity.entity_id, new_unique_id=new_unique_id)
             moved_entity_ids.add(entity.entity_id)
             moved_this_pass += 1
+
+        for old_segment, new_segment in mapping.items():
+            old = old_device_identifier[old_segment]
+            device = dev_reg.async_get_device(identifiers={(DOMAIN, old)})
+            if device is None or device.id in moved_device_ids:
+                continue
+            new = build_user_device_identifier(entry_id, new_segment)
+            # Pre-checked because async_update_device does NOT validate
+            # identifier collisions -- it just assigns. Two devices sharing an
+            # identifier corrupts every lookup that follows.
+            if dev_reg.async_get_device(identifiers={(DOMAIN, new)}) is not None:
+                continue
+            # Replace only the matching identifier; a device may carry others.
+            dev_reg.async_update_device(
+                device.id,
+                new_identifiers={
+                    (DOMAIN, new) if identifier == (DOMAIN, old) else identifier
+                    for identifier in device.identifiers
+                },
+            )
+            moved_device_ids.add(device.id)
+            moved_this_pass += 1
+
         changed += moved_this_pass
         if not moved_this_pass:
             break
@@ -120,33 +151,16 @@ def _async_remap_segment(
                 new_unique_id,
             )
 
-    dev_reg = dr.async_get(hass)
     for old_segment, new_segment in mapping.items():
         old = old_device_identifier[old_segment]
         device = dev_reg.async_get_device(identifiers={(DOMAIN, old)})
-        if device is None:
-            continue
-        new = build_user_device_identifier(entry_id, new_segment)
-        # Pre-checked because async_update_device does NOT validate identifier
-        # collisions -- it just assigns. Two devices sharing an identifier
-        # would corrupt every lookup that followed.
-        if dev_reg.async_get_device(identifiers={(DOMAIN, new)}) is not None:
+        if device is not None and device.id not in moved_device_ids:
             _LOGGER.warning(
                 "%s: cannot move device %s to %s -- target already exists",
                 entry_id,
                 old,
-                new,
+                build_user_device_identifier(entry_id, new_segment),
             )
-            continue
-        # Replace only the matching identifier; a device may carry others.
-        dev_reg.async_update_device(
-            device.id,
-            new_identifiers={
-                (DOMAIN, new) if identifier == (DOMAIN, old) else identifier
-                for identifier in device.identifiers
-            },
-        )
-        changed += 1
 
     return changed
 

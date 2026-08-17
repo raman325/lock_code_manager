@@ -253,3 +253,51 @@ async def test_rewrite_gives_up_on_a_true_cycle(
     assert ent_reg.async_get(slot_1).unique_id == f"{eid}|1|pin"
     assert ent_reg.async_get(slot_2).unique_id == f"{eid}|2|pin"
     assert "already in use" in caplog.text
+
+
+async def test_device_is_never_moved_twice(hass: HomeAssistant, entry) -> None:
+    """A device moved this run is never moved again by a later pass.
+
+    With {1: "2", 2: "Bob"} and no device for slot 2, the pass moved slot 1's
+    device to "…|2" and then, reading "2" from the mapping, moved it on to
+    "…|Bob" -- handing slot 1's device, its area, and its entities to a
+    different user. The entity loop had this guard; the device loop did not.
+    """
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    device = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|1")}, name="Code slot 1"
+    )
+
+    async_migrate_identifiers_to_names(
+        hass, eid, {1: {CONF_NAME: "2"}, 2: {CONF_NAME: "Bob"}}
+    )
+
+    moved = dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|2")})
+    assert moved is not None and moved.id == device.id
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Bob")}) is None
+
+
+async def test_device_chain_resolves(hass: HomeAssistant, entry) -> None:
+    """A device whose target frees up later is retried, not stranded.
+
+    The device pass was a single ordered walk while the entity pass repeated,
+    so which device stranded depended on mapping insertion order.
+    """
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    slot_1 = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|1")}, name="one"
+    )
+    slot_2 = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|2")}, name="two"
+    )
+
+    async_migrate_identifiers_to_names(
+        hass, eid, {1: {CONF_NAME: "2"}, 2: {CONF_NAME: "Bob"}}
+    )
+
+    assert (
+        dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Bob")}).id == slot_2.id
+    )
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|2")}).id == slot_1.id
