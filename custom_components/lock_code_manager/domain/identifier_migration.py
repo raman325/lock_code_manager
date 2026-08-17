@@ -27,7 +27,9 @@ from .queries import get_entry_config
 _LOGGER = logging.getLogger(__name__)
 
 
-def _rewritten_unique_id(unique_id: str, entry_id: str, mapping: dict[str, str]) -> str | None:
+def _rewritten_unique_id(
+    unique_id: str, entry_id: str, mapping: dict[str, str]
+) -> str | None:
     """
     Return ``unique_id`` with its slot segment replaced by a name, else ``None``.
 
@@ -147,9 +149,7 @@ def async_rename_identifiers(
     for entity in list(er.async_entries_for_config_entry(ent_reg, entry_id)):
         if not entity.unique_id.startswith(old_prefix):
             continue
-        new_unique_id = (
-            f"{entry_id}|{new_name}|{entity.unique_id[len(old_prefix):]}"
-        )
+        new_unique_id = f"{entry_id}|{new_name}|{entity.unique_id[len(old_prefix) :]}"
         ent_reg.async_update_entity(entity.entity_id, new_unique_id=new_unique_id)
 
     dev_reg = dr.async_get(hass)

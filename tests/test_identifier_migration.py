@@ -10,6 +10,7 @@ duplicates every device.
 """
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -23,8 +24,6 @@ from custom_components.lock_code_manager.domain.identifier_migration import (
     async_rename_identifiers,
     async_rename_identifiers_for_slot,
 )
-
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 SLOTS = {
     1: {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1234"},
@@ -42,9 +41,11 @@ def entry_fixture(hass: HomeAssistant) -> MockConfigEntry:
 
 def _seed_entity(hass, entry, domain, unique_id) -> str:
     """Register an entity under a pre-migration unique ID; return its entity ID."""
-    return er.async_get(hass).async_get_or_create(
-        domain, DOMAIN, unique_id, config_entry=entry
-    ).entity_id
+    return (
+        er.async_get(hass)
+        .async_get_or_create(domain, DOMAIN, unique_id, config_entry=entry)
+        .entity_id
+    )
 
 
 async def test_rewrite_preserves_entity_ids(hass: HomeAssistant, entry) -> None:
@@ -125,7 +126,7 @@ async def test_rewrite_skips_foreign_and_malformed_identifiers(
     ent_reg = er.async_get(hass)
     eid = entry.entry_id
     bare = _seed_entity(hass, entry, TEXT_DOMAIN, eid)
-    other_entry = _seed_entity(hass, entry, TEXT_DOMAIN, f"other|1|pin")
+    other_entry = _seed_entity(hass, entry, TEXT_DOMAIN, "other|1|pin")
     unconfigured = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|99|pin")
 
     assert async_migrate_identifiers_to_names(hass, eid, SLOTS) == 0
@@ -205,7 +206,7 @@ async def test_rename_moves_entities_and_device(hass: HomeAssistant, entry) -> N
 
 
 async def test_rename_does_not_match_a_name_prefix(hass: HomeAssistant, entry) -> None:
-    """"Ram" must not drag "Raman" along with it.
+    """ "Ram" must not drag "Raman" along with it.
 
     Matching on the separator-terminated prefix is what prevents that; a bare
     startswith on the name alone would rewrite every user whose name begins
