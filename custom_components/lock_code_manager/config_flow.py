@@ -37,7 +37,7 @@ from .domain.config import EntryConfig
 from .domain.credentials import CredentialType
 from .domain.exceptions import LockCodeManagerError
 from .domain.models import SlotCredential
-from .domain.names import name_error, normalize_name, validate_slot_names
+from .domain.names import check_name, normalize_name, validate_slot_names
 from .domain.queries import get_entry_config
 from .providers import INTEGRATIONS_CLASS_MAP
 
@@ -518,19 +518,17 @@ class LockCodeManagerFlowHandler(
             # The name is on its way to becoming the identity Lock Code
             # Manager keys on, so it must be present, separator-free, and
             # unique within the entry.
-            if error := name_error(user_input.get(CONF_NAME)):
-                errors[CONF_NAME] = error
+            checked = check_name(
+                user_input.get(CONF_NAME),
+                {
+                    slot_num: slot.get(CONF_NAME)
+                    for slot_num, slot in self.data[CONF_SLOTS].items()
+                },
+            )
+            if checked.error:
+                errors[CONF_NAME] = checked.error
             else:
-                # Normalize BOTH sides. Comparing a stripped candidate
-                # against unstripped stored names lets "Raman " and "Raman"
-                # both through in one order but not the other.
-                user_input[CONF_NAME] = normalize_name(user_input[CONF_NAME])
-                if any(
-                    normalize_name(slot.get(CONF_NAME)).casefold()
-                    == user_input[CONF_NAME].casefold()
-                    for slot in self.data[CONF_SLOTS].values()
-                ):
-                    errors[CONF_NAME] = "name_not_unique"
+                user_input[CONF_NAME] = checked.name
 
             # Check for excluded platforms with a single registry lookup
             # self.ent_reg is set in async_step_user which always runs first

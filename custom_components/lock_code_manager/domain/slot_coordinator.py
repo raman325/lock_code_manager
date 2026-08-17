@@ -43,7 +43,7 @@ from homeassistant.helpers.issue_registry import (
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
 from .config import EntryConfig
-from .names import name_error, normalize_name
+from .names import check_name
 from .queries import get_entry_config
 
 if TYPE_CHECKING:
@@ -216,21 +216,22 @@ class SlotEntityCoordinator:
         separator, or a duplicate of another slot's would land in the
         config entry unchallenged.
         """
-        name = normalize_name(value)
-        if error := name_error(name):
-            raise InvalidNameError(error, self._slot_num)
-
-        conflict = next(
-            (
-                other
-                for other, slot in get_entry_config(self._config_entry).slots.items()
-                if other != self._slot_num
-                and normalize_name(slot.get(CONF_NAME)).casefold() == name.casefold()
-            ),
-            None,
+        # Every slot BUT this one, so a user can rewrite their own name --
+        # correcting its capitalization, say -- without colliding with
+        # themselves.
+        checked = check_name(
+            value,
+            {
+                slot_num: slot.get(CONF_NAME)
+                for slot_num, slot in get_entry_config(self._config_entry).slots.items()
+                if slot_num != self._slot_num
+            },
         )
-        if conflict is not None:
-            raise InvalidNameError("name_not_unique", self._slot_num, conflict)
+        if checked.error:
+            raise InvalidNameError(
+                checked.error, self._slot_num, checked.conflicting_slot
+            )
+        name = checked.name
 
         # The registry rewrite is NOT done here. It runs from the config
         # entry update listener, which is the only place that sees renames

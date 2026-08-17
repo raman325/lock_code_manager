@@ -5,6 +5,7 @@ import pytest
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
 from custom_components.lock_code_manager.domain.names import (
+    check_name,
     deduplicate,
     fallback_name,
     name_error,
@@ -190,3 +191,59 @@ def test_normalize_strips_whitespace_from_otherwise_valid_names() -> None:
 
     assert repaired[1][CONF_NAME] == "Raman"
     assert changed == ["1"]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "taken", "expected_name", "expected_error"),
+    [
+        ("Raman", {}, "Raman", None),
+        ("  Raman  ", {}, "Raman", None),
+        ("Raman", {1: "Alice"}, "Raman", None),
+        (None, {}, None, "name_required"),
+        ("  ", {}, None, "name_required"),
+        ("Ra|man", {}, None, "name_has_separator"),
+        ("Raman", {1: "Raman"}, None, "name_not_unique"),
+        ("raman", {1: "Raman"}, None, "name_not_unique"),
+        # Padded on either side must collide in BOTH directions. Comparing a
+        # stripped candidate against unstripped stored names caught only one.
+        ("Raman", {1: "Raman "}, None, "name_not_unique"),
+        ("  Raman  ", {1: "Raman"}, None, "name_not_unique"),
+    ],
+)
+def test_check_name(candidate, taken, expected_name, expected_error) -> None:
+    """One checker decides for every write path."""
+    result = check_name(candidate, taken)
+
+    assert result.name == expected_name
+    assert result.error == expected_error
+
+
+def test_check_name_reports_the_conflicting_slot() -> None:
+    """The caller needs to say WHICH slot already holds the name."""
+    assert check_name("Raman", {3: "raman"}).conflicting_slot == 3
+
+
+def test_check_name_lets_a_slot_keep_its_own_name() -> None:
+    """Renaming excludes the slot being renamed, or nobody could fix a typo.
+
+    Callers omit the slot they are editing from ``taken``; this pins that
+    the checker itself imposes no self-collision.
+    """
+    assert check_name("Raman", {}).error is None
+
+
+def test_write_paths_agree_on_what_they_accept() -> None:
+    """The whole-set validator and the per-name checker must not diverge.
+
+    They used to be separate implementations of the same rules, and the
+    differences between the copies were real bugs. This fails if one grows a
+    rule the other lacks.
+    """
+    cases = ["Raman", "  Raman  ", "", "   ", "Ra|man", None]
+    for candidate in cases:
+        per_name = check_name(candidate, {})
+        whole_set = validate_slot_names({1: {CONF_NAME: candidate}})
+
+        assert (whole_set is None) == (per_name.error is None), candidate
+        if whole_set is not None:
+            assert whole_set[1] == per_name.error, candidate

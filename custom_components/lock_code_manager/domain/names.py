@@ -14,7 +14,7 @@ drift from each other.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from homeassistant.const import CONF_NAME
 
@@ -141,29 +141,68 @@ def normalize_slot_names(
     return repaired, changed
 
 
+class NameCheck(NamedTuple):
+    """
+    Outcome of checking one candidate name against the names already taken.
+
+    Exactly one field is set: ``name`` is the normalized value to store, or
+    ``error`` is the translation key describing why it was refused.
+    """
+
+    name: str | None
+    error: str | None
+    conflicting_slot: int | None = None
+
+
+def check_name(
+    candidate: str | None, taken: Mapping[Any, str | None] | None = None
+) -> NameCheck:
+    """
+    Validate and normalize one candidate name against the names in use.
+
+    The single entry point for all three write paths -- the per-slot config
+    flow step, the whole-block YAML and options flows, and the name text
+    entity. They previously each ran their own combination of
+    ``name_error``, normalization, and a case-folded uniqueness scan, and
+    the differences between those copies were real bugs: one compared a
+    stripped candidate against unstripped stored names, so a padded
+    duplicate was refused in one order and accepted in the other.
+
+    ``taken`` maps slot number to that slot's current name. A caller
+    renaming an existing slot omits that slot from the mapping, so a user
+    can rewrite their own name without colliding with themselves.
+    """
+    if error := name_error(candidate):
+        return NameCheck(None, error)
+
+    name = normalize_name(candidate)
+    folded = name.casefold()
+    for slot_num, existing in (taken or {}).items():
+        if normalize_name(existing).casefold() == folded:
+            return NameCheck(None, "name_not_unique", slot_num)
+    return NameCheck(name, None)
+
+
 def validate_slot_names(
     slots: Mapping[Any, Mapping[str, Any]],
 ) -> tuple[str, str] | None:
     """
     Return the first ``(slot_num, error_key)`` problem in ``slots``, else None.
 
-    The single-slot config flow validates one name at a time against the
-    slots already accepted, but the YAML and options flows submit every slot
-    at once and need the whole set checked together. Returning the offending
-    slot number lets the caller name it in the error, since "one of your
-    slots has a duplicate name" is not actionable.
+    The per-slot config flow checks one name at a time against the slots
+    already accepted; the YAML and options flows submit every slot at once
+    and need the whole set checked together. Returning the offending slot
+    number lets the caller name it, since "one of your slots has a duplicate
+    name" is not actionable.
 
-    Uniqueness is compared on the normalized, case-folded name, matching how
-    the migration deduplicates -- otherwise a pair the migration would repair
-    could be re-entered by hand.
+    Walks the same :func:`check_name` every other write path uses, feeding it
+    the slots already seen, so the three paths cannot drift apart in what
+    they accept.
     """
-    seen: dict[str, str] = {}
+    seen: dict[Any, str] = {}
     for slot_num in sorted(slots, key=int):
-        name = slots[slot_num].get(CONF_NAME)
-        if error := name_error(name):
-            return str(slot_num), error
-        key = normalize_name(name).casefold()
-        if key in seen:
-            return str(slot_num), "name_not_unique"
-        seen[key] = str(slot_num)
+        checked = check_name(slots[slot_num].get(CONF_NAME), seen)
+        if checked.error:
+            return str(slot_num), checked.error
+        seen[slot_num] = checked.name or ""
     return None
