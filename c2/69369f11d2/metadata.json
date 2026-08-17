@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "c269369f11d2",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-name-unique-ids",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/identifier_migration.py",
+    "custom_components/lock_code_manager/websocket.py",
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "tests/properties/test_identifier_codec.py",
+    "tests/test_config.py",
+    "tests/test_identifier_migration.py",
+    "ts/generate-view.internal.ts",
+    "ts/generate-view.test.ts",
+    "ts/generate-view.ts",
+    "ts/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c2/69369f11d2/0/metadata.json",
+      "transcript": "/c2/69369f11d2/0/full.jsonl",
+      "compact_transcript": "/c2/69369f11d2/0/transcript.jsonl",
+      "content_hash": "/c2/69369f11d2/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 25090,
+    "cache_read_tokens": 18636248,
+    "output_tokens": 17417,
+    "api_call_count": 27
+  }
+}
