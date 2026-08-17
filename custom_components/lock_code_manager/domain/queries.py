@@ -116,6 +116,20 @@ def slot_name_by_entry_id(hass: HomeAssistant, entry_id: str, slot_num: int) -> 
     return slot_name(entry, slot_num) if entry else fallback_name(slot_num)
 
 
+def configured_slot_name(entry: ConfigEntry, slot_num: int | str) -> str | None:
+    """
+    Return the slot's configured name, or ``None`` if it has none.
+
+    The strict counterpart to :func:`slot_name`. Callers that act on whatever
+    they find -- turning off a switch, say -- must use this, because
+    ``slot_name``'s fallback shares a namespace with real names: it returns
+    ``"User {n}"``, which is exactly what the migration hands out, so a user
+    can legitimately be called "User 3". Falling back for an unconfigured
+    slot 3 would then resolve a *different* user's entities and act on them.
+    """
+    return normalize_name(get_entry_config(entry).slot(slot_num).get(CONF_NAME)) or None
+
+
 def slot_for_name(entry: ConfigEntry, name: str) -> int | None:
     """
     Return the slot number configured under ``name``, or ``None``.

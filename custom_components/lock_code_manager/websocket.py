@@ -100,10 +100,10 @@ from .domain.config import build_user_unique_id
 from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
-from .domain.names import normalize_name
 from .domain.queries import (
     get_entry_config,
     get_managed_slots,
+    slot_name,
     slot_name_by_entry_id,
 )
 from .domain.services import (
@@ -426,9 +426,12 @@ async def get_config_entry_data(
             # of the unique id, which is normalized. A version 4 entry can
             # still hold a padded name; sending it raw made every entity
             # resolve to NaN and every slot section render empty.
+            # Routed through slot_name, the same resolver every identifier
+            # site uses, so the two sides cannot disagree. Deriving the name
+            # here instead meant an unnamed slot sent "" while its entities
+            # carried "User N" -- and every entity for it resolved to NaN.
             ATTR_SLOT_NAMES: {
-                k: normalize_name(v.get(CONF_NAME))
-                for k, v in entry_config.slots.items()
+                k: slot_name(config_entry, k) for k in entry_config.slots
             },
         },
     )

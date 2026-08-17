@@ -51,6 +51,55 @@ def _remapped(unique_id: str, entry_id: str, mapping: dict[str, str]) -> str | N
     return "|".join([parts[0], replacement, *parts[2:]])
 
 
+def _temporary_segment(mapping: dict[str, str]) -> str:
+    """
+    Return a segment name no user holds, for parking a cycle member.
+
+    Deterministic rather than random so a failure is reproducible, and
+    checked against the mapping so it cannot collide with a user who happens
+    to have chosen the same string.
+    """
+    index = 0
+    while (candidate := f"lcm-parked-{index}") in mapping or candidate in set(
+        mapping.values()
+    ):
+        index += 1
+    return candidate
+
+
+def _async_park_segment(
+    hass: HomeAssistant,
+    entry_id: str,
+    segment: str,
+    temp: str,
+    old_device_identifier: dict[str, str],
+) -> None:
+    """
+    Move one segment's rows onto ``temp`` to free its target.
+
+    Deliberately does not mark the rows as moved: parking is half a move, and
+    they still have to reach their real target on a later pass.
+    """
+    ent_reg = er.async_get(hass)
+    for entity in list(er.async_entries_for_config_entry(ent_reg, entry_id)):
+        new_unique_id = _remapped(entity.unique_id, entry_id, {segment: temp})
+        if new_unique_id is None or new_unique_id == entity.unique_id:
+            continue
+        ent_reg.async_update_entity(entity.entity_id, new_unique_id=new_unique_id)
+
+    dev_reg = dr.async_get(hass)
+    old = old_device_identifier.get(segment)
+    if old and (device := dev_reg.async_get_device(identifiers={(DOMAIN, old)})):
+        new = build_user_device_identifier(entry_id, temp)
+        dev_reg.async_update_device(
+            device.id,
+            new_identifiers={
+                (DOMAIN, new) if identifier == (DOMAIN, old) else identifier
+                for identifier in device.identifiers
+            },
+        )
+
+
 def _async_remap_segment(
     hass: HomeAssistant,
     entry_id: str,
@@ -117,8 +166,23 @@ def _async_remap_segment(
             # Pre-checked because async_update_device does NOT validate
             # identifier collisions -- it just assigns. Two devices sharing an
             # identifier corrupts every lookup that follows.
-            if dev_reg.async_get_device(identifiers={(DOMAIN, new)}) is not None:
-                continue
+            if (
+                blocker := dev_reg.async_get_device(identifiers={(DOMAIN, new)})
+            ) is not None:
+                # A blocker that is ITSELF due to move is not a blocker, it
+                # is a queue -- it vacates on a later pass. Reclaiming it here
+                # would delete a live user's device.
+                if new_segment in mapping:
+                    continue
+                # A blocker with no entities is a leftover shell -- a device
+                # whose slot was removed, or a previous move that got half
+                # done. Reclaim it rather than leave the real device stranded
+                # on its old identifier, because the orphan sweep would then
+                # delete THAT one on the next setup, cascading to its
+                # entities. Removing an empty device destroys nothing.
+                if er.async_entries_for_device(ent_reg, blocker.id, True):
+                    continue
+                dev_reg.async_remove_device(blocker.id)
             # Replace only the matching identifier; a device may carry others.
             dev_reg.async_update_device(
                 device.id,
@@ -131,8 +195,39 @@ def _async_remap_segment(
             moved_this_pass += 1
 
         changed += moved_this_pass
-        if not moved_this_pass:
+        if moved_this_pass:
+            continue
+
+        # Stalled. If any segment's target is itself due to move, the
+        # remainder is a cycle -- two users swapping names, which the options
+        # flow accepts because the FINAL state is unique. Leaving a cycle
+        # unmoved is not safe: each user's rows sit under a name that now
+        # belongs to the other, so on the next restart their entities adopt
+        # each other's registry rows, crossing over entity IDs, history, and
+        # device assignment.
+        #
+        # Break it by parking one segment on a temporary name, which frees its
+        # target for the rest. The parked rows finish on the following pass.
+        # Only segments that still HAVE rows to move. Without this the
+        # detector re-parks an already-resolved segment whose target happens
+        # to still be a mapping key, forever.
+        pending = {
+            entity.unique_id.split("|")[1]
+            for entity in er.async_entries_for_config_entry(ent_reg, entry_id)
+            if entity.entity_id not in moved_entity_ids
+            and _remapped(entity.unique_id, entry_id, mapping) is not None
+        }
+        cycle_segment = next(
+            (old for old, new in mapping.items() if old in pending and new in mapping),
+            None,
+        )
+        if cycle_segment is None:
             break
+        temp = _temporary_segment(mapping)
+        _async_park_segment(hass, entry_id, cycle_segment, temp, old_device_identifier)
+        mapping[temp] = mapping.pop(cycle_segment)
+        old_device_identifier.pop(cycle_segment, None)
+        old_device_identifier[temp] = build_user_device_identifier(entry_id, temp)
 
     # Anything still on an old identifier could not be moved at all.
     for entity in list(er.async_entries_for_config_entry(ent_reg, entry_id)):
@@ -182,7 +277,12 @@ def async_migrate_identifiers_to_names(
     mapping = {
         str(slot_num): normalize_name(slot[CONF_NAME])
         for slot_num, slot in slots.items()
+        # An identity mapping is not a move. A slot legitimately named for its
+        # own number ("1") would otherwise be reported as an unmovable
+        # collision with itself, pointing the user at a nonexistent problem
+        # during an upgrade.
         if normalize_name(slot.get(CONF_NAME))
+        and normalize_name(slot[CONF_NAME]) != str(slot_num)
     }
     return _async_remap_segment(
         hass,

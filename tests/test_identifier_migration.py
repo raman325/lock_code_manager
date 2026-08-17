@@ -20,6 +20,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import ATTR_IN_SYNC, DOMAIN
 from custom_components.lock_code_manager.domain.identifier_migration import (
+    _temporary_segment,
     async_migrate_identifiers_to_names,
     async_rename_identifiers,
 )
@@ -219,8 +220,16 @@ async def test_rewrite_leaves_device_alone_on_collision(
     dev_reg.async_get_or_create(
         config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|1")}, name="old"
     )
-    dev_reg.async_get_or_create(
+    blocker = dev_reg.async_get_or_create(
         config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Raman")}, name="new"
+    )
+    # Populated, so it is a real conflict rather than a reclaimable shell.
+    er.async_get(hass).async_get_or_create(
+        TEXT_DOMAIN,
+        DOMAIN,
+        f"{eid}|Raman|pin",
+        config_entry=entry,
+        device_id=blocker.id,
     )
 
     async_migrate_identifiers_to_names(hass, eid, SLOTS)
@@ -234,13 +243,18 @@ async def test_rewrite_without_names_is_a_noop(hass: HomeAssistant, entry) -> No
     assert async_migrate_identifiers_to_names(hass, entry.entry_id, {}) == 0
 
 
-async def test_rewrite_gives_up_on_a_true_cycle(
-    hass: HomeAssistant, entry, caplog
-) -> None:
-    """A cycle stops making progress and is logged, rather than looping.
+async def test_rewrite_resolves_a_true_cycle(hass: HomeAssistant, entry) -> None:
+    """Two users swapping names resolve, rather than both staying put.
 
-    Slots {1: "2", 2: "1"} can never both move without a temporary name.
-    Both rows stay put and keep working under their old identifiers.
+    The options flow accepts a swap because the FINAL state is unique. An
+    earlier version left both rows alone on the reasoning that they kept
+    working -- they do not. Each user's rows sit under a name that now
+    belongs to the other, so on the next restart their entities adopt each
+    other's registry rows: entity IDs, history, and device assignment all
+    cross over.
+
+    Resolved by parking one side on a temporary name to free the other's
+    target, then completing the parked move.
     """
     ent_reg = er.async_get(hass)
     eid = entry.entry_id
@@ -251,9 +265,38 @@ async def test_rewrite_gives_up_on_a_true_cycle(
         hass, eid, {1: {CONF_NAME: "2"}, 2: {CONF_NAME: "1"}}
     )
 
-    assert ent_reg.async_get(slot_1).unique_id == f"{eid}|1|pin"
-    assert ent_reg.async_get(slot_2).unique_id == f"{eid}|2|pin"
-    assert "already in use" in caplog.text
+    assert ent_reg.async_get(slot_1).unique_id == f"{eid}|2|pin"
+    assert ent_reg.async_get(slot_2).unique_id == f"{eid}|1|pin"
+    # Nothing is left parked.
+    assert not [
+        e
+        for e in er.async_entries_for_config_entry(ent_reg, eid)
+        if "lcm-parked" in e.unique_id
+    ]
+
+
+async def test_rename_resolves_a_swap(hass: HomeAssistant, entry) -> None:
+    """The same cycle, through the rename path, including devices."""
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    a = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Alice|pin")
+    b = _seed_entity(hass, entry, TEXT_DOMAIN, f"{eid}|Bob|pin")
+    dev_a = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Alice")}, name="Alice"
+    )
+    dev_b = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Bob")}, name="Bob"
+    )
+
+    async_rename_identifiers(hass, eid, {"Alice": "Bob", "Bob": "Alice"})
+
+    assert ent_reg.async_get(a).unique_id == f"{eid}|Bob|pin"
+    assert ent_reg.async_get(b).unique_id == f"{eid}|Alice|pin"
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Bob")}).id == dev_a.id
+    assert (
+        dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Alice")}).id == dev_b.id
+    )
 
 
 async def test_device_is_never_moved_twice(hass: HomeAssistant, entry) -> None:
@@ -407,3 +450,64 @@ async def test_rename_leaves_a_row_alone_on_collision(
 
     assert ent_reg.async_get(old).unique_id == f"{eid}|Raman|pin"
     assert "already in use" in caplog.text
+
+
+def test_parked_segment_avoids_a_user_who_chose_that_name() -> None:
+    """The parking name steps aside for a user who happens to hold it.
+
+    Unlikely, but the parking name lives in the same namespace as user
+    names, so a collision would move one user's rows on top of another's.
+    """
+    assert _temporary_segment({"a": "b"}) == "lcm-parked-0"
+    assert _temporary_segment({"lcm-parked-0": "b"}) == "lcm-parked-1"
+    assert _temporary_segment({"a": "lcm-parked-0"}) == "lcm-parked-1"
+
+
+async def test_rename_reclaims_an_empty_blocking_device(
+    hass: HomeAssistant, entry
+) -> None:
+    """A leftover shell at the target is reclaimed, not left to strand us.
+
+    Leaving the real device on its old identifier is not safe: the orphan
+    sweep prunes it on the next setup because its name is no longer
+    configured, and Home Assistant cascades that to its entity rows.
+    Removing an empty device destroys nothing.
+    """
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    real = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Alice")}, name="Alice"
+    )
+    dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Bob")}, name="stale shell"
+    )
+
+    async_rename_identifiers(hass, eid, {"Alice": "Bob"})
+
+    moved = dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Bob")})
+    assert moved is not None and moved.id == real.id
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Alice")}) is None
+
+
+async def test_rename_leaves_a_populated_blocking_device(
+    hass: HomeAssistant, entry, caplog
+) -> None:
+    """A blocker that still has entities is reported, never removed."""
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Alice")}, name="Alice"
+    )
+    blocker = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Bob")}, name="Bob"
+    )
+    ent_reg.async_get_or_create(
+        TEXT_DOMAIN, DOMAIN, f"{eid}|Bob|pin", config_entry=entry, device_id=blocker.id
+    )
+
+    async_rename_identifiers(hass, eid, {"Alice": "Bob"})
+
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Alice")}) is not None
+    assert dev_reg.async_get(blocker.id) is not None
+    assert "target already exists" in caplog.text

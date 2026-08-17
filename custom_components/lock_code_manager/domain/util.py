@@ -17,7 +17,7 @@ from homeassistant.helpers.issue_registry import IssueSeverity, async_create_iss
 
 from ..const import DOMAIN
 from .config import EntryConfig, build_user_unique_id
-from .queries import slot_name_by_entry_id
+from .queries import configured_slot_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,14 +135,20 @@ async def async_disable_slot(
     When reason is provided, a repair issue is created so the user can
     acknowledge it through the Home Assistant repairs dashboard.
     """
-    enabled_entity_id = ent_reg.async_get_entity_id(
-        SWITCH_DOMAIN,
-        DOMAIN,
-        build_user_unique_id(
-            config_entry_id,
-            slot_name_by_entry_id(hass, config_entry_id, slot_num),
-            CONF_ENABLED,
-        ),
+    # Strict: this turns off whatever switch it finds, so it must not fall
+    # back to a generated name. The fallback shares a namespace with real
+    # names ("User 3" is both), so an unconfigured slot 3 could resolve a
+    # different user's switch and disable them instead.
+    entry = hass.config_entries.async_get_entry(config_entry_id)
+    user_name = configured_slot_name(entry, slot_num) if entry else None
+    enabled_entity_id = (
+        ent_reg.async_get_entity_id(
+            SWITCH_DOMAIN,
+            DOMAIN,
+            build_user_unique_id(config_entry_id, user_name, CONF_ENABLED),
+        )
+        if user_name
+        else None
     )
     if not enabled_entity_id:
         lock_context = f" on {lock_name} ({lock_entity_id})" if lock_name else ""
