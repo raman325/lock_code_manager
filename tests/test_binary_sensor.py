@@ -2227,3 +2227,48 @@ async def test_add_standard_entity_for_slot_without_coordinator_logs_warning(
         if "|99|" in entry.unique_id
     ]
     assert slot_99_entities
+
+
+async def test_a_lock_that_withholds_its_contents_is_cleared_once(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A disabled slot the lock will not report on must not be cleared forever.
+
+    Some locks answer "occupied" without returning the code -- masked PINs on
+    Z-Wave, an enabled status with no value on Zigbee. The clear lands, but
+    the read can never confirm it, so the slot reads out of sync on every
+    tick and each tick issues another clear at a lock that has already done
+    as it was asked.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    lock_provider.service_calls["clear_usercode"].clear()
+
+    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    assert len(lock_provider.service_calls.get("clear_usercode", [])) == 1
+
+    # The lock keeps reporting the slot occupied, without saying what it holds.
+    for _ in range(3):
+        coordinator.async_set_updated_data(
+            {pin_address(1): SlotCredential.unreadable()}
+        )
+        await hass.async_block_till_done()
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    assert len(lock_provider.service_calls.get("clear_usercode", [])) == 1, (
+        "The clear was reissued on every tick"
+    )
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON

@@ -230,6 +230,14 @@ class SlotSyncManager:
         # masked/write-only slot on every restart.
         self._last_set_pin: str | None = None
 
+        # Whether the last write to this slot was a clear. Read only when the
+        # lock reports the slot occupied but withholds its contents, where it
+        # is the only evidence the clear landed. In memory only, and False on
+        # restart, so an unreadable slot is cleared once more after a restart
+        # rather than assumed -- matching what ``_last_set_pin`` does on the
+        # set side, and for the same reason.
+        self._cleared_slot: bool = False
+
         # Slot-level circuit breaker: trips when a code repeatedly fails to
         # converge within the window, suspending just this lock and slot.
         # Only ``_async_tick_impl`` mutates the breaker; external callbacks
@@ -484,7 +492,17 @@ class SlotSyncManager:
             return snapshot.credential_state == snapshot.code_state
         # active_state == STATE_OFF: slot should be cleared
         if credential is not None:
-            return credential.is_empty
+            if credential.is_empty:
+                return True
+            if not credential.is_readable:
+                # The lock says the slot holds something but will not say
+                # what, so it can neither confirm nor deny the clear. Trust
+                # the clear already issued -- the same trade the set path
+                # above makes with ``_last_set_pin``. Without it the slot is
+                # never in sync, and every tick issues another clear at a
+                # lock that has already done as it was asked.
+                return self._cleared_slot
+            return False
         # Code sensor entity returns "" for empty credential.
         return snapshot.code_state == ""
 
@@ -508,10 +526,12 @@ class SlotSyncManager:
                 source="sync",
             )
             self._last_set_pin = snapshot.credential_state
+            self._cleared_slot = False
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
             return True
         await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
         self._last_set_pin = None
+        self._cleared_slot = True
         _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
         return False
 
