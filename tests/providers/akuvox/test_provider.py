@@ -1034,3 +1034,30 @@ class TestBaseOrchestration:
         codes = await akuvox_lock.async_get_usercodes()
         assert codes[1] is SlotCredential.empty()
         assert codes[2] is SlotCredential.empty()
+
+
+async def test_occupied_indices_sees_tags_no_entry_manages(
+    akuvox_lock: AkuvoxLock,
+) -> None:
+    """A tag left behind by a removed configuration still claims its number."""
+    users = [
+        {"name": "lcm:1:Raman", "source_type": "1", "private_pin": "1234"},
+        {"name": "lcm:7:Departed", "source_type": "1", "private_pin": "5678"},
+        {"name": "Cleaner", "source_type": "1", "private_pin": "9999"},
+    ]
+    with patch.object(akuvox_lock, "_async_list_users", AsyncMock(return_value=users)):
+        # The untagged user claims no slot: an Akuvox user is addressed by its
+        # own identifier, not by a slot number.
+        assert await akuvox_lock.async_get_occupied_indices(10) == frozenset({1, 7})
+
+
+async def test_occupied_indices_ignores_users_from_elsewhere(
+    akuvox_lock: AkuvoxLock,
+) -> None:
+    """Only users created on the device itself are the device's own."""
+    users = [
+        {"name": "lcm:1:Raman", "source_type": "1", "private_pin": "1234"},
+        {"name": "lcm:4:FromCloud", "source_type": "9", "private_pin": "5678"},
+    ]
+    with patch.object(akuvox_lock, "_async_list_users", AsyncMock(return_value=users)):
+        assert await akuvox_lock.async_get_occupied_indices(10) == frozenset({1})

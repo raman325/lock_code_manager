@@ -259,6 +259,20 @@ class ZWaveJSLock(BaseLock):
             return SlotCredential.unreadable()
         return SlotCredential.known(code)
 
+    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
+        """
+        Report occupancy from the node read, which already covers every user.
+
+        ``async_get_users`` is not scoped to the slots Lock Code Manager
+        manages here, so a code programmed by hand is already in the answer.
+        """
+        return frozenset(
+            credential.slot
+            for user in await self.async_get_users()
+            for credential in user.pin_credentials
+            if credential.is_present and credential.slot <= limit
+        )
+
     async def async_get_users(self) -> list[User]:
         """
         Read every user and all of their credentials from the lock.

@@ -800,3 +800,92 @@ class TestAsyncSetClearHardRefresh:
             direct = await lock.async_get_usercodes()
 
         assert refresh == direct == {12: SlotCredential.known("ABC")}
+
+
+class TestOccupiedIndices:
+    """Occupancy reads span the lock, not just the slots this entry manages."""
+
+    async def test_sees_slots_no_entry_manages(
+        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """A code programmed by hand holds its index and must be reported.
+
+        A write-only code counts as occupied: the value cannot be read, but
+        the index plainly is taken.
+        """
+        lock = zigbee2mqtt_lock_connected
+
+        async def _read(slot_num: int, get_topic: str) -> SlotCredential | None:
+            if slot_num == 4:
+                return SlotCredential.known("9999")
+            if slot_num == 5:
+                return SlotCredential.unreadable()
+            return SlotCredential.empty()
+
+        with (
+            patch.object(
+                lock, "async_is_integration_connected", new=AsyncMock(return_value=True)
+            ),
+            patch.object(lock, "_get_topic", return_value="topic/get"),
+            patch.object(lock, "_async_read_slot", side_effect=_read),
+        ):
+            assert await lock.async_get_occupied_indices(5) == frozenset({4, 5})
+
+    async def test_stops_at_the_limit(
+        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """The bound is what keeps a per-index lock from being walked end to end."""
+        lock = zigbee2mqtt_lock_connected
+        read = AsyncMock(return_value=SlotCredential.empty())
+
+        with (
+            patch.object(
+                lock, "async_is_integration_connected", new=AsyncMock(return_value=True)
+            ),
+            patch.object(lock, "_get_topic", return_value="topic/get"),
+            patch.object(lock, "_async_read_slot", read),
+        ):
+            assert await lock.async_get_occupied_indices(3) == frozenset()
+
+        assert read.await_count == 3
+
+    async def test_unknown_when_one_index_goes_unanswered(
+        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """A partial answer understates occupancy, which is what overwrites codes."""
+        lock = zigbee2mqtt_lock_connected
+
+        async def _read(slot_num: int, get_topic: str) -> SlotCredential | None:
+            return None if slot_num == 2 else SlotCredential.empty()
+
+        with (
+            patch.object(
+                lock, "async_is_integration_connected", new=AsyncMock(return_value=True)
+            ),
+            patch.object(lock, "_get_topic", return_value="topic/get"),
+            patch.object(lock, "_async_read_slot", side_effect=_read),
+        ):
+            assert await lock.async_get_occupied_indices(3) is None
+
+    async def test_unknown_when_disconnected(
+        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """A lock that cannot be reached reports unknown, never empty."""
+        lock = zigbee2mqtt_lock_connected
+        with patch.object(
+            lock, "async_is_integration_connected", new=AsyncMock(return_value=False)
+        ):
+            assert await lock.async_get_occupied_indices(3) is None
+
+    async def test_unknown_without_a_get_topic(
+        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """No topic means no question can be asked, which is not an empty lock."""
+        lock = zigbee2mqtt_lock_connected
+        with (
+            patch.object(
+                lock, "async_is_integration_connected", new=AsyncMock(return_value=True)
+            ),
+            patch.object(lock, "_get_topic", return_value=None),
+        ):
+            assert await lock.async_get_occupied_indices(3) is None

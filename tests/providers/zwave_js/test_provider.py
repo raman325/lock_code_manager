@@ -36,6 +36,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     SetUserResult,
     User,
     WriteResult,
+    credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -2143,3 +2144,44 @@ async def test_reconcile_read_unexpected_error_does_not_replace_typed_error(
             name=None,
             source="sync",
         )
+
+
+async def test_occupied_indices_covers_users_no_entry_manages(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """The node read already spans the whole lock, so occupancy comes free.
+
+    This is the property the scoped providers lack: nothing here filters to
+    the slots Lock Code Manager manages, so a code programmed by hand is
+    already in the answer.
+    """
+    users = [
+        User(
+            user_id=2,
+            credentials=[
+                credential_from_slot(2, SlotCredential.known("1111")),
+            ],
+        ),
+        User(
+            user_id=8,
+            credentials=[
+                credential_from_slot(8, SlotCredential.known("2222")),
+            ],
+        ),
+    ]
+    with patch.object(zwave_js_lock, "async_get_users", AsyncMock(return_value=users)):
+        assert await zwave_js_lock.async_get_occupied_indices(5) == frozenset({2})
+
+
+async def test_occupied_indices_ignores_empty_credentials(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """A slot the lock reports as empty is free, not occupied."""
+    users = [
+        User(user_id=1, credentials=[credential_from_slot(1, SlotCredential.empty())]),
+        User(
+            user_id=2, credentials=[credential_from_slot(2, SlotCredential.known("1"))]
+        ),
+    ]
+    with patch.object(zwave_js_lock, "async_get_users", AsyncMock(return_value=users)):
+        assert await zwave_js_lock.async_get_occupied_indices(5) == frozenset({2})

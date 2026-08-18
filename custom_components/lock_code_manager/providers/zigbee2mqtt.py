@@ -666,60 +666,104 @@ class Zigbee2MQTTLock(BaseLock):
         if not code_slots:
             return []
 
-        loop = asyncio.get_running_loop()
-        slot_states: dict[int, SlotCredential] = {}
-
-        # Query one slot at a time so Zigbee2MQTT / firmware can answer each GET before
-        # the next. Parallel gather + per-slot timeouts can fail the entire refresh and
-        # leave coordinator.data empty -- sync then skips every slot (see
-        # SlotSyncManager._resolve_credential_snapshot).
-        # Transient publish/timeout/read failures use the unreadable credential so sync
-        # does not treat the slot as confirmed-empty and storm reprogramming after MQTT
-        # recovery.
-        for slot_num in sorted(code_slots):
-            future = loop.create_future()
-            self._pending_codes[slot_num] = future
-            payload = json.dumps({"pin_code": {"user": slot_num}})
-            try:
-                await async_publish(self.hass, get_topic, payload)
-            except (HomeAssistantError, OSError) as err:
-                LOGGER.debug(
-                    "MQTT publish failed for PIN get %s slot %s: %s",
-                    self.lock.entity_id,
-                    slot_num,
-                    err,
-                )
-                slot_states[slot_num] = SlotCredential.unreadable()
-                self._pending_codes.pop(slot_num, None)
-                continue
-
-            try:
-                result = await asyncio.wait_for(future, timeout=10.0)
-            except TimeoutError:
-                LOGGER.debug(
-                    "Timeout waiting for PIN code response for %s slot %s",
-                    self.lock.entity_id,
-                    slot_num,
-                )
-                slot_states[slot_num] = SlotCredential.unreadable()
-            except Exception as err:
-                # Broad catch is intentional: the future is resolved by the MQTT
-                # callback, and any exception from resolution (InvalidStateError,
-                # data processing errors) should not crash the entire refresh.
-                # CancelledError is BaseException in Python 3.11+ and propagates.
-                LOGGER.warning(
-                    "Unexpected error getting PIN for %s slot %s: %s",
-                    self.lock.entity_id,
-                    slot_num,
-                    err,
-                )
-                slot_states[slot_num] = SlotCredential.unreadable()
-            else:
-                slot_states[slot_num] = result
-            finally:
-                self._pending_codes.pop(slot_num, None)
-
+        slot_states = {
+            slot_num: await self._async_read_slot(slot_num, get_topic)
+            or SlotCredential.unreadable()
+            for slot_num in sorted(code_slots)
+        }
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
+
+    async def _async_read_slot(
+        self, slot_num: int, get_topic: str
+    ) -> SlotCredential | None:
+        """
+        Ask the lock for one slot and wait for the answer.
+
+        Returns ``None`` when the lock did not answer at all. That is a
+        different thing from ``SlotCredential.unreadable()``, which says the
+        slot holds a code whose value is write-only -- callers that must not
+        confuse "no answer" with "occupied" need the two kept apart.
+
+        Slots are queried one at a time so Zigbee2MQTT and the firmware can
+        answer each GET before the next. A parallel gather with per-slot
+        timeouts can fail an entire refresh and leave the coordinator with no
+        data, which makes sync skip every slot (see
+        ``SlotSyncManager._resolve_credential_snapshot``).
+
+        Publish, timeout and read failures all produce an unreadable
+        credential rather than an empty one, so sync does not take a
+        transient MQTT problem for a confirmed-empty slot and storm
+        reprogramming once MQTT recovers.
+        """
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self._pending_codes[slot_num] = future
+        payload = json.dumps({"pin_code": {"user": slot_num}})
+        try:
+            await async_publish(self.hass, get_topic, payload)
+        except (HomeAssistantError, OSError) as err:
+            LOGGER.debug(
+                "MQTT publish failed for PIN get %s slot %s: %s",
+                self.lock.entity_id,
+                slot_num,
+                err,
+            )
+            self._pending_codes.pop(slot_num, None)
+            return None
+
+        try:
+            result = await asyncio.wait_for(future, timeout=10.0)
+        except TimeoutError:
+            LOGGER.debug(
+                "Timeout waiting for PIN code response for %s slot %s",
+                self.lock.entity_id,
+                slot_num,
+            )
+            credential = None
+        except Exception as err:
+            # Broad catch is intentional: the future is resolved by the MQTT
+            # callback, and any exception from resolution (InvalidStateError,
+            # data processing errors) should not crash the entire refresh.
+            # CancelledError is BaseException in Python 3.11+ and propagates.
+            LOGGER.warning(
+                "Unexpected error getting PIN for %s slot %s: %s",
+                self.lock.entity_id,
+                slot_num,
+                err,
+            )
+            credential = None
+        else:
+            credential = result
+        finally:
+            self._pending_codes.pop(slot_num, None)
+        return credential
+
+    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
+        """
+        Ask the lock about each index in turn, up to ``limit``.
+
+        Zigbee2MQTT answers one index per request, which is why the caller
+        bounds the range rather than the whole advertised capacity being
+        walked.
+
+        A single index that cannot be read makes the whole answer unknown.
+        Returning the rest would understate what is occupied, and an
+        understated answer is the one that overwrites a code.
+        """
+        if not await self.async_is_integration_connected():
+            return None
+        get_topic = self._get_topic("get")
+        if not get_topic:
+            return None
+
+        occupied: set[int] = set()
+        for slot_num in range(1, limit + 1):
+            credential = await self._async_read_slot(slot_num, get_topic)
+            if credential is None:
+                return None
+            if credential.is_present:
+                occupied.add(slot_num)
+        return frozenset(occupied)
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Perform hard refresh and return all codes."""

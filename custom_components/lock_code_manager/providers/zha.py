@@ -378,6 +378,40 @@ class ZHALock(BaseLock):
                 slot_states[slot_num] = SlotCredential.unreadable()
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
+    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
+        """
+        Ask the lock about each index in turn, up to ``limit``.
+
+        The cluster answers one index per round trip, which is why the
+        caller bounds the range instead of the whole advertised capacity
+        being walked.
+
+        A single index that cannot be read makes the whole answer unknown.
+        Returning the rest would understate what is occupied, and an
+        understated answer is the one that overwrites a code.
+        """
+        cluster = await self._get_connected_cluster()
+        occupied: set[int] = set()
+        for slot_num in range(1, limit + 1):
+            try:
+                result = await cluster.get_pin_code(slot_num)
+                user_status, _pin_code = self._parse_pin_response(result)
+            except Exception:
+                _LOGGER.debug(
+                    "Lock %s: could not read slot %s, so occupancy is unknown",
+                    self.lock.entity_id,
+                    slot_num,
+                    exc_info=True,
+                )
+                return None
+            # Enabled is enough. A lock that will not hand back the code
+            # still has one in that slot, and requiring the value would
+            # report a write-only slot as free -- the understatement that
+            # overwrites a credential.
+            if user_status == DoorLock.UserStatus.Enabled:
+                occupied.add(slot_num)
+        return frozenset(occupied)
+
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read all codes from the lock (no cache to invalidate)."""
         return await self.async_get_usercodes()

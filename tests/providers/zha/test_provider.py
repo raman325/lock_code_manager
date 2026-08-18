@@ -876,3 +876,99 @@ async def test_programming_event_unparseable_with_coordinator_triggers_refresh(
     await hass.async_block_till_done()
 
     zha_lock.coordinator.async_request_refresh.assert_called_once()
+
+
+async def test_occupied_indices_sees_slots_no_entry_manages(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Occupancy reports codes this integration did not put there.
+
+    ``async_get_users`` is scoped to the slots Lock Code Manager manages
+    because it also decides where writes land. Allocation needs the wider
+    view: a code programmed by hand holds its index just as firmly, and
+    issuing that index to a new user would overwrite it.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        # Slot 4 is outside anything this entry manages.
+        if slot_num == 4:
+            return type(
+                "Response",
+                (),
+                {"user_status": DoorLock.UserStatus.Enabled, "code": "9999"},
+            )()
+        return type(
+            "Response",
+            (),
+            {"user_status": DoorLock.UserStatus.Available, "code": ""},
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+
+    assert await zha_lock.async_get_occupied_indices(5) == frozenset({4})
+    # The managed-slot read cannot see it, which is why occupancy is separate.
+    assert 4 not in await zha_lock.async_get_usercodes()
+
+
+async def test_occupied_indices_stops_at_the_limit(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """The bound is what keeps a per-index lock from being walked end to end."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
+        )()
+    )
+
+    assert await zha_lock.async_get_occupied_indices(3) == frozenset()
+    assert cluster.get_pin_code.await_count == 3
+
+
+async def test_occupied_indices_unknown_when_one_index_fails(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """One unreadable index makes the whole answer unknown, not partial.
+
+    A partial answer understates what is occupied, and an understated answer
+    is the one that overwrites a code.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        if slot_num == 2:
+            raise OSError("radio dropped")
+        return type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+
+    assert await zha_lock.async_get_occupied_indices(3) is None
+
+
+async def test_occupied_indices_counts_a_write_only_slot(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """An enabled slot is occupied even when the lock will not return its code."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Enabled, "code": ""}
+        )()
+    )
+
+    assert await zha_lock.async_get_occupied_indices(2) == frozenset({1, 2})

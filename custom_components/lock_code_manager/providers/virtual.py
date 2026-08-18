@@ -105,6 +105,14 @@ class VirtualLock(BaseLock):
         self._data.pop(slot_key)
         return True
 
+    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
+        """Report every stored slot, managed by this entry or not."""
+        return frozenset(
+            slot_num
+            for key in self._data
+            if (slot_num := parse_slot_num(key)) is not None and slot_num <= limit
+        )
+
     async def async_get_users(self) -> list[User]:
         """
         Return users by reading all stored and managed slots.

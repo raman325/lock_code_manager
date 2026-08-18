@@ -173,6 +173,51 @@ async def test_describe_link_health_defaults_to_none(hass: HomeAssistant) -> Non
     assert lock.describe_link_health() is None
 
 
+async def test_occupied_indices_defaults_to_unknown(hass: HomeAssistant) -> None:
+    """A provider that cannot report occupancy refuses by default.
+
+    Returning an empty set instead would make every unimplemented provider
+    look like an empty lock, and allocation would issue indices over codes it
+    never asked about.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_occupancy_default",
+        config_entry=config_entry,
+    )
+    lock = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+    assert await lock.async_get_occupied_indices(10) is None
+    assert await lock.async_internal_get_occupied_indices(10) is None
+
+
+async def test_internal_occupied_indices_turns_a_failed_read_into_unknown(
+    hass: HomeAssistant,
+) -> None:
+    """A provider error is unknown, which callers already have to handle."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_occupancy_error",
+        config_entry=config_entry,
+    )
+    lock = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+    with patch.object(
+        lock,
+        "async_get_occupied_indices",
+        AsyncMock(side_effect=LockDisconnected("asleep")),
+    ):
+        assert await lock.async_internal_get_occupied_indices(10) is None
+
+
 class _PushSetupRaisesLock(MockLCMLock):
     """Mock lock whose setup_push_subscription raises a configurable error."""
 

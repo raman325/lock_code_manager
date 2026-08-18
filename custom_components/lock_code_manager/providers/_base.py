@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
+from functools import partial
 import logging
 import time
 from typing import Any, Literal, NoReturn, final
@@ -1790,6 +1791,30 @@ class BaseLock:
             "Override to read users and credentials from the lock.",
         )
 
+    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
+        """
+        Return which Personal Identification Number indices in 1..limit are taken.
+
+        Reports what is on the DEVICE, whoever put it there. That is what
+        separates this from ``async_get_users``, which is deliberately scoped
+        to the users Lock Code Manager manages because it also decides where
+        writes land. A code programmed by hand occupies an index just as
+        firmly as one this integration wrote, so allocation needs the wider
+        view or it will hand a new user somebody else's index.
+
+        ``limit`` bounds the work. Locks that can only be asked about one
+        index at a time would otherwise have to walk their entire advertised
+        capacity to report a handful of numbers; a caller that finds the
+        window too full to satisfy it asks again with a wider one.
+
+        ``None`` means the lock could not say, and callers must treat it as
+        unknown rather than empty -- issuing an index against a lock that
+        never answered is how a real credential gets overwritten. The base
+        returns ``None`` so a provider that cannot answer refuses by default
+        rather than by omission.
+        """
+        return None
+
     async def async_get_capabilities(self) -> LockCapabilities:
         """
         Report the lock's user/credential capabilities.
@@ -1806,6 +1831,28 @@ class BaseLock:
     async def async_internal_get_usercodes(self) -> dict[int, SlotCredential]:
         """Rate-limited wrapper around async_get_usercodes()."""
         return await self._execute_rate_limited("get", self.async_get_usercodes)
+
+    @final
+    async def async_internal_get_occupied_indices(
+        self, limit: int
+    ) -> frozenset[int] | None:
+        """
+        Rate-limited wrapper around async_get_occupied_indices().
+
+        A failed read becomes ``None`` rather than an exception: unknown is
+        already a value this returns, and every caller has to handle it.
+        """
+        try:
+            return await self._execute_rate_limited(
+                "get", partial(self.async_get_occupied_indices, limit)
+            )
+        except LockCodeManagerError as err:
+            _LOGGER.debug(
+                "Could not read occupied indices from %s: %s",
+                self.lock.entity_id,
+                err,
+            )
+            return None
 
     @final
     async def async_call_service(

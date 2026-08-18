@@ -296,3 +296,11 @@ async def test_get_users_returns_user_objects(virtual_lock_with_slots: VirtualLo
     assert user_1.user_id == expected.user_id
     assert user_1.active == expected.active
     assert user_1.pin_credentials[0].state == expected.pin_credentials[0].state
+
+
+async def test_occupied_indices_reports_stored_slots(virtual_lock: VirtualLock) -> None:
+    """The store is the device, so everything in it holds its number."""
+    virtual_lock._data["3"] = {"code": "1234", "name": "programmed by hand"}
+    virtual_lock._data["11"] = {"code": "5678", "name": "beyond the window"}
+
+    assert await virtual_lock.async_get_occupied_indices(10) == frozenset({3})

@@ -290,6 +290,29 @@ class AkuvoxLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
+    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
+        """
+        Report the slot numbers this lock's tagged users claim.
+
+        An Akuvox user is addressed by its own identifier, not by a slot
+        number -- the slot number lives in the user's NAME, put there by this
+        integration. So an untagged user occupies no slot number and cannot
+        collide with one allocation issues; what it consumes is one of the
+        lock's finite user entries.
+
+        Reading the tags still matters: a tag left behind by a configuration
+        that has since been removed claims a slot number nothing else knows
+        about.
+        """
+        users = await self._async_list_users()
+        return frozenset(
+            slot_num
+            for user in users
+            if _is_local_user(user)
+            and (slot_num := _parse_tag(user.get("name", ""))[0]) is not None
+            and slot_num <= limit
+        )
+
     async def async_get_users(self) -> list[User]:
         """
         Return users by reading tagged local users from the Akuvox device.
