@@ -85,6 +85,10 @@ CONF_ENTITIES = "entities"
 CONF_LOCKS = "locks"
 CONF_SLOTS = "slots"
 CONF_USERS = "users"
+CONF_NUM_USERS = "num_users"
+
+# Retired from the configuration in version 3, but still recognised so the
+# migration can drop them from a version 2 entry.
 CONF_NUM_SLOTS = "num_slots"
 CONF_START_SLOT = "start_slot"
 
@@ -125,8 +129,7 @@ SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 
 
 # Defaults
-DEFAULT_NUM_SLOTS = 3
-DEFAULT_START = 1
+DEFAULT_NUM_USERS = 3
 
 PLATFORM_MAP = {
     CONF_CALENDAR: Platform.CALENDAR,

@@ -174,14 +174,9 @@ class SlotAssignment:
         arrival or departure. New users take the lowest free number at or
         above ``start``, skipping ``unavailable``.
 
-        ``start`` is required, not defaulted. The entry's configured start
-        slot (``CONF_START_SLOT``) is usually chosen because the numbers below
-        it hold codes programmed by hand that Lock Code Manager does not
-        manage, and ``config_flow._check_common_slots`` refuses ranges that
-        overlap another entry on a shared lock. Since the slot IS the
-        credential index on most providers, defaulting to 1 would make a
-        forgotten argument write a new user's code over one of those --
-        silently, and on a real door. Required makes it a type error.
+        ``start`` is required, not defaulted, so a caller has to decide where
+        issuing begins rather than inheriting a default that happens to be
+        safe today.
 
         A user already holding a slot keeps it even when ``start`` rises
         above it or ``unavailable`` comes to include it: both constrain

@@ -12,13 +12,14 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.config_flow import (
     LockCodeManagerFlowHandler,
-    _async_get_all_codes,
+    _async_query_locks,
+    _LockQuery,
 )
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
-    CONF_NUM_SLOTS,
+    CONF_NUM_USERS,
     CONF_SLOTS,
-    CONF_START_SLOT,
+    CONF_USERS,
     DOMAIN,
 )
 from custom_components.lock_code_manager.domain.credentials import (
@@ -31,12 +32,37 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.slot_assignment import (
+    CONF_SLOT_ASSIGNMENT,
+)
 
 from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, MockLCMLock
 
 GET_ALL_CODES_PATCH = (
-    "custom_components.lock_code_manager.config_flow._async_get_all_codes"
+    "custom_components.lock_code_manager.config_flow._async_query_locks"
 )
+
+
+def _answers(existing: dict[str, dict[int, SlotCredential]]):
+    """Answer the lock query with these codes, for whichever locks are asked.
+
+    Replaces a fixture that returned one fixed mapping regardless of the
+    question. The flow now distinguishes "read, and empty" from "could not
+    read", so the stub has to answer per lock rather than in aggregate.
+    """
+
+    async def _query(hass, dev_reg, ent_reg, lock_entity_ids):
+        return [
+            _LockQuery(
+                lock_entity_id=lock,
+                managed=True,
+                credential_index_follows_slot=True,
+                codes=existing.get(lock, {}),
+            )
+            for lock in lock_entity_ids
+        ]
+
+    return _query
 
 
 @pytest.fixture(name="bypass_entry_setup_and_unload", autouse=True)
@@ -63,7 +89,7 @@ async def _start_config_flow(hass: HomeAssistant):
     assert result["step_id"] == "user"
     flow_id = result["flow_id"]
 
-    with patch(GET_ALL_CODES_PATCH, return_value={}):
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers({})):
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
@@ -86,13 +112,13 @@ async def _start_ui_config_flow(hass: HomeAssistant):
     assert result["step_id"] == "ui"
 
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NUM_SLOTS: 4, CONF_START_SLOT: 1}
+        flow_id, {CONF_NUM_USERS: 4}
     )
 
     assert result["type"] == "form"
     assert result["step_id"] == "code_slot"
     assert not result["last_step"]
-    assert result["description_placeholders"]["slot_num"] == 1
+    assert result["description_placeholders"]["user_num"] == 1
 
     return flow_id
 
@@ -141,16 +167,23 @@ async def test_config_flow_ui(hass: HomeAssistant):
             assert result["type"] == "form"
             assert result["step_id"] == "code_slot"
             assert result["last_step"] == (slot_num == len(pins) - 1)
-            assert result["description_placeholders"]["slot_num"] == slot_num + 1
+            assert result["description_placeholders"]["user_num"] == slot_num + 1
 
     assert result["title"] == "test"
     assert result["data"] == {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
-        CONF_SLOTS: {
-            1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"},
-            2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"},
-            3: {CONF_NAME: "User 3", CONF_ENABLED: True, CONF_PIN: "9012"},
-            4: {CONF_NAME: "User 4", CONF_ENABLED: True, CONF_PIN: "3456"},
+        CONF_USERS: {
+            "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
+            "User 2": {CONF_ENABLED: True, CONF_PIN: "5678"},
+            "User 3": {CONF_ENABLED: True, CONF_PIN: "9012"},
+            "User 4": {CONF_ENABLED: True, CONF_PIN: "3456"},
+        },
+        # Numbers the user never chose: the lowest free on the lock.
+        CONF_SLOT_ASSIGNMENT: {
+            "user 1": 1,
+            "user 2": 2,
+            "user 3": 3,
+            "user 4": 4,
         },
     }
 
@@ -404,91 +437,89 @@ async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
 # --- Existing-codes confirmation step tests ---
 
 
-async def test_ui_existing_codes_confirm_continue(hass: HomeAssistant):
-    """UI path: existing codes detected -> confirm -> continue -> create entry."""
-    existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}}
+async def test_ui_setup_allocates_around_existing_codes(hass: HomeAssistant):
+    """Setup skips slots that already hold a code instead of asking about them.
 
-    with patch(GET_ALL_CODES_PATCH, return_value=existing):
+    There is no prompt because there is nothing to overwrite: the numbers are
+    chosen, not requested, so an occupied one is simply not offered. The
+    confirmation the flow used to show existed because the user picked a range
+    and might have picked one already in use.
+    """
+    existing = {
+        LOCK_1_ENTITY_ID: {
+            1: SlotCredential.known("1234"),
+            2: SlotCredential.known("5678"),
+        }
+    }
+
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers(existing)):
         flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
+        await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
+        await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
 
-    assert result["step_id"] == "choose_path"
+        # Straight to the first user, with no confirmation in between.
+        assert result["type"] == "form"
+        assert result["step_id"] == "code_slot"
 
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "ui"}
-    )
-    assert result["step_id"] == "ui"
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NUM_SLOTS: 2, CONF_START_SLOT: 1}
-    )
-
-    # Should show the confirmation menu with lock/slot details
-    assert result["type"] == "menu"
-    assert result["step_id"] == "existing_codes_confirm"
-    assert LOCK_1_ENTITY_ID in result["description_placeholders"]["details"]
-    assert "slot 1" in result["description_placeholders"]["details"]
-
-    # User acknowledges — no clearing happens, just proceeds to slot config
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "existing_codes_continue"}
-    )
-
-    assert result["type"] == "form"
-    assert result["step_id"] == "code_slot"
-    assert result["description_placeholders"]["slot_num"] == 1
-
-    # Configure slot 1
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "1234"}
-    )
-
-    assert result["step_id"] == "code_slot"
-
-    # Configure slot 2 -> create entry (sync manager handles reconciliation)
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "User 3", CONF_ENABLED: True, CONF_PIN: "5678"}
-    )
+        await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1111"}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "Alice", CONF_ENABLED: True, CONF_PIN: "2222"}
+        )
 
     assert result["type"] == "create_entry"
+    # Slots 1 and 2 are taken on the lock, so the users get 3 and 4. Which of
+    # them gets which does not follow the order they were entered: numbering
+    # is by name, so a caller passing an unordered collection cannot hand the
+    # same configuration different credential indices from one run to the next.
+    assert result["data"][CONF_SLOT_ASSIGNMENT] == {"alice": 3, "raman": 4}
 
 
-async def test_ui_existing_codes_confirm_cancel(hass: HomeAssistant):
-    """UI path: existing codes detected -> confirm -> cancel -> abort."""
-    existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}}
+async def test_ui_setup_refuses_when_a_lock_cannot_be_read(hass: HomeAssistant):
+    """A lock that did not answer makes occupancy unknown, and setup stops.
 
-    with patch(GET_ALL_CODES_PATCH, return_value=existing):
+    Unreadable is not free. Issuing a number here could put a user's code over
+    a credential programmed by hand on a lock that was merely unreachable.
+    """
+
+    async def _unreadable(hass, dev_reg, ent_reg, lock_entity_ids):
+        return [
+            _LockQuery(
+                lock_entity_id=lock,
+                managed=True,
+                credential_index_follows_slot=True,
+                codes=None,
+            )
+            for lock in lock_entity_ids
+        ]
+
+    with patch(GET_ALL_CODES_PATCH, side_effect=_unreadable):
         flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
+        await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "ui"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NUM_SLOTS: 2, CONF_START_SLOT: 1}
-    )
-
-    assert result["type"] == "menu"
-    assert result["step_id"] == "existing_codes_confirm"
-
-    # Cancel -> abort, no clear
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "existing_codes_cancel"}
-    )
+        await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+        await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1111"}
+        )
 
     assert result["type"] == "abort"
-    assert result["reason"] == "existing_codes_cancelled"
+    assert result["reason"] == "occupancy_unknown"
+    assert LOCK_1_ENTITY_ID in result["description_placeholders"]["locks"]
 
 
 async def test_yaml_existing_codes_confirm_continue(hass: HomeAssistant):
     """YAML path: existing codes detected -> confirm -> continue -> create entry."""
     existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("9999")}}
 
-    with patch(GET_ALL_CODES_PATCH, return_value=existing):
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers(existing)):
         flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
@@ -523,7 +554,7 @@ async def test_yaml_existing_codes_confirm_cancel(hass: HomeAssistant):
     """YAML path: existing codes detected -> confirm -> cancel -> abort."""
     existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("9999")}}
 
-    with patch(GET_ALL_CODES_PATCH, return_value=existing):
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers(existing)):
         flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
@@ -551,7 +582,7 @@ async def test_yaml_existing_codes_confirm_cancel(hass: HomeAssistant):
 
 async def test_ui_no_existing_codes_skips_confirm(hass: HomeAssistant):
     """UI path: no existing codes -> skip confirm step entirely."""
-    with patch(GET_ALL_CODES_PATCH, return_value={}):
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers({})):
         flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
@@ -563,7 +594,7 @@ async def test_ui_no_existing_codes_skips_confirm(hass: HomeAssistant):
         flow_id, {"next_step_id": "ui"}
     )
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NUM_SLOTS: 1, CONF_START_SLOT: 1}
+        flow_id, {CONF_NUM_USERS: 1}
     )
 
     # Goes directly to code_slot, no confirm step
@@ -573,7 +604,7 @@ async def test_ui_no_existing_codes_skips_confirm(hass: HomeAssistant):
 
 async def test_yaml_no_existing_codes_skips_confirm(hass: HomeAssistant):
     """YAML path: no existing codes -> create_entry directly without confirm."""
-    with patch(GET_ALL_CODES_PATCH, return_value={}):
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers({})):
         flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
@@ -592,8 +623,8 @@ async def test_yaml_no_existing_codes_skips_confirm(hass: HomeAssistant):
     assert result["data"][CONF_SLOTS][1][CONF_PIN] == "1234"
 
 
-async def test_ui_existing_codes_confirm_lists_multiple_slots(hass: HomeAssistant):
-    """Confirm step shows all slots with existing codes, sorted."""
+async def test_yaml_existing_codes_confirm_lists_slots_sorted(hass: HomeAssistant):
+    """The confirmation names every slot holding a code, in ascending order."""
     existing = {
         LOCK_1_ENTITY_ID: {
             3: SlotCredential.known("1234"),
@@ -601,30 +632,34 @@ async def test_ui_existing_codes_confirm_lists_multiple_slots(hass: HomeAssistan
         }
     }
 
-    with patch(GET_ALL_CODES_PATCH, return_value=existing):
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers(existing)):
         flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
+        await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "ui"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NUM_SLOTS: 5, CONF_START_SLOT: 1}
-    )
+        await hass.config_entries.flow.async_configure(
+            flow_id, {"next_step_id": "yaml"}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {
+                CONF_SLOTS: {
+                    1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1111"},
+                    3: {CONF_NAME: "User 3", CONF_ENABLED: True, CONF_PIN: "3333"},
+                }
+            },
+        )
 
     assert result["type"] == "menu"
     assert result["step_id"] == "existing_codes_confirm"
-    # Slots are sorted in the placeholder
-    assert "slot 1" in result["description_placeholders"]["details"]
-    assert "slot 3" in result["description_placeholders"]["details"]
+    details = result["description_placeholders"]["details"]
+    assert details.index("slot 1") < details.index("slot 3")
 
 
 # --- _async_get_all_codes tests ---
 
 
-async def test_async_get_all_codes_exception(hass: HomeAssistant):
+async def test_query_locks_exception(hass: HomeAssistant):
     """Test _async_get_all_codes catches exception from usercodes fetch."""
     mock_instance = MagicMock()
     mock_instance.async_internal_get_usercodes = AsyncMock(
@@ -649,13 +684,16 @@ async def test_async_get_all_codes_exception(hass: HomeAssistant):
             return_value=MockConfigEntry(domain="zwave_js"),
         ),
     ):
-        result = await _async_get_all_codes(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
+        [query] = await _async_query_locks(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
 
     # Exception should be caught; result should be empty
-    assert result == {}
+    # The read FAILED. Reporting it as empty would let allocation issue a
+    # number this lock may already hold a credential at.
+    assert query.codes is None
+    assert query.managed
 
 
-async def test_async_get_all_codes_provider_failure_logs_warning(
+async def test_query_locks_provider_failure_logs_warning(
     hass: HomeAssistant, caplog: pytest.LogCaptureFixture
 ):
     """
@@ -690,9 +728,12 @@ async def test_async_get_all_codes_provider_failure_logs_warning(
         ),
         caplog.at_level("WARNING"),
     ):
-        result = await _async_get_all_codes(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
+        [query] = await _async_query_locks(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
 
-    assert result == {}
+    # The read FAILED. Reporting it as empty would let allocation issue a
+    # number this lock may already hold a credential at.
+    assert query.codes is None
+    assert query.managed
     # Surfaced at WARNING (not DEBUG): failure should be visible in logs
     assert any(
         record.levelname == "WARNING" and LOCK_1_ENTITY_ID in record.message
@@ -700,7 +741,7 @@ async def test_async_get_all_codes_provider_failure_logs_warning(
     )
 
 
-async def test_async_get_all_codes_bare_base_error_logs_warning(
+async def test_query_locks_bare_base_error_logs_warning(
     hass: HomeAssistant, caplog: pytest.LogCaptureFixture
 ):
     """
@@ -735,9 +776,12 @@ async def test_async_get_all_codes_bare_base_error_logs_warning(
         ),
         caplog.at_level("WARNING"),
     ):
-        result = await _async_get_all_codes(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
+        [query] = await _async_query_locks(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
 
-    assert result == {}
+    # The read FAILED. Reporting it as empty would let allocation issue a
+    # number this lock may already hold a credential at.
+    assert query.codes is None
+    assert query.managed
     # Should be a clean WARNING (no traceback), since this is a known
     # failure mode — not the generic Exception arm
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
@@ -747,9 +791,9 @@ async def test_async_get_all_codes_bare_base_error_logs_warning(
     assert all(r.exc_info is None for r in warnings)
 
 
-async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):
+async def test_query_locks_returns_all_codes(hass: HomeAssistant):
     """
-    Test _async_get_all_codes returns every slot the lock reports.
+    Test _async_query_locks returns every slot the lock reports.
 
     Filtering empty slots is the caller's responsibility, so this function
     must not drop them.
@@ -797,29 +841,32 @@ async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):
             return_value=MockConfigEntry(domain="zwave_js"),
         ),
     ):
-        result = await _async_get_all_codes(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
+        [query] = await _async_query_locks(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
 
-    # _async_get_all_codes returns ALL codes — including empty slots.
-    # Callers (e.g. _slots_with_existing_codes) filter as needed.
-    assert LOCK_1_ENTITY_ID in result
-    assert result[LOCK_1_ENTITY_ID] == {
+    # Every slot the lock reports, including empty ones: filtering is the
+    # caller's job, and an empty slot is a slot allocation may use.
+    assert query.lock_entity_id == LOCK_1_ENTITY_ID
+    assert query.codes == {
         1: SlotCredential.known("1234"),
         3: SlotCredential.known("9999"),
         4: SlotCredential.empty(),
     }
 
 
-async def test_async_get_all_codes_entity_not_in_registry(hass: HomeAssistant):
+async def test_query_locks_entity_not_in_registry(hass: HomeAssistant):
     """Test _async_get_all_codes skips locks not in the entity registry."""
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
 
-    result = await _async_get_all_codes(hass, dev_reg, ent_reg, ["lock.does_not_exist"])
+    [query] = await _async_query_locks(hass, dev_reg, ent_reg, ["lock.does_not_exist"])
 
-    assert result == {}
+    # Not a lock Lock Code Manager writes credentials to, so its contents
+    # cannot collide with anything allocation issues.
+    assert not query.managed
+    assert query.codes is None
 
 
-async def test_async_get_all_codes_unsupported_platform(hass: HomeAssistant):
+async def test_query_locks_unsupported_platform(hass: HomeAssistant):
     """Test _async_get_all_codes skips locks on unsupported platforms."""
     ent_reg = er.async_get(hass)
     ent_reg.async_get_or_create(
@@ -827,12 +874,15 @@ async def test_async_get_all_codes_unsupported_platform(hass: HomeAssistant):
     )
     dev_reg = dr.async_get(hass)
 
-    result = await _async_get_all_codes(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
+    [query] = await _async_query_locks(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
 
-    assert result == {}
+    # Not a lock Lock Code Manager writes credentials to, so its contents
+    # cannot collide with anything allocation issues.
+    assert not query.managed
+    assert query.codes is None
 
 
-async def test_async_get_all_codes_missing_lock_config_entry(hass: HomeAssistant):
+async def test_query_locks_missing_lock_config_entry(hass: HomeAssistant):
     """Test _async_get_all_codes skips locks whose config entry is missing."""
     ent_reg = er.async_get(hass)
     ent_reg.async_get_or_create(
@@ -847,44 +897,52 @@ async def test_async_get_all_codes_missing_lock_config_entry(hass: HomeAssistant
         ),
         patch.object(hass.config_entries, "async_get_entry", return_value=None),
     ):
-        result = await _async_get_all_codes(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
+        [query] = await _async_query_locks(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
 
-    assert result == {}
+    # Not a lock Lock Code Manager writes credentials to, so its contents
+    # cannot collide with anything allocation issues.
+    assert not query.managed
+    assert query.codes is None
 
 
 async def test_existing_codes_detected_across_multiple_locks(hass: HomeAssistant):
-    """Test that existing codes are detected across multiple locks without clearing."""
-    # Locks: one without an instance (skipped), one OK, one that fails,
-    # one whose slot 1 is reported as EMPTY (must not be cleared), and one
-    # that doesn't have slot 1 at all (must not be cleared)
+    """One lock holding a code at the requested slot is enough to prompt.
+
+    The other lock answers, and answers "empty" -- which is a real answer, not
+    a missing one, and must not be reported as an existing code.
+    """
     existing = {
-        "lock.no_instance": {1: SlotCredential.known("1111")},
-        "lock.ok": {1: SlotCredential.known("2222")},
-        "lock.fails": {1: SlotCredential.known("3333")},
-        "lock.empty_slot": {1: SlotCredential.empty()},
-        "lock.different_slot": {2: SlotCredential.known("4444")},
+        LOCK_1_ENTITY_ID: {1: SlotCredential.empty()},
+        LOCK_2_ENTITY_ID: {1: SlotCredential.known("2222")},
     }
-    with patch(GET_ALL_CODES_PATCH, return_value=existing):
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers(existing)):
         flow_id = await _init_flow_to_user_step(hass)
+        await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]},
+        )
+        await hass.config_entries.flow.async_configure(
+            flow_id, {"next_step_id": "yaml"}
+        )
         result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+            flow_id,
+            {
+                CONF_SLOTS: {
+                    1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "5678"}
+                }
+            },
         )
 
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "yaml"}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        flow_id,
-        {CONF_SLOTS: {1: {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "5678"}}},
-    )
-
-    # Confirm step shown because slot 1 has existing codes on some locks
     assert result["step_id"] == "existing_codes_confirm"
+    details = result["description_placeholders"]["details"]
+    assert LOCK_2_ENTITY_ID in details
+    assert LOCK_1_ENTITY_ID not in details
+
     result = await hass.config_entries.flow.async_configure(
         flow_id, {"next_step_id": "existing_codes_continue"}
     )
 
-    # No clearing happens — sync manager handles reconciliation
+    # Nothing is cleared -- the sync manager reconciles from here.
     assert result["type"] == "create_entry"
 
 
@@ -959,7 +1017,7 @@ async def test_options_flow_added_pair_no_existing_code_persists(hass: HomeAssis
     # Adding slot 2; lock has nothing in slot 2 (only slot 1)
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}},
+        side_effect=_answers({LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}}),
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -985,12 +1043,14 @@ async def test_options_flow_added_pair_with_existing_code_confirm(
     # in slot 1 — slot 1 is NOT in added_pairs so it must not be cleared)
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={
-            LOCK_1_ENTITY_ID: {
-                1: SlotCredential.known("1234"),
-                2: SlotCredential.known("9999"),
+        side_effect=_answers(
+            {
+                LOCK_1_ENTITY_ID: {
+                    1: SlotCredential.known("1234"),
+                    2: SlotCredential.known("9999"),
+                }
             }
-        },
+        ),
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -1027,7 +1087,7 @@ async def test_options_flow_added_lock_with_existing_code_confirm(
     # code in slot 1. The mixin should detect this and prompt.
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_2_ENTITY_ID: {1: SlotCredential.known("5555")}},
+        side_effect=_answers({LOCK_2_ENTITY_ID: {1: SlotCredential.known("5555")}}),
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -1054,7 +1114,7 @@ async def test_options_flow_existing_codes_cancel_aborts(hass: HomeAssistant):
 
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_1_ENTITY_ID: {2: SlotCredential.known("9999")}},
+        side_effect=_answers({LOCK_1_ENTITY_ID: {2: SlotCredential.known("9999")}}),
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -1083,7 +1143,7 @@ async def test_options_flow_added_pair_empty_code_persists(hass: HomeAssistant):
 
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_1_ENTITY_ID: {2: SlotCredential.empty()}},
+        side_effect=_answers({LOCK_1_ENTITY_ID: {2: SlotCredential.empty()}}),
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -1207,28 +1267,35 @@ async def test_config_flow_yaml_accepts_slot_within_capacity(
     assert result["type"] == "create_entry"
 
 
-async def test_config_flow_ui_rejects_slot_range_beyond_lock_capacity(
+async def test_config_flow_ui_rejects_more_users_than_the_lock_holds(
     hass: HomeAssistant, mock_lock_config_entry
 ):
-    """The UI path bounds start+count against the lock the same way YAML does."""
+    """Asking for more users than the lock has slots for cannot be satisfied.
+
+    The count is the only thing the user chose, so the refusal has to name it;
+    there is no slot range to send them back to.
+    """
     flow_id = await _start_config_flow(hass)
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "ui"}
-    )
-    assert result["step_id"] == "ui"
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+    await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 3})
+
+    for name in ("Raman", "Alice"):
+        await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
+        )
 
     probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(10)
+        return_value=_capabilities_with_slots(2)
     )
     with probe_registered, probe_capabilities:
         result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_START_SLOT: 8, CONF_NUM_SLOTS: 5}
+            flow_id, {CONF_NAME: "Bo", CONF_ENABLED: True, CONF_PIN: "3333"}
         )
 
-    assert result["type"] == "form"
-    assert result["step_id"] == "ui"
-    assert result["errors"] == {"base": "slot_out_of_range"}
-    assert result["description_placeholders"]["out_of_range_slots"] == "11, 12"
+    assert result["type"] == "abort"
+    assert result["reason"] == "too_many_users"
+    assert result["description_placeholders"]["num_users"] == "3"
+    assert result["description_placeholders"]["num_slots"] == "2"
 
 
 async def test_config_flow_capacity_check_skipped_when_lock_unreachable(

@@ -4,6 +4,8 @@
       "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
       "existing_codes_cancelled": "Setup cancelled. Existing codes were not modified.",
       "locks_updated": "The locks for your config entry have been updated.",
+      "occupancy_unknown": "Could not read the existing codes from {locks}, so Lock Code Manager cannot tell which code slots are free. Setting a user up now could overwrite a code already on the lock. Check the lock is reachable and try again.",
+      "too_many_users": "Lock {lock} has room for {num_slots} PIN codes, and {num_users} users were requested. Configure at most {num_slots} here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "unknown": "An unexpected error occurred during setup."
     },
     "error": {
@@ -31,8 +33,7 @@
           "name": "Name",
           "pin": "PIN Code"
         },
-        "description": "**Configure slot {slot_num}:** A slot is active when the condition entity (if configured) is 'on'. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
-        "title": "Configure Slot {slot_num}"
+        "title": "User {user_num} of {num_users}"
       },
       "existing_codes_confirm": {
         "title": "Existing Codes Detected",
@@ -44,10 +45,9 @@
       },
       "ui": {
         "data": {
-          "num_slots": "Number of slots",
-          "start_slot": "Start from slot #"
+          "num_users": "Number of users"
         },
-        "description": "Configure slots for all codes you want on the lock. You can add and remove slots later using the integration services.",
+        "description": "How many users do you want to set up? You can add or remove users later. Lock Code Manager picks which code slot each user occupies, skipping any slot that already holds a code.",
         "title": "How Many Slots?"
       },
       "user": {
