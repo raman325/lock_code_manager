@@ -8,10 +8,43 @@ from types import MappingProxyType
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_NAME
 
-from ..const import CONF_LOCKS, CONF_SLOTS
+from ..const import CONF_LOCKS, CONF_SLOTS, CONF_USERS
+from .slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment, _identity
 
 _EMPTY_SLOTS: Mapping[int, Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_EXTRA: Mapping[str, Any] = MappingProxyType({})
+
+# The keys EntryConfig models directly. Everything else in the entry is
+# internal bookkeeping and rides along in `extra`.
+_CONFIG_KEYS = frozenset({CONF_LOCKS, CONF_SLOTS})
+
+
+def _slots_from_users(mapping: Mapping[str, Any]) -> Mapping[Any, Mapping[str, Any]]:
+    """
+    Rebuild the slot-keyed view from the user-keyed storage shape.
+
+    Storage moved to ``users`` in version 3; the rest of the integration still
+    works in slot numbers, and will for another increment or two. Rebuilding
+    here keeps that one change confined to this function -- every reader goes
+    through ``EntryConfig``, so none of them has to know which shape is on
+    disk.
+
+    A user with no assigned slot is skipped rather than guessed at. Guessing
+    would put their code on a credential index somebody else may hold.
+    """
+    users = mapping.get(CONF_USERS)
+    if not users:
+        return {}
+    assignment = SlotAssignment.from_mapping(mapping)
+    rebuilt: dict[int, dict[str, Any]] = {}
+    for name, user in users.items():
+        slot_num = assignment.slot(name)
+        if slot_num is None:
+            continue
+        rebuilt[slot_num] = {CONF_NAME: name, **user}
+    return rebuilt
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +67,16 @@ class EntryConfig:
 
     locks: tuple[str, ...]
     slots: Mapping[int, Mapping[str, Any]]
+    # Every other top-level key in the entry, carried through verbatim.
+    #
+    # Deliberately has NO default. to_dict() feeds async_update_entry
+    # directly, so a field that could be forgotten at a construction site
+    # would silently ERASE that bookkeeping on the next write. That is not
+    # hypothetical: without this, the update listener's terminal write dropped
+    # `users` and `slot_assignment` on every pass, so the migrated entry
+    # reverted to the slot-keyed shape and setup looped. Requiring the field
+    # makes mypy the check instead of memory.
+    extra: Mapping[str, Any]
 
     @classmethod
     def empty(cls) -> EntryConfig:
@@ -43,7 +86,7 @@ class EntryConfig:
         Used as the initial value for ``runtime_data.config`` before the
         entry's data has been read.
         """
-        return cls(locks=(), slots=_EMPTY_SLOTS)
+        return cls(locks=(), slots=_EMPTY_SLOTS, extra=_EMPTY_EXTRA)
 
     @classmethod
     def from_entry(cls, entry: ConfigEntry) -> EntryConfig:
@@ -54,13 +97,31 @@ class EntryConfig:
         the new config is in ``options`` while ``data`` still holds the
         old config.
         """
+        # Bookkeeping is merged from BOTH sides rather than taken
+        # options-preferred the way configuration is. _setup_entry_after_start
+        # moves everything from data into options and the listener moves it
+        # back, so which side holds it depends on where in that cycle we are.
         return cls.from_mapping(
             {
+                **{k: v for k, v in entry.data.items() if k not in _CONFIG_KEYS},
+                **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
                 CONF_LOCKS: entry.options.get(
                     CONF_LOCKS, entry.data.get(CONF_LOCKS, [])
                 ),
-                CONF_SLOTS: entry.options.get(
-                    CONF_SLOTS, entry.data.get(CONF_SLOTS, {})
+                # Only set when a side actually HAS it. Defaulting to {} here
+                # would hand from_mapping an empty mapping rather than an
+                # absent key, so it would never rebuild the slot view from
+                # `users` -- and every reader would see an entry with no users
+                # at all.
+                **(
+                    {CONF_SLOTS: slots}
+                    if (
+                        slots := entry.options.get(
+                            CONF_SLOTS, entry.data.get(CONF_SLOTS)
+                        )
+                    )
+                    is not None
+                    else {}
                 ),
             }
         )
@@ -74,12 +135,17 @@ class EntryConfig:
         slot config dicts are wrapped in ``MappingProxyType`` so the
         whole structure is read-only.
         """
-        raw_slots = mapping.get(CONF_SLOTS, {})
+        raw_slots = mapping.get(CONF_SLOTS)
+        if raw_slots is None:
+            raw_slots = _slots_from_users(mapping)
         raw_locks = mapping.get(CONF_LOCKS, [])
         return cls(
             locks=tuple(raw_locks),
             slots=MappingProxyType(
                 {int(k): MappingProxyType(dict(v)) for k, v in raw_slots.items()}
+            ),
+            extra=MappingProxyType(
+                {k: v for k, v in mapping.items() if k not in _CONFIG_KEYS}
             ),
         )
 
@@ -146,6 +212,7 @@ class EntryConfig:
             slots=MappingProxyType(
                 {k: MappingProxyType(v) for k, v in new_slots.items()}
             ),
+            extra=self.extra,
         )
 
     def with_slot_field_removed(self, slot_num: int | str, key: str) -> EntryConfig:
@@ -166,6 +233,7 @@ class EntryConfig:
             slots=MappingProxyType(
                 {k: MappingProxyType(v) for k, v in new_slots.items()}
             ),
+            extra=self.extra,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -181,9 +249,39 @@ class EntryConfig:
         **new_config.to_dict()}``. In practice LCM entries only carry
         these two keys.
         """
+        # Emits the STORAGE shape, projected from the internal one. The
+        # internal view stays slot-keyed because the rest of the integration
+        # still works in slot numbers; only what reaches disk changed.
+        #
+        # Projected rather than carried through from `extra`, because edits
+        # land on the slot view -- a text entity setting a name or a code
+        # writes there. Re-emitting a stale copy of `users` would persist the
+        # configuration as it was before the edit.
+        #
+        # A slot with no name cannot be keyed by one, so the whole entry falls
+        # back to the slot-keyed form rather than dropping that user. Reachable
+        # only mid-config-flow, before validation has run.
+        carried = {
+            k: v
+            for k, v in self.extra.items()
+            if k not in (CONF_USERS, CONF_SLOT_ASSIGNMENT)
+        }
+        if any(not slot.get(CONF_NAME) for slot in self.slots.values()):
+            return {
+                **carried,
+                CONF_LOCKS: list(self.locks),
+                CONF_SLOTS: {k: dict(v) for k, v in self.slots.items()},
+            }
         return {
+            **carried,
             CONF_LOCKS: list(self.locks),
-            CONF_SLOTS: {k: dict(v) for k, v in self.slots.items()},
+            CONF_USERS: {
+                slot[CONF_NAME]: {k: v for k, v in slot.items() if k != CONF_NAME}
+                for slot in self.slots.values()
+            },
+            CONF_SLOT_ASSIGNMENT: {
+                _identity(slot[CONF_NAME]): num for num, slot in self.slots.items()
+            },
         }
 
 

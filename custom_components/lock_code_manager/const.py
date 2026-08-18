@@ -87,6 +87,7 @@ CONF_CONDITIONS = "conditions"
 CONF_ENTITIES = "entities"
 CONF_LOCKS = "locks"
 CONF_SLOTS = "slots"
+CONF_USERS = "users"
 CONF_NUM_SLOTS = "num_slots"
 CONF_START_SLOT = "start_slot"
 

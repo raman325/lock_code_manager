@@ -68,6 +68,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
+from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
@@ -2241,7 +2242,7 @@ class TestSetSlotCondition:
 
         # Verify config entry was updated
         assert (
-            lock_code_manager_config_entry.data[CONF_SLOTS][1]["entity_id"]
+            get_entry_config(lock_code_manager_config_entry).slot(1)["entity_id"]
             == BINARY_SENSOR_TEST_ENTITY_ID
         )
 
@@ -2353,7 +2354,7 @@ class TestSetSlotCondition:
 
         # Verify update worked
         assert (
-            lock_code_manager_config_entry.data[CONF_SLOTS][1]["entity_id"]
+            get_entry_config(lock_code_manager_config_entry).slot(1)["entity_id"]
             == INPUT_BOOLEAN_TEST_ENTITY_ID
         )
 
@@ -2549,7 +2550,7 @@ class TestClearSlotCondition:
         ws_client = await hass_ws_client(hass)
 
         # Slot 2 has a calendar entity configured
-        assert "entity_id" in lock_code_manager_config_entry.data[CONF_SLOTS][2]
+        assert "entity_id" in get_entry_config(lock_code_manager_config_entry).slot(2)
 
         # Clear slot 2's entity_id
         await ws_client.send_json(
@@ -2564,7 +2565,9 @@ class TestClearSlotCondition:
         assert msg["success"]
 
         # Verify entity_id was removed from config
-        assert "entity_id" not in lock_code_manager_config_entry.data[CONF_SLOTS][2]
+        assert "entity_id" not in get_entry_config(lock_code_manager_config_entry).slot(
+            2
+        )
 
     async def test_clear_already_empty(
         self,
@@ -2577,7 +2580,9 @@ class TestClearSlotCondition:
         ws_client = await hass_ws_client(hass)
 
         # Slot 1 has no entity_id configured
-        assert "entity_id" not in lock_code_manager_config_entry.data[CONF_SLOTS][1]
+        assert "entity_id" not in get_entry_config(lock_code_manager_config_entry).slot(
+            1
+        )
 
         await ws_client.send_json(
             {

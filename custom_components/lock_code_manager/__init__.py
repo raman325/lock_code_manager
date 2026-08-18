@@ -91,7 +91,6 @@ from .domain.models import (
     LockCodeManagerConfigEntry,
     LockCodeManagerConfigEntryRuntimeData,
 )
-from .domain.names import normalize_slot_names
 from .domain.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
@@ -106,6 +105,7 @@ from .domain.services import (
     async_set_usercode,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
+from .domain.user_migration import migrate_to_users
 from .domain.util import (
     PER_LOCK_ISSUE_KEYS,
     build_pin_deobfuscation_map,
@@ -209,18 +209,22 @@ async def async_migrate_entry(
             )
 
     if config_entry.version == 3:
-        # Give every slot a present, separator-free, entry-unique name. The
-        # name is becoming the identity Lock Code Manager keys on, so these
-        # three properties stop being cosmetic and start being load-bearing.
-        new_data = {**config_entry.data}
-        new_options = {**config_entry.options}
-        renamed: set[str] = set()
-        for data_dict in (new_data, new_options):
-            if CONF_SLOTS not in data_dict:
-                continue
-            repaired, changed = normalize_slot_names(data_dict[CONF_SLOTS])
-            data_dict[CONF_SLOTS] = repaired
-            renamed.update(changed)
+        # Two halves of ONE version bump, because they ship as one release and
+        # no released schema ever sat between them.
+        #
+        # First: give every slot a present, entry-unique name. The name is
+        # becoming the key the configuration is stored under, so an absent one
+        # has nothing to key on and a duplicate cannot be represented at all.
+        #
+        # Then: reshape from slots to users, demoting the slot number to
+        # internal bookkeeping.
+        #
+        # NO REGISTRY WRITES happen anywhere in here. Entity and device
+        # identifiers keep the slot number, so there is nothing to move --
+        # which is what makes a migration with no rollback safe to ship.
+        new_data, renamed_in_data = migrate_to_users(config_entry.data)
+        new_options, renamed_in_options = migrate_to_users(config_entry.options)
+        renamed = set(renamed_in_data) | set(renamed_in_options)
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=4
         )
