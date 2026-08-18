@@ -615,3 +615,7 @@ fold it in
 
 1. never reuse
 2. verify
+
+---
+
+should they see a slot number? in our design, isn't the slot umber an internal thing if needed?
