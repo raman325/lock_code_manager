@@ -124,7 +124,6 @@ async def test_whitespace_pin_normalized_to_empty(
     [
         ("", "name_required"),
         ("   ", "name_required"),
-        ("Ra|man", "name_has_separator"),
     ],
 )
 async def test_set_name_rejects_invalid_names(

@@ -21,12 +21,15 @@ from custom_components.lock_code_manager.domain.names import (
         (None, "name_required"),
         ("", "name_required"),
         ("   ", "name_required"),
-        ("Ra|man", "name_has_separator"),
-        ("|", "name_has_separator"),
+        # The separator rule is gone. It existed only while identifiers were
+        # keyed by name and delimited by "|"; they are keyed by slot number,
+        # so a name carrying one splits nothing.
+        ("Ra|man", None),
+        ("|", None),
     ],
 )
 def test_name_error(name: str | None, expected: str | None) -> None:
-    """A name must be present and free of the identifier separator."""
+    """A name only has to be present."""
     assert name_error(name) == expected
 
 
@@ -84,17 +87,22 @@ def test_normalize_names_unnamed_slots() -> None:
     assert sorted(changed) == ["1", "2"]
 
 
-def test_normalize_strips_the_separator() -> None:
-    """The separator is replaced rather than the name rejected."""
+def test_normalize_leaves_a_separator_alone() -> None:
+    """A "|" in a name is now ordinary text and must survive untouched.
+
+    The repair used to rewrite it to a space, which renamed the user on every
+    lock that stores names. That was only ever needed because identifiers were
+    delimited by "|" and keyed by the name; they are keyed by the slot number.
+    """
     repaired, changed = normalize_slot_names({1: {CONF_NAME: "Ra|man"}})
 
-    assert repaired[1][CONF_NAME] == "Ra man"
-    assert changed == ["1"]
+    assert repaired[1][CONF_NAME] == "Ra|man"
+    assert changed == []
 
 
-def test_normalize_falls_back_when_a_name_is_only_separators() -> None:
-    """A name that collapses to empty after stripping falls back."""
-    repaired, changed = normalize_slot_names({4: {CONF_NAME: "||"}})
+def test_normalize_falls_back_only_for_an_empty_name() -> None:
+    """A name that is empty or whitespace still falls back."""
+    repaired, changed = normalize_slot_names({4: {CONF_NAME: "   "}})
 
     assert repaired[4][CONF_NAME] == "User 4"
     assert changed == ["4"]
@@ -147,7 +155,6 @@ def test_normalize_accepts_string_slot_keys() -> None:
         ({1: {CONF_NAME: "Raman"}, 2: {CONF_NAME: "Alice"}}, None),
         ({1: {CONF_ENABLED: True}}, ("1", "name_required")),
         ({1: {CONF_NAME: "  "}}, ("1", "name_required")),
-        ({1: {CONF_NAME: "Ra|man"}}, ("1", "name_has_separator")),
         ({1: {CONF_NAME: "Raman"}, 2: {CONF_NAME: "raman"}}, ("2", "name_not_unique")),
         # Whitespace-padded duplicates must be caught in BOTH orders. Comparing
         # a stripped candidate against unstripped stored names caught only one.
