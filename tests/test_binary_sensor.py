@@ -61,8 +61,10 @@ from .common import (
     SLOT_1_PIN_ENTITY,
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_ENABLED_ENTITY,
+    SLOT_2_IN_SYNC_ENTITY,
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
+    in_sync_entity_id,
 )
 from .conftest import (
     async_advance_time,
@@ -199,7 +201,7 @@ async def test_startup_no_code_flapping_when_synced(
     await hass.async_block_till_done()
 
     # Get the in-sync binary sensor for lock 1, slot 2
-    in_sync_entity = "binary_sensor.test_1_code_slot_2_in_sync"
+    in_sync_entity = SLOT_2_IN_SYNC_ENTITY
 
     # Verify the entity exists
     state = hass.states.get(in_sync_entity)
@@ -257,7 +259,7 @@ async def test_startup_detects_out_of_sync_code(
     await hass.async_block_till_done()
 
     # Get the in-sync binary sensor
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
 
     # Verify the entity exists
     state = hass.states.get(in_sync_entity)
@@ -324,8 +326,8 @@ async def test_startup_out_of_sync_slots_sync_once(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
-    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+    in_sync_slot_1 = in_sync_entity_id(hass, config_entry, 1)
+    in_sync_slot_2 = in_sync_entity_id(hass, config_entry, 2)
 
     assert hass.states.get(in_sync_slot_1)
     assert hass.states.get(in_sync_slot_2)
@@ -386,7 +388,7 @@ async def test_startup_waits_for_valid_active_state(
 
     # Get the entity IDs
     active_entity_id = "binary_sensor.test_lcm_code_slot_1_active"
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
 
     # Verify entities exist
     assert hass.states.get(active_entity_id), (
@@ -688,7 +690,7 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     # Verify initial state - should be in sync
@@ -1178,7 +1180,7 @@ async def test_coordinator_poll_detects_external_change_and_syncs(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     # Verify initial state is in sync
@@ -1241,7 +1243,7 @@ async def test_push_update_triggers_sync_state_change_on_binary_sensor(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     state = hass.states.get(in_sync_entity)
@@ -1311,8 +1313,8 @@ async def test_slot_suspension_isolated_from_other_slots(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
-    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+    in_sync_slot_1 = in_sync_entity_id(hass, config_entry, 1)
+    in_sync_slot_2 = in_sync_entity_id(hass, config_entry, 2)
     await async_initial_tick(hass, in_sync_slot_1)
     await async_initial_tick(hass, in_sync_slot_2)
 
@@ -1364,7 +1366,7 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     state = hass.states.get(in_sync_entity)
@@ -1455,7 +1457,7 @@ async def test_async_advance_time_drains_background_tick_chain(
     ):
         await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
-        in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+        in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
         await async_initial_tick(hass, in_sync_entity)
 
         lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
@@ -1508,7 +1510,7 @@ async def test_sync_manager_handles_code_sensor_unknown_state_on_startup(
         await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     entity_obj = get_in_sync_entity_obj(hass, in_sync_entity)
     mgr = entity_obj._sync_manager
 
@@ -1640,7 +1642,7 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
@@ -1869,8 +1871,8 @@ async def test_multiple_slots_sync_sequentially_not_concurrently(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
-    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+    in_sync_slot_1 = in_sync_entity_id(hass, config_entry, 1)
+    in_sync_slot_2 = in_sync_entity_id(hass, config_entry, 2)
     await async_initial_tick(hass, in_sync_slot_1)
     await async_initial_tick(hass, in_sync_slot_2)
 

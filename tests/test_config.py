@@ -17,6 +17,7 @@ from custom_components.lock_code_manager.domain.config import (
     build_slot_device_identifier,
     build_slot_unique_id,
     parse_slot_device_identifier,
+    parse_slot_unique_id,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 
@@ -660,3 +661,28 @@ def test_build_slot_unique_id_variants_never_collide() -> None:
     per_lock = build_slot_unique_id("abc123", 4, "code", "lock.front_door")
     assert standard != per_lock
     assert per_lock.startswith(f"{standard}|")
+
+
+@pytest.mark.parametrize("slot_num", [1, 10, 250, -1])
+@pytest.mark.parametrize("lock_entity_id", [None, "lock.front_door"])
+def test_slot_unique_id_round_trips(slot_num: int, lock_entity_id: str | None) -> None:
+    """Both shapes of unique ID resolve to the slot they were built for.
+
+    A per-lock entity has to land on the same slot device as the shared
+    entities beside it; parsing only the shared shape would leave exactly the
+    entities this moves stranded.
+    """
+    unique_id = build_slot_unique_id("abc123", slot_num, "in_sync", lock_entity_id)
+    assert parse_slot_unique_id("abc123", unique_id) == slot_num
+
+
+def test_parse_slot_unique_id_rejects_what_it_did_not_build() -> None:
+    """Anything that is not this entry's slot entity resolves to nothing."""
+    # Another entry's entity.
+    assert parse_slot_unique_id("abc123", "def456|1|in_sync") is None
+    # Not a slot number.
+    assert parse_slot_unique_id("abc123", "abc123|name|in_sync") is None
+    assert parse_slot_unique_id("abc123", "abc123||in_sync") is None
+    # Aliases of a number that the builder would never emit.
+    assert parse_slot_unique_id("abc123", "abc123|+1|in_sync") is None
+    assert parse_slot_unique_id("abc123", "abc123|1_0|in_sync") is None
