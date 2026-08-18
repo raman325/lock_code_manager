@@ -68,6 +68,7 @@ from .common import (
     LOCK_2_ENTITY_ID,
     SLOT_1_IN_SYNC_ENTITY,
     MockLCMLock,
+    in_sync_entity_id,
 )
 from .conftest import (
     async_initial_tick,
@@ -125,13 +126,23 @@ async def test_entry_setup_and_unload(
         )
         assert slot_device
         assert slot_device.config_entries == {lcm_entry_id}
+        # Exact, so anything unexpected landing here is caught too.
         assert {
             entry.unique_id
             for entry in er.async_entries_for_device(ent_reg, slot_device.id)
-        } >= {
+        } == {
             f"{lcm_entry_id}|{slot}|{key}|{entity_id}"
             for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
             for key in (ATTR_CODE, ATTR_IN_SYNC)
+        } | {
+            f"{lcm_entry_id}|{slot}|{key}"
+            for key in (
+                CONF_ENABLED,
+                CONF_NAME,
+                CONF_PIN,
+                ATTR_ACTIVE,
+                EVENT_PIN_USED,
+            )
         }
 
     unique_ids = set()
@@ -1290,7 +1301,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     )
 
     # Get entry B's in-sync entity for slot 3 on lock 1
-    entry_b_in_sync_entity = "binary_sensor.entry_b_code_slot_3_test_1_in_sync"
+    entry_b_in_sync_entity = in_sync_entity_id(hass, entry_b, 3)
 
     # Ensure slot 3 exists in coordinator data so sync manager can resolve state.
     # The mock lock only starts with slots 1 and 2, so push slot 3 data.
@@ -2038,5 +2049,129 @@ async def test_reclaim_skips_entities_it_has_no_slot_device_for(
     # Still on the foreign device, which therefore survives the removal pass.
     assert ent_reg.async_get(unparseable.entity_id).device_id == foreign.id
     assert dev_reg.async_get(foreign.id) is not None
+
+    await hass.config_entries.async_unload(entry_id)
+
+
+async def test_reclaim_leaves_our_own_empty_devices_alone(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Devices of ours that hold nothing are not copies to be cleaned up.
+
+    The entry's own device carries no entities by design -- it exists so the
+    slot devices have a parent -- which makes it a perfect match for the
+    removal pass. Only the check that it is one of ours keeps it.
+    """
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Keeps Own Devices"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    hub = dev_reg.async_get_device({(DOMAIN, entry_id)})
+    assert hub
+    assert not er.async_entries_for_device(
+        er.async_get(hass), hub.id, include_disabled_entities=True
+    )
+
+    # A second setup runs the sweep against a registry that already has it.
+    await hass.config_entries.async_reload(entry_id)
+    await hass.async_block_till_done()
+
+    assert dev_reg.async_get_device({(DOMAIN, entry_id)}) is not None
+
+    await hass.config_entries.async_unload(entry_id)
+
+
+async def test_reclaim_moves_a_disabled_entity_rather_than_deleting_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A disabled entity is never re-added by a platform, so it must be moved.
+
+    Removing the copy first and letting the platforms sort it out would take
+    this entity with it, along with whatever the user had customised on it.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Disabled Entity"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    split = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={("test", "lock_1_serial")},
+        name="Test 1",
+    )
+    disabled = ent_reg.async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{entry_id}|1|{ATTR_IN_SYNC}|{LOCK_1_ENTITY_ID}",
+        config_entry=config_entry,
+        device_id=split.id,
+        disabled_by=er.RegistryEntryDisabler.USER,
+    )
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    survivor = ent_reg.async_get(disabled.entity_id)
+    assert survivor is not None
+    assert survivor.disabled_by is er.RegistryEntryDisabler.USER
+    slot_device = dev_reg.async_get_device(
+        {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
+    )
+    assert slot_device and survivor.device_id == slot_device.id
+    assert dev_reg.async_get(split.id) is None
+
+    await hass.config_entries.async_unload(entry_id)
+
+
+async def test_reclaim_does_not_resurrect_a_device_for_an_unconfigured_slot(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Moving an entity must not recreate a slot device the sweep then drops.
+
+    The entity's slot is no longer configured, so its device is orphaned. If
+    the move ran after the orphan sweep, that device would be recreated and
+    left behind as a phantom until the next reload.
+    """
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Unconfigured Slot"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    split = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={("test", "lock_1_serial")},
+        name="Test 1",
+    )
+    er.async_get(hass).async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{entry_id}|9|{ATTR_IN_SYNC}|{LOCK_1_ENTITY_ID}",
+        config_entry=config_entry,
+        device_id=split.id,
+    )
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    # Slot 9 is not configured, so neither device may survive.
+    assert (
+        dev_reg.async_get_device({(DOMAIN, build_slot_device_identifier(entry_id, 9))})
+        is None
+    )
+    assert dev_reg.async_get(split.id) is None
 
     await hass.config_entries.async_unload(entry_id)

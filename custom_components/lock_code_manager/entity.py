@@ -340,9 +340,7 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
         # one of them the same thing.
         self._attr_translation_placeholders = {
             "slot_num": str(slot_num),
-            "lock_name": lock.lock.name
-            or lock.lock.original_name
-            or lock.lock.entity_id,
+            "lock_name": lock.display_name,
         }
 
         self._attr_unique_id = build_slot_unique_id(

@@ -10,6 +10,7 @@ from typing import Literal
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
@@ -18,6 +19,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CODE,
     ATTR_IN_SYNC,
     CONF_LOCKS,
     CONF_SLOTS,
@@ -47,6 +49,18 @@ BASE_CONFIG = {
 }
 
 
+def code_entity_id(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    slot_num: int,
+    lock_entity_id: str = LOCK_1_ENTITY_ID,
+) -> str:
+    """Return the code sensor for one slot on one lock."""
+    return _per_lock_entity_id(
+        hass, SENSOR_DOMAIN, config_entry, slot_num, ATTR_CODE, lock_entity_id
+    )
+
+
 def in_sync_entity_id(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -61,14 +75,26 @@ def in_sync_entity_id(
     test ties that test to both -- and a test that renames either then looks
     for an entity that was never going to exist.
     """
-    entity_id = er.async_get(hass).async_get_entity_id(
-        BINARY_SENSOR_DOMAIN,
-        DOMAIN,
-        build_slot_unique_id(
-            config_entry.entry_id, slot_num, ATTR_IN_SYNC, lock_entity_id
-        ),
+    return _per_lock_entity_id(
+        hass, BINARY_SENSOR_DOMAIN, config_entry, slot_num, ATTR_IN_SYNC, lock_entity_id
     )
-    assert entity_id, f"No in-sync entity for slot {slot_num} on {lock_entity_id}"
+
+
+def _per_lock_entity_id(
+    hass: HomeAssistant,
+    platform: str,
+    config_entry: ConfigEntry,
+    slot_num: int,
+    key: str,
+    lock_entity_id: str,
+) -> str:
+    """Resolve a per-lock entity by unique ID."""
+    entity_id = er.async_get(hass).async_get_entity_id(
+        platform,
+        DOMAIN,
+        build_slot_unique_id(config_entry.entry_id, slot_num, key, lock_entity_id),
+    )
+    assert entity_id, f"No {key} entity for slot {slot_num} on {lock_entity_id}"
     return entity_id
 
 

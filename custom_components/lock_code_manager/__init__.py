@@ -595,8 +595,8 @@ async def async_setup_entry(
         name=config_entry.title,
         serial_number=entry_id,
     )
-    _async_prune_orphaned_slot_devices(hass, config_entry)
     _async_reclaim_entities_from_foreign_devices(hass, config_entry)
+    _async_prune_orphaned_slot_devices(hass, config_entry)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
@@ -867,10 +867,11 @@ def _async_reclaim_entities_from_foreign_devices(
     entities are moved to the slot device they belong to and the emptied copy
     is removed here.
 
-    Runs before the platforms are set up, so a slot's device is created if it
-    does not exist yet rather than assumed -- an entity that is disabled, or
-    whose slot has since been removed, is never re-added and would otherwise
-    keep pointing at a device this is trying to delete.
+    Runs before the platforms are set up, so an entity that is disabled or
+    whose slot has since been removed -- neither of which is ever re-added --
+    is moved rather than deleted along with the copy it is sitting on. It also
+    runs before the orphaned-slot sweep, which then collects any slot device
+    this recreates for a slot that is no longer configured.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
