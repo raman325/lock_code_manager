@@ -17,7 +17,7 @@ configurations and edit histories.
 
 from __future__ import annotations
 
-from hypothesis import given, strategies as st
+from hypothesis import assume, given, strategies as st
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
@@ -44,7 +44,7 @@ SLOT_CONFIGS = st.builds(
 
 @st.composite
 def slot_mappings(draw: st.DrawFn) -> dict[int, dict]:
-    """Slot-keyed configurations whose names are unique, as B1 guarantees."""
+    """Slot-keyed configurations with unique names and int keys."""
     configs = draw(st.lists(SLOT_CONFIGS, max_size=5))
     seen: set[str] = set()
     unique = [
@@ -54,10 +54,34 @@ def slot_mappings(draw: st.DrawFn) -> dict[int, dict]:
     return {starts + i: config for i, config in enumerate(unique)}
 
 
+@st.composite
+def stored_slot_mappings(draw: st.DrawFn) -> dict:
+    """Configurations shaped like STORAGE rather than like valid input.
+
+    Keys are strings, because that is what the on-disk JSON form yields and
+    what a migration reading stored data actually hands in. Names may repeat
+    or be missing, because both are reachable from a version 2 entry where
+    the name is optional.
+
+    The clean strategy above cannot expose either hazard, which is exactly
+    why the string-key slot collision survived the first round of these
+    properties.
+    """
+    configs = draw(st.lists(SLOT_CONFIGS, max_size=4))
+    start = draw(st.integers(min_value=1, max_value=4))
+    slots = {}
+    for i, config in enumerate(configs):
+        nameless = draw(st.booleans())
+        slots[str(start + i)] = (
+            {k: v for k, v in config.items() if k != CONF_NAME} if nameless else config
+        )
+    return slots
+
+
 @given(slots=slot_mappings())
 def test_conversion_loses_no_user(slots: dict[int, dict]) -> None:
     """Every configured slot becomes exactly one user."""
-    users, assignment = users_from_slots(slots)
+    users, assignment, _ = users_from_slots(slots)
 
     assert len(users) == len(slots)
     assert set(users) == {slot[CONF_NAME] for slot in slots.values()}
@@ -72,7 +96,7 @@ def test_conversion_loses_no_field(slots: dict[int, dict]) -> None:
     going missing is silent data loss -- the result still validates, the user
     just quietly has no code.
     """
-    users, _ = users_from_slots(slots)
+    users, _, _ = users_from_slots(slots)
 
     for slot in slots.values():
         user = users[slot[CONF_NAME]]
@@ -88,7 +112,7 @@ def test_conversion_renumbers_nobody(slots: dict[int, dict]) -> None:
     changed would have their entities orphaned AND their code written to a
     different index.
     """
-    _, assignment = users_from_slots(slots)
+    _, assignment, _ = users_from_slots(slots)
 
     for slot_num, slot in slots.items():
         assert assignment.slot(slot[CONF_NAME]) == slot_num
@@ -102,7 +126,7 @@ def test_conversion_round_trips(slots: dict[int, dict]) -> None:
     reshaping that happens to preserve counts and fields separately while
     still pairing them up wrongly.
     """
-    users, assignment = users_from_slots(slots)
+    users, assignment, _ = users_from_slots(slots)
 
     rebuilt = {
         assignment.slot(name): {CONF_NAME: name, **user} for name, user in users.items()
@@ -160,6 +184,70 @@ def test_slots_never_exceed_the_most_users_ever_configured_at_once(
         assignment = assignment.assign(configured)
         high_water = max(high_water, len(configured))
         assert all(1 <= s <= high_water for s in assignment.slots.values())
+
+
+@given(stored=stored_slot_mappings(), later=NAME_SETS)
+def test_editing_after_a_migration_never_double_books_a_slot(
+    stored: dict, later: list[str]
+) -> None:
+    """Migrate, then keep editing -- the two halves composed.
+
+    Every other assignment property starts from ``SlotAssignment.empty()``,
+    which is not how production reaches ``assign``: it reaches it from a
+    migrated assignment, built from storage. That gap hid a real defect --
+    string keys from JSON survived into the assignment, so ``candidate in
+    taken`` compared an int against a string, missed, and issued an occupied
+    slot to the next user. Two users on one credential index means one
+    overwrites the other on every lock.
+    """
+    _, assignment, _ = users_from_slots(stored)
+    after = assignment.assign([*assignment.slots, *later])
+
+    numbers = list(after.slots.values())
+    assert len(numbers) == len(set(numbers))
+    assert all(isinstance(s, int) for s in numbers)
+
+
+@given(stored=stored_slot_mappings())
+def test_migration_always_produces_one_user_per_slot(stored: dict) -> None:
+    """No slot is lost to a missing or duplicated name.
+
+    Both are reachable from a version 2 entry. Before the repair was folded
+    in, two slots sharing a name collapsed into one user -- losing that
+    user's code AND renumbering the survivor -- and a nameless slot raised
+    mid-migration, on a path with no rollback.
+    """
+    users, assignment, _ = users_from_slots(stored)
+
+    assert len(users) == len(stored)
+    assert len(assignment.slots) == len(stored)
+    assert set(assignment.slots.values()) == {int(k) for k in stored}
+
+
+@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3))
+def test_renaming_never_renumbers_anyone(
+    names: list[str], renames: dict[str, str]
+) -> None:
+    """A rename changes who holds a slot, never which slot they hold.
+
+    ``assign`` alone cannot see a rename -- it looks like a deletion plus an
+    addition, so it frees the old name's slot and reissues it in iteration
+    order, landing two renamed users on each other's index. Re-keying first
+    is what keeps the rename free, including for a swap.
+    """
+    before = SlotAssignment.empty().assign(names)
+    renames = {old: new for old, new in renames.items() if old in before.slots}
+    # A rename onto a name someone else still holds is a collision the name
+    # rules reject upstream, not something this has to resolve.
+    assume(len(set(renames.values())) == len(renames))
+    assume(not set(renames.values()) & (set(before.slots) - set(renames)))
+
+    after = before.with_renames(renames)
+
+    for old, new in renames.items():
+        assert after.slot(new) == before.slot(old)
+    for name in set(before.slots) - set(renames):
+        assert after.slot(name) == before.slot(name)
 
 
 @given(names=NAME_SETS)

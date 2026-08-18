@@ -26,6 +26,8 @@ from typing import Any
 
 from homeassistant.const import CONF_NAME
 
+from .names import normalize_slot_names
+
 CONF_SLOT_ASSIGNMENT = "slot_assignment"
 
 _EMPTY_ASSIGNMENT: Mapping[str, int] = MappingProxyType({})
@@ -55,6 +57,28 @@ class SlotAssignment:
     def slot(self, name: str) -> int | None:
         """Return the slot ``name`` occupies, or None if they hold none."""
         return self.slots.get(name)
+
+    def with_renames(self, renames: Mapping[str, str]) -> SlotAssignment:
+        """
+        Re-key the assignment so renamed users keep their slot.
+
+        Must be applied BEFORE :meth:`assign`, which cannot tell a rename from
+        a deletion plus an addition: it would free the old name's slot and
+        hand it out in iteration order. Two renames in one submission then
+        land each user on the other's index, rewriting both credentials on
+        every lock -- the failure this whole design exists to avoid, arriving
+        through the one operation that is supposed to be free.
+
+        Built as a fresh mapping rather than moved key by key, so a swap
+        (``A -> B`` and ``B -> A``) resolves without needing an order.
+        """
+        if not renames:
+            return self
+        return SlotAssignment(
+            slots=MappingProxyType(
+                {renames.get(name, name): slot for name, slot in self.slots.items()}
+            )
+        )
 
     def assign(self, names: Iterable[str]) -> SlotAssignment:
         """
@@ -87,24 +111,33 @@ class SlotAssignment:
 
 
 def users_from_slots(
-    slots: Mapping[int, Mapping[str, Any]],
-) -> tuple[dict[str, dict[str, Any]], SlotAssignment]:
+    slots: Mapping[Any, Mapping[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], SlotAssignment, list[str]]:
     """
     Convert slot-keyed configuration into name-keyed users plus an assignment.
 
     The version 3 migration in one function, kept pure so the properties that
     matter -- nothing lost, nobody renumbered -- can be stated over it
-    directly rather than through a config entry.
+    directly rather than through a config entry. Also returns the slots whose
+    name the repair changed, so the migration can report them.
 
-    The name becomes the key and stops being a field, so a duplicate name is
-    no longer something to validate and reject: it cannot be represented.
-    Callers must have run the name repair first, since two slots sharing a
-    name would silently collapse into one user here.
+    Repairs the names ITSELF rather than documenting that callers must. The
+    name becomes the mapping key here, so two slots sharing one would collapse
+    into a single user -- losing a user and their code, and renumbering the
+    survivor -- and a slot with no name at all would raise mid-migration. Both
+    are reachable from a version 2 entry, where the name is optional. A
+    precondition is not good enough on a migration with no rollback.
+
+    Slot keys are coerced to ``int``. The on-disk JSON form is ``str``, so a
+    migration reading stored data hands strings straight in; a string here
+    survives into the assignment, where ``candidate in taken`` compares an int
+    against it, misses, and issues a slot that is already occupied.
     """
+    repaired, renamed = normalize_slot_names(slots)
     users: dict[str, dict[str, Any]] = {}
     assignment: dict[str, int] = {}
-    for slot_num, slot in sorted(slots.items()):
+    for raw_slot_num, slot in sorted(repaired.items(), key=lambda kv: int(kv[0])):
         name = slot[CONF_NAME]
         users[name] = {k: v for k, v in slot.items() if k != CONF_NAME}
-        assignment[name] = slot_num
-    return users, SlotAssignment(slots=MappingProxyType(assignment))
+        assignment[name] = int(raw_slot_num)
+    return users, SlotAssignment(slots=MappingProxyType(assignment)), renamed
