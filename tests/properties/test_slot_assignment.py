@@ -86,7 +86,11 @@ def test_conversion_loses_no_user(slots: dict[int, dict]) -> None:
 
     assert len(users) == len(slots)
     assert set(users) == {slot[CONF_NAME] for slot in slots.values()}
-    assert set(assignment.slots) == set(users)
+    # Compared through slot(), not by key set: users are keyed by the name as
+    # displayed while the assignment keys by the identity form the rest of
+    # the system compares on (whitespace-normalized, casefolded).
+    assert len(assignment.slots) == len(users)
+    assert all(assignment.slot(name) is not None for name in users)
 
 
 @given(slots=slot_mappings())
@@ -324,6 +328,93 @@ def test_a_whitespace_variant_is_the_same_user(names: list[str], pad: str) -> No
     )
     for name in names:
         assert stored_padded.slot(name) == bare.slot(name)
+
+
+@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3))
+def test_renaming_never_removes_a_user(
+    names: list[str], renames: dict[str, str]
+) -> None:
+    """Nobody loses their slot to a rename they were not part of.
+
+    A rename map naming a source that holds nothing -- a stale replay, or a
+    name already renamed -- previously deleted whoever sat on the TARGET,
+    because the target was vacated whether or not anything moved into it. The
+    following ``assign`` then renumbered that bystander onto a different
+    credential index.
+    """
+    before = SlotAssignment.empty().assign(names)
+    assume(len({v.casefold() for v in renames.values()}) == len(renames))
+
+    after = before.with_renames(renames)
+
+    moved_from = {k.casefold() for k in renames if k.casefold() in before.slots}
+    for name in set(before.slots) - moved_from:
+        assert after.slot(name) == before.slot(name)
+
+
+@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3))
+def test_replaying_a_rename_never_loses_a_user(
+    names: list[str], renames: dict[str, str]
+) -> None:
+    """Applying a rename map again must not delete anyone.
+
+    Deliberately NOT stated as "changes nothing", which is false and was my
+    first attempt: a swap map is its own inverse, so replaying it legitimately
+    flips the two names back. A map is computed for one transition and is not
+    meaningful against its own result.
+
+    What must never happen is a user disappearing. Vacating a rename target
+    whether or not anything moved into it made a replayed map erase its own
+    result -- the user who had just been renamed was deleted outright, and the
+    following assign handed their slot to somebody else.
+    """
+    before = SlotAssignment.empty().assign(names)
+    assume(len({v.casefold() for v in renames.values()}) == len(renames))
+
+    once = before.with_renames(renames)
+    twice = once.with_renames(renames)
+
+    assert len(twice.slots) == len(once.slots)
+    assert set(twice.slots.values()) == set(once.slots.values())
+
+
+@given(
+    names=NAME_SETS,
+    start=st.integers(min_value=1, max_value=8),
+    unavailable=st.sets(st.integers(min_value=1, max_value=12), max_size=4),
+)
+def test_new_users_respect_the_start_slot_and_reserved_numbers(
+    names: list[str], start: int, unavailable: set[int]
+) -> None:
+    """A newly issued slot is never below the start, nor one that is spoken for.
+
+    The start slot is usually chosen because the numbers below it hold codes
+    programmed by hand that Lock Code Manager does not manage, and another
+    entry may own slots on the same lock. The slot IS the credential index on
+    most providers, so issuing one of those overwrites a real code on a real
+    door.
+    """
+    assignment = SlotAssignment.empty().assign(
+        names, start=start, unavailable=unavailable
+    )
+
+    for number in assignment.slots.values():
+        assert number >= start
+        assert number not in unavailable
+
+
+@given(names=NAME_SETS)
+def test_case_only_differences_are_the_same_user(names: list[str]) -> None:
+    """``Bob`` and ``BOB`` are one user, as ``names.deduplicate`` already says.
+
+    Two credential indices for one person otherwise, and a case-only rename
+    reading as a deletion plus an addition.
+    """
+    assignment = SlotAssignment.empty().assign(names)
+
+    for name in names:
+        assert assignment.slot(name.upper()) == assignment.slot(name.lower())
+    assert assignment.assign([name.upper() for name in names]) is assignment
 
 
 @given(names=NAME_SETS)

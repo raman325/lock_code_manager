@@ -15,11 +15,16 @@ being reused.
 
 Entity and device identifiers keep keying on this number, so a rename moves
 nothing in either registry.
+
+Users are identified the way :mod:`.names` identifies them: whitespace
+normalized, compared case-insensitively. Storing a name in any other form
+would let it match on one path and miss on another, and missing means looking
+like a different user and being renumbered onto a different credential index.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -33,6 +38,19 @@ CONF_SLOT_ASSIGNMENT = "slot_assignment"
 _EMPTY_ASSIGNMENT: Mapping[str, int] = MappingProxyType({})
 
 
+def _identity(name: str) -> str:
+    """
+    Return the form a user is recognized by.
+
+    Matches ``names.deduplicate`` and ``names.validate_slot_names``, which
+    both casefold. Comparing case-sensitively here would let ``Bob`` and
+    ``BOB`` hold two credential indices for someone the rest of the system
+    treats as one person, and would make a case-only rename read as a
+    deletion plus an addition.
+    """
+    return normalize_name(name).casefold()
+
+
 @dataclass(frozen=True, slots=True)
 class SlotAssignment:
     """The slot number held by each configured user, keyed by name."""
@@ -41,26 +59,27 @@ class SlotAssignment:
 
     def __post_init__(self) -> None:
         """
-        Normalize the names and freeze the mapping.
+        Put the mapping into its canonical form, then freeze it.
 
-        Normalizing here rather than at each method makes it an invariant of
-        the type: a name can only ever be stored in one form, so it cannot
-        match on one path and miss on another. Missing means looking like a
-        different user and being renumbered, which moves that user's
-        credential on every lock. Stored data predating this is normalized on
-        read for the same reason.
+        Names are reduced to their identity form and slot numbers coerced to
+        ``int``. Doing it here makes both invariants of the TYPE rather than
+        of whichever factory happened to build it -- the plain constructor
+        previously accepted a string slot number, and a caller reading
+        ``entry.data`` directly instead of through :meth:`from_mapping` would
+        reintroduce the double-booking that string keys caused.
 
-        Freezing closes the one hole the factories leave: the plain
-        constructor accepted a live dict, which a caller could then mutate
-        under the identity check ``assign`` uses to decide whether to write.
+        Two keys reducing to one identity keeps the LOWER slot. That case
+        means the stored bookkeeping was already inconsistent; raising would
+        make the entry unloadable, which is worse than picking
+        deterministically, and the lower number is the one likelier to
+        predate the corruption.
         """
-        object.__setattr__(
-            self,
-            "slots",
-            MappingProxyType(
-                {normalize_name(name): slot for name, slot in self.slots.items()}
-            ),
-        )
+        canonical: dict[str, int] = {}
+        for name, slot in self.slots.items():
+            key = _identity(name)
+            number = int(slot)
+            canonical[key] = min(canonical.get(key, number), number)
+        object.__setattr__(self, "slots", MappingProxyType(canonical))
 
     def __hash__(self) -> int:
         """
@@ -89,8 +108,7 @@ class SlotAssignment:
         already-merged mapping rather than an entry, so there is no second
         precedence rule here to get out of step with the first.
         """
-        raw = mapping.get(CONF_SLOT_ASSIGNMENT) or {}
-        return cls(slots=MappingProxyType({str(k): int(v) for k, v in raw.items()}))
+        return cls(slots=mapping.get(CONF_SLOT_ASSIGNMENT) or {})
 
     def to_dict(self) -> dict[str, Any]:
         """Return the bookkeeping to persist beside the configuration."""
@@ -98,7 +116,7 @@ class SlotAssignment:
 
     def slot(self, name: str) -> int | None:
         """Return the slot ``name`` occupies, or None if they hold none."""
-        return self.slots.get(name)
+        return self.slots.get(_identity(name))
 
     def with_renames(self, renames: Mapping[str, str]) -> SlotAssignment:
         """
@@ -113,55 +131,63 @@ class SlotAssignment:
 
         A rename target may be a name somebody else still holds, and that is
         legal rather than a conflict: the holder must be departing in the same
-        submission, since two users cannot share a name in the result. So the
-        renamed entry WINS and the entry sitting on the target is dropped.
-        Renaming into a target with a plain re-key instead lets whichever the
-        mapping happens to iterate last overwrite the other -- which for the
-        chain ``A -> B``, ``B -> C`` with ``C`` deleted moved the user
-        formerly named B from index 2 to index 3, and gave a different answer
-        for a different insertion order.
+        submission, since two users cannot share a name in the result. The
+        renamed entry therefore displaces the one sitting on the target.
 
-        The two halves are built over disjoint key sets, so the result does
-        not depend on iteration order for chains any more than for swaps.
+        A target is only displaced when a source actually surrendered a slot.
+        Dropping it unconditionally deleted an uninvolved user whenever the
+        map named a source holding nothing -- and made replaying an
+        already-applied map erase its own result, so the operation was not
+        idempotent.
         """
-        renames = {
-            normalize_name(old): normalize_name(new) for old, new in renames.items()
+        moves = {
+            _identity(old): _identity(new)
+            for old, new in renames.items()
+            if _identity(old) in self.slots
         }
-        targets = set(renames.values())
         renamed = {
-            renames[name]: slot for name, slot in self.slots.items() if name in renames
+            moves[name]: slot for name, slot in self.slots.items() if name in moves
         }
         kept = {
             name: slot
             for name, slot in self.slots.items()
-            if name not in renames and name not in targets
+            if name not in moves and name not in renamed
         }
         moved = {**kept, **renamed}
         if moved == dict(self.slots):
             return self
-        return SlotAssignment(slots=MappingProxyType(moved))
+        return SlotAssignment(slots=moved)
 
-    def assign(self, names: Iterable[str]) -> SlotAssignment:
+    def assign(
+        self,
+        names: Iterable[str],
+        *,
+        start: int = 1,
+        unavailable: Collection[int] = (),
+    ) -> SlotAssignment:
         """
         Return the assignment covering exactly ``names``.
 
         Users already holding a slot keep it, so a rename or an unrelated
-        edit never renumbers anyone. New users take the lowest free slot,
-        which is what keeps the numbers inside a lock's capacity -- counting
-        upward from the highest ever issued would drift past it.
+        edit never renumbers anyone. New users take the lowest free slot at or
+        above ``start``, skipping anything in ``unavailable``.
+
+        Those two are not decoration. The entry has a configured start slot
+        (``CONF_START_SLOT``), usually chosen because the numbers below it
+        hold codes programmed by hand that Lock Code Manager does not manage,
+        and ``config_flow._check_common_slots`` refuses ranges overlapping
+        another entry on a shared lock. Since the slot IS the credential index
+        on most providers, allocating from 1 unconditionally would write a new
+        user's code over one of those.
 
         Returns ``self`` when nothing differs, so callers can use identity to
         decide whether a write is needed.
         """
-        # Normalized here, not assumed. A name reaching this boundary in its
-        # raw form -- one caller storing the repaired name while another
-        # passes what the user typed -- would look like a different user and
-        # renumber them, moving their credential on every lock.
-        wanted = list(dict.fromkeys(normalize_name(name) for name in names))
+        wanted = list(dict.fromkeys(_identity(name) for name in names))
         assigned = {name: self.slots[name] for name in wanted if name in self.slots}
 
-        taken = set(assigned.values())
-        candidate = 1
+        taken = set(assigned.values()) | set(unavailable)
+        candidate = start
         for name in wanted:
             if name in assigned:
                 continue
@@ -172,7 +198,7 @@ class SlotAssignment:
 
         if assigned == dict(self.slots):
             return self
-        return SlotAssignment(slots=MappingProxyType(assigned))
+        return SlotAssignment(slots=assigned)
 
 
 def users_from_slots(
@@ -205,4 +231,4 @@ def users_from_slots(
         name = slot[CONF_NAME]
         users[name] = {k: v for k, v in slot.items() if k != CONF_NAME}
         assignment[name] = int(raw_slot_num)
-    return users, SlotAssignment(slots=MappingProxyType(assignment)), renamed
+    return users, SlotAssignment(slots=assignment), renamed
