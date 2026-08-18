@@ -269,7 +269,7 @@ async def test_config_flow_reauth(
     assert len(flows) == 1
     [result] = flows
 
-    assert result["step_id"] == "reauth"
+    assert result["step_id"] == "reauth_confirm"
     flow_id = result["flow_id"]
 
     result = await hass.config_entries.flow.async_configure(
@@ -300,7 +300,7 @@ async def test_config_flow_reauth_form_refetch(
     result = await hass.config_entries.flow.async_configure(flow["flow_id"], None)
 
     assert result["type"] == "form"
-    assert result["step_id"] == "reauth"
+    assert result["step_id"] == "reauth_confirm"
     assert result["data_schema"]({})[CONF_LOCKS] == [
         LOCK_1_ENTITY_ID,
         LOCK_2_ENTITY_ID,

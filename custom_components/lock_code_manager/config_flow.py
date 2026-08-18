@@ -732,10 +732,17 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
                 return await self._maybe_confirm_then_persist(user_input)
 
         # Use to_dict() rather than .locks / .slots directly — to_dict
-        # returns plain mutable dict/list, while EntryConfig.slots is a
-        # deeply read-only MappingProxyType which the form selectors
-        # can't JSON-serialize.
-        defaults = get_entry_config(self.config_entry).to_dict()
+        # Plain dict/list, because the form selectors cannot serialize the
+        # deeply read-only mappings EntryConfig uses internally.
+        #
+        # Seeded from the SLOT-shaped view, because this editor still takes
+        # slot-shaped YAML. That is the next thing to change, and when it does
+        # this becomes `config.users` and the projection disappears with it.
+        config = get_entry_config(self.config_entry)
+        defaults = {
+            CONF_LOCKS: list(config.locks),
+            CONF_SLOTS: {num: dict(slot) for num, slot in config.slots.items()},
+        }
 
         return self.async_show_form(
             step_id="init",

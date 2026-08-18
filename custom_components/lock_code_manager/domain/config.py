@@ -171,10 +171,6 @@ class EntryConfig:
         """Return True if this entry manages the given lock."""
         return lock_entity_id in self.locks
 
-    def has_user(self, name: str) -> bool:
-        """Return True if this entry configures a user with that name."""
-        return _identity(name) in {_identity(known) for known in self.users}
-
     def user(self, name: str) -> Mapping[str, Any]:
         """Return a user's configuration, or an empty mapping if absent."""
         wanted = _identity(name)

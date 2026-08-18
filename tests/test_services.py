@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_USERCODE,
 )
 from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
+from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
 from custom_components.lock_code_manager.domain.util import mask_pin
 
@@ -141,9 +142,9 @@ async def test_set_slot_condition_service(
     updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
     # After update, data is written via options then moved to data
     # Check both options and data for the condition entity
-    slots = updated_entry.options.get("slots", updated_entry.data.get("slots", {}))
-    slot_key = 1 if 1 in slots else "1"
-    assert slots[slot_key][CONF_ENTITY_ID] == condition_entity_id
+    assert (
+        get_entry_config(updated_entry).slot(1)[CONF_ENTITY_ID] == condition_entity_id
+    )
 
 
 async def test_set_slot_condition_service_entry_not_found(
@@ -231,9 +232,7 @@ async def test_clear_slot_condition_service(
     await hass.async_block_till_done()
 
     updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
-    slots = updated_entry.options.get("slots", updated_entry.data.get("slots", {}))
-    slot_key = 2 if 2 in slots else "2"
-    assert CONF_ENTITY_ID not in slots[slot_key]
+    assert CONF_ENTITY_ID not in get_entry_config(updated_entry).slot(2)
 
 
 async def test_clear_slot_condition_service_entry_not_found(

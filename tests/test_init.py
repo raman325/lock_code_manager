@@ -588,21 +588,22 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     # Verify migration happened (v1 -> v2 calendar, then v2 -> v3 number_of_uses)
     assert config_entry.version == 4
 
-    # Get the migrated data (should be in .data after setup moves options to data)
-    migrated_data = config_entry.data
+    # Read through the typed view: the entry is keyed by user now, and this
+    # migration runs before that reshape in the same version bump.
+    migrated = get_entry_config(config_entry)
 
     # Slot 1 should be unchanged (no calendar)
-    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][1]
-    assert CONF_ENTITY_ID not in migrated_data[CONF_SLOTS][1]
+    assert CONF_CALENDAR not in migrated.slot(1)
+    assert CONF_ENTITY_ID not in migrated.slot(1)
 
     # Slot 2 should have CONF_ENTITY_ID instead of CONF_CALENDAR
-    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][2]
-    assert migrated_data[CONF_SLOTS][2][CONF_ENTITY_ID] == "calendar.test_1"
+    assert CONF_CALENDAR not in migrated.slot(2)
+    assert migrated.slot(2)[CONF_ENTITY_ID] == "calendar.test_1"
 
     # Slot 3 already had both fields set -- calendar is dropped and the
     # pre-existing entity_id value is preserved untouched.
-    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][3]
-    assert migrated_data[CONF_SLOTS][3][CONF_ENTITY_ID] == "calendar.test_2"
+    assert CONF_CALENDAR not in migrated.slot(3)
+    assert migrated.slot(3)[CONF_ENTITY_ID] == "calendar.test_2"
 
     await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.config_entries.async_remove(config_entry.entry_id)
@@ -1546,8 +1547,12 @@ async def test_removing_slot_removes_its_device(
     slot_2_identifiers = {(DOMAIN, f"{entry_id}|2")}
     assert dev_reg.async_get_device(slot_2_identifiers) is not None
 
+    # Removing a user is removing them from `users`; the slot they occupied is
+    # freed with them.
     new_config = copy.deepcopy(dict(lock_code_manager_config_entry.data))
-    new_config[CONF_SLOTS].pop(2)
+    removed = get_entry_config(lock_code_manager_config_entry).name_for(2)
+    new_config[CONF_USERS].pop(removed)
+    new_config[CONF_SLOT_ASSIGNMENT].pop(removed.casefold(), None)
     assert hass.config_entries.async_update_entry(
         lock_code_manager_config_entry, options=new_config
     )
