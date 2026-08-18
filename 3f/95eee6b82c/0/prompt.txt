@@ -1576,3 +1576,103 @@ add an already empty short circuit. I am not really clear on what the right ceil
 ---
 
 Run code review again on both
+
+---
+
+<task-notification>
+<task-id>afeee2a05ed605dac</task-id>
+<tool-use-id>toolu_01NQE6HKrfeNKUhpW1DAFjoA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/afeee2a05ed605dac.output</output-file>
+<status>completed</status>
+<summary>Agent "Third review of PR 1434" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed the three commits (`e3af0009`, `df1aad53`, `ca372fd0`) at final state: 8 production files, 10 test files. Full suite passes (1615 passed, 3 skipped, 58s); ruff check and format clean. Worktree restored clean after my mutation experiments.
+
+## Critical
+
+### 1. ZHA maps ZCL `Occupied/Disabled` to `empty()` — occupancy reports a real credential's index as free
+`custom_components/lock_code_manager/providers/zha.py:390-391`
+
+```python
+elif parsed[0] != DoorLock.UserStatus.Enabled:
+    slot_states[slot_num] = SlotCredential.empty()
+```
+
+`zigpy.zcl.clusters.closures.DoorLock.UserStatus` has exactly four members — `Available: 0`, `Enabled: 1`, `Disabled: 3`, `Not_Supported: 255`. Only `Available` means "free". `Disabled` is the ZCL spec's **Occupied/Disabled**: the slot holds a PIN that is temporarily disabled. The `!= Enabled` test collapses it into `empty()`.
+
+Verified empirically — I ran a probe test against the real `zha_lock` fixture with `user_status=Disabled, code="1234"`:
+
+```
+RESULT   {1: SlotCredential(present=False, pin=None), 2: SlotCredential(present=False, pin=None)}
+OCCUPIED frozenset()
+```
+
+A slot holding the PIN `1234` reads as confirmed-cleared, and `async_internal_get_occupied_indices` reports it free — allocation hands the index out and the write overwrites a live credential. This is the exact failure mode the branch exists to prevent.
+
+The `!= Enabled` collapse is inherited from `v3`, but this branch owns it now for three reasons: it rewrote precisely this branch into an explicit case enumeration; its docstring at `zha.py:349-354` claims completeness ("Anything the lock will not put a value to … is `unreadable`, never `empty`. `empty` means confirmed cleared") while enumerating only `Enabled`; and it newly makes `is_present` from this read drive allocation, converting a sync-layer mis-read into a credential overwrite.
+
+Fix: treat `Available` as the only empty status. `Disabled` → `known(pin)` if a code came back, else `unreadable()`. `Not_Supported` is a separate case worth deciding explicitly (it is not "free" either, though a write there would fail anyway). No ZHA test uses `DoorLock.UserStatus.Disabled` — `grep -rn UserStatus tests/providers/zha/` returns only `Enabled` and `Available`.
+
+## Important
+
+### 2. The new end-to-end test cannot fail when the scope threading breaks
+`tests/providers/test_base.py:187-200`, `tests/common.py:134-145`
+
+This is commit `ca372fd0`'s headline addition, and its docstring claims it "drives a provider that implements the scope, so a signature that cannot accept it fails here."
+
+I mutated `_base.py:1847` from `partial(self.async_get_usercodes, range(1, limit + 1))` to `self.async_get_usercodes` — dropping the scope entirely — and ran the full suite: **1614 passed, 1 failed**. The only failure was `test_occupied_indices_asks_only_about_the_window`, which already existed before `ca372fd0`. The new test passes with the feature removed.
+
+This is structural, not a data-choice problem. `async_internal_get_occupied_indices` uses the *same window* for the scope and the filter (`range(1, limit+1)` then `1 &lt;= slot &lt;= limit`), so any slot the scope would have excluded is excluded by the filter anyway. No fixture data can make that test discriminate. All it pins is that `MockLCMLock.async_get_usercodes` accepts a `slots` keyword — and that is already pinned by every other test in the suite, because `_project_users_to_slots` at `_base.py:1364` calls `self.async_get_users(slots)` **positionally even when `slots` is None**, so a provider missing the parameter fails on the default poll path immediately.
+
+Related, and answering question 1 directly: the mock is **less** permissive than reality. `{slot: codes.get(slot, empty) for slot in slots}` returns exactly the scope. Three of seven providers exceed it — `virtual.py:132` (`managed_slots | stored_slots`), `matter.py:457` (every user on the device), `zwave_js.py:322` plus `_overlay_uc_occupancy`, which inserts value-DB slots not in `codes` at all. So the mock models the one shape where the `1 &lt;= slot &lt;= limit` filter is a no-op, i.e. the design property the docstrings now call load-bearing is the one the "end to end" test structurally cannot reach.
+
+To make it earn its name, either have the mock mirror the base projection (`{**dict.fromkeys(slots, empty), **codes}`) *and* assert the derivation drops an out-of-window slot the provider volunteered, or assert a per-index call count. The ZHA (`await_count == 3`) and z2m (`read.await_count == 3`) tests already do the latter correctly; the base test does not.
+
+### 3. Unrecognized ZHA response now permanently blocks a cleared slot from reaching in-sync
+`custom_components/lock_code_manager/providers/zha.py:383-389` vs `custom_components/lock_code_manager/domain/sync.py:487`
+
+`_parse_pin_response` returning `None` (was `(Available, "")`) now yields `unreadable()`. `SlotSyncManager.calculate_in_sync` for an inactive slot is:
+
+```python
+# active_state == STATE_OFF: slot should be cleared
+if credential is not None:
+    return credential.is_empty
+```
+
+`unreadable()` has `present=True`, so an OFF slot on a lock whose `get_pin_code` returns a shape neither parser branch handles can never converge: it clears every tick, never reads back empty, and the circuit breaker (`MAX_SYNC_ATTEMPTS`) suspends it. Under `v3` it read as confirmed-cleared and sat quiet.
+
+For an ON slot the same change self-heals — `not credential.is_readable` falls through to the `_last_set_pin` comparison after one write — so the asymmetry is specific to cleared slots. This is a real behavioural change on the default poll path (question 3) and it is not acknowledged anywhere; the docstring only argues the direction that is safe for occupancy. Worth deciding deliberately: over-reserving is right for allocation, but "never confirms a clear" is a different cost than the docstring's "sync reprograms a slot that already holds a code."
+
+### 4. The occupancy read holds the operation lock for an unbounded time on per-index providers
+`custom_components/lock_code_manager/providers/_base.py:1846-1848`
+
+`_execute_rate_limited` (`_base.py:287-310`) takes `self._aio_lock` and has no timeout; the whole scoped read runs inside it. On zigbee2mqtt, `_async_read_slot` waits `timeout=10.0` per index (`zigbee2mqtt.py:704`), serially. An unresponsive lock with a 250-slot advertised capacity means ~2500 seconds during which every poll, set, and clear on that lock blocks. ZHA is the same shape without an explicit per-index timeout.
+
+The docstring at `_base.py:1789-1793` says "a wide scope is the caller's to justify," but nothing enforces it and `limit: int` is unconstrained. Since there is no caller yet, consider putting the bound in the type/signature rather than the prose — a cap, or a per-index budget for the slot-at-a-time providers.
+
+## Minor
+
+### 5. Contract drift: Matter untagged users report a raw credential index
+`custom_components/lock_code_manager/providers/_base.py:1826-1830` claims: "Where they diverge — Matter … the number here is the Lock Code Manager slot recovered from the user's tag."
+
+`matter.py:500-504` falls back to `credential_index` when there is no tag, so for a code added at the keypad the number *is* the raw Matter credential index. The branch's own new test says so explicitly (`tests/providers/matter/test_provider.py`, "or the credential index itself for an untagged user") and asserts `codes[4].is_present` for exactly that case. The base docstring contradicts its own test.
+
+Every other claim in question 5 checks out against the code: the result may exceed the scope (verified for virtual/matter/zwave), per-index providers honour the scope (zha.py:356, zigbee2mqtt.py:664), and unreadable counts as occupied (`is_present` is `True` for `_UNREADABLE_CREDENTIAL`, `models.py:134`).
+
+### 6. Akuvox: the new guard checks the key but not its type
+`custom_components/lock_code_manager/providers/akuvox.py:131-135`
+
+`return entity_response["users"]` is unvalidated, sitting directly below two `isinstance` guards that follow the opposite convention. `{"users": None}` or `{"users": {...}}` reaches `for user in users` at `akuvox.py:322` and raises a bare `TypeError`/`AttributeError` — not a `LockCodeManagerError`, so it escapes `async_internal_get_occupied_indices`'s `except LockCodeManagerError` at `_base.py:1849` and propagates raw to the future caller. An `isinstance(..., list)` check completes the guard.
+
+Separately, this is the second behavioural change on a default poll path in this branch (question 3): a response with no `users` key now raises where it previously returned `[]`. All akuvox test fixtures use `{"users": []}` for the empty-device case, so the key does appear to always be present, but the change is worth flagging since it was not part of the occupancy work.
+
+### 7. Dead setup in the virtual scoped-read test
+`tests/providers/virtual/test_provider.py:301-306` seeds `_data["11"]` labelled "beyond the window" and never asserts anything about slot 11 — which is the one place virtual's "result exceeds the scope" behaviour (`virtual.py:132`) is visible. The surviving assertion (`codes[3].is_present`) passes even if the `| stored_slots` union is deleted, since slot 3 is inside the scope and gets picked up by the projection seed.
+
+## Notes, not findings
+
+- `async_internal_get_occupied_indices` has no production caller (`grep` finds only tests). It is `@final` public API landing ahead of its consumer, so the interaction with allocation — particularly the `credential_index_follows_slot` reasoning in the docstring — is asserted rather than exercised.
+- Poll paths for matter, schlage, virtual, zigbee2mqtt, and zwave_js are behaviourally identical to `v3` at `slots=None`; I diffed each. The zigbee2mqtt `_async_read_slot` extraction preserves the publish-failure `pop`, the `finally` `pop`, and the broad-catch semantics exactly.
+- `except TypeError, ValueError:` at `domain/slot_assignment.py:79` is valid — PEP 758, Python 3.14. Not a bug; flagging only because it looks like one.</result>
+<usage><subagent_tokens>152568</subagent_tokens><tool_uses>40</tool_uses><duration_ms>600928</duration_ms></usage>
+</task-notification>
