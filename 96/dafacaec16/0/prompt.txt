@@ -432,3 +432,38 @@ Note: no `ReportFindings` tool is exposed in this session (searched the deferred
 ---
 
 run the eigth
+
+---
+
+<task-notification>
+<task-id>ab2daa40d260da3c6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/ab2daa40d260da3c6.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1422 (`feat/v3-name-unique-ids` → `v3`), full diff of `custom_components/` and `ts/`, with the surrounding files opened for context. I could not submit via `ReportFindings` — that tool is not exposed in this environment (`ToolSearch` returns no match), so the findings are below.
+
+Findings (3), two of them verified by running code against the PR branch.
+
+**1. `custom_components/lock_code_manager/domain/identifier_migration.py:220` — HIGH: `_async_remap_segment` loops forever when a chain's final target is occupied by a row that is not itself in the mapping.**
+When a pass moves nothing, the stall handler picks `cycle_segment` as any `old` where `old in pending and new in mapping`, parks it on a fresh `lcm-parked-N`, and loops. The parked segment is deliberately *not* marked as moved, so it stays in `pending`, and its target is still a mapping key — so the very next stalled pass re-parks the segment it just parked, onto `lcm-parked-N+1`, unboundedly. Nothing bounds the number of parks or excludes an already-parked segment.
+
+Verified repro on the branch (hangs; killed at 30s):
+
+```python
+_seed(f"{eid}|A|pin"); _seed(f"{eid}|B|pin"); _seed(f"{eid}|C|pin")
+async_rename_identifiers(hass, eid, {"A": "B", "B": "C"})   # never returns
+```
+
+`C`'s row only has to be something the mapping doesn't cover — a slot removed from config while HA was down, or a row this same module left behind via its own "cannot move … leaving as-is" path. Both entry points are `@callback` (synchronous), so this wedges the HA event loop permanently. `async_migrate_identifiers_to_names` shares the primitive and runs from `async_migrate_entry`, so the equivalent shape (`{1: name "2", 2: name "5"}` plus a stale `entry|5|…` row) hangs HA at startup, and since the version bump happens *after* the call the entry never leaves version 3, so every subsequent restart hangs too.
+
+**2. `custom_components/lock_code_manager/domain/identifier_migration.py:88` — MEDIUM: `_async_park_segment` omits the unique-ID collision pre-check the main loop has, so `async_update_entity` can raise mid-run.**
+The main entity loop guards every move with `if ent_reg.async_get_entity_id(...) is not None: continue`. The park path calls `ent_reg.async_update_entity(entity.entity_id, new_unique_id=...)` unguarded, and HA's `EntityRegistry._async_update_entity` raises `ValueError("Unique id '…' is already in use by …")` on conflict. `_temporary_segment` only checks the *mapping* for collisions, never the registry — so a registry row already sitting at `{entry_id}|lcm-parked-0|…` collides. That row exists if a user is literally named `lcm-parked-0`, or (more reachably) if a previous run was interrupted after parking — which finding 1 makes likely, since the hang leaves parked rows behind and a subsequent restart picks `lcm-parked-0` again. The raise propagates out of `async_migrate_entry`/`async_update_listener` with identifiers half-moved.
+
+**3. `custom_components/lock_code_manager/__init__.py:1146` (with `domain/slot_coordinator.py:342`) — MEDIUM: renaming via the name text entity only works because `async_update_listener` has no `await` before its early return; the invariant is unprotected and untested.**
+`_write_config_fields` eagerly overwrites `runtime_data.config` immediately after `async_update_entry`. The only reason `_async_apply_renames` still sees a rename is that HA's eager task start runs the listener body synchronously inside `async_update_entry`, and the data-only path reaches `return` without suspending — so `previous_config` is captured before the eager refresh. Verified counterfactual: inserting a single `await asyncio.sleep(0)` at the top of `async_update_listener` makes the registry row stay at `{eid}|test1|pin` after renaming to `renamed`, i.e. every text-entity rename silently stops moving identifiers. The failure mode is the destructive one the PR description calls out — config holds the new name, the registry holds the old, and `_async_prune_orphaned_slot_devices` reaps the device on the next setup, cascading to the entity rows. No end-to-end test covers this path (`tests/test_slot_coordinator.py:851` only asserts the config field is written; the e2e rename tests all go through the options flow), so the suite would stay green through the regression.
+
+Things I checked that are clean: every inline identifier construction is now routed through the shared builders (no stragglers left in Python); the migration/rename `moved_entity_ids` / `moved_device_ids` guards correctly prevent double-walking `{"1": "2", "2": "Bob"}`; `check_name` is behaviour-preserving on all three write paths and the config flow's self-collision concern doesn't apply (the options flow uses the YAML path, and `async_step_code_slot` adds the slot only after validating); `parse_user_device_identifier` still rejects the entry's own device; the TS `slotNumForName` map has exactly one live caller and reads `slot_names`, not `slots`. I also ran e2e probes for a two-user name swap and for rename-then-reload — both behave correctly.</result>
+<usage><subagent_tokens>189004</subagent_tokens><tool_uses>45</tool_uses><duration_ms>740980</duration_ms></usage>
+</task-notification>
