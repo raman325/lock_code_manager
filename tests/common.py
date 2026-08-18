@@ -126,6 +126,11 @@ class MockLCMLock(BaseLock):
         self._device_available = True
         self._hard_refresh_interval: timedelta | None = None
         self.codes: dict[int, str] = {1: "1234", 2: "5678"}
+        # Slots this lock reports as occupied without giving up the value,
+        # the way a lock with masked Personal Identification Numbers does.
+        # Reported regardless of ``codes``, so a slot keeps reading occupied
+        # after a clear -- which is the state a clear can never confirm.
+        self.write_only: set[int] = set()
         self.service_calls: defaultdict[str, list] = defaultdict(list)
 
     @property
@@ -193,7 +198,9 @@ class MockLCMLock(BaseLock):
         """Return dictionary of code slots and usercodes."""
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
-        return {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
+        codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
+        codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
+        return codes
 
 
 @dataclass(repr=False, eq=False)

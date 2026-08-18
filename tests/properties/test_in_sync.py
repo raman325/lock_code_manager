@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from hypothesis import assume, given, strategies as st
+from hypothesis import given, strategies as st
 
 from homeassistant.const import STATE_OFF, STATE_ON
 
@@ -43,7 +43,7 @@ def _manager(
     manager._address = pin_address(1)
     manager._coordinator = SimpleNamespace(is_verified=lambda address: verified)
     manager._last_set_pin = last_set_pin
-    manager._cleared_slot = cleared_slot
+    manager._lock = SimpleNamespace(last_write_was_clear=lambda slot: cleared_slot)
     return manager
 
 
@@ -109,7 +109,7 @@ def test_inactive_slot_syncs_iff_the_lock_shows_no_code_it_can_report(
     A lock that reports the slot occupied but withholds its contents can
     neither confirm nor deny a clear, so the clear already issued is the only
     evidence there is. Everything else is unchanged: a readable code means
-    work to do, and an empty slot is done.
+    work to do whatever was cleared before, and an empty slot is done.
     """
     manager = _manager(
         verified=True, last_set_pin=last_set_pin, cleared_slot=cleared_slot
@@ -131,25 +131,3 @@ def test_inactive_slot_syncs_iff_the_lock_shows_no_code_it_can_report(
     else:
         expected = cleared_slot
     assert manager.calculate_in_sync(state) is expected
-
-
-@given(snapshot=SLOT_STATES, last_set_pin=LAST_SET)
-def test_inactive_slot_with_a_readable_code_is_never_in_sync(
-    snapshot: CredentialSyncState, last_set_pin: str | None
-) -> None:
-    """No memory of a clear can make a code the lock still reports acceptable.
-
-    The clear-was-issued evidence must not leak into the case where the lock
-    tells us plainly that a code is there.
-    """
-    assume(snapshot.coordinator_credential is not None)
-    assume(snapshot.coordinator_credential.is_readable)
-    manager = _manager(verified=True, last_set_pin=last_set_pin, cleared_slot=True)
-    state = CredentialSyncState(
-        STATE_OFF,
-        snapshot.credential_state,
-        snapshot.name_state,
-        snapshot.code_state,
-        snapshot.coordinator_credential,
-    )
-    assert manager.calculate_in_sync(state) is False

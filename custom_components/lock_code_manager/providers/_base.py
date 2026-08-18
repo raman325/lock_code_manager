@@ -225,6 +225,9 @@ class BaseLock:
     _setup_running: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
     _rejected_code_slots: set[int] = field(default_factory=set, init=False)
+    # Slots whose most recent write from this integration was a clear that
+    # changed something. See ``last_write_was_clear``.
+    _cleared_slots: set[int] = field(default_factory=set, init=False)
     # Slots with an outstanding optimistic (ambiguous-but-treated-as-completed)
     # write awaiting confirmation, mapped to (believed_pin, monotonic_deadline).
     # A confirmation -- a push event or a hard-refresh read observing the slot
@@ -1165,6 +1168,11 @@ class BaseLock:
         source: Literal["sync", "direct"] = "direct",
     ) -> None:
         """Set a usercode on a code slot."""
+        # Discarded BEFORE the write: a set that raises may still have landed
+        # -- the verification read is what times out -- and a slot still
+        # remembered as cleared would be reported cleared while it holds a
+        # working code.
+        self._cleared_slots.discard(code_slot)
         LOGGER.debug(
             "Setting usercode on %s slot %s (pin=%s, source=%s)",
             self.lock.entity_id,
@@ -1297,8 +1305,14 @@ class BaseLock:
         self,
         code_slot: int,
         source: Literal["sync", "direct"] = "direct",
-    ) -> None:
-        """Clear a usercode on a code slot."""
+    ) -> bool:
+        """
+        Clear a usercode on a code slot.
+
+        Returns whether the provider actually changed anything. A clear that
+        found nothing to clear has told the caller nothing about what the
+        slot holds.
+        """
         LOGGER.debug(
             "Clearing usercode on %s slot %s (source=%s)",
             self.lock.entity_id,
@@ -1312,8 +1326,16 @@ class BaseLock:
         changed = await self._execute_rate_limited(
             "clear", self.async_clear_usercode, code_slot
         )
+        # Only a clear that changed something is evidence about the slot. A
+        # provider that found nothing to clear has said nothing about what is
+        # there.
+        if changed:
+            self._cleared_slots.add(code_slot)
+        else:
+            self._cleared_slots.discard(code_slot)
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
+        return bool(changed)
 
     async def _project_users_to_slots(
         self, credential_type: CredentialType
@@ -1835,6 +1857,22 @@ class BaseLock:
             ) from err
 
     @final
+    @final
+    def last_write_was_clear(self, code_slot: int) -> bool:
+        """
+        Return whether the last write this integration made here was a clear.
+
+        The only evidence a clear landed on a lock that reports a slot
+        occupied without saying what it holds. Kept on the provider rather
+        than in the sync manager because every write funnels through here,
+        including the ones a service call makes directly -- a memory the sync
+        manager kept could not see those and would go stale.
+
+        In memory only, so a restart forgets and the slot is cleared once
+        more rather than assumed.
+        """
+        return code_slot in self._cleared_slots
+
     @property
     def managed_slots(self) -> set[int]:
         """Return slot numbers managed by any Lock Code Manager config entry that includes this lock."""
