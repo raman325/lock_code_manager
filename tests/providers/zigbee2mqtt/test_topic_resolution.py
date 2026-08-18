@@ -187,3 +187,86 @@ async def test_two_bridges_resolve_independent_topics(
     lock_b = _build_lock(hass, second)
     assert lock_a._resolve_device_topic() == Z2M_FULL_TOPIC
     assert lock_b._resolve_device_topic() == "z2m_outbuilding/Outbuilding"
+
+
+async def test_resolve_device_topic_z2m_device_without_entity_device_id(
+    hass: HomeAssistant, zigbee2mqtt_lock_with_device: Zigbee2MQTTLock
+) -> None:
+    """A Zigbee2MQTT device whose entity row carries no device_id yields no topic.
+
+    Distinct from the no-device case already covered: there the device entry
+    is absent so ``_is_z2m_device`` refuses first. Here the device IS a
+    Zigbee2MQTT one and only the entity's link is missing, which is the state
+    a registry row left mid-update can be in. Guessing a topic from the
+    friendly name instead would publish a lock command to whatever device
+    happened to own that name.
+    """
+    lock = zigbee2mqtt_lock_with_device
+    assert lock._is_z2m_device()
+
+    with patch.object(type(lock.lock), "device_id", None):
+        assert lock._resolve_device_topic() is None
+
+
+async def test_resolve_device_topic_skips_other_entities_on_the_device(
+    hass: HomeAssistant, mqtt_lock_discovered: er.RegistryEntry
+) -> None:
+    """Only the lock's own discovery entry is read, not a sibling's.
+
+    A Zigbee2MQTT device publishes many entities -- battery, linkquality, the
+    lock itself -- and they do not share a topic. Reading the first entry
+    rather than the matching one would resolve to a sensor's topic and send
+    every lock command there.
+    """
+    lock = _build_lock(hass, mqtt_lock_discovered)
+    real = mqtt_debug_info.info_for_device(hass, mqtt_lock_discovered.device_id)
+    ours = next(
+        e for e in real["entities"] if e["entity_id"] == mqtt_lock_discovered.entity_id
+    )
+    sibling = {
+        "entity_id": "sensor.someone_elses_battery",
+        "discovery_data": {"payload": {"state_topic": "zigbee2mqtt/NotOurLock"}},
+    }
+
+    with patch.object(
+        mqtt_debug_info, "info_for_device", return_value={"entities": [sibling, ours]}
+    ):
+        assert lock._resolve_device_topic() == Z2M_FULL_TOPIC
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        (None, "discovery data with no payload at all"),
+        ("zigbee2mqtt/Lock", "a payload that is not a mapping"),
+        ({}, "a payload carrying neither topic"),
+        ({"command_topic": "zigbee2mqtt/Lock/get"}, "a command topic without /set"),
+    ],
+)
+async def test_resolve_device_topic_refuses_an_unusable_payload(
+    hass: HomeAssistant,
+    mqtt_lock_discovered: er.RegistryEntry,
+    payload: object,
+    reason: str,
+) -> None:
+    """An unusable discovery payload resolves to nothing rather than a guess.
+
+    Callers treat None as disconnected, which is the safe reading: the
+    alternative is reconstructing a topic from the friendly name, which breaks
+    on custom and multi-level base topics and would publish somewhere real.
+
+    The payload shapes are hand-built because Zigbee2MQTT would never publish
+    them -- that is the point. The SHAPE those fixtures assume is pinned
+    against the real Home Assistant structure by ``test_debug_info_shape_pin``
+    above, so a Home Assistant change breaks that test rather than silently
+    invalidating these.
+    """
+    lock = _build_lock(hass, mqtt_lock_discovered)
+    entry = {"entity_id": mqtt_lock_discovered.entity_id, "discovery_data": {}}
+    if payload is not None:
+        entry["discovery_data"] = {"payload": payload}
+
+    with patch.object(
+        mqtt_debug_info, "info_for_device", return_value={"entities": [entry]}
+    ):
+        assert lock._resolve_device_topic() is None
