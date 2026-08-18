@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "75f657839061",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-migration",
+  "checkpoints_count": 5,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/75/f657839061/0/metadata.json",
+      "transcript": "/75/f657839061/0/full.jsonl",
+      "compact_transcript": "/75/f657839061/0/transcript.jsonl",
+      "content_hash": "/75/f657839061/0/content_hash.txt",
+      "prompt": "/75/f657839061/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 138,
+    "cache_creation_tokens": 719628,
+    "cache_read_tokens": 46582432,
+    "output_tokens": 68090,
+    "api_call_count": 69
+  }
+}
