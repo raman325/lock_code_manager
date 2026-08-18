@@ -5,7 +5,6 @@
       "existing_codes_cancelled": "Setup cancelled. Existing codes were not modified.",
       "locks_updated": "The locks for your config entry have been updated.",
       "occupancy_unknown": "Could not read the existing codes from {locks}, so Lock Code Manager cannot tell which code slots are free. Setting a user up now could overwrite a code already on the lock. Check the lock is reachable and try again.",
-      "too_many_users": "Lock {lock} has room for {num_slots} PIN codes, and {num_users} users were requested. Configure at most {num_slots} here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "unknown": "An unexpected error occurred during setup."
     },
     "error": {
@@ -15,7 +14,8 @@
       "name_not_unique": "The name for code slot {slot_num} is already used by another code slot in this entry. Names must be unique.",
       "name_required": "Code slot {slot_num} needs a name. The name identifies this user on your locks.",
       "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
-      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}"
+      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
+      "too_many_users": "Lock {lock} has {num_slots} PIN code slots and {taken} of them already hold a code, leaving room for {room} more. Set up at most {room} users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity."
     },
     "step": {
       "choose_path": {
@@ -33,6 +33,7 @@
           "name": "Name",
           "pin": "PIN Code"
         },
+        "description": "A user is active when their condition entity (if configured) is 'on'. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
         "title": "User {user_num} of {num_users}"
       },
       "existing_codes_confirm": {
@@ -48,7 +49,7 @@
           "num_users": "Number of users"
         },
         "description": "How many users do you want to set up? You can add or remove users later. Lock Code Manager picks which code slot each user occupies, skipping any slot that already holds a code.",
-        "title": "How Many Slots?"
+        "title": "How Many Users?"
       },
       "user": {
         "data": {

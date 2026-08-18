@@ -504,12 +504,12 @@ async def test_ui_setup_refuses_when_a_lock_cannot_be_read(hass: HomeAssistant):
         await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
-        await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
-        await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
         result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1111"}
+            flow_id, {"next_step_id": "ui"}
         )
 
+    # Refused on the way in to the count form, not after names and PINs have
+    # been typed -- nothing collected there could change the answer.
     assert result["type"] == "abort"
     assert result["reason"] == "occupancy_unknown"
     assert LOCK_1_ENTITY_ID in result["description_placeholders"]["locks"]
@@ -860,9 +860,11 @@ async def test_query_locks_entity_not_in_registry(hass: HomeAssistant):
 
     [query] = await _async_query_locks(hass, dev_reg, ent_reg, ["lock.does_not_exist"])
 
-    # Not a lock Lock Code Manager writes credentials to, so its contents
-    # cannot collide with anything allocation issues.
-    assert not query.managed
+    # Lock Code Manager still writes here -- the provider just could not be
+    # built right now -- so the lock has to constrain allocation, and an
+    # unread lock constrains it by making occupancy unknown.
+    assert query.managed
+    assert query.credential_index_follows_slot
     assert query.codes is None
 
 
@@ -899,9 +901,11 @@ async def test_query_locks_missing_lock_config_entry(hass: HomeAssistant):
     ):
         [query] = await _async_query_locks(hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID])
 
-    # Not a lock Lock Code Manager writes credentials to, so its contents
-    # cannot collide with anything allocation issues.
-    assert not query.managed
+    # Lock Code Manager still writes here -- the provider just could not be
+    # built right now -- so the lock has to constrain allocation, and an
+    # unread lock constrains it by making occupancy unknown.
+    assert query.managed
+    assert query.credential_index_follows_slot
     assert query.codes is None
 
 
@@ -1270,32 +1274,68 @@ async def test_config_flow_yaml_accepts_slot_within_capacity(
 async def test_config_flow_ui_rejects_more_users_than_the_lock_holds(
     hass: HomeAssistant, mock_lock_config_entry
 ):
-    """Asking for more users than the lock has slots for cannot be satisfied.
+    """A count the locks cannot hold is refused where it can still be changed.
 
-    The count is the only thing the user chose, so the refusal has to name it;
-    there is no slot range to send them back to.
+    Which users get configured does not change which numbers allocation
+    issues, so the answer is known as soon as the count is.
     """
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
-    await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 3})
-
-    for name in ("Raman", "Alice"):
-        await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
-        )
 
     probe_registered, probe_capabilities = _capacity_probe(
         return_value=_capabilities_with_slots(2)
     )
     with probe_registered, probe_capabilities:
         result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "Bo", CONF_ENABLED: True, CONF_PIN: "3333"}
+            flow_id, {CONF_NUM_USERS: 3}
         )
 
-    assert result["type"] == "abort"
-    assert result["reason"] == "too_many_users"
+    # A form, not an abort: the user can lower the count and carry on.
+    assert result["type"] == "form"
+    assert result["step_id"] == "ui"
+    assert result["errors"] == {"base": "too_many_users"}
     assert result["description_placeholders"]["num_users"] == "3"
-    assert result["description_placeholders"]["num_slots"] == "2"
+    assert result["description_placeholders"]["room"] == "2"
+    assert result["description_placeholders"]["taken"] == "0"
+
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "code_slot"
+
+
+async def test_config_flow_ui_room_accounts_for_codes_already_on_the_lock(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The room offered is capacity minus what the lock already holds.
+
+    Reporting raw capacity would tell someone with a nearly-full lock they
+    can add far more users than they can.
+    """
+    existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}}
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers(existing)):
+        flow_id = await _init_flow_to_user_step(hass)
+        await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    probe_registered, probe_capabilities = _capacity_probe(
+        return_value=_capabilities_with_slots(3)
+    )
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 3}
+        )
+
+    assert result["errors"] == {"base": "too_many_users"}
+    # Three slots, one already holding a code: room for two, not three.
+    assert result["description_placeholders"]["num_slots"] == "3"
+    assert result["description_placeholders"]["taken"] == "1"
+    assert result["description_placeholders"]["room"] == "2"
 
 
 async def test_config_flow_capacity_check_skipped_when_lock_unreachable(
