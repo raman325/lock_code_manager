@@ -48,10 +48,12 @@ The **Code Events** column refers to PIN-used automations from Lock Code Manager
 (which slots were used to lock/unlock).
 Zigbee2MQTT lock/unlock actions with user identification are mapped to code slot events for PIN-used automations.
 Configure Home Assistant’s **MQTT** integration on the **same broker** Zigbee2MQTT uses.
-The default Zigbee2MQTT base topic `zigbee2mqtt` matches what Lock Code Manager expects unless you customize topics
-(`{base_topic}/{friendly_name}/set|get`).
+Custom Zigbee2MQTT base topics — including multi-level topics (e.g. `home/z2m`) and multiple
+bridges on one broker — are supported automatically: Lock Code Manager reads each lock’s exact
+MQTT topic from the discovery data Zigbee2MQTT publishes to Home Assistant, so no extra
+configuration is needed. Locks must be added to Home Assistant via MQTT discovery
+(Zigbee2MQTT’s default).
 During LCM setup, choose your `lock.*` entity from **MQTT**.
-If you rename the device in HA, keep it aligned with the **friendly name** in Zigbee2MQTT.
 
 [zigbee2mqtt]: https://www.zigbee2mqtt.io/
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration

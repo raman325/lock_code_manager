@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
 from homeassistant.core import HomeAssistant
 
@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     _mqtt_payload_pin_has_code_value,
 )
 
-from .conftest import _minimal_lock
+from .conftest import Z2M_FULL_TOPIC, _minimal_lock
 
 
 def test_mqtt_payload_pin_has_code_value_rejects_bool() -> None:
@@ -188,27 +188,15 @@ def test_pin_code_get_invalid_user_type_returns_early() -> None:
 
 async def test_mqtt_payload_invalid_json_ignored(
     hass: HomeAssistant,
-    zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
 ) -> None:
     """Subscription callback skips invalid JSON payloads."""
-    lock = zigbee2mqtt_lock_with_device
+    lock = zigbee2mqtt_lock_connected
     lock.coordinator = MagicMock()
-    with (
-        patch(
-            "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
-            return_value=True,
-        ),
-        patch(
-            "custom_components.lock_code_manager.providers.zigbee2mqtt.async_subscribe",
-            new_callable=AsyncMock,
-        ) as mock_subscribe,
-    ):
-        mock_subscribe.return_value = lambda: None
-        lock.setup_push_subscription()
-        await hass.async_block_till_done()
-        cb = mock_subscribe.call_args[0][2]
-        cb(SimpleNamespace(payload=b"not json {{{"))
-        await hass.async_block_till_done()
+    await lock._async_ensure_device_subscription()
+
+    async_fire_mqtt_message(hass, Z2M_FULL_TOPIC, "not json {{{")
+    await hass.async_block_till_done()
 
     lock.coordinator.push_update.assert_not_called()
 

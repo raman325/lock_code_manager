@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass, field
+from collections.abc import AsyncGenerator
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import DEFAULT, MagicMock
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_mqtt_message,
+)
 
-from homeassistant.components.mqtt.models import ReceiveMessage
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -30,54 +30,102 @@ Z2M_TOPIC_NAME = "TestLockZ2M"
 Z2M_FULL_TOPIC = f"zigbee2mqtt/{Z2M_TOPIC_NAME}"
 Z2M_GET_TOPIC = f"{Z2M_FULL_TOPIC}/get"
 Z2M_SET_TOPIC = f"{Z2M_FULL_TOPIC}/set"
-Z2M_LOCK_UNIQUE_ID = "test_z2m"
+
+Z2M_IEEE = "0xc0ffee"
 
 
-@dataclass
-class MqttMessageBus:
+def z2m_lock_discovery_payload(
+    *,
+    ieee: str = Z2M_IEEE,
+    name: str = Z2M_TOPIC_NAME,
+    base_topic: str = "zigbee2mqtt",
+    include_state_topic: bool = True,
+) -> dict[str, Any]:
     """
-    Lightweight MQTT message bus for E2E testing.
+    Build a Zigbee2MQTT-shaped Home Assistant discovery payload for a lock.
 
-    Tracks subscriptions and publishes so tests can fire incoming messages
-    and verify outgoing publishes without a real Paho client.
+    Mirrors what zigbee-herdsman-converters publishes: the device topic is
+    ``<base_topic>/<friendly_name>`` and commands go to ``<device topic>/set``.
     """
+    device_topic = f"{base_topic}/{name}"
+    payload: dict[str, Any] = {
+        "name": None,
+        "command_topic": f"{device_topic}/set",
+        "payload_lock": "LOCK",
+        "payload_unlock": "UNLOCK",
+        "state_locked": "LOCKED",
+        "state_unlocked": "UNLOCKED",
+        "value_template": "{{ value_json.state }}",
+        "unique_id": f"{ieee}_lock_zigbee2mqtt",
+        "device": {
+            "identifiers": [f"zigbee2mqtt_{ieee}"],
+            "name": name,
+            "manufacturer": "Test",
+            "model": "Test lock",
+        },
+    }
+    if include_state_topic:
+        payload["state_topic"] = device_topic
+    return payload
 
-    subscriptions: dict[str, list[Callable]] = field(default_factory=dict)
-    publishes: list[tuple[str, str]] = field(default_factory=list)
 
-    def subscribe(self, topic: str, callback: Callable) -> Callable[[], None]:
-        """Register a subscription callback and return an unsubscribe handle."""
-        self.subscriptions.setdefault(topic, []).append(callback)
+async def async_discover_z2m_lock(
+    hass: HomeAssistant,
+    *,
+    ieee: str = Z2M_IEEE,
+    name: str = Z2M_TOPIC_NAME,
+    base_topic: str = "zigbee2mqtt",
+    include_state_topic: bool = True,
+) -> er.RegistryEntry:
+    """Fire a Z2M-style discovery config and return the created lock entity."""
+    discovery_topic = f"homeassistant/lock/{ieee}/lock/config"
+    async_fire_mqtt_message(
+        hass,
+        discovery_topic,
+        json.dumps(
+            z2m_lock_discovery_payload(
+                ieee=ieee,
+                name=name,
+                base_topic=base_topic,
+                include_state_topic=include_state_topic,
+            )
+        ),
+    )
+    await hass.async_block_till_done()
+    ent_reg = er.async_get(hass)
+    entity_id = ent_reg.async_get_entity_id("lock", "mqtt", f"{ieee}_lock_zigbee2mqtt")
+    assert entity_id is not None, "discovery did not create the lock entity"
+    # Seed a state so the entity is available.
+    async_fire_mqtt_message(hass, f"{base_topic}/{name}", '{"state": "LOCKED"}')
+    await hass.async_block_till_done()
+    entry = ent_reg.async_get(entity_id)
+    assert entry is not None
+    return entry
 
-        def unsub() -> None:
-            self.subscriptions.get(topic, []).remove(callback)
 
-        return unsub
+@pytest.fixture
+async def mqtt_teardown(hass: HomeAssistant, mqtt_client_mock) -> AsyncGenerator[None]:
+    """
+    Cancel the MQTT client's misc periodic timer after the test.
 
-    async def publish(
-        self,
-        hass: HomeAssistant,
-        topic: str,
-        payload: str,
-        **kwargs: Any,
-    ) -> None:
-        """Record a published message."""
-        self.publishes.append((topic, payload))
+    HA's MQTT client cancels that timer only on socket close, which the paho
+    client mock never fires. Fire it here so teardown does not trip the
+    lingering-timer check in verify_cleanup. Any test that sets up the real
+    MQTT integration via ``mqtt_mock`` needs this.
+    """
+    yield
+    mqtt_client_mock.on_socket_close(
+        mqtt_client_mock, None, MagicMock(fileno=MagicMock(return_value=-1))
+    )
+    await hass.async_block_till_done()
 
-    def fire_message(self, topic: str, payload: dict[str, Any]) -> None:
-        """
-        Simulate an incoming MQTT message on a topic.
 
-        Creates a ReceiveMessage-like object and dispatches to all
-        registered callbacks for the topic.
-        """
-        msg = MagicMock(spec=ReceiveMessage)
-        msg.topic = topic
-        msg.payload = json.dumps(payload).encode()
-        msg.qos = 0
-        msg.retain = False
-        for cb in self.subscriptions.get(topic, []):
-            cb(msg)
+@pytest.fixture
+async def mqtt_lock_discovered(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> er.RegistryEntry:
+    """Z2M lock entity created through real MQTT discovery (default base topic)."""
+    return await async_discover_z2m_lock(hass)
 
 
 def _minimal_lock() -> Zigbee2MQTTLock:
@@ -99,111 +147,63 @@ def _minimal_lock() -> Zigbee2MQTTLock:
 
 
 @pytest.fixture
-def mqtt_bus() -> MqttMessageBus:
-    """Create a fresh MQTT message bus for the test."""
-    return MqttMessageBus()
+def auto_get_responder(hass: HomeAssistant, mqtt_mock):
+    """
+    Answer pin_code GET publishes like a Zigbee2MQTT bridge would.
+
+    The mocked paho client never echoes publishes back, so tests that run the
+    coordinator's initial refresh need GET requests answered or every slot
+    read blocks on its 10-second timeout.
+
+    The hook lives on ``mqtt_mock.async_publish`` (the HA MQTT client mock),
+    not the paho layer: that mock wraps the real client method, and a
+    side_effect that returns ``unittest.mock.DEFAULT`` keeps the wrapped
+    call (and therefore the real publish pass-through) intact.
+    """
+
+    def _respond(topic: str, payload: str, *args: Any, **kwargs: Any) -> Any:
+        if not topic.endswith("/get"):
+            return DEFAULT
+        try:
+            body = json.loads(payload)
+        except json.JSONDecodeError, TypeError:
+            return DEFAULT
+        slot = body.get("pin_code", {}).get("user")
+        if slot is None:
+            return DEFAULT
+        device_topic = topic.removesuffix("/get")
+        async_fire_mqtt_message(
+            hass,
+            device_topic,
+            json.dumps(
+                {"pin_code": {"user": slot, "user_enabled": False, "pin_code": None}}
+            ),
+        )
+        return DEFAULT
+
+    mqtt_mock.async_publish.side_effect = _respond
+    yield
+    mqtt_mock.async_publish.side_effect = None
 
 
 @pytest.fixture
-def mqtt_patches(mqtt_bus: MqttMessageBus):
-    """
-    Patch async_subscribe and async_publish at the HA MQTT component boundary.
-
-    Also patches mqtt_config_entry_enabled to return True so the provider
-    does not bail out during setup.
-    """
-
-    async def fake_subscribe(hass, topic, callback, *args, **kwargs):
-        return mqtt_bus.subscribe(topic, callback)
-
-    async def fake_publish(hass, topic, payload, *args, **kwargs):
-        await mqtt_bus.publish(hass, topic, payload, **kwargs)
-        # Auto-respond to GET requests so the coordinator's initial
-        # refresh doesn't block on 10-second timeouts per slot.
-        if topic.endswith("/get"):
-            try:
-                body = json.loads(payload)
-                slot = body.get("pin_code", {}).get("user")
-                if slot is not None:
-                    device_topic = topic.rsplit("/get", 1)[0]
-                    mqtt_bus.fire_message(
-                        device_topic,
-                        {
-                            "pin_code": {
-                                "user": slot,
-                                "user_enabled": False,
-                                "pin_code": None,
-                            }
-                        },
-                    )
-            except json.JSONDecodeError, TypeError:
-                pass
-
-    with (
-        patch(
-            "custom_components.lock_code_manager.providers.zigbee2mqtt.async_subscribe",
-            side_effect=fake_subscribe,
-        ),
-        patch(
-            "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
-            side_effect=fake_publish,
-        ),
-        patch(
-            "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
-            return_value=True,
-        ),
-    ):
-        yield
-
-
-@pytest.fixture
-async def mqtt_lock_entity(
-    hass: HomeAssistant,
-) -> AsyncGenerator[er.RegistryEntry]:
-    """
-    Create an MQTT config entry, Z2M device, and lock entity.
-
-    Sets the MQTT config entry to LOADED state so the provider's
-    async_is_integration_connected check passes. Resets the state to
-    NOT_LOADED on teardown because HA 2026.5.0's mqtt.async_unload_entry
-    does an unguarded ``hass.data[DATA_MQTT]`` lookup that this fake
-    setup never populates.
-    """
-    mqtt_entry = MockConfigEntry(domain="mqtt")
-    mqtt_entry.add_to_hass(hass)
-    mqtt_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
-
-    dev_reg = dr.async_get(hass)
-    ent_reg = er.async_get(hass)
-
-    device = dev_reg.async_get_or_create(
-        config_entry_id=mqtt_entry.entry_id,
-        connections=set(),
-        identifiers={("mqtt", "zigbee2mqtt_0xc0ffee")},
-        name=Z2M_TOPIC_NAME,
+async def zigbee2mqtt_lock_connected(
+    hass: HomeAssistant, mqtt_lock_discovered: er.RegistryEntry
+) -> Zigbee2MQTTLock:
+    """Build a provider instance around a real-discovery lock with resolvable topics."""
+    mqtt_entry = hass.config_entries.async_entries("mqtt")[0]
+    return Zigbee2MQTTLock(
+        hass, dr.async_get(hass), er.async_get(hass), mqtt_entry, mqtt_lock_discovered
     )
-
-    lock_entity = ent_reg.async_get_or_create(
-        "lock",
-        "mqtt",
-        "test_z2m",
-        config_entry=mqtt_entry,
-        device_id=device.id,
-    )
-
-    hass.states.async_set(lock_entity.entity_id, "locked")
-
-    yield lock_entity
-
-    mqtt_entry._async_set_state(hass, ConfigEntryState.NOT_LOADED, None)
 
 
 @pytest.fixture
 async def lcm_config_entry(
     hass: HomeAssistant,
-    mqtt_lock_entity: er.RegistryEntry,
-    mqtt_patches,
-) -> MockConfigEntry:
+    mqtt_lock_discovered: er.RegistryEntry,
+    auto_get_responder,
+    mqtt_teardown,
+) -> AsyncGenerator[MockConfigEntry]:
     """
     Set up a full LCM config entry managing the Z2M lock.
 
@@ -211,7 +211,7 @@ async def lcm_config_entry(
     lock entity is from the mqtt platform, instantiates Zigbee2MQTTLock,
     creates the coordinator, entities, and sync managers.
     """
-    entity_id = mqtt_lock_entity.entity_id
+    entity_id = mqtt_lock_discovered.entity_id
     config = {
         CONF_LOCKS: [entity_id],
         CONF_SLOTS: {
