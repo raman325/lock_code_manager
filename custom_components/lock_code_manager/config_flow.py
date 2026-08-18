@@ -731,7 +731,6 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
                 user_input[CONF_SLOTS] = parsed_slots
                 return await self._maybe_confirm_then_persist(user_input)
 
-        # Use to_dict() rather than .locks / .slots directly — to_dict
         # Plain dict/list, because the form selectors cannot serialize the
         # deeply read-only mappings EntryConfig uses internally.
         #

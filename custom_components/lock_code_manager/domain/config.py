@@ -12,7 +12,12 @@ from homeassistant.const import CONF_NAME
 
 from ..const import CONF_LOCKS, CONF_SLOTS, CONF_USERS
 from .names import normalize_name
-from .slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment, _identity
+from .slot_assignment import (
+    CONF_SLOT_ASSIGNMENT,
+    SlotAssignment,
+    _identity,
+    users_from_slots,
+)
 
 _EMPTY_USERS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
 _EMPTY_EXTRA: Mapping[str, Any] = MappingProxyType({})
@@ -38,14 +43,14 @@ def _users_from_slot_shape(
     An unnamed slot falls back to its generated name rather than being
     dropped, because a version 2 entry is allowed to have one.
     """
-    users: dict[str, dict[str, Any]] = {}
-    assignment: dict[str, int] = {}
-    for raw_num, slot in sorted(raw_slots.items(), key=lambda kv: int(kv[0])):
-        slot_num = int(raw_num)
-        name = normalize_name(slot.get(CONF_NAME)) or f"User {slot_num}"
-        users[name] = {k: v for k, v in slot.items() if k != CONF_NAME}
-        assignment[name] = slot_num
-    return MappingProxyType(users), SlotAssignment(slots=assignment)
+    # Delegated to the migration's own conversion so the two cannot disagree.
+    # They accept the same input, and a second implementation drifted: this one
+    # collapsed two names differing only by case into a single user -- losing
+    # one of them and their code -- where the migration deduplicates. It also
+    # minted the "User {n}" fallback itself, a second copy of a format that
+    # only fallback_name should own.
+    users, assignment, _ = users_from_slots(raw_slots)
+    return MappingProxyType(users), assignment
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +84,27 @@ class EntryConfig:
     # hypothetical -- it erased the migrated shape on every listener pass and
     # sent setup into a loop. Requiring it makes mypy the check, not memory.
     extra: Mapping[str, Any]
+    # Derived once at construction rather than recomputed per access. The
+    # instance is immutable and cached on runtime_data, and the slot view is
+    # read on hot paths -- get_managed_slots walks every entry, and
+    # _check_common_slots does so per lock per entry.
+    _by_slot: Mapping[int, Mapping[str, Any]] = field(init=False, repr=False)
+    _slot_of: Mapping[str, int] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Build the slot-keyed projection and its reverse index."""
+        by_slot: dict[int, Mapping[str, Any]] = {}
+        slot_of: dict[str, int] = {}
+        for name, user in self.users.items():
+            slot_num = self.assignment.slot(name)
+            if slot_num is None:
+                # No number: inventing one would put this user's code on a
+                # credential index somebody else may hold.
+                continue
+            by_slot[slot_num] = MappingProxyType({CONF_NAME: name, **user})
+            slot_of[name] = slot_num
+        object.__setattr__(self, "_by_slot", MappingProxyType(by_slot))
+        object.__setattr__(self, "_slot_of", MappingProxyType(slot_of))
 
     @classmethod
     def empty(cls) -> EntryConfig:
@@ -101,18 +127,37 @@ class EntryConfig:
         from data into options and the listener moves it back, so which side
         holds it depends on where in that cycle we are.
         """
+        # ONE side holds the configuration, and it is read whole. Filling the
+        # shape keys independently let an entry carry both -- user-shaped data
+        # (the steady state) alongside a slot-shaped options save the entry
+        # could not process while it was failed -- and from_mapping prefers
+        # `users`, so the pending save was silently reverted and then
+        # persisted over. Options wins when it holds configuration at all,
+        # which is what _setup_entry_after_start's merge exists to preserve.
+        config_side: Mapping[str, Any] = next(
+            (
+                side
+                for side in (entry.options, entry.data)
+                if CONF_USERS in side or CONF_SLOTS in side
+            ),
+            {},
+        )
         merged: dict[str, Any] = {
+            # Bookkeeping is merged from both sides: setup moves it from data
+            # into options and the listener moves it back, so which side holds
+            # it depends on where in that cycle we are.
             **{k: v for k, v in entry.data.items() if k not in _CONFIG_KEYS},
             **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
             CONF_LOCKS: entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, [])),
         }
-        for key in (CONF_USERS, CONF_SLOT_ASSIGNMENT, CONF_SLOTS):
-            # Only set when a side actually HAS it. Defaulting to an empty
-            # mapping would make "absent" indistinguishable from "empty", and
-            # from_mapping would read an entry with users as having none.
-            value = entry.options.get(key, entry.data.get(key))
-            if value is not None:
-                merged[key] = value
+        for key in (CONF_USERS, CONF_SLOTS):
+            if key in config_side:
+                merged[key] = config_side[key]
+        assignment = entry.options.get(
+            CONF_SLOT_ASSIGNMENT, entry.data.get(CONF_SLOT_ASSIGNMENT)
+        )
+        if assignment is not None:
+            merged[CONF_SLOT_ASSIGNMENT] = assignment
         return cls.from_mapping(merged)
 
     @classmethod
@@ -150,22 +195,12 @@ class EntryConfig:
         """
         Return the slot-keyed view.
 
-        TEMPORARY, and derived rather than stored -- there is one model, and
-        this is a projection of it. It exists so the twenty-eight remaining
-        slot-keyed call sites can move one at a time instead of in a single
-        change nobody could review. Delete it, and this docstring, once they
-        have.
-
-        A user holding no slot is omitted: inventing a number would put their
-        code on a credential index somebody else may hold.
+        TEMPORARY, and a projection of the one model rather than a second one.
+        It exists so the remaining slot-keyed call sites can move one at a
+        time instead of in a single unreviewable change. Delete it, and this
+        docstring, once they have.
         """
-        return MappingProxyType(
-            {
-                slot_num: MappingProxyType({CONF_NAME: name, **user})
-                for name, user in self.users.items()
-                if (slot_num := self.assignment.slot(name)) is not None
-            }
-        )
+        return self._by_slot
 
     def has_lock(self, lock_entity_id: str) -> bool:
         """Return True if this entry manages the given lock."""
@@ -218,14 +253,62 @@ class EntryConfig:
             return NotImplemented
         return EntryConfigDiff(old=self, new=other)
 
-    def with_user_field_set(self, name: str, key: str, value: Any) -> EntryConfig:
-        """Return a copy with one user's field set, creating the user if new."""
+    def with_user_renamed(self, old: str, new: str) -> EntryConfig:
+        """
+        Return a copy with a user re-keyed, keeping their slot.
+
+        A rename re-keys the configuration AND the assignment, so the slot
+        follows the person. Nothing in either registry moves: identifiers key
+        on the slot number, which is exactly why a rename is free.
+        """
         stored = next(
-            (known for known in self.users if _identity(known) == _identity(name)),
-            normalize_name(name),
+            (known for known in self.users if _identity(known) == _identity(old)), None
         )
+        if stored is None:
+            return self
+        renamed = normalize_name(new)
+        new_users = {
+            (renamed if k == stored else k): dict(v) for k, v in self.users.items()
+        }
+        return EntryConfig(
+            locks=self.locks,
+            users=MappingProxyType(
+                {k: MappingProxyType(v) for k, v in new_users.items()}
+            ),
+            # Through reconcile, which is the only allocator, so the rename
+            # cannot drift from how additions and removals are resolved. No
+            # allocation happens here -- every name already holds a slot -- so
+            # `start` is inert; it is required rather than defaulted precisely
+            # so a caller that DOES allocate has to think about it.
+            assignment=self.assignment.reconcile(
+                new_users, start=1, renames={stored: renamed}
+            ),
+            extra=self.extra,
+        )
+
+    def with_user_field_set(self, name: str, key: str, value: Any) -> EntryConfig:
+        """
+        Return a copy with one user's field set.
+
+        Setting the NAME re-keys the user rather than storing a field, because
+        the name is the identity here -- it is what the configuration is keyed
+        by and what the assignment records. Stored as a field it looked
+        correct through the slot projection, where the inner value shadows the
+        key, while the actual identity went permanently stale.
+
+        A user who does not exist is NOT created: creating one also has to
+        allocate a slot, and this cannot. Until allocation is wired, creation
+        has no correct implementation to offer.
+        """
+        if key == CONF_NAME:
+            return self.with_user_renamed(name, value)
+        stored = next(
+            (known for known in self.users if _identity(known) == _identity(name)), None
+        )
+        if stored is None:
+            return self
         new_users = {k: dict(v) for k, v in self.users.items()}
-        new_users.setdefault(stored, {})[key] = value
+        new_users[stored][key] = value
         return EntryConfig(
             locks=self.locks,
             users=MappingProxyType(

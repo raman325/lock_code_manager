@@ -436,17 +436,41 @@ def test_with_slot_field_set_cannot_create_a_user() -> None:
     assert config.with_slot_field_set(2, "pin", "5678") is config
 
 
-def test_with_user_field_set_creates_the_user_when_missing() -> None:
-    """Creating goes through the name, which is what a new user actually needs."""
+def test_with_user_field_set_does_not_create_a_user() -> None:
+    """Setting a field on somebody who does not exist is a no-op.
+
+    Creating a user also has to allocate them a slot, and this cannot -- it
+    has no view of what is occupied on the locks. A user created without one
+    is persisted in `users`, omitted from every slot-keyed consumer, never
+    reaches a lock, and is dropped the next time the configuration round-trips.
+    Creation gets an implementation when allocation does.
+    """
     config = EntryConfig.from_mapping(
         {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
     )
 
-    updated = config.with_user_field_set("Alice", "pin", "5678")
+    assert config.with_user_field_set("Alice", "pin", "5678") is config
 
-    assert dict(updated.users["Alice"]) == {"pin": "5678"}
-    # No slot yet: allocation is a separate, deliberate step.
-    assert updated.slot_for("Alice") is None
+
+def test_setting_the_name_re_keys_the_user() -> None:
+    """The name is the identity, so setting it moves the user, not a field.
+
+    Stored as a field it looks right through the slot projection -- the inner
+    value shadows the key -- while the actual identity goes permanently stale:
+    after a reload the user cannot be found by their new name and holds no
+    slot.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: {**_slot(), "name": "Alice"}}}
+    )
+
+    renamed = config.with_slot_field_set(1, "name", "Bob")
+    reloaded = EntryConfig.from_mapping(renamed.to_dict())
+
+    assert set(reloaded.users) == {"Bob"}
+    assert "name" not in reloaded.users["Bob"]
+    assert reloaded.slot_for("Bob") == 1
+    assert reloaded.user("Alice") == {}
 
 
 def test_with_slot_field_set_updates_existing_field() -> None:
@@ -481,11 +505,11 @@ def test_with_slot_field_set_accepts_str_slot_num() -> None:
 
 def test_with_slot_field_set_output_is_deeply_immutable() -> None:
     """The returned EntryConfig is frozen with read-only mappings, same as the input."""
-    config = EntryConfig.empty()
-    updated = config.with_user_field_set("Raman", "pin", "1234")
+    config = EntryConfig.from_mapping({CONF_SLOTS: {1: {**_slot(), "name": "Raman"}}})
+    updated = config.with_user_field_set("Raman", "pin", "9999")
 
     with pytest.raises(TypeError):
-        updated.users["Raman"]["pin"] = "9999"  # type: ignore[index]
+        updated.users["Raman"]["pin"] = "0000"  # type: ignore[index]
 
 
 def test_with_slot_field_removed_removes_key() -> None:
@@ -688,3 +712,16 @@ def test_build_slot_unique_id_variants_never_collide() -> None:
     per_lock = build_slot_unique_id("abc123", 4, "code", "lock.front_door")
     assert standard != per_lock
     assert per_lock.startswith(f"{standard}|")
+
+
+def test_renaming_somebody_who_does_not_exist_is_a_no_op() -> None:
+    """A rename naming an unknown user changes nothing.
+
+    Reachable from a stale rename map -- one computed against a configuration
+    that has since moved on. Creating the target instead would add a user
+    holding no slot, who never reaches a lock and is dropped on the next
+    round-trip.
+    """
+    config = EntryConfig.from_mapping({CONF_SLOTS: {1: {**_slot(), "name": "Raman"}}})
+
+    assert config.with_user_renamed("Ghost", "Wren") is config
