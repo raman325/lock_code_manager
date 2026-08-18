@@ -50,6 +50,9 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
 )
+from custom_components.lock_code_manager.domain.config import (
+    build_slot_device_identifier,
+)
 from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
 )
@@ -65,6 +68,7 @@ from .common import (
     LOCK_2_ENTITY_ID,
     SLOT_1_IN_SYNC_ENTITY,
     MockLCMLock,
+    in_sync_entity_id,
 )
 from .conftest import (
     async_initial_tick,
@@ -105,19 +109,40 @@ async def test_entry_setup_and_unload(
     for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         device = dev_reg.async_get_device({(DOMAIN, entity_id)})
         assert device
-        # LCM links its per-lock entities to the lock's own device but no
-        # longer adds its config entry to it -- a device belongs to a single
-        # config entry as of HA 2026.8.
         assert device.config_entries == {mock_lock_entry_id}
-        lcm_device_entities = {
-            entry.unique_id
+        # Nothing of ours sits on the lock's own device. A device belongs to
+        # one config entry as of HA 2026.8, so an entity parked on another
+        # integration's device is one this integration cannot show.
+        assert not [
+            entry
             for entry in er.async_entries_for_device(ent_reg, device.id)
             if entry.config_entry_id == lcm_entry_id
-        }
-        assert lcm_device_entities == {
+        ]
+
+    # The per-lock entities live on the slot device beside the shared ones.
+    for slot in range(1, 3):
+        slot_device = dev_reg.async_get_device(
+            {(DOMAIN, build_slot_device_identifier(lcm_entry_id, slot))}
+        )
+        assert slot_device
+        assert slot_device.config_entries == {lcm_entry_id}
+        # Exact, so anything unexpected landing here is caught too.
+        assert {
+            entry.unique_id
+            for entry in er.async_entries_for_device(ent_reg, slot_device.id)
+        } == {
             f"{lcm_entry_id}|{slot}|{key}|{entity_id}"
-            for slot in range(1, 3)
+            for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
             for key in (ATTR_CODE, ATTR_IN_SYNC)
+        } | {
+            f"{lcm_entry_id}|{slot}|{key}"
+            for key in (
+                CONF_ENABLED,
+                CONF_NAME,
+                CONF_PIN,
+                ATTR_ACTIVE,
+                EVENT_PIN_USED,
+            )
         }
 
     unique_ids = set()
@@ -1276,7 +1301,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     )
 
     # Get entry B's in-sync entity for slot 3 on lock 1
-    entry_b_in_sync_entity = "binary_sensor.test_1_code_slot_3_in_sync"
+    entry_b_in_sync_entity = in_sync_entity_id(hass, entry_b, 3)
 
     # Ensure slot 3 exists in coordinator data so sync manager can resolve state.
     # The mock lock only starts with slots 1 and 2, so push slot 3 data.
@@ -1885,3 +1910,268 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     assert LOCK_1_ENTITY_ID in caplog.text
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_setup_reclaims_entities_left_on_a_split_device(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Entities parked on a copy of the lock's device are brought home.
+
+    HA 2026.8 restricted a device to one config entry and split every device
+    that had two, leaving a Lock Code Manager-owned copy of the lock holding
+    the per-lock entities. Setup moves them onto their slot device and drops
+    the emptied copy, which nothing else will: ``dr.async_cleanup`` keeps any
+    device that references a live config entry, occupied or not.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Split Device"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    # The copy the split left behind: our config entry, the lock's identifiers.
+    split = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={("test", "lock_1_serial")},
+        name="Test 1",
+    )
+    stranded = ent_reg.async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{entry_id}|1|{ATTR_IN_SYNC}|{LOCK_1_ENTITY_ID}",
+        config_entry=config_entry,
+        device_id=split.id,
+    )
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    slot_device = dev_reg.async_get_device(
+        {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
+    )
+    assert slot_device
+    assert ent_reg.async_get(stranded.entity_id).device_id == slot_device.id
+    assert dev_reg.async_get(split.id) is None
+
+    await hass.config_entries.async_unload(entry_id)
+
+
+async def test_setup_leaves_devices_of_other_integrations_alone(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The sweep only touches devices this entry owns.
+
+    The lock's real device is owned by the lock's integration and holds its
+    entities; removing it, or moving anything off it, would be this
+    integration reaching into another's registry.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    lock_device = dev_reg.async_get_device({(DOMAIN, LOCK_1_ENTITY_ID)})
+    assert lock_device
+    before = {
+        entry.entity_id
+        for entry in er.async_entries_for_device(ent_reg, lock_device.id)
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Leaves Others Alone"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert dev_reg.async_get(lock_device.id) is not None
+    assert {
+        entry.entity_id
+        for entry in er.async_entries_for_device(ent_reg, lock_device.id)
+    } == before
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_reclaim_skips_entities_it_has_no_slot_device_for(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The sweep moves slot entities and nothing else.
+
+    An entity with no device, one already on a Lock Code Manager device, and
+    one whose unique ID names no slot are all left exactly where they are --
+    the last of those names no slot device to be moved to.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Skips Non Slot Entities"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    foreign = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={("test", "some_other_serial")},
+        name="Test 1",
+    )
+    ours = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={(DOMAIN, build_slot_device_identifier(entry_id, 1))},
+        name="Already home",
+    )
+    no_device = ent_reg.async_get_or_create(
+        "binary_sensor", DOMAIN, f"{entry_id}|no_device", config_entry=config_entry
+    )
+    settled = ent_reg.async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{entry_id}|1|{ATTR_IN_SYNC}|{LOCK_2_ENTITY_ID}",
+        config_entry=config_entry,
+        device_id=ours.id,
+    )
+    unparseable = ent_reg.async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{entry_id}|not_a_slot|{ATTR_IN_SYNC}",
+        config_entry=config_entry,
+        device_id=foreign.id,
+    )
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    assert ent_reg.async_get(no_device.entity_id).device_id is None
+    # Already on one of our devices, so the sweep has nothing to do for it.
+    assert ent_reg.async_get(settled.entity_id).device_id == ours.id
+    # Still on the foreign device, which therefore survives the removal pass.
+    assert ent_reg.async_get(unparseable.entity_id).device_id == foreign.id
+    assert dev_reg.async_get(foreign.id) is not None
+
+    await hass.config_entries.async_unload(entry_id)
+
+
+async def test_reclaim_leaves_our_own_empty_devices_alone(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Devices of ours that hold nothing are not copies to be cleaned up.
+
+    The entry's own device carries no entities by design -- it exists so the
+    slot devices have a parent -- which makes it a perfect match for the
+    removal pass. Only the check that it is one of ours keeps it.
+    """
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Keeps Own Devices"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    hub = dev_reg.async_get_device({(DOMAIN, entry_id)})
+    assert hub
+    assert not er.async_entries_for_device(
+        er.async_get(hass), hub.id, include_disabled_entities=True
+    )
+
+    # A second setup runs the sweep against a registry that already has it.
+    await hass.config_entries.async_reload(entry_id)
+    await hass.async_block_till_done()
+
+    assert dev_reg.async_get_device({(DOMAIN, entry_id)}) is not None
+
+    await hass.config_entries.async_unload(entry_id)
+
+
+async def test_reclaim_moves_a_disabled_entity_rather_than_deleting_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A disabled entity is never re-added by a platform, so it must be moved.
+
+    Removing the copy first and letting the platforms sort it out would take
+    this entity with it, along with whatever the user had customised on it.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Disabled Entity"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    split = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={("test", "lock_1_serial")},
+        name="Test 1",
+    )
+    disabled = ent_reg.async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{entry_id}|1|{ATTR_IN_SYNC}|{LOCK_1_ENTITY_ID}",
+        config_entry=config_entry,
+        device_id=split.id,
+        disabled_by=er.RegistryEntryDisabler.USER,
+    )
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    survivor = ent_reg.async_get(disabled.entity_id)
+    assert survivor is not None
+    assert survivor.disabled_by is er.RegistryEntryDisabler.USER
+    slot_device = dev_reg.async_get_device(
+        {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
+    )
+    assert slot_device and survivor.device_id == slot_device.id
+    assert dev_reg.async_get(split.id) is None
+
+    await hass.config_entries.async_unload(entry_id)
+
+
+async def test_reclaim_does_not_resurrect_a_device_for_an_unconfigured_slot(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Moving an entity must not recreate a slot device the sweep then drops.
+
+    The entity's slot is no longer configured, so its device is orphaned. If
+    the move ran after the orphan sweep, that device would be recreated and
+    left behind as a phantom until the next reload.
+    """
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Unconfigured Slot"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    split = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={("test", "lock_1_serial")},
+        name="Test 1",
+    )
+    er.async_get(hass).async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{entry_id}|9|{ATTR_IN_SYNC}|{LOCK_1_ENTITY_ID}",
+        config_entry=config_entry,
+        device_id=split.id,
+    )
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    # Slot 9 is not configured, so neither device may survive.
+    assert (
+        dev_reg.async_get_device({(DOMAIN, build_slot_device_identifier(entry_id, 9))})
+        is None
+    )
+    assert dev_reg.async_get(split.id) is None
+
+    await hass.config_entries.async_unload(entry_id)

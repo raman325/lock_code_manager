@@ -84,6 +84,7 @@ from .domain.config import (
     EntryConfig,
     build_slot_device_identifier,
     parse_slot_device_identifier,
+    parse_slot_unique_id,
 )
 from .domain.exceptions import LockDisconnected, LockOperationFailed
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
@@ -111,6 +112,7 @@ from .domain.util import (
     deobfuscate_pins,
     per_lock_issue_id,
 )
+from .entity import build_slot_device_info
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 
@@ -593,6 +595,7 @@ async def async_setup_entry(
         name=config_entry.title,
         serial_number=entry_id,
     )
+    _async_reclaim_entities_from_foreign_devices(hass, config_entry)
     _async_prune_orphaned_slot_devices(hass, config_entry)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
@@ -847,6 +850,71 @@ def _async_remove_slot_devices(
 
 
 @callback
+def _async_reclaim_entities_from_foreign_devices(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """
+    Move this entry's entities onto its own devices, and drop what is left.
+
+    Before Home Assistant 2026.8 the per-lock entities were attached to the
+    lock's own device by reusing that device's identifiers, which also added
+    this entry to it. 2026.8 restricts a device to one config entry and split
+    every such device in two, leaving a Lock Code Manager-owned copy of the
+    lock holding those entities.
+
+    The copy cannot age out on its own: ``dr.async_cleanup`` keeps any device
+    referencing a live config entry, whether or not anything is on it. So the
+    entities are moved to the slot device they belong to and the emptied copy
+    is removed here.
+
+    Runs before the platforms are set up, so an entity that is disabled or
+    whose slot has since been removed -- neither of which is ever re-added --
+    is moved rather than deleted along with the copy it is sitting on. It also
+    runs before the orphaned-slot sweep, which then collects any slot device
+    this recreates for a slot that is no longer configured.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+
+    def _is_ours(device: dr.DeviceEntry) -> bool:
+        return any(domain == DOMAIN for domain, _ in device.identifiers)
+
+    for entity in er.async_entries_for_config_entry(ent_reg, entry_id):
+        if entity.device_id is None:
+            continue
+        device = dev_reg.async_get(entity.device_id)
+        if device is None or _is_ours(device):
+            continue
+        slot_num = parse_slot_unique_id(entry_id, entity.unique_id)
+        if slot_num is None:
+            continue
+        slot_device = dev_reg.async_get_or_create(
+            config_entry_id=entry_id,
+            **build_slot_device_info(config_entry, slot_num),
+        )
+        _LOGGER.debug(
+            "%s (%s): Moving %s onto its slot device",
+            entry_id,
+            config_entry.title,
+            entity.entity_id,
+        )
+        ent_reg.async_update_entity(entity.entity_id, device_id=slot_device.id)
+
+    for device in dr.async_entries_for_config_entry(dev_reg, entry_id):
+        if _is_ours(device) or er.async_entries_for_device(
+            ent_reg, device.id, include_disabled_entities=True
+        ):
+            continue
+        _LOGGER.debug(
+            "%s (%s): Removing copy of device %s left by the 2026.8 device split",
+            entry_id,
+            config_entry.title,
+            device.name,
+        )
+        dev_reg.async_remove_device(device.id)
+
+
 def _async_prune_orphaned_slot_devices(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:

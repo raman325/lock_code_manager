@@ -37,6 +37,19 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
+def build_slot_device_info(config_entry: ConfigEntry, slot_num: int) -> DeviceInfo:
+    """Describe the device that carries every entity for one code slot."""
+    return DeviceInfo(
+        identifiers={
+            (DOMAIN, build_slot_device_identifier(config_entry.entry_id, slot_num))
+        },
+        name=f"{config_entry.title} Code slot {slot_num}",
+        manufacturer="Lock Code Manager",
+        model="Code Slot",
+        via_device=(DOMAIN, config_entry.entry_id),
+    )
+
+
 class BaseLockCodeManagerEntity(Entity):
     """Base Lock Code Manager Entity."""
 
@@ -62,17 +75,9 @@ class BaseLockCodeManagerEntity(Entity):
         self.ent_reg = ent_reg
 
         self._attr_translation_key = key
-        self._attr_translation_placeholders = {"slot_num": slot_num}
+        self._attr_translation_placeholders = {"slot_num": str(slot_num)}
 
-        self._attr_device_info = DeviceInfo(
-            identifiers={
-                (DOMAIN, build_slot_device_identifier(self.entry_id, slot_num))
-            },
-            name=f"{config_entry.title} Code slot {slot_num}",
-            manufacturer="Lock Code Manager",
-            model="Code Slot",
-            via_device=(DOMAIN, self.entry_id),
-        )
+        self._attr_device_info = build_slot_device_info(config_entry, slot_num)
 
         self._attr_unique_id = build_slot_unique_id(self.base_unique_id, slot_num, key)
         self._attr_extra_state_attributes: dict[str, int | list[str]] = {
@@ -323,18 +328,20 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
             self, hass, ent_reg, config_entry, slot_num, key
         )
         self.lock = lock
-        if lock.device_entry:
-            # Link this entity to the lock's own device. Since HA 2026.8 a
-            # device belongs to a single config entry, so a helper
-            # integration must not reuse another integration's device
-            # identifiers/connections in ``device_info`` (which added LCM's
-            # config entry to that device and now forks a duplicate device
-            # instead). Setting ``device_entry`` links the entity to the
-            # existing device without claiming ownership of it; the entity
-            # platform honors a pre-set ``device_entry`` when ``device_info``
-            # is not provided.
-            self._attr_device_info = None
-            self.device_entry = lock.device_entry
+        # Deliberately keeps the slot device the base assigned rather than
+        # attaching to the lock's own device. Since HA 2026.8 a device belongs
+        # to exactly one config entry, so anything Lock Code Manager puts on
+        # another integration's device either forks a duplicate of it or, if
+        # attached without claiming it, leaves this entity somewhere its own
+        # integration cannot show it.
+        #
+        # The lock therefore has to be named by the ENTITY. Sitting on the
+        # slot device, one per lock, the slot number alone would name every
+        # one of them the same thing.
+        self._attr_translation_placeholders = {
+            "slot_num": str(slot_num),
+            "lock_name": lock.display_name,
+        }
 
         self._attr_unique_id = build_slot_unique_id(
             self.base_unique_id, slot_num, self.key, lock.lock.entity_id
