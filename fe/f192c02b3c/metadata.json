@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "fef192c02b3c",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-name-unique-ids",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/domain/identifier_migration.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "tests/properties/test_identifier_remap.py",
+    "tests/test_identifier_migration.py",
+    "tests/test_init.py",
+    "tests/test_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fe/f192c02b3c/0/metadata.json",
+      "transcript": "/fe/f192c02b3c/0/full.jsonl",
+      "compact_transcript": "/fe/f192c02b3c/0/transcript.jsonl",
+      "content_hash": "/fe/f192c02b3c/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 183932,
+    "cache_read_tokens": 42484812,
+    "output_tokens": 45275,
+    "api_call_count": 65
+  }
+}
