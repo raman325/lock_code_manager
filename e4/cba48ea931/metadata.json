@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "e4cba48ea931",
+  "strategy": "manual-commit",
+  "branch": "fix/lcm-owns-its-devices",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/domain/config.py",
+    "custom_components/lock_code_manager/entity.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/common.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_config.py",
+    "tests/test_init.py",
+    "tests/test_sensor.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/cba48ea931/0/metadata.json",
+      "transcript": "/e4/cba48ea931/0/full.jsonl",
+      "compact_transcript": "/e4/cba48ea931/0/transcript.jsonl",
+      "content_hash": "/e4/cba48ea931/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 144,
+    "cache_creation_tokens": 80618,
+    "cache_read_tokens": 22917194,
+    "output_tokens": 49050,
+    "api_call_count": 72
+  }
+}
