@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "b7de0b297963",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-config-shape",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/slot_assignment.py",
+    "tests/properties/test_slot_assignment.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b7/de0b297963/0/metadata.json",
+      "transcript": "/b7/de0b297963/0/full.jsonl",
+      "compact_transcript": "/b7/de0b297963/0/transcript.jsonl",
+      "content_hash": "/b7/de0b297963/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 22770,
+    "cache_read_tokens": 7531522,
+    "output_tokens": 17019,
+    "api_call_count": 14
+  }
+}
