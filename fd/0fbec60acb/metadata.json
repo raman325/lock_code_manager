@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "fd0fbec60acb",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-migration",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/domain/config.py",
+    "custom_components/lock_code_manager/domain/credentials.py",
+    "custom_components/lock_code_manager/domain/names.py",
+    "custom_components/lock_code_manager/domain/slot_assignment.py",
+    "custom_components/lock_code_manager/domain/user_migration.py",
+    "tests/properties/test_slot_assignment.py",
+    "tests/properties/test_user_migration.py",
+    "tests/test_config.py",
+    "tests/test_credentials.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fd/0fbec60acb/0/metadata.json",
+      "transcript": "/fd/0fbec60acb/0/full.jsonl",
+      "compact_transcript": "/fd/0fbec60acb/0/transcript.jsonl",
+      "content_hash": "/fd/0fbec60acb/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 68362,
+    "cache_read_tokens": 42797683,
+    "output_tokens": 46416,
+    "api_call_count": 50
+  }
+}
