@@ -536,3 +536,53 @@ yes work through those and check on mempalace
 ---
 
 continue by first filing everything needed to mempalace, then continue with the plan
+
+---
+
+<task-notification>
+<task-id>a13cb897f8ea0c7eb</task-id>
+<tool-use-id>toolu_01CSGYRAFAPkG128uRA5N9i7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a13cb897f8ea0c7eb.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1422 (`feat/v3-name-unique-ids`, 15 commits, base `v3`). No `ReportFindings` tool is available in this environment, so findings are stated inline below.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/__init__.py:677` — HIGH — the setup-time rename reconciliation double-applies on top of the v3→v4 migration and swaps two users' registry rows.**
+`async_migrate_entry` migrates identifiers onto the **options** names (`new_slots_source` prefers `new_options[CONF_SLOTS]`), but then leaves both `data` and `options` populated. `async_setup_entry` sees `config_entry.data and config_entry.options` and applies the `data → options` rename diff *again*. For a chain the collision guard saves it, but for a **cycle** the parking logic happily resolves it — undoing the migration.
+
+Verified with a probe test (v3 entry, unprocessed options save that swaps two names):
+```
+data:    {1: Alice, 2: Bob}   options: {1: Bob, 2: Alice}   version=3
+seeded:  &lt;entry&gt;|1|pin , &lt;entry&gt;|2|pin
+result:  slot 1's row -&gt; &lt;entry&gt;|Alice|pin   (config says slot 1 is "Bob")
+         slot 2's row -&gt; &lt;entry&gt;|Bob|pin     (config says slot 2 is "Alice")
+         devices likewise crossed
+```
+The two users end up on each other's registry rows, entity IDs, recorder history, and device — exactly the cross-contamination the module exists to prevent. The equivalent v4-only case (no migration) resolves correctly, so the defect is specifically migration-then-reconcile. Suggested fix: skip the setup reconcile when the migration just ran this startup, or migrate onto the **data** names and let the setup reconcile carry the options delta.
+
+**2. `custom_components/lock_code_manager/domain/slot_coordinator.py:340` (with `__init__.py:1179`) — MEDIUM — the text-entity rename path depends on an undefended ordering invariant.**
+`_write_config_fields` calls `async_update_entry` and then immediately overwrites `runtime_data.config`. The listener's `previous_config = runtime_data.config` is only correct because HA's `hass.async_create_task(..., eager_start=True)` runs `async_update_listener` synchronously to its first suspension, and the data-only path has no `await` before `_async_apply_renames`. Confirmed `eager_start: bool = True` in the pinned HA 2026.8.0. This is documented only in a test docstring (`tests/test_text.py::test_set_name_moves_registry_identifiers`), not in the code that depends on it. Adding any `await` above the rename block — or HA changing that default — silently stops every text-entity rename from moving identifiers, leaving config on the new name and the registry on the old. Passing the pre-write config (or the old name) explicitly from `_write_config_fields` would remove the dependency.
+
+**3. `custom_components/lock_code_manager/domain/sync.py:373` — LOW/MEDIUM — `_build_entity_id_map` reports "fully resolved" for an empty map.**
+`_unique_ids_for_current_name()` now returns `{}` when `configured_slot_name` is `None`, so the loop body never runs, `missing` stays `False`, and the function returns `True`. `_setup_state_tracking` then takes the "all entity IDs available" branch, subscribes to an empty `_tracked_entity_ids`, and sets `_tracking_all_states = False` — which permanently disables `_try_upgrade_state_tracking`'s recovery path. The manager then only re-evaluates on the periodic tick, never on state changes. Before this change the map was never empty. Returning `False` for the no-name case would keep the catch-all subscription.
+
+**4. `custom_components/lock_code_manager/domain/identifier_migration.py:4` — LOW — module docstring names the wrong migration.**
+"The version 4 to 5 migration moves slot numbers into that segment" (and the following paragraph repeats the same clause). The code runs inside the `config_entry.version == 3` block and bumps to 4. Misleading for whoever writes the next migration.
+
+**5. `ts/generate-view.ts:143` — LOW — `slotNumForName` is optional, so a missed call site degrades silently.**
+`createLockCodeManagerEntity(entity)` without the map yields `slotNum: NaN` for every entity, which matches no slot and renders every section empty — the exact regression the PR describes fixing. Every caller (including all tests) now passes the map, so making the parameter required would turn a future missed call site into a compile error instead of a blank dashboard.
+
+## Verified as correct (things I specifically probed or traced)
+
+- Cycle parking (`_cycle_member` / `_temporary_segment` / `_async_park_segment`) terminates and resolves swaps correctly for the pure-rename case; the "never move a row twice" and "blocker that is itself due to move" guards both hold. A v4 swap saved while unloaded resolves correctly end-to-end.
+- Chained renames (`a→b`, `b→c`) are protected by the entity/device collision pre-checks rather than corrupting.
+- `_async_apply_renames` is not double-applied on the normal options-flow path (the terminal `async_update_entry(data=…, options={})` re-entry diffs to empty).
+- Removals → renames → additions ordering in the update listener is correct, including `_async_remove_slot_devices` resolving departing slots by their old names.
+- `parse_user_device_identifier` still returns `None` for the entry's own device and for other entries' devices; non-LCM devices are filtered by the `domain == DOMAIN` check before parsing.
+- The generated JS bundle was rebuilt and contains the `slot_names` read.
+- `tests/test_identifier_migration.py`, `tests/test_text.py`, and `tests/properties/` pass on the branch (87 passed).</result>
+<usage><subagent_tokens>214569</subagent_tokens><tool_uses>58</tool_uses><duration_ms>804944</duration_ms></usage>
+</task-notification>
