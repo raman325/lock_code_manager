@@ -5,9 +5,13 @@ name: Integration
 # yamllint disable-line rule:truthy
 on:
   push:
-    branches: [main]
+    # v3 is a long-lived release branch that several pull requests merge into
+    # before it reaches main. Without it here, every one of those merged with
+    # no test run at all -- the only checks on them were the labellers, the
+    # release drafter, and lint.
+    branches: [main, v3]
   pull_request:
-    branches: [main]
+    branches: [main, v3]
 
 concurrency:
   group: integration-${{ github.head_ref || github.ref }}
