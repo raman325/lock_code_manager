@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "9094e0ffaa04",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-config-flow",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/slot_assignment.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/90/94e0ffaa04/0/metadata.json",
+      "transcript": "/90/94e0ffaa04/0/full.jsonl",
+      "compact_transcript": "/90/94e0ffaa04/0/transcript.jsonl",
+      "content_hash": "/90/94e0ffaa04/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 122,
+    "cache_creation_tokens": 142097,
+    "cache_read_tokens": 38884222,
+    "output_tokens": 40964,
+    "api_call_count": 61
+  }
+}
