@@ -6,12 +6,11 @@ bookkeeping. It still exists, because on most providers it IS the lock's
 credential index -- ``credential_index_follows_slot`` -- so it is bounded by
 the lock's advertised capacity and must be reusable when a user is deleted.
 
-That boundedness is why this is an assignment rather than a handle allocator:
-a number that can never be reused would eventually exceed every lock's
-capacity. Reuse is correct here. Deleting a user and creating another does
-hand the newcomer the departed user's slot, entity identifiers, and history
--- exactly as it does today, because the physical credential slot is genuinely
-being reused.
+That boundedness is why numbers are reused rather than issued monotonically:
+one that is never reused would eventually exceed every lock's capacity.
+Deleting a user and creating another does hand the newcomer the departed
+user's slot, entity identifiers, and history, which matches what the physical
+credential slot is doing.
 
 Entity and device identifiers keep keying on this number, so a rename moves
 nothing in either registry.
@@ -62,11 +61,10 @@ class SlotAssignment:
         Put the mapping into its canonical form, then freeze it.
 
         Names are reduced to their identity form and slot numbers coerced to
-        ``int``. Doing it here makes both invariants of the TYPE rather than
-        of whichever factory happened to build it -- the plain constructor
-        previously accepted a string slot number, and a caller reading
-        ``entry.data`` directly instead of through :meth:`from_mapping` would
-        reintroduce the double-booking that string keys caused.
+        ``int``. Doing it here makes both invariants of the TYPE rather than of
+        whichever factory built it, so a caller constructing directly from
+        stored data cannot introduce a string key that compares unequal to an
+        int one.
 
         Two keys reducing to one identity keeps the LOWER slot. That case
         means the stored bookkeeping was already inconsistent; raising would
@@ -207,16 +205,13 @@ class SlotAssignment:
         wanted = list(dict.fromkeys(_identity(name) for name in names))
         surviving = set(wanted)
 
-        # A move is only honoured when the source holds a slot AND the target
-        # is among the survivors. A rename whose target is absent contradicts
-        # the name set -- and left unfiltered it dropped the source from
-        # `kept` while `renamed` refused to take them, so a user who survived
-        # under their own name was reallocated from `start`.
+        # A move is honoured only when the source holds a slot AND the target
+        # is among the survivors; a rename whose target is absent contradicts
+        # the name set and is ignored.
         #
-        # Two sources renaming onto one target is likewise contradictory
-        # (``validate_slot_names`` rejects it upstream). Resolved by sorted
-        # order rather than by whichever the stored mapping happened to
-        # iterate first, so the same input always gives the same answer.
+        # Two sources renaming onto one target is likewise contradictory.
+        # Resolved in sorted order so the same input always gives the same
+        # answer regardless of mapping iteration order.
         # Reduce to identity form FIRST. Iterating the raw mapping let two
         # keys that mean the same user (``Alice`` and ``alice ``) each take a
         # turn: the later overwrote the earlier while the earlier's target

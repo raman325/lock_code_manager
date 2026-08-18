@@ -44,6 +44,7 @@ from custom_components.lock_code_manager.const import (
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOTS,
+    CONF_USERS,
     DOMAIN,
     EVENT_PIN_USED,
     SERVICE_DEOBFUSCATE_LOG,
@@ -54,6 +55,10 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.domain.slot_assignment import (
+    CONF_SLOT_ASSIGNMENT,
+)
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,
@@ -583,21 +588,22 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     # Verify migration happened (v1 -> v2 calendar, then v2 -> v3 number_of_uses)
     assert config_entry.version == 4
 
-    # Get the migrated data (should be in .data after setup moves options to data)
-    migrated_data = config_entry.data
+    # Read through the typed view: the entry is keyed by user now, and this
+    # migration runs before that reshape in the same version bump.
+    migrated = get_entry_config(config_entry)
 
     # Slot 1 should be unchanged (no calendar)
-    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][1]
-    assert CONF_ENTITY_ID not in migrated_data[CONF_SLOTS][1]
+    assert CONF_CALENDAR not in migrated.slot(1)
+    assert CONF_ENTITY_ID not in migrated.slot(1)
 
     # Slot 2 should have CONF_ENTITY_ID instead of CONF_CALENDAR
-    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][2]
-    assert migrated_data[CONF_SLOTS][2][CONF_ENTITY_ID] == "calendar.test_1"
+    assert CONF_CALENDAR not in migrated.slot(2)
+    assert migrated.slot(2)[CONF_ENTITY_ID] == "calendar.test_1"
 
     # Slot 3 already had both fields set -- calendar is dropped and the
     # pre-existing entity_id value is preserved untouched.
-    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][3]
-    assert migrated_data[CONF_SLOTS][3][CONF_ENTITY_ID] == "calendar.test_2"
+    assert CONF_CALENDAR not in migrated.slot(3)
+    assert migrated.slot(3)[CONF_ENTITY_ID] == "calendar.test_2"
 
     await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.config_entries.async_remove(config_entry.entry_id)
@@ -838,8 +844,8 @@ async def test_number_of_uses_auto_stripped_and_repair_raised(
     await hass.async_block_till_done()
 
     # Field stripped from both slots
-    assert LEGACY_NUMBER_OF_USES_KEY not in entry.data[CONF_SLOTS][1]
-    assert LEGACY_NUMBER_OF_USES_KEY not in entry.data[CONF_SLOTS][3]
+    assert LEGACY_NUMBER_OF_USES_KEY not in get_entry_config(entry).slot(1)
+    assert LEGACY_NUMBER_OF_USES_KEY not in get_entry_config(entry).slot(3)
 
     # Informational repair raised with impacted slot list
     issue_registry = ir.async_get(hass)
@@ -1541,8 +1547,12 @@ async def test_removing_slot_removes_its_device(
     slot_2_identifiers = {(DOMAIN, f"{entry_id}|2")}
     assert dev_reg.async_get_device(slot_2_identifiers) is not None
 
+    # Removing a user is removing them from `users`; the slot they occupied is
+    # freed with them.
     new_config = copy.deepcopy(dict(lock_code_manager_config_entry.data))
-    new_config[CONF_SLOTS].pop(2)
+    removed = get_entry_config(lock_code_manager_config_entry).name_for(2)
+    new_config[CONF_USERS].pop(removed)
+    new_config[CONF_SLOT_ASSIGNMENT].pop(removed.casefold(), None)
     assert hass.config_entries.async_update_entry(
         lock_code_manager_config_entry, options=new_config
     )
@@ -1727,7 +1737,7 @@ async def test_setup_entry_with_empty_data_uses_initial_listener_task(
 
     assert set(entry.runtime_data.locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
     # The listener consolidates options back into data, as normal.
-    assert entry.data[CONF_SLOTS]
+    assert get_entry_config(entry).slots
     assert not entry.options
 
     await hass.config_entries.async_unload(entry.entry_id)
@@ -1889,13 +1899,17 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
-    """v4 gives every slot a present, entry-unique name.
+async def test_migration_v3_to_v4_reshapes_to_users(hass: HomeAssistant) -> None:
+    """v4 names every user, then keys the configuration by that name.
 
-    The name is becoming the identity Lock Code Manager keys on, so these
-    three properties stop being cosmetic. A name the user already chose is
-    left exactly as-is, because rewriting one would also rename that user on
-    every lock that stores a user name.
+    Both halves of one version bump. A name the user already chose is left
+    exactly as-is, because rewriting one also renames that user on every lock
+    that stores a user name.
+
+    The slot number survives as internal bookkeeping and NOBODY IS
+    RENUMBERED: it is the credential index on most providers, so a changed
+    number moves that person's code to a different index on every lock and
+    orphans their entities.
     """
     config_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -1917,10 +1931,55 @@ async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
 
     assert config_entry.version == 4
-    slots = config_entry.data[CONF_SLOTS]
-    assert slots[1][CONF_NAME] == "User 1"  # was unnamed
-    assert slots[2][CONF_NAME] == "Raman"  # user's choice, untouched
-    assert slots[3][CONF_NAME] == "Raman 2"  # collided with slot 2
-    assert slots[4][CONF_NAME] == "Ra|man"  # "|" is ordinary text now
+    config = get_entry_config(config_entry)
+
+    # Names: repaired where they had to be, untouched where they did not.
+    by_slot = {num: slot[CONF_NAME] for num, slot in config.slots.items()}
+    assert by_slot[1] == "User 1"  # was unnamed
+    assert by_slot[2] == "Raman"  # user's choice, untouched
+    assert by_slot[3] == "Raman 2"  # collided with slot 2
+    assert by_slot[4] == "Ra|man"  # "|" is ordinary text now
+
+    # Shape: keyed by user, with the slot number demoted to bookkeeping.
+    stored = {**config_entry.data, **config_entry.options}
+    assert CONF_SLOTS not in stored
+    assert set(stored[CONF_USERS]) == {"User 1", "Raman", "Raman 2", "Ra|man"}
+    # Nobody was renumbered, and the name is no longer a field of the user.
+    assert stored[CONF_SLOT_ASSIGNMENT] == {
+        "user 1": 1,
+        "raman": 2,
+        "raman 2": 3,
+        "ra|man": 4,
+    }
+    assert CONF_NAME not in stored[CONF_USERS]["Raman"]
     # Every other field survives.
-    assert slots[1][CONF_PIN] == "1234"
+    assert stored[CONF_USERS]["User 1"][CONF_PIN] == "1234"
+
+
+async def test_the_user_shape_survives_a_full_setup_cycle(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """The migrated shape is still on disk after setup has written the entry back.
+
+    Setup does not leave the entry alone: it moves data into options, the
+    update listener rebuilds the configuration, and the listener's terminal
+    write persists whatever ``EntryConfig.to_dict()`` emits. A to_dict that
+    dropped the bookkeeping would silently rewrite the entry back to the
+    slot-keyed shape on every single load.
+
+    Nothing else catches that. Behaviour is IDENTICAL either way, because the
+    integration still works in slot numbers internally -- so every behavioural
+    test passes while the migration quietly undoes itself. Verified by
+    mutation: removing the passthrough from to_dict leaves the whole suite
+    green without this test.
+    """
+    stored = {
+        **lock_code_manager_config_entry.data,
+        **lock_code_manager_config_entry.options,
+    }
+
+    assert CONF_SLOTS not in stored
+    assert set(stored[CONF_USERS]) == {"test1", "test2"}
+    assert stored[CONF_SLOT_ASSIGNMENT] == {"test1": 1, "test2": 2}
+    # And the reconstructed view still sees them, so nothing downstream broke.
+    assert set(get_entry_config(lock_code_manager_config_entry).slots) == {1, 2}

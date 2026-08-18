@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from functools import partial
 import logging
 from typing import Any
@@ -598,8 +598,24 @@ class LockCodeManagerFlowHandler(
             last_step=True,
         )
 
-    async def async_step_reauth(self, user_input: dict[str, Any] | None = None):
-        """Handle reauth flow step."""
+    async def async_step_reauth(self, entry_data: Mapping[str, Any] | None = None):
+        """
+        Entry point for reauth. Home Assistant passes the ENTRY'S OWN DATA here.
+
+        Delegated immediately, and the argument ignored, so the confirm step
+        can read ``user_input is None`` as "render the form" rather than
+        inspecting the payload to guess whether its caller was Home Assistant
+        or the user. Guessing wrong updates the entry and reloads it.
+        """
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None):
+        """
+        Handle the reauth form.
+
+        Reached only through :meth:`async_step_reauth`, so ``user_input is
+        None`` unambiguously means "render the form".
+        """
         config_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
@@ -611,10 +627,11 @@ class LockCodeManagerFlowHandler(
         }
 
         if user_input is None:
-            # The frontend re-invokes the step with no input to render the
-            # form; seed the lock selector from the entry's current config.
+            # Either the frontend re-invoking the step to render the form, or
+            # the initial call carrying the entry's data. Seed the lock
+            # selector from the entry's current config either way.
             user_input = {CONF_LOCKS: list(get_entry_config(config_entry).locks)}
-        elif CONF_SLOTS not in user_input:
+        else:
             existing_slots = get_entry_config(config_entry).slots.keys()
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass,
@@ -640,11 +657,13 @@ class LockCodeManagerFlowHandler(
                 # merges options-preferred, so leaving stale options in
                 # place would silently override this reauth fix on the
                 # next load.
+                # Resolved through EntryConfig, not by merging raw dicts: the
+                # two sides may be in different shapes, and a raw merge carries
+                # both, discarding the very save this block exists to consume.
                 self.hass.config_entries.async_update_entry(
                     config_entry,
                     data={
-                        **config_entry.data,
-                        **config_entry.options,
+                        **get_entry_config(config_entry).to_dict(),
                         **user_input,
                     },
                     options={},
@@ -656,7 +675,7 @@ class LockCodeManagerFlowHandler(
                 return self.async_abort(reason="locks_updated")
 
         return self.async_show_form(
-            step_id="reauth",
+            step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -711,11 +730,17 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
                 user_input[CONF_SLOTS] = parsed_slots
                 return await self._maybe_confirm_then_persist(user_input)
 
-        # Use to_dict() rather than .locks / .slots directly — to_dict
-        # returns plain mutable dict/list, while EntryConfig.slots is a
-        # deeply read-only MappingProxyType which the form selectors
-        # can't JSON-serialize.
-        defaults = get_entry_config(self.config_entry).to_dict()
+        # Plain dict/list, because the form selectors cannot serialize the
+        # deeply read-only mappings EntryConfig uses internally.
+        #
+        # Seeded from the SLOT-shaped view, because this editor still takes
+        # slot-shaped YAML. That is the next thing to change, and when it does
+        # this becomes `config.users` and the projection disappears with it.
+        config = get_entry_config(self.config_entry)
+        defaults = {
+            CONF_LOCKS: list(config.locks),
+            CONF_SLOTS: {num: dict(slot) for num, slot in config.slots.items()},
+        }
 
         return self.async_show_form(
             step_id="init",

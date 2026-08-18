@@ -6,11 +6,6 @@ on -- the config entry will store a mapping of named users rather than one of
 slot numbers, and lock users will be tagged ``lcm:{name}``. That only works if
 every name is present and unique within its entry.
 
-Encodability used to be a third rule: a name could not contain ``|``, because
-entity and device identifiers were delimited by it and keyed by the name. They
-are keyed by the slot number, so nothing parses a name any more and the
-restriction had no reason left to exist.
-
 This module is the single place those rules live, so the config flow
 (validating new input) and the migration (repairing existing data) cannot
 drift from each other.

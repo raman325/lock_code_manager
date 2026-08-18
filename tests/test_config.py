@@ -9,6 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
+    CONF_USERS,
     DOMAIN,
 )
 from custom_components.lock_code_manager.domain.config import (
@@ -19,11 +20,23 @@ from custom_components.lock_code_manager.domain.config import (
     parse_slot_device_identifier,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.domain.slot_assignment import (
+    CONF_SLOT_ASSIGNMENT,
+)
 
 
-def _slot(pin: str = "1234") -> dict:
-    """Trivial slot config dict for tests."""
-    return {"pin": pin, "enabled": True}
+def _slot(pin: str = "1234", name: str | None = None) -> dict:
+    """Trivial slot config dict for tests.
+
+    A slot without a name gets a generated one, since the name is the key the
+    configuration is stored under.
+    """
+    return {"pin": pin, "enabled": True, **({"name": name} if name else {})}
+
+
+def _named(slot_num: int, pin: str = "1234") -> dict:
+    """The slot as EntryConfig returns it: with the name it was given."""
+    return {"name": f"User {slot_num}", "pin": pin, "enabled": True}
 
 
 def _cfg(mapping: dict | None = None) -> EntryConfig:
@@ -56,7 +69,7 @@ def test_diff_added_slots_and_locks() -> None:
 
     diff = EntryConfigDiff(new=new)
 
-    assert dict(diff.slots_added) == {1: _slot(), 2: _slot()}
+    assert dict(diff.slots_added) == {1: _named(1), 2: _named(2)}
     assert diff.locks_added == ("lock.a",)
     assert diff.pairs_added == frozenset({("lock.a", 1), ("lock.a", 2)})
     assert diff.has_changes
@@ -68,7 +81,7 @@ def test_diff_removed_slots_and_locks() -> None:
 
     diff = EntryConfigDiff(old=old)
 
-    assert dict(diff.slots_removed) == {1: _slot()}
+    assert dict(diff.slots_removed) == {1: _named(1)}
     assert diff.locks_removed == ("lock.a",)
     assert diff.pairs_removed == frozenset({("lock.a", 1)})
     assert diff.has_changes
@@ -146,7 +159,7 @@ def test_diff_pair_added_for_new_slot_on_existing_lock() -> None:
 
     diff = EntryConfigDiff(old=old, new=new)
 
-    assert dict(diff.slots_added) == {2: _slot()}
+    assert dict(diff.slots_added) == {2: _named(2)}
     assert diff.pairs_added == frozenset({("lock.a", 2), ("lock.b", 2)})
 
 
@@ -287,8 +300,9 @@ def test_entry_config_accessors_absorb_str_or_int_slot_num() -> None:
 
     assert config.has_slot(1)
     assert config.has_slot("1")
-    assert config.slot(1) == {"pin": "abc", "enabled": True}
-    assert config.slot("1") == {"pin": "abc", "enabled": True}
+    # The name comes back too: it is the identity now, not an optional field.
+    assert config.slot(1) == _named(1, pin="abc")
+    assert config.slot("1") == _named(1, pin="abc")
     # Missing slot returns empty mapping (not KeyError)
     assert config.slot(99) == {}
     assert config.slot("99") == {}
@@ -409,16 +423,50 @@ def test_get_entry_config_falls_back_when_runtime_data_lacks_config() -> None:
 # --- Immutable update helper tests ---
 
 
-def test_with_slot_field_set_creates_slot_when_missing() -> None:
-    """with_slot_field_set creates the slot if it wasn't already present."""
+def test_with_slot_field_set_cannot_create_a_user() -> None:
+    """Setting a field on an unoccupied slot is a no-op, not a creation.
+
+    A user is created by name, and a bare slot number supplies none. Inventing
+    one would put a user on the lock that nobody asked for.
+    """
     config = EntryConfig.from_mapping(
         {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
     )
 
-    updated = config.with_slot_field_set(2, "pin", "5678")
+    assert config.with_slot_field_set(2, "pin", "5678") is config
 
-    assert set(updated.slots.keys()) == {1, 2}
-    assert dict(updated.slots[2]) == {"pin": "5678"}
+
+def test_with_user_field_set_does_not_create_a_user() -> None:
+    """Setting a field on somebody who does not exist is a no-op.
+
+    Creating a user also has to allocate them a slot, which this has no view to
+    do. One created without a slot reaches no lock and is dropped the next time
+    the configuration round-trips.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
+    )
+
+    assert config.with_user_field_set("Alice", "pin", "5678") is config
+
+
+def test_setting_the_name_re_keys_the_user() -> None:
+    """The name is the identity, so setting it moves the user, not a field.
+
+    Stored as a field, the user could not be found by their new name after a
+    reload and would hold no slot.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: {**_slot(), "name": "Alice"}}}
+    )
+
+    renamed = config.with_slot_field_set(1, "name", "Bob")
+    reloaded = EntryConfig.from_mapping(renamed.to_dict())
+
+    assert set(reloaded.users) == {"Bob"}
+    assert "name" not in reloaded.users["Bob"]
+    assert reloaded.assignment.slot("Bob") == 1
+    assert "Alice" not in reloaded.users
 
 
 def test_with_slot_field_set_updates_existing_field() -> None:
@@ -453,11 +501,11 @@ def test_with_slot_field_set_accepts_str_slot_num() -> None:
 
 def test_with_slot_field_set_output_is_deeply_immutable() -> None:
     """The returned EntryConfig is frozen with read-only mappings, same as the input."""
-    config = EntryConfig.empty()
-    updated = config.with_slot_field_set(1, "pin", "1234")
+    config = EntryConfig.from_mapping({CONF_SLOTS: {1: {**_slot(), "name": "Raman"}}})
+    updated = config.with_user_field_set("Raman", "pin", "9999")
 
     with pytest.raises(TypeError):
-        updated.slots[1]["pin"] = "9999"  # type: ignore[index]
+        updated.users["Raman"]["pin"] = "0000"  # type: ignore[index]
 
 
 def test_with_slot_field_removed_removes_key() -> None:
@@ -518,10 +566,10 @@ def test_to_dict_produces_plain_mutable_dicts() -> None:
     result = config.to_dict()
 
     assert isinstance(result, dict)
-    assert isinstance(result[CONF_SLOTS], dict)
-    assert isinstance(result[CONF_SLOTS][1], dict)
+    assert isinstance(result[CONF_USERS], dict)
+    assert isinstance(result[CONF_USERS]["User 1"], dict)
     # Mutability — the returned dicts are the caller's to modify
-    result[CONF_SLOTS][1]["pin"] = "9999"
+    result[CONF_USERS]["User 1"]["pin"] = "9999"
     result[CONF_LOCKS].append("lock.b")
     # Original EntryConfig is untouched by that mutation
     assert config.slots[1]["pin"] == "1234"
@@ -660,3 +708,49 @@ def test_build_slot_unique_id_variants_never_collide() -> None:
     per_lock = build_slot_unique_id("abc123", 4, "code", "lock.front_door")
     assert standard != per_lock
     assert per_lock.startswith(f"{standard}|")
+
+
+def test_renaming_somebody_who_does_not_exist_is_a_no_op() -> None:
+    """A rename naming an unknown user changes nothing.
+
+    Reachable from a rename map computed against a configuration that has since
+    moved on. Creating the target would add a user holding no slot.
+    """
+    config = EntryConfig.from_mapping({CONF_SLOTS: {1: {**_slot(), "name": "Raman"}}})
+
+    assert config.with_user_renamed("Ghost", "Wren") is config
+
+
+def test_renaming_onto_an_existing_user_is_refused() -> None:
+    """A rename onto somebody else's name must not collapse two users into one.
+
+    Re-keying without the check deletes the target: their configuration is
+    gone and their slot is freed for reallocation.
+    """
+    config = EntryConfig.from_mapping(
+        {
+            CONF_SLOTS: {
+                1: {**_slot("1111"), "name": "Alice"},
+                2: {**_slot("2222"), "name": "Bob"},
+            }
+        }
+    )
+
+    assert config.with_user_field_set("Bob", "name", "Alice") is config
+
+
+def test_two_stored_names_with_one_identity_keep_the_first() -> None:
+    """Stored users differing only by case or padding collapse to one.
+
+    Keeping both would put them on a single slot while the name lookups
+    disagreed about which of them holds it, so a display would show one user
+    and a write would land on the other.
+    """
+    config = EntryConfig.from_mapping(
+        {
+            CONF_USERS: {"Bob": {"pin": "1111"}, "bob ": {"pin": "2222"}},
+            CONF_SLOT_ASSIGNMENT: {"bob": 1},
+        }
+    )
+
+    assert dict(config.users) == {"Bob": {"pin": "1111"}}

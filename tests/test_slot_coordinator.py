@@ -40,6 +40,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.domain.config import EntryConfig
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_coordinator import (
     PinRequiredError,
@@ -329,7 +330,7 @@ async def test_request_pin_update_auto_disables_in_single_write(
         await hass.async_block_till_done()
 
     assert len(captured) == 1
-    slot_1 = captured[0][CONF_SLOTS][1]
+    slot_1 = EntryConfig.from_mapping(captured[0]).slot(1)
     assert slot_1[CONF_PIN] == ""
     assert slot_1[CONF_ENABLED] is False
 

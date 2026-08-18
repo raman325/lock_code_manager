@@ -91,7 +91,6 @@ from .domain.models import (
     LockCodeManagerConfigEntry,
     LockCodeManagerConfigEntryRuntimeData,
 )
-from .domain.names import normalize_slot_names
 from .domain.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
@@ -106,6 +105,7 @@ from .domain.services import (
     async_set_usercode,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
+from .domain.user_migration import migrate_to_users
 from .domain.util import (
     PER_LOCK_ISSUE_KEYS,
     build_pin_deobfuscation_map,
@@ -209,18 +209,15 @@ async def async_migrate_entry(
             )
 
     if config_entry.version == 3:
-        # Give every slot a present, separator-free, entry-unique name. The
-        # name is becoming the identity Lock Code Manager keys on, so these
-        # three properties stop being cosmetic and start being load-bearing.
-        new_data = {**config_entry.data}
-        new_options = {**config_entry.options}
-        renamed: set[str] = set()
-        for data_dict in (new_data, new_options):
-            if CONF_SLOTS not in data_dict:
-                continue
-            repaired, changed = normalize_slot_names(data_dict[CONF_SLOTS])
-            data_dict[CONF_SLOTS] = repaired
-            renamed.update(changed)
+        # Two halves of one version bump: name every slot, then key the
+        # configuration by that name and demote the slot number to internal
+        # bookkeeping.
+        #
+        # No registry writes happen here. Entity and device identifiers keep
+        # the slot number, so there is nothing to move.
+        new_data, renamed_in_data = migrate_to_users(config_entry.data)
+        new_options, renamed_in_options = migrate_to_users(config_entry.options)
+        renamed = set(renamed_in_data) | set(renamed_in_options)
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=4
         )
@@ -567,16 +564,20 @@ def _setup_entry_after_start(
         config_entry.async_on_unload(_clear_listener_registered)
 
     if config_entry.data:
-        # Move data from data to options so update listener can work.
-        # Merge options-preferred (matching EntryConfig.from_entry): a
-        # non-empty options here holds an options-flow save the entry
-        # could not process (no listener was registered while it was
-        # failed) — overwriting it with data would silently discard the
-        # user's fix.
+        # Move data into options so the update listener can work.
+        #
+        # Resolved through EntryConfig rather than by merging the two raw
+        # dicts: the sides may be in different shapes, and reading a mix
+        # discards whichever loses. EntryConfig picks one side whole.
+        #
+        # Built from the entry, NOT from the cached view: the cache is only
+        # refreshed by the update listener, which has not run yet, so a
+        # service call during startup would be overwritten by a stale
+        # snapshot.
         hass.config_entries.async_update_entry(
             config_entry,
             data={},
-            options={**config_entry.data, **config_entry.options},
+            options=EntryConfig.from_entry(config_entry).to_dict(),
         )
     else:
         hass.async_create_task(

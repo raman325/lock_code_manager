@@ -214,10 +214,6 @@ class User:
         """
         return self.credentials_of_type(CredentialType.PIN)
 
-    def credential_for(self, credential_type: CredentialType) -> Credential | None:
-        """Return the first credential of ``credential_type``, else ``None``."""
-        return next(iter(self.credentials_of_type(credential_type)), None)
-
 
 class WriteResult(StrEnum):
     """
@@ -349,22 +345,6 @@ def credential_from_slot(slot: int, state: SlotCredential) -> Credential:
     at the same index, reusing the ``SlotCredential`` verbatim as its state.
     """
     return Credential(type=CredentialType.PIN, slot=slot, state=state)
-
-
-def slot_credential_of(credential: Credential) -> SlotCredential:
-    """
-    Project a Personal Identification Number credential back to a SlotCredential.
-
-    This is the inverse of ``credential_from_slot`` and is identity on the
-    state, so the coordinator can keep consuming ``SlotCredential`` unchanged.
-    It rejects non-PIN credentials because only PIN projects one-to-one onto a
-    managed slot today.
-    """
-    if credential.type is not CredentialType.PIN:
-        raise ValueError(
-            f"Only PIN credentials project to a slot, got {credential.type}"
-        )
-    return credential.state
 
 
 def user_from_slot(slot: int, state: SlotCredential, name: str | None = None) -> User:

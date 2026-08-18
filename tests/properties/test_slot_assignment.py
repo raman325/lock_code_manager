@@ -61,14 +61,9 @@ def slot_mappings(draw: st.DrawFn) -> dict[int, dict]:
 def stored_slot_mappings(draw: st.DrawFn) -> dict:
     """Configurations shaped like STORAGE rather than like valid input.
 
-    Keys are strings, because that is what the on-disk JSON form yields and
-    what a migration reading stored data actually hands in. Names may repeat
-    or be missing, because both are reachable from a version 2 entry where
-    the name is optional.
-
-    The clean strategy above cannot expose either hazard, which is exactly
-    why the string-key slot collision survived the first round of these
-    properties.
+    Keys are strings, as the on-disk JSON form yields. Names may repeat or be
+    missing, both of which are reachable from a version 2 entry where the name
+    is optional. The clean strategy above can produce neither.
     """
     configs = draw(st.lists(SLOT_CONFIGS, max_size=4))
     start = draw(st.integers(min_value=1, max_value=4))
@@ -208,18 +203,13 @@ def test_renaming_keeps_the_users_slot(
 ) -> None:
     """A rename changes who holds a slot, never which slot they hold.
 
-    Two things make this property actually bite, and it did not before.
+    Filters on the IDENTITY form, since the stored keys are casefolded.
 
-    It filters on the IDENTITY form. Filtering on the raw name went vacuous
-    the moment keys became casefolded -- every generated name is capitalized,
-    so the filter emptied the map and every assertion was trivially true.
-
-    And it adds users in a SHUFFLED order alongside the rename. Without a
-    competing addition, ignoring renames entirely still passes: the newcomer
-    is handed the very slot the "departed" user just freed, so delete-plus-add
-    and rename coincide. They only diverge when somebody else is in line for
-    that slot, which is exactly the case that reorders two users' credential
-    indices on a real lock.
+    Adds users in a SHUFFLED order alongside the rename, because without a
+    competing addition a rename is indistinguishable from delete-plus-add: the
+    newcomer is handed the very slot the departed user freed. They diverge only
+    when somebody else is in line for that slot, which is the case that
+    reorders two users' credential indices on a real lock.
     """
     before = _reconcile(SlotAssignment.empty(), names, start=start)
     moves = {old: new for old, new in renames.items() if _identity(old) in before.slots}
@@ -385,15 +375,10 @@ def test_slots_never_exceed_the_most_users_ever_configured_at_once(
 ) -> None:
     """Numbers stay inside ``start`` plus the high-water mark of CONCURRENT users.
 
-    This is the property that justifies reusing slot numbers at all, and it
-    went missing in a rewrite while the pull request description went on
-    citing it by name. On most providers the slot IS the lock's credential
-    index, and a number above the advertised capacity can never be written.
-
-    A never-reused number satisfies this for no bound: it climbs with every
-    user ever created and eventually leaves the lock's range entirely. Reuse
-    is what keeps the numbering tight, which is why the slot number is the
-    right thing to key on and a monotonically increasing handle is not.
+    The property that justifies reusing slot numbers: on most providers the
+    slot IS the lock's credential index, and a number above the advertised
+    capacity can never be written. A monotonically increasing number satisfies
+    no such bound.
     """
     assignment = SlotAssignment.empty()
     high_water = 0
@@ -456,9 +441,8 @@ def test_a_rename_to_somebody_absent_leaves_the_source_alone(
 def test_a_double_booked_slot_is_repaired(slots: dict[str, int], start: int) -> None:
     """Two users on one credential index must not survive a reconcile.
 
-    Only reachable from bookkeeping that was already inconsistent, but nothing
-    else repairs it, so it would persist for good -- and both users would
-    write over each other on the lock every sync.
+    Only reachable from bookkeeping that is already inconsistent, but nothing
+    else repairs it and both users would write over each other every sync.
     """
     reconciled = SlotAssignment(slots=slots).reconcile(list(slots), start=start)
 
@@ -470,8 +454,8 @@ def test_a_double_booked_slot_is_repaired(slots: dict[str, int], start: int) -> 
 def test_a_collapsed_identity_keeps_the_lower_slot() -> None:
     """Two keys reducing to one identity keep the LOWER number, as documented.
 
-    Covered but unpinned before: mutating ``min`` to ``max`` passed every
-    property, because nothing constructed a mapping whose keys collapse.
+    Needs an example: the strategies cannot construct a mapping whose keys
+    collapse.
     """
     assert dict(SlotAssignment(slots={"Raman": 4, "raman ": 2}).slots) == {"raman": 2}
 
@@ -479,9 +463,8 @@ def test_a_collapsed_identity_keeps_the_lower_slot() -> None:
 def test_a_string_slot_number_is_coerced() -> None:
     """The constructor accepts what storage yields and normalizes it.
 
-    This coercion is the type-level defence against the string-key
-    double-booking the branch previously shipped, and mutating it away passed
-    every property -- no test handed a string slot value to the constructor.
+    The type-level defence against a string key comparing unequal to the int
+    one everything else uses.
     """
     assignment = SlotAssignment(slots={"alice": "3"})
 
@@ -495,11 +478,8 @@ def test_a_string_slot_number_is_coerced() -> None:
 def test_a_non_string_name_key_is_coerced_not_fatal() -> None:
     """Stored bookkeeping with a non-string key must load, not abort setup.
 
-    ``normalize_name`` calls ``.strip()``, so an integer key raised
-    AttributeError and took the whole entry setup down with it. Reachable
-    from hand-edited storage, or from a writer that persisted the slot number
-    as the key by mistake. Nothing pinned the coercion until this test: the
-    mutation removing it passed all 23 properties.
+    ``normalize_name`` calls ``.strip()``, so a non-string key would raise and
+    take entry setup down. Reachable from hand-edited storage.
     """
     assignment = SlotAssignment.from_mapping({CONF_SLOT_ASSIGNMENT: {1: 4}})
 
@@ -539,12 +519,9 @@ def test_renames_are_read_case_insensitively_too(
 ) -> None:
     """The rename map is reduced to identity form, like the stored names are.
 
-    ``__post_init__`` canonicalizes the assignment's keys, but the rename map
-    arrives from a caller and got none of that treatment. Two keys meaning the
-    same user each took a turn: the later overwrote the earlier while the
-    earlier's target stayed claimed, so a third user's legitimate rename onto
-    that target was refused and they were renumbered onto a different
-    credential index.
+    ``__post_init__`` canonicalizes the assignment's keys; the rename map
+    arrives from a caller and needs the same treatment, or two keys meaning one
+    user each take a turn.
     """
     before = SlotAssignment.empty().reconcile(names, start=start)
     shouted = {old.upper(): new for old, new in renames.items()}
@@ -604,15 +581,12 @@ def test_corrupt_stored_bookkeeping_degrades_instead_of_aborting_setup() -> None
 def test_two_rename_keys_meaning_one_user_resolve_deterministically() -> None:
     """``Alice`` and ``alice `` are one user, so they get one turn, not two.
 
-    Iterating the raw mapping gave each a turn: the later overwrote the
-    earlier in the move table while the earlier's target stayed CLAIMED. A
-    third user renaming onto that abandoned target was then refused and
-    renumbered onto a different credential index -- and which of the two won
-    depended on the mapping's insertion order.
+    Whichever of the two wins must not depend on the mapping's insertion
+    order, and the loser's target must not stay claimed against a third user
+    renaming onto it.
 
     Needs an example rather than a property: the strategies generate distinct
-    names, so they cannot produce two keys with one identity, which is why
-    the mutation removing this survived every property.
+    names, so they cannot produce two keys with one identity.
     """
     before = SlotAssignment(slots={"Alice": 1, "Bob": 5, "Carl": 2})
     forward = {"Alice": "Wren", "alice ": "Vic", "Bob": "Wren"}
