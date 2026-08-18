@@ -12,6 +12,9 @@ from homeassistant.components.text import (
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import entity_registry as er
+
+from custom_components.lock_code_manager.const import DOMAIN
 
 from .common import (
     SLOT_1_NAME_ENTITY,
@@ -193,3 +196,45 @@ async def test_set_name_normalizes_whitespace(
     )
 
     assert hass.states.get(SLOT_2_NAME_ENTITY).state == "Raman"
+
+
+async def test_set_name_moves_registry_identifiers(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Renaming through the text entity moves the registry, not just config.
+
+    This path works only because async_update_listener reaches its early
+    return without suspending, so it captures the previous config before
+    _write_config_fields' eager refresh overwrites it. Nothing enforces that;
+    inserting a single await ahead of the rename block silently stops every
+    text-entity rename from moving identifiers — and config then holds the new
+    name while the registry holds the old, which is the destructive case.
+
+    No test covered this path: the end-to-end rename tests all go through the
+    options flow.
+    """
+    ent_reg = er.async_get(hass)
+    entry_id = lock_code_manager_config_entry.entry_id
+    before = hass.states.get(SLOT_2_NAME_ENTITY).state
+    pin_entity = ent_reg.async_get_entity_id(
+        TEXT_DOMAIN, DOMAIN, f"{entry_id}|{before}|pin"
+    )
+    assert pin_entity is not None
+
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "Renamed User"},
+        target={ATTR_ENTITY_ID: SLOT_2_NAME_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Same registry row — so the entity ID automations reference is unchanged.
+    assert ent_reg.async_get(pin_entity).unique_id == f"{entry_id}|Renamed User|pin"
+    assert (
+        ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, f"{entry_id}|{before}|pin")
+        is None
+    )

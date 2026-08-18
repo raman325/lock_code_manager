@@ -458,9 +458,11 @@ def test_parked_segment_avoids_a_user_who_chose_that_name() -> None:
     Unlikely, but the parking name lives in the same namespace as user
     names, so a collision would move one user's rows on top of another's.
     """
-    assert _temporary_segment({"a": "b"}) == "lcm-parked-0"
-    assert _temporary_segment({"lcm-parked-0": "b"}) == "lcm-parked-1"
-    assert _temporary_segment({"a": "lcm-parked-0"}) == "lcm-parked-1"
+    assert _temporary_segment({"a": "b"}, set()) == "lcm-parked-0"
+    assert _temporary_segment({"lcm-parked-0": "b"}, set()) == "lcm-parked-1"
+    assert _temporary_segment({"a": "lcm-parked-0"}, set()) == "lcm-parked-1"
+    # A row already parked by an interrupted run also counts as taken.
+    assert _temporary_segment({"a": "b"}, {"lcm-parked-0"}) == "lcm-parked-1"
 
 
 async def test_rename_reclaims_an_empty_blocking_device(

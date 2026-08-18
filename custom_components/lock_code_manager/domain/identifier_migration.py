@@ -51,18 +51,43 @@ def _remapped(unique_id: str, entry_id: str, mapping: dict[str, str]) -> str | N
     return "|".join([parts[0], replacement, *parts[2:]])
 
 
-def _temporary_segment(mapping: dict[str, str]) -> str:
+def _cycle_member(mapping: dict[str, str], pending: set[str]) -> str | None:
     """
-    Return a segment name no user holds, for parking a cycle member.
+    Return a segment lying on a true cycle, or ``None`` if none does.
 
-    Deterministic rather than random so a failure is reproducible, and
-    checked against the mapping so it cannot collide with a user who happens
-    to have chosen the same string.
+    "Its target is also due to move" is NOT a cycle -- that describes every
+    chain, and chains resolve on their own once the far end moves. Parking a
+    chain member accomplishes nothing except renaming the problem, which is
+    how an earlier version of this looped forever: it parked, re-detected the
+    same condition on the parked segment, and parked again without bound.
+
+    A cycle is a segment that reaches itself by following the mapping.
+    """
+    for start in mapping:
+        if start not in pending:
+            continue
+        seen: set[str] = set()
+        node = start
+        while node in mapping and node not in seen:
+            seen.add(node)
+            node = mapping[node]
+        if node == start:
+            return start
+    return None
+
+
+def _temporary_segment(mapping: dict[str, str], in_use: set[str]) -> str:
+    """
+    Return a segment name nothing holds, for parking a cycle member.
+
+    Deterministic rather than random so a failure reproduces. Checked against
+    the mapping *and* against the segments already present in the registry:
+    a row can be sitting on a parking name from a previous interrupted run,
+    and moving onto it would raise mid-pass.
     """
     index = 0
-    while (candidate := f"lcm-parked-{index}") in mapping or candidate in set(
-        mapping.values()
-    ):
+    taken = set(mapping) | set(mapping.values()) | in_use
+    while (candidate := f"lcm-parked-{index}") in taken:
         index += 1
     return candidate
 
@@ -217,13 +242,18 @@ def _async_remap_segment(
             if entity.entity_id not in moved_entity_ids
             and _remapped(entity.unique_id, entry_id, mapping) is not None
         }
-        cycle_segment = next(
-            (old for old, new in mapping.items() if old in pending and new in mapping),
-            None,
-        )
+        cycle_segment = _cycle_member(mapping, pending)
         if cycle_segment is None:
             break
-        temp = _temporary_segment(mapping)
+        temp = _temporary_segment(
+            mapping,
+            {
+                entity.unique_id.split("|")[1]
+                for entity in er.async_entries_for_config_entry(ent_reg, entry_id)
+                if entity.unique_id.startswith(f"{entry_id}|")
+                and len(entity.unique_id.split("|")) >= 3
+            },
+        )
         _async_park_segment(hass, entry_id, cycle_segment, temp, old_device_identifier)
         mapping[temp] = mapping.pop(cycle_segment)
         old_device_identifier.pop(cycle_segment, None)
