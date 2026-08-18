@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "f72d2244cbac",
+  "strategy": "manual-commit",
+  "branch": "fix/confirm-clear-on-unreadable",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/sync.py",
+    "tests/properties/test_in_sync.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f7/2d2244cbac/0/metadata.json",
+      "transcript": "/f7/2d2244cbac/0/full.jsonl",
+      "compact_transcript": "/f7/2d2244cbac/0/transcript.jsonl",
+      "content_hash": "/f7/2d2244cbac/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 20861,
+    "cache_read_tokens": 10254862,
+    "output_tokens": 13795,
+    "api_call_count": 20
+  }
+}
