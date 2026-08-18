@@ -24,6 +24,7 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from custom_components.lock_code_manager.domain.names import normalize_slot_names
 from custom_components.lock_code_manager.domain.slot_assignment import (
     SlotAssignment,
+    _identity,
     users_from_slots,
 )
 
@@ -139,74 +140,192 @@ def test_conversion_round_trips(slots: dict[int, dict]) -> None:
     assert rebuilt == slots
 
 
-@given(history=EDIT_HISTORIES)
-def test_a_surviving_user_is_never_renumbered(history: list[list[str]]) -> None:
+START = st.integers(min_value=1, max_value=6)
+
+
+def _reconcile(assignment, names, **kwargs):
+    """Reconcile with a start slot supplied, since it is required."""
+    return assignment.reconcile(names, start=kwargs.pop("start", 1), **kwargs)
+
+
+@given(history=EDIT_HISTORIES, start=START)
+def test_a_surviving_user_is_never_renumbered(
+    history: list[list[str]], start: int
+) -> None:
     """Adding or removing users must not move anyone else.
 
     Renumbering a bystander rewrites their credential to a different index on
-    every lock. This is the invariant that a naive "renumber from one on every
-    edit" implementation violates, and it needs a sequence to expose.
+    every lock.
     """
     assignment = SlotAssignment.empty()
     for configured in history:
-        after = assignment.assign(configured)
-        for name in set(assignment.slots) & set(configured):
+        after = _reconcile(assignment, configured, start=start)
+        for name in set(assignment.slots) & {_identity(n) for n in configured}:
             assert after.slot(name) == assignment.slot(name)
         assignment = after
 
 
-@given(history=EDIT_HISTORIES)
-def test_two_users_never_share_a_slot(history: list[list[str]]) -> None:
-    """A slot addresses one credential, so two users in it would overwrite each other."""
+@given(history=EDIT_HISTORIES, start=START)
+def test_two_users_never_share_a_slot(history: list[list[str]], start: int) -> None:
+    """A slot addresses one credential, so two users in it overwrite each other."""
     assignment = SlotAssignment.empty()
     for configured in history:
-        assignment = assignment.assign(configured)
+        assignment = _reconcile(assignment, configured, start=start)
         numbers = list(assignment.slots.values())
         assert len(numbers) == len(set(numbers))
 
 
-@given(history=EDIT_HISTORIES)
-def test_slots_never_exceed_the_most_users_ever_configured_at_once(
-    history: list[list[str]],
+@given(history=EDIT_HISTORIES, start=START)
+def test_every_configured_user_holds_a_slot(
+    history: list[list[str]], start: int
 ) -> None:
-    """Numbers stay inside the high-water mark of CONCURRENT users.
-
-    Not the current count -- a survivor keeps their number when someone below
-    them leaves, which is required and is the property above. The bound that
-    does hold is the most users ever configured simultaneously, and it is the
-    one that matters: capacity is sized against how many users exist at once,
-    and on most providers the slot IS the lock's credential index, where a
-    number above the advertised count can never be written.
-
-    A never-reused number satisfies neither bound: it climbs with every user
-    ever created and eventually leaves the lock's range entirely. Reuse is
-    what keeps the numbering inside capacity, which is why the slot number is
-    the right thing to key on and a monotonic handle is not.
-    """
+    """Nobody configured is left without a slot, however the set churns."""
     assignment = SlotAssignment.empty()
-    high_water = 0
     for configured in history:
-        assignment = assignment.assign(configured)
-        high_water = max(high_water, len(configured))
-        assert all(1 <= s <= high_water for s in assignment.slots.values())
+        assignment = _reconcile(assignment, configured, start=start)
+        assert {_identity(n) for n in configured} == set(assignment.slots)
 
 
-@given(stored=stored_slot_mappings(), later=NAME_SETS)
+NEWCOMERS = st.lists(st.sampled_from(["Zoe", "Yan", "Xavier"]), max_size=2).map(
+    lambda ns: list(dict.fromkeys(ns))
+)
+
+
+@given(
+    names=NAME_SETS,
+    renames=st.dictionaries(NAMES, st.sampled_from(["Wren", "Vic"]), max_size=2),
+    newcomers=NEWCOMERS,
+    start=START,
+    data=st.data(),
+)
+def test_renaming_keeps_the_users_slot(
+    names: list[str],
+    renames: dict[str, str],
+    newcomers: list[str],
+    start: int,
+    data: st.DataObject,
+) -> None:
+    """A rename changes who holds a slot, never which slot they hold.
+
+    Two things make this property actually bite, and it did not before.
+
+    It filters on the IDENTITY form. Filtering on the raw name went vacuous
+    the moment keys became casefolded -- every generated name is capitalized,
+    so the filter emptied the map and every assertion was trivially true.
+
+    And it adds users in a SHUFFLED order alongside the rename. Without a
+    competing addition, ignoring renames entirely still passes: the newcomer
+    is handed the very slot the "departed" user just freed, so delete-plus-add
+    and rename coincide. They only diverge when somebody else is in line for
+    that slot, which is exactly the case that reorders two users' credential
+    indices on a real lock.
+    """
+    before = _reconcile(SlotAssignment.empty(), names, start=start)
+    moves = {old: new for old, new in renames.items() if _identity(old) in before.slots}
+    assume(len({_identity(v) for v in moves.values()}) == len(moves))
+
+    after_names = data.draw(
+        st.permutations([moves.get(n, n) for n in names] + newcomers)
+    )
+
+    after = _reconcile(before, after_names, renames=moves, start=start)
+
+    for old, new in moves.items():
+        assert after.slot(new) == before.slot(old)
+    for name in names:
+        if name not in moves:
+            assert after.slot(name) == before.slot(name)
+
+
+@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3), start=START)
+def test_renaming_does_not_depend_on_insertion_order(
+    names: list[str], renames: dict[str, str], start: int
+) -> None:
+    """The same edit gives the same answer whatever order the mapping holds."""
+    before = _reconcile(SlotAssignment.empty(), names, start=start)
+    moves = {old: new for old, new in renames.items() if _identity(old) in before.slots}
+    assume(len({_identity(v) for v in moves.values()}) == len(moves))
+    after_names = [moves.get(n, n) for n in names]
+
+    flipped = SlotAssignment(slots=dict(reversed(list(before.slots.items()))))
+
+    assert dict(
+        _reconcile(before, after_names, renames=moves, start=start).slots
+    ) == dict(_reconcile(flipped, after_names, renames=moves, start=start).slots)
+
+
+@given(names=NAME_SETS, start=START)
+def test_reconciling_the_same_users_twice_changes_nothing(
+    names: list[str], start: int
+) -> None:
+    """No renames and the same names is a no-op, so callers do not write."""
+    once = _reconcile(SlotAssignment.empty(), names, start=start)
+
+    assert once.reconcile(names, start=start) is once
+
+
+@given(
+    names=NAME_SETS,
+    start=START,
+    unavailable=st.sets(st.integers(min_value=1, max_value=12), max_size=4),
+)
+def test_new_users_respect_the_start_slot_and_reserved_numbers(
+    names: list[str], start: int, unavailable: set[int]
+) -> None:
+    """A newly issued slot is never below the start, nor one already spoken for.
+
+    The start slot is usually chosen because the numbers below it hold codes
+    programmed by hand, and another entry may own slots on the same lock. The
+    slot IS the credential index on most providers, so issuing one of those
+    overwrites a real code on a real door.
+    """
+    assignment = SlotAssignment.empty().reconcile(
+        names, start=start, unavailable=unavailable
+    )
+
+    for number in assignment.slots.values():
+        assert number >= start
+        assert number not in unavailable
+
+
+@given(names=NAME_SETS, start=START)
+def test_case_only_differences_are_the_same_user(names: list[str], start: int) -> None:
+    """``Bob`` and ``BOB`` are one user, as ``names.deduplicate`` already says."""
+    assignment = _reconcile(SlotAssignment.empty(), names, start=start)
+
+    for name in names:
+        assert assignment.slot(name.upper()) == assignment.slot(name.lower())
+    assert assignment.reconcile([n.upper() for n in names], start=start) is assignment
+
+
+@given(names=NAME_SETS, pad=st.sampled_from([" ", "  ", "\t"]), start=START)
+def test_a_whitespace_variant_is_the_same_user(
+    names: list[str], pad: str, start: int
+) -> None:
+    """``"Raman "`` and ``"Raman"`` must never be two different users."""
+    bare = _reconcile(SlotAssignment.empty(), names, start=start)
+
+    assert bare.reconcile([f"{pad}{n}{pad}" for n in names], start=start) is bare
+
+    stored_padded = SlotAssignment(
+        slots={f"{pad}{n}{pad}": s for n, s in bare.slots.items()}
+    )
+    for name in names:
+        assert stored_padded.slot(name) == bare.slot(name)
+
+
+@given(stored=stored_slot_mappings(), later=NAME_SETS, start=START)
 def test_editing_after_a_migration_never_double_books_a_slot(
-    stored: dict, later: list[str]
+    stored: dict, later: list[str], start: int
 ) -> None:
     """Migrate, then keep editing -- the two halves composed.
 
-    Every other assignment property starts from ``SlotAssignment.empty()``,
-    which is not how production reaches ``assign``: it reaches it from a
-    migrated assignment, built from storage. That gap hid a real defect --
-    string keys from JSON survived into the assignment, so ``candidate in
-    taken`` compared an int against a string, missed, and issued an occupied
-    slot to the next user. Two users on one credential index means one
-    overwrites the other on every lock.
+    Production reaches reconcile from a MIGRATED assignment built out of
+    storage, never from ``empty()``. That gap hid a string-key collision that
+    issued one credential index to two users.
     """
     _, assignment, _ = users_from_slots(stored)
-    after = assignment.assign([*assignment.slots, *later])
+    after = _reconcile(assignment, [*assignment.slots, *later], start=start)
 
     numbers = list(after.slots.values())
     assert len(numbers) == len(set(numbers))
@@ -215,13 +334,7 @@ def test_editing_after_a_migration_never_double_books_a_slot(
 
 @given(stored=stored_slot_mappings())
 def test_migration_always_produces_one_user_per_slot(stored: dict) -> None:
-    """No slot is lost to a missing or duplicated name.
-
-    Both are reachable from a version 2 entry. Before the repair was folded
-    in, two slots sharing a name collapsed into one user -- losing that
-    user's code AND renumbering the survivor -- and a nameless slot raised
-    mid-migration, on a path with no rollback.
-    """
+    """No slot is lost to a missing or duplicated name."""
     users, assignment, _ = users_from_slots(stored)
 
     assert len(users) == len(stored)
@@ -229,73 +342,9 @@ def test_migration_always_produces_one_user_per_slot(stored: dict) -> None:
     assert set(assignment.slots.values()) == {int(k) for k in stored}
 
 
-@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3))
-def test_renaming_never_renumbers_anyone(
-    names: list[str], renames: dict[str, str]
-) -> None:
-    """A rename changes who holds a slot, never which slot they hold.
-
-    ``assign`` alone cannot see a rename -- it looks like a deletion plus an
-    addition, so it frees the old name's slot and reissues it in iteration
-    order, landing two renamed users on each other's index. Re-keying first
-    is what keeps the rename free.
-
-    Chained renames are deliberately NOT excluded. An earlier version of this
-    property assumed away the case where a rename target is a name somebody
-    still holds, on the reasoning that the name rules reject it upstream. They
-    do not: ``A -> B``, ``B -> C`` with ``C`` deleted ends with the unique
-    names {B, C}, so it is a legal submission -- and it was the exact shape
-    that moved a user from index 2 to index 3. Filtering it out is what let
-    the defect through.
-    """
-    before = SlotAssignment.empty().assign(names)
-    renames = {old: new for old, new in renames.items() if old in before.slots}
-    # Two users renaming to the SAME name is a genuine conflict the name
-    # rules reject, and not something this has to resolve.
-    assume(len(set(renames.values())) == len(renames))
-
-    after = before.with_renames(renames)
-
-    for old, new in renames.items():
-        assert after.slot(new) == before.slot(old)
-    # Anyone neither renamed nor displaced by a rename keeps their number.
-    for name in set(before.slots) - set(renames) - set(renames.values()):
-        assert after.slot(name) == before.slot(name)
-
-
-@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3))
-def test_renaming_does_not_depend_on_insertion_order(
-    names: list[str], renames: dict[str, str]
-) -> None:
-    """The same renames give the same answer whatever order the map holds.
-
-    The first implementation re-keyed in place, so whichever entry iterated
-    last overwrote the other and a differently-ordered mapping produced a
-    different assignment. Order-dependence in bookkeeping that decides
-    credential indices is not a style question.
-    """
-    before = SlotAssignment.empty().assign(names)
-    renames = {old: new for old, new in renames.items() if old in before.slots}
-    assume(len(set(renames.values())) == len(renames))
-
-    reversed_order = SlotAssignment(slots=dict(reversed(list(before.slots.items()))))
-
-    assert dict(before.with_renames(renames).slots) == dict(
-        reversed_order.with_renames(renames).slots
-    )
-
-
 @given(stored=stored_slot_mappings())
-def test_repair_pairs_each_user_with_their_own_fields_and_slot(
-    stored: dict,
-) -> None:
-    """Repaired names stay attached to the right fields and the right slot.
-
-    The conversion properties run only on already-valid input, so nothing
-    pinned the pairing THROUGH the repair. A migration that swapped two
-    repaired slots' codes would satisfy every count-based property while
-    giving two people each other's code.
-    """
+def test_repair_pairs_each_user_with_their_own_fields_and_slot(stored: dict) -> None:
+    """Repaired names stay attached to the right fields and the right slot."""
     users, assignment, _ = users_from_slots(stored)
     repaired, _ = normalize_slot_names(stored)
 
@@ -305,129 +354,9 @@ def test_repair_pairs_each_user_with_their_own_fields_and_slot(
         assert users[name] == {k: v for k, v in slot.items() if k != CONF_NAME}
 
 
-@given(names=NAME_SETS, pad=st.sampled_from([" ", "  ", "\t"]))
-def test_a_whitespace_variant_is_the_same_user(names: list[str], pad: str) -> None:
-    """``"Raman "`` and ``"Raman"`` must never be two different users.
-
-    Names arrive here from more than one place -- the repaired configuration,
-    and whatever a caller passes straight through -- and the two forms are
-    indistinguishable on screen. Treating them as different users renumbers
-    somebody, which moves their credential on every lock.
-
-    Covers both directions, because normalizing only the incoming names left
-    a stored key in its raw form still missing: assignment stored padded and
-    looked up bare, and assignment stored bare and looked up padded.
-    """
-    bare = SlotAssignment.empty().assign(names)
-    padded_lookup = bare.assign([f"{pad}{name}{pad}" for name in names])
-
-    assert padded_lookup is bare
-
-    stored_padded = SlotAssignment(
-        slots={f"{pad}{n}{pad}": s for n, s in bare.slots.items()}
-    )
-    for name in names:
-        assert stored_padded.slot(name) == bare.slot(name)
-
-
-@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3))
-def test_renaming_never_removes_a_user(
-    names: list[str], renames: dict[str, str]
-) -> None:
-    """Nobody loses their slot to a rename they were not part of.
-
-    A rename map naming a source that holds nothing -- a stale replay, or a
-    name already renamed -- previously deleted whoever sat on the TARGET,
-    because the target was vacated whether or not anything moved into it. The
-    following ``assign`` then renumbered that bystander onto a different
-    credential index.
-    """
-    before = SlotAssignment.empty().assign(names)
-    assume(len({v.casefold() for v in renames.values()}) == len(renames))
-
-    after = before.with_renames(renames)
-
-    moved_from = {k.casefold() for k in renames if k.casefold() in before.slots}
-    for name in set(before.slots) - moved_from:
-        assert after.slot(name) == before.slot(name)
-
-
-@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3))
-def test_replaying_a_rename_never_loses_a_user(
-    names: list[str], renames: dict[str, str]
-) -> None:
-    """Applying a rename map again must not delete anyone.
-
-    Deliberately NOT stated as "changes nothing", which is false and was my
-    first attempt: a swap map is its own inverse, so replaying it legitimately
-    flips the two names back. A map is computed for one transition and is not
-    meaningful against its own result.
-
-    What must never happen is a user disappearing. Vacating a rename target
-    whether or not anything moved into it made a replayed map erase its own
-    result -- the user who had just been renamed was deleted outright, and the
-    following assign handed their slot to somebody else.
-    """
-    before = SlotAssignment.empty().assign(names)
-    assume(len({v.casefold() for v in renames.values()}) == len(renames))
-
-    once = before.with_renames(renames)
-    twice = once.with_renames(renames)
-
-    assert len(twice.slots) == len(once.slots)
-    assert set(twice.slots.values()) == set(once.slots.values())
-
-
-@given(
-    names=NAME_SETS,
-    start=st.integers(min_value=1, max_value=8),
-    unavailable=st.sets(st.integers(min_value=1, max_value=12), max_size=4),
-)
-def test_new_users_respect_the_start_slot_and_reserved_numbers(
-    names: list[str], start: int, unavailable: set[int]
-) -> None:
-    """A newly issued slot is never below the start, nor one that is spoken for.
-
-    The start slot is usually chosen because the numbers below it hold codes
-    programmed by hand that Lock Code Manager does not manage, and another
-    entry may own slots on the same lock. The slot IS the credential index on
-    most providers, so issuing one of those overwrites a real code on a real
-    door.
-    """
-    assignment = SlotAssignment.empty().assign(
-        names, start=start, unavailable=unavailable
-    )
-
-    for number in assignment.slots.values():
-        assert number >= start
-        assert number not in unavailable
-
-
-@given(names=NAME_SETS)
-def test_case_only_differences_are_the_same_user(names: list[str]) -> None:
-    """``Bob`` and ``BOB`` are one user, as ``names.deduplicate`` already says.
-
-    Two credential indices for one person otherwise, and a case-only rename
-    reading as a deletion plus an addition.
-    """
-    assignment = SlotAssignment.empty().assign(names)
-
-    for name in names:
-        assert assignment.slot(name.upper()) == assignment.slot(name.lower())
-    assert assignment.assign([name.upper() for name in names]) is assignment
-
-
-@given(names=NAME_SETS)
-def test_assignment_is_idempotent(names: list[str]) -> None:
-    """Assigning the same users twice changes nothing."""
-    once = SlotAssignment.empty().assign(names)
-
-    assert once.assign(names) is once
-
-
-@given(history=EDIT_HISTORIES)
+@given(history=EDIT_HISTORIES, start=START)
 def test_assignment_survives_a_round_trip_through_storage(
-    history: list[list[str]],
+    history: list[list[str]], start: int
 ) -> None:
     """What is persisted reloads identically.
 
@@ -436,7 +365,7 @@ def test_assignment_survives_a_round_trip_through_storage(
     """
     assignment = SlotAssignment.empty()
     for configured in history:
-        assignment = assignment.assign(configured)
+        assignment = assignment.reconcile(configured, start=start)
 
     restored = SlotAssignment.from_mapping(assignment.to_dict())
 

@@ -76,7 +76,7 @@ class SlotAssignment:
         """
         canonical: dict[str, int] = {}
         for name, slot in self.slots.items():
-            key = _identity(name)
+            key = _identity(str(name))
             number = int(slot)
             canonical[key] = min(canonical.get(key, number), number)
         object.__setattr__(self, "slots", MappingProxyType(canonical))
@@ -118,87 +118,82 @@ class SlotAssignment:
         """Return the slot ``name`` occupies, or None if they hold none."""
         return self.slots.get(_identity(name))
 
-    def with_renames(self, renames: Mapping[str, str]) -> SlotAssignment:
-        """
-        Re-key the assignment so renamed users keep their slot.
-
-        Must be applied BEFORE :meth:`assign`, which cannot tell a rename from
-        a deletion plus an addition: it would free the old name's slot and
-        hand it out in iteration order. Two renames in one submission then
-        land each user on the other's index, rewriting both credentials on
-        every lock -- the failure this whole design exists to avoid, arriving
-        through the one operation that is supposed to be free.
-
-        A rename target may be a name somebody else still holds, and that is
-        legal rather than a conflict: the holder must be departing in the same
-        submission, since two users cannot share a name in the result. The
-        renamed entry therefore displaces the one sitting on the target.
-
-        A target is only displaced when a source actually surrendered a slot.
-        Dropping it unconditionally deleted an uninvolved user whenever the
-        map named a source holding nothing -- and made replaying an
-        already-applied map erase its own result, so the operation was not
-        idempotent.
-        """
-        moves = {
-            _identity(old): _identity(new)
-            for old, new in renames.items()
-            if _identity(old) in self.slots
-        }
-        renamed = {
-            moves[name]: slot for name, slot in self.slots.items() if name in moves
-        }
-        kept = {
-            name: slot
-            for name, slot in self.slots.items()
-            if name not in moves and name not in renamed
-        }
-        moved = {**kept, **renamed}
-        if moved == dict(self.slots):
-            return self
-        return SlotAssignment(slots=moved)
-
-    def assign(
+    def reconcile(
         self,
         names: Iterable[str],
         *,
-        start: int = 1,
+        start: int,
+        renames: Mapping[str, str] | None = None,
         unavailable: Collection[int] = (),
     ) -> SlotAssignment:
         """
-        Return the assignment covering exactly ``names``.
+        Return the assignment covering exactly ``names``, applying ``renames``.
 
-        Users already holding a slot keep it, so a rename or an unrelated
-        edit never renumbers anyone. New users take the lowest free slot at or
-        above ``start``, skipping anything in ``unavailable``.
+        ONE operation rather than a rename step followed by an allocation
+        step. Splitting them put the order in the caller's hands, and the
+        order is the whole difficulty: a rename is indistinguishable from a
+        deletion plus an addition unless you already know who survives.
+        Getting that sequence wrong produced a high-severity defect in three
+        consecutive review rounds -- users deleted, users renumbered onto
+        another user's credential index -- so the sequence is gone rather
+        than documented.
 
-        Those two are not decoration. The entry has a configured start slot
-        (``CONF_START_SLOT``), usually chosen because the numbers below it
-        hold codes programmed by hand that Lock Code Manager does not manage,
-        and ``config_flow._check_common_slots`` refuses ranges overlapping
-        another entry on a shared lock. Since the slot IS the credential index
-        on most providers, allocating from 1 unconditionally would write a new
-        user's code over one of those.
+        ``names`` is the full set of users in the NEW configuration, which is
+        what resolves the ambiguity: a rename target that is not in ``names``
+        is departing, and one that is names the renamed user.
+
+        Users keep their slot through a rename and through anyone else's
+        arrival or departure. New users take the lowest free number at or
+        above ``start``, skipping ``unavailable``.
+
+        ``start`` is required, not defaulted. The entry's configured start
+        slot (``CONF_START_SLOT``) is usually chosen because the numbers below
+        it hold codes programmed by hand that Lock Code Manager does not
+        manage, and ``config_flow._check_common_slots`` refuses ranges that
+        overlap another entry on a shared lock. Since the slot IS the
+        credential index on most providers, defaulting to 1 would make a
+        forgotten argument write a new user's code over one of those --
+        silently, and on a real door. Required makes it a type error.
 
         Returns ``self`` when nothing differs, so callers can use identity to
         decide whether a write is needed.
         """
+        moves = {
+            _identity(old): _identity(new)
+            for old, new in (renames or {}).items()
+            if _identity(old) in self.slots
+        }
         wanted = list(dict.fromkeys(_identity(name) for name in names))
-        assigned = {name: self.slots[name] for name in wanted if name in self.slots}
+        surviving = set(wanted)
 
-        taken = set(assigned.values()) | set(unavailable)
+        # A renamed user displaces whoever held the target name, because two
+        # users cannot share a name in the result -- so that holder is
+        # departing in this same submission.
+        renamed = {
+            moves[name]: slot
+            for name, slot in self.slots.items()
+            if name in moves and moves[name] in surviving
+        }
+        kept = {
+            name: slot
+            for name, slot in self.slots.items()
+            if name not in moves and name in surviving and name not in renamed
+        }
+        carried = {**kept, **renamed}
+
+        taken = set(carried.values()) | set(unavailable)
         candidate = start
         for name in wanted:
-            if name in assigned:
+            if name in carried:
                 continue
             while candidate in taken:
                 candidate += 1
-            assigned[name] = candidate
+            carried[name] = candidate
             taken.add(candidate)
 
-        if assigned == dict(self.slots):
+        if carried == dict(self.slots):
             return self
-        return SlotAssignment(slots=assigned)
+        return SlotAssignment(slots=carried)
 
 
 def users_from_slots(
