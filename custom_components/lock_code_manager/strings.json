@@ -130,7 +130,6 @@
     },
     "error": {
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
-      "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}.",
       "name_not_unique": "The name for code slot {slot_num} is already used by another code slot in this entry. Names must be unique.",
       "name_required": "Code slot {slot_num} needs a name. The name identifies this user on your locks.",
       "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",

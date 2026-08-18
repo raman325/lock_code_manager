@@ -24,8 +24,6 @@ SERVICE_DEOBFUSCATE_LOG = "deobfuscate_log"
 
 ATTR_TEXT = "text"
 
-ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
-ATTR_ENTITIES_REMOVED_TRACKER = "entities_removed_tracker"
 
 ATTR_CODE_SLOT = "code_slot"
 ATTR_USERCODE = "usercode"
@@ -50,7 +48,6 @@ ATTR_LAST_SYNCED = "last_synced"
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 ATTR_CONFIG_ENTRY_TITLE = "config_entry_title"
 ATTR_EVENT_ENTITY_ID = "event_entity_id"
-ATTR_CALENDAR_ENTITY_ID = "calendar_entity_id"
 ATTR_CALENDAR = "calendar"
 ATTR_CALENDAR_NEXT = "calendar_next"
 ATTR_CALENDAR_ACTIVE = "active"
