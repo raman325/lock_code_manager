@@ -9,12 +9,13 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF
+from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, STATE_OFF
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.domain.config import EntryConfig
 
 from .common import (
     SLOT_1_NAME_ENTITY,
@@ -205,15 +206,8 @@ async def test_set_name_moves_registry_identifiers(
 ):
     """Renaming through the text entity moves the registry, not just config.
 
-    This path works only because async_update_listener reaches its early
-    return without suspending, so it captures the previous config before
-    _write_config_fields' eager refresh overwrites it. Nothing enforces that;
-    inserting a single await ahead of the rename block silently stops every
-    text-entity rename from moving identifiers — and config then holds the new
-    name while the registry holds the old, which is the destructive case.
-
-    No test covered this path: the end-to-end rename tests all go through the
-    options flow.
+    No other test covered this path: the end-to-end rename tests all go
+    through the options flow.
     """
     ent_reg = er.async_get(hass)
     entry_id = lock_code_manager_config_entry.entry_id
@@ -238,3 +232,43 @@ async def test_set_name_moves_registry_identifiers(
         ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, f"{entry_id}|{before}|pin")
         is None
     )
+
+
+async def test_text_rename_survives_a_late_update_listener(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The rename must not depend on the listener winning a race.
+
+    _write_config_fields refreshes runtime_data.config eagerly right after
+    async_update_entry. The listener reading runtime_data.config as its
+    "previous" side is correct only while it runs synchronously to its first
+    suspension and reaches the rename before that refresh. A listener that ran
+    later would diff the new config against itself, move nothing, and leave
+    config on the new name with the registry on the old -- the destructive
+    direction.
+
+    This sets up exactly what a late listener would find: the cache already
+    advanced past the write. The rename still has to land, because the writer
+    hands its pre-write config over rather than letting the reader infer one.
+    """
+    ent_reg = er.async_get(hass)
+    entry = lock_code_manager_config_entry
+    entry_id = entry.entry_id
+    before = hass.states.get(SLOT_2_NAME_ENTITY).state
+    pin_entity = ent_reg.async_get_entity_id(
+        TEXT_DOMAIN, DOMAIN, f"{entry_id}|{before}|pin"
+    )
+    assert pin_entity is not None
+
+    previous_config = EntryConfig.from_entry(entry)
+    new_config = previous_config.with_slot_field_set(2, CONF_NAME, "Late Listener")
+
+    entry.runtime_data.pending_previous_config = previous_config
+    # The eager refresh, moved AHEAD of the listener rather than after it.
+    entry.runtime_data.config = new_config
+    hass.config_entries.async_update_entry(entry, data=new_config.to_dict())
+    await hass.async_block_till_done()
+
+    assert ent_reg.async_get(pin_entity).unique_id == f"{entry_id}|Late Listener|pin"

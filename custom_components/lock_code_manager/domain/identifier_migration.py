@@ -2,12 +2,11 @@
 Move registry identifiers between key segments, in place.
 
 Entity and device identifiers carry the user's name in their second segment.
-The version 4 to 5 migration moves slot numbers into that segment.
 
-Two operations move them: the version 4 to 5 migration, which moves slot
-numbers into that segment, and a rename, which moves one name to another.
-Both are the same problem -- remap segment 2 across a set of rows -- so both
-go through ``_async_remap_segment``.
+Two operations move them: the version 3 to 4 migration, which replaces slot
+numbers in that segment with names, and a rename, which moves one name to
+another. Both are the same problem -- remap segment 2 across a set of rows --
+so both go through ``_async_remap_segment``.
 
 Rewriting **in place** is what makes either invisible: a registry row found
 by its old identifier and updated keeps its entity identifier, so every

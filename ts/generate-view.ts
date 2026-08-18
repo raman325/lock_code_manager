@@ -140,7 +140,11 @@ export function compareAndSortEntities(
 /** @internal - exported for testing via generate-view.internal.ts */
 export function createLockCodeManagerEntity(
     entity: EntityRegistryEntry,
-    slotNumForName?: Map<string, number>
+    // Required, not optional. Omitting it yields NaN for every entity, which
+    // matches no slot and renders every section empty -- the regression this
+    // map exists to fix. A compile error is the only thing that catches a
+    // missed call site, because the blank dashboard looks like no data.
+    slotNumForName: Map<string, number>
 ): LockCodeManagerEntityEntry {
     const split = entity.unique_id.split('|');
     const [, userName] = split;
@@ -152,7 +156,7 @@ export function createLockCodeManagerEntity(
         // the number, and reading it as one now yields NaN -- which silently
         // matches no slot and renders every section empty. The slot number is
         // recovered from the entry's slot map instead.
-        slotNum: slotNumForName ? (slotNumForName.get(userName) ?? NaN) : NaN,
+        slotNum: slotNumForName.get(userName) ?? NaN,
         userName
     };
 }

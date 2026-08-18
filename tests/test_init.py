@@ -1967,6 +1967,67 @@ async def test_migration_v3_to_v4_rewrites_identifiers_end_to_end(
     assert "entity IDs are unchanged" in caplog.text
 
 
+async def test_migration_with_an_unprocessed_rename_applies_it_once(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A rename saved while unloaded, on an entry that also needs migrating.
+
+    Two code paths both want to apply this rename. The migration picks its
+    names from options, so it lands the registry on the post-rename names;
+    the setup-time reconcile then diffs data against options and would apply
+    the SAME rename to rows already holding the result. A chain survives that
+    on the collision guard, but a SWAP resolves cleanly through the parking
+    logic -- putting each user on the other's rows, entity IDs, history, and
+    device. So the swap is the case worth pinning, not the chain.
+
+    The migration collapses into data with options cleared, which is the
+    shape every other write path produces, and leaves the reconcile nothing
+    to diff.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "Alice", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "Bob", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+        },
+        # The save that never got processed: the two users swap names.
+        options={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "Bob", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "Alice", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+        },
+        unique_id="Migration With Pending Swap",
+        version=3,
+    )
+    config_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    slot_1_row = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|1|pin", config_entry=config_entry
+    ).entity_id
+    slot_2_row = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|2|pin", config_entry=config_entry
+    ).entity_id
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Each slot's row carries the name that slot actually holds. Applied
+    # twice, the two would be crossed: slot 1 on Alice, slot 2 on Bob.
+    assert ent_reg.async_get(slot_1_row).unique_id == f"{entry_id}|Bob|pin"
+    assert ent_reg.async_get(slot_2_row).unique_id == f"{entry_id}|Alice|pin"
+    # And the entry is left in the canonical shape, so nothing re-diffs it.
+    assert config_entry.options == {}
+    assert config_entry.data[CONF_SLOTS][1][CONF_NAME] == "Bob"
+    assert config_entry.data[CONF_SLOTS][2][CONF_NAME] == "Alice"
+
+
 async def test_rename_reassigning_a_removed_users_name(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:

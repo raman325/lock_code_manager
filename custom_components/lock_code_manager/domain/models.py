@@ -145,6 +145,17 @@ class LockCodeManagerConfigEntryRuntimeData:
     # update listener on every change. Readers should prefer this over
     # parsing config_entry.data/options directly. See data.EntryConfig.
     config: EntryConfig = field(default_factory=EntryConfig.empty)
+    # Handed to the update listener by a writer that already knows the
+    # pre-write config, so the listener does not have to infer it from the
+    # order it happens to run in. The listener consumes and clears it.
+    #
+    # Only the entity-driven path sets this. It writes straight to data and
+    # then eagerly refreshes `config` above, so the listener's own
+    # `previous_config = runtime_data.config` reads the OLD value purely
+    # because async_update_entry starts the listener eagerly and the path to
+    # the rename never suspends. Either of those changing would silently stop
+    # every text-entity rename from moving registry identifiers.
+    pending_previous_config: EntryConfig | None = None
     # Active per-slot sync managers, registered by the in-sync binary sensor
     # on add and discarded on remove. Tracked so async_unload_entry can stop
     # them up front -- before lock-removed callbacks fire and before platforms

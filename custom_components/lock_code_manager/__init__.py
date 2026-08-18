@@ -264,6 +264,19 @@ async def async_migrate_entry(
             int(slot_num): dict(slot) for slot_num, slot in new_slots_source.items()
         }
         changed = async_migrate_identifiers_to_names(hass, config_entry.entry_id, slots)
+        # Leave the setup-time reconcile nothing to redo. It fires on a
+        # non-empty data alongside a non-empty options and applies the
+        # data-to-options rename diff -- which the migration has ALREADY
+        # applied, by migrating onto the options names above. A chain survives
+        # that on the collision guard, but a swap re-resolves through the
+        # parking logic and lands each user on the other's rows.
+        #
+        # Only when BOTH sides are populated, which is the condition the
+        # reconcile keys on. Config held entirely under options is a shape the
+        # integration supports, and there is no stale side to diff there.
+        if new_data and new_options:
+            new_data = {**new_data, **new_options}
+            new_options = {}
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=4
         )
@@ -1172,11 +1185,14 @@ async def async_update_listener(
     # entity-creation pass for those cases, but downstream readers via
     # runtime_data.config still need to see the current data.
     runtime_data = config_entry.runtime_data
-    # Captured before the refresh below overwrites it. The only source of the
-    # pre-update config that works for BOTH write paths: the options flow puts
-    # the new config in options, while the name text entity writes straight to
-    # data with empty options, leaving no "old" side in the entry itself.
-    previous_config = runtime_data.config
+    # The pre-update config, for both write paths. The options flow puts the
+    # new config in options, so data is still the old side and the cached
+    # config is too. The name text entity writes straight to data with empty
+    # options, leaving no old side in the entry at all -- so that writer hands
+    # its own pre-write config over instead of this reader guessing from the
+    # order the listener happens to run in.
+    previous_config = runtime_data.pending_previous_config or runtime_data.config
+    runtime_data.pending_previous_config = None
     runtime_data.config = EntryConfig.from_entry(config_entry)
 
     # Notify per-slot coordinators so derived "active" state and condition-

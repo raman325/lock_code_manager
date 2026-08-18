@@ -333,9 +333,14 @@ class SlotEntityCoordinator:
         observe the new values. The listener will refresh again when it
         runs -- writing the same value twice is harmless.
         """
-        config = get_entry_config(self._config_entry)
+        previous_config = get_entry_config(self._config_entry)
+        config = previous_config
         for key, value in fields.items():
             config = config.with_slot_field_set(self._slot_num, key, value)
+        # Hand the listener the pre-write config rather than letting it infer
+        # one. Set BEFORE the update so it is in place whether the listener
+        # runs synchronously from async_update_entry or on a later task.
+        self._config_entry.runtime_data.pending_previous_config = previous_config
         self._hass.config_entries.async_update_entry(
             self._config_entry, data=config.to_dict()
         )

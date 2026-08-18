@@ -372,8 +372,15 @@ class SlotSyncManager:
 
     def _build_entity_id_map(self) -> bool:
         """Build and cache entity IDs for this slot from the entity registry."""
-        missing = False
-        for key, (domain, unique_id) in self._unique_ids_for_current_name().items():
+        unique_ids = self._unique_ids_for_current_name()
+        # Nothing to resolve is NOT everything resolved. An unconfigured slot
+        # returns an empty map, and reporting success for it sends
+        # _setup_state_tracking down the targeted branch: it subscribes to an
+        # empty set and clears _tracking_all_states, so
+        # _try_upgrade_state_tracking can never restore the catch-all if the
+        # slot is configured again.
+        missing = not unique_ids
+        for key, (domain, unique_id) in unique_ids.items():
             if key in self._entity_id_map:
                 continue
             ent_id = self._ent_reg.async_get_entity_id(domain, DOMAIN, unique_id)

@@ -2167,3 +2167,21 @@ def test_unique_ids_are_empty_for_an_unconfigured_slot() -> None:
         return_value=None,
     ):
         assert manager._unique_ids_for_current_name() == {}
+
+
+def test_entity_id_map_reports_unresolved_for_an_unconfigured_slot() -> None:
+    """Nothing to resolve must not report as everything resolved.
+
+    Reporting success sends _setup_state_tracking down the targeted branch:
+    it subscribes to an EMPTY set and clears _tracking_all_states, so
+    _try_upgrade_state_tracking's `if not self._tracking_all_states: return`
+    fires forever after and the catch-all can never come back. The manager
+    would then only ever re-evaluate on the periodic tick.
+    """
+    manager = SlotSyncManager.__new__(SlotSyncManager)
+    manager._entity_id_map = {}
+    manager._tracked_entity_ids = set()
+    manager._ent_reg = MagicMock()
+
+    with patch.object(manager, "_unique_ids_for_current_name", return_value={}):
+        assert manager._build_entity_id_map() is False
