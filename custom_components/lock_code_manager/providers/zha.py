@@ -10,6 +10,7 @@ polling.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -337,22 +338,27 @@ class ZHALock(BaseLock):
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
-        Read Personal Identification Number codes from all managed slots.
+        Read Personal Identification Number codes one index at a time.
 
-        Returns a user per slot via the one-slot-one-user projection.
-        Known codes surface as occupied users; failed reads produce
-        unreadable credentials so the coordinator does not treat a
-        transient cluster error as a confirmed-empty slot.
+        Returns a user per slot via the one-slot-one-user projection. The
+        cluster answers a single index per round trip, so ``slots`` bounds
+        the work and must be honoured.
+
+        Anything the lock will not put a value to -- a failed read, a
+        response shape this cannot parse, an enabled slot whose code the
+        lock withholds -- is ``unreadable``, never ``empty``. ``empty``
+        means confirmed cleared, and confirming that wrongly makes sync
+        reprogram a slot that already holds a code.
         """
         cluster = await self._get_connected_cluster()
-        managed = self.managed_slots
-        if not managed:
+        scope = self.managed_slots if slots is None else slots
+        if not scope:
             return []
 
         slot_states: dict[int, SlotCredential] = {}
-        for slot_num in managed:
+        for slot_num in scope:
             try:
                 result = await cluster.get_pin_code(slot_num)
                 _LOGGER.debug(
@@ -361,11 +367,7 @@ class ZHALock(BaseLock):
                     slot_num,
                     result,
                 )
-                user_status, pin_code = self._parse_pin_response(result)
-                if user_status == DoorLock.UserStatus.Enabled and pin_code:
-                    slot_states[slot_num] = SlotCredential.known(pin_code)
-                else:
-                    slot_states[slot_num] = SlotCredential.empty()
+                parsed = self._parse_pin_response(result)
             except LockDisconnected:
                 raise
             except Exception:
@@ -376,41 +378,22 @@ class ZHALock(BaseLock):
                     exc_info=True,
                 )
                 slot_states[slot_num] = SlotCredential.unreadable()
-        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
+                continue
 
-    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
-        """
-        Ask the lock about each index in turn, up to ``limit``.
-
-        The cluster answers one index per round trip, which is why the
-        caller bounds the range instead of the whole advertised capacity
-        being walked.
-
-        A single index that cannot be read makes the whole answer unknown.
-        Returning the rest would understate what is occupied, and an
-        understated answer is the one that overwrites a code.
-        """
-        cluster = await self._get_connected_cluster()
-        occupied: set[int] = set()
-        for slot_num in range(1, limit + 1):
-            try:
-                result = await cluster.get_pin_code(slot_num)
-                user_status, _pin_code = self._parse_pin_response(result)
-            except Exception:
+            if parsed is None:
                 _LOGGER.debug(
-                    "Lock %s: could not read slot %s, so occupancy is unknown",
+                    "Lock %s: unrecognized get_pin_code response for slot %s",
                     self.lock.entity_id,
                     slot_num,
-                    exc_info=True,
                 )
-                return None
-            # Enabled is enough. A lock that will not hand back the code
-            # still has one in that slot, and requiring the value would
-            # report a write-only slot as free -- the understatement that
-            # overwrites a credential.
-            if user_status == DoorLock.UserStatus.Enabled:
-                occupied.add(slot_num)
-        return frozenset(occupied)
+                slot_states[slot_num] = SlotCredential.unreadable()
+            elif parsed[0] != DoorLock.UserStatus.Enabled:
+                slot_states[slot_num] = SlotCredential.empty()
+            elif parsed[1]:
+                slot_states[slot_num] = SlotCredential.known(parsed[1])
+            else:
+                slot_states[slot_num] = SlotCredential.unreadable()
+        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read all codes from the lock (no cache to invalidate)."""
@@ -419,8 +402,14 @@ class ZHALock(BaseLock):
     # -- Response parsing ----------------------------------------------------
 
     @staticmethod
-    def _parse_pin_response(result: Any) -> tuple[int, str]:
-        """Extract (user_status, pin_code) from a get_pin_code response."""
+    def _parse_pin_response(result: Any) -> tuple[int, str] | None:
+        """
+        Extract (user_status, pin_code) from a get_pin_code response.
+
+        ``None`` for a shape this does not recognize. Reporting such a
+        response as ``Available`` would answer "this slot is free" from a
+        reply that was never understood.
+        """
         if hasattr(result, "user_status"):
             pin = getattr(result, "code", "") or ""
             if isinstance(pin, bytes):
@@ -431,7 +420,7 @@ class ZHALock(BaseLock):
             if isinstance(pin, bytes):
                 pin = pin.decode("utf-8", errors="ignore")
             return result[1], str(pin) if pin else ""
-        return DoorLock.UserStatus.Available, ""
+        return None
 
     # -- Push updates --------------------------------------------------------
 

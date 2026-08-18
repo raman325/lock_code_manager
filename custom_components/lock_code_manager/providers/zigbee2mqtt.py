@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import json
@@ -624,9 +625,9 @@ class Zigbee2MQTTLock(BaseLock):
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
-        Read Personal Identification Number codes from all managed slots.
+        Read Personal Identification Number codes one index at a time.
 
         Queries Zigbee2MQTT one slot at a time over MQTT so the bridge can
         respond to each GET before the next. Transient publish/timeout/read
@@ -660,29 +661,26 @@ class Zigbee2MQTTLock(BaseLock):
         if not get_topic:
             raise LockDisconnected("Could not determine MQTT topic")
 
-        # Get configured code slots for this lock (any LCM entry that includes this lock).
-        code_slots = self.managed_slots
+        # One request per index, so the caller's scope bounds the work.
+        code_slots = self.managed_slots if slots is None else slots
 
         if not code_slots:
             return []
 
         slot_states = {
             slot_num: await self._async_read_slot(slot_num, get_topic)
-            or SlotCredential.unreadable()
             for slot_num in sorted(code_slots)
         }
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
-    async def _async_read_slot(
-        self, slot_num: int, get_topic: str
-    ) -> SlotCredential | None:
+    async def _async_read_slot(self, slot_num: int, get_topic: str) -> SlotCredential:
         """
         Ask the lock for one slot and wait for the answer.
 
-        Returns ``None`` when the lock did not answer at all. That is a
-        different thing from ``SlotCredential.unreadable()``, which says the
-        slot holds a code whose value is write-only -- callers that must not
-        confuse "no answer" with "occupied" need the two kept apart.
+        A publish failure, a timeout, or an unusable reply all produce
+        ``unreadable`` rather than ``empty``: sync must not take a transient
+        MQTT problem for a confirmed-empty slot and storm reprogramming once
+        MQTT recovers.
 
         Slots are queried one at a time so Zigbee2MQTT and the firmware can
         answer each GET before the next. A parallel gather with per-slot
@@ -709,7 +707,7 @@ class Zigbee2MQTTLock(BaseLock):
                 err,
             )
             self._pending_codes.pop(slot_num, None)
-            return None
+            return SlotCredential.unreadable()
 
         try:
             result = await asyncio.wait_for(future, timeout=10.0)
@@ -719,7 +717,7 @@ class Zigbee2MQTTLock(BaseLock):
                 self.lock.entity_id,
                 slot_num,
             )
-            credential = None
+            credential = SlotCredential.unreadable()
         except Exception as err:
             # Broad catch is intentional: the future is resolved by the MQTT
             # callback, and any exception from resolution (InvalidStateError,
@@ -731,39 +729,12 @@ class Zigbee2MQTTLock(BaseLock):
                 slot_num,
                 err,
             )
-            credential = None
+            credential = SlotCredential.unreadable()
         else:
             credential = result
         finally:
             self._pending_codes.pop(slot_num, None)
         return credential
-
-    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
-        """
-        Ask the lock about each index in turn, up to ``limit``.
-
-        Zigbee2MQTT answers one index per request, which is why the caller
-        bounds the range rather than the whole advertised capacity being
-        walked.
-
-        A single index that cannot be read makes the whole answer unknown.
-        Returning the rest would understate what is occupied, and an
-        understated answer is the one that overwrites a code.
-        """
-        if not await self.async_is_integration_connected():
-            return None
-        get_topic = self._get_topic("get")
-        if not get_topic:
-            return None
-
-        occupied: set[int] = set()
-        for slot_num in range(1, limit + 1):
-            credential = await self._async_read_slot(slot_num, get_topic)
-            if credential is None:
-                return None
-            if credential.is_present:
-                occupied.add(slot_num)
-        return frozenset(occupied)
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Perform hard refresh and return all codes."""

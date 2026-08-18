@@ -802,6 +802,52 @@ class TestAsyncSetClearHardRefresh:
         assert refresh == direct == {12: SlotCredential.known("ABC")}
 
 
+class TestScopedRead:
+    """A caller-named scope drives the real per-index read, not a stub."""
+
+    async def test_a_timeout_outside_the_managed_slots_is_still_unreadable(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+    ) -> None:
+        """The scope reaches slots no entry manages, and its failures behave.
+
+        Driving the real read rather than a stubbed one is the point: nothing
+        else proves that a slot the lock never answers about comes back
+        unreadable, and an empty answer there is what lets allocation hand out
+        an occupied index.
+        """
+        real_wait_for = asyncio.wait_for
+
+        async def fast_pin_timeout(
+            awaitable: object, timeout: float | None = None
+        ) -> object:
+            return await real_wait_for(awaitable, timeout=0.001)
+
+        lock = zigbee2mqtt_lock_connected
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                return_value=set(),
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for",
+                side_effect=fast_pin_timeout,
+            ),
+        ):
+            # Nothing is managed, so the default read would ask about nothing.
+            assert await lock.async_get_usercodes() == {}
+            codes = await lock.async_get_usercodes(range(1, 3))
+
+        assert codes[1] is SlotCredential.unreadable()
+        assert codes[2] is SlotCredential.unreadable()
+
+
 class TestOccupiedIndices:
     """Occupancy reads span the lock, not just the slots this entry manages."""
 
@@ -829,7 +875,9 @@ class TestOccupiedIndices:
             patch.object(lock, "_get_topic", return_value="topic/get"),
             patch.object(lock, "_async_read_slot", side_effect=_read),
         ):
-            assert await lock.async_get_occupied_indices(5) == frozenset({4, 5})
+            codes = await lock.async_get_usercodes(range(1, 6))
+            assert codes[4].is_present
+            assert codes[5] is SlotCredential.unreadable()
 
     async def test_stops_at_the_limit(
         self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
@@ -845,18 +893,21 @@ class TestOccupiedIndices:
             patch.object(lock, "_get_topic", return_value="topic/get"),
             patch.object(lock, "_async_read_slot", read),
         ):
-            assert await lock.async_get_occupied_indices(3) == frozenset()
+            codes = await lock.async_get_usercodes(range(1, 4))
+            assert all(credential.is_empty for credential in codes.values())
 
         assert read.await_count == 3
 
-    async def test_unknown_when_one_index_goes_unanswered(
+    async def test_an_unanswered_index_is_not_reported_empty(
         self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
     ) -> None:
-        """A partial answer understates occupancy, which is what overwrites codes."""
+        """Calling an unanswered index empty is what overwrites codes."""
         lock = zigbee2mqtt_lock_connected
 
-        async def _read(slot_num: int, get_topic: str) -> SlotCredential | None:
-            return None if slot_num == 2 else SlotCredential.empty()
+        async def _read(slot_num: int, get_topic: str) -> SlotCredential:
+            return (
+                SlotCredential.unreadable() if slot_num == 2 else SlotCredential.empty()
+            )
 
         with (
             patch.object(
@@ -865,27 +916,41 @@ class TestOccupiedIndices:
             patch.object(lock, "_get_topic", return_value="topic/get"),
             patch.object(lock, "_async_read_slot", side_effect=_read),
         ):
-            assert await lock.async_get_occupied_indices(3) is None
+            codes = await lock.async_get_usercodes(range(1, 4))
+            assert codes[2] is SlotCredential.unreadable()
+            assert codes[1].is_empty and codes[3].is_empty
 
-    async def test_unknown_when_disconnected(
+    async def test_raises_when_disconnected_rather_than_answering_empty(
         self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
     ) -> None:
-        """A lock that cannot be reached reports unknown, never empty."""
-        lock = zigbee2mqtt_lock_connected
-        with patch.object(
-            lock, "async_is_integration_connected", new=AsyncMock(return_value=False)
-        ):
-            assert await lock.async_get_occupied_indices(3) is None
+        """A lock that cannot be reached must not answer at all.
 
-    async def test_unknown_without_a_get_topic(
+        Raising is what makes occupancy read as unknown; answering with
+        nothing would read as an empty lock.
+        """
+        lock = zigbee2mqtt_lock_connected
+        with (
+            patch.object(
+                lock,
+                "async_is_integration_connected",
+                new=AsyncMock(return_value=False),
+            ),
+            pytest.raises(LockDisconnected),
+        ):
+            await lock.async_get_usercodes(range(1, 4))
+
+    async def test_raises_without_a_get_topic(
         self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
     ) -> None:
         """No topic means no question can be asked, which is not an empty lock."""
         lock = zigbee2mqtt_lock_connected
         with (
             patch.object(
-                lock, "async_is_integration_connected", new=AsyncMock(return_value=True)
+                lock,
+                "async_is_integration_connected",
+                new=AsyncMock(return_value=True),
             ),
             patch.object(lock, "_get_topic", return_value=None),
+            pytest.raises(LockDisconnected),
         ):
-            assert await lock.async_get_occupied_indices(3) is None
+            await lock.async_get_usercodes(range(1, 4))

@@ -558,10 +558,12 @@ def test_parse_pin_response_list_bytes() -> None:
 
 
 def test_parse_pin_response_unknown_format() -> None:
-    """Test parsing unknown response format returns Available/empty."""
-    status, pin = ZHALock._parse_pin_response("unexpected")
-    assert status == DoorLock.UserStatus.Available
-    assert pin == ""
+    """An unrecognized response is not an answer.
+
+    Reporting it as ``Available`` would say "this slot is free" on the
+    strength of a reply that was never understood.
+    """
+    assert ZHALock._parse_pin_response("unexpected") is None
 
 
 # ---------------------------------------------------------------------------
@@ -909,8 +911,9 @@ async def test_occupied_indices_sees_slots_no_entry_manages(
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
-    assert await zha_lock.async_get_occupied_indices(5) == frozenset({4})
-    # The managed-slot read cannot see it, which is why occupancy is separate.
+    codes = await zha_lock.async_get_usercodes(range(1, 6))
+    assert codes[4].is_present
+    # The default scope cannot see it, which is what the scope argument is for.
     assert 4 not in await zha_lock.async_get_usercodes()
 
 
@@ -928,7 +931,8 @@ async def test_occupied_indices_stops_at_the_limit(
         )()
     )
 
-    assert await zha_lock.async_get_occupied_indices(3) == frozenset()
+    codes = await zha_lock.async_get_usercodes(range(1, 4))
+    assert all(credential.is_empty for credential in codes.values())
     assert cluster.get_pin_code.await_count == 3
 
 
@@ -954,7 +958,11 @@ async def test_occupied_indices_unknown_when_one_index_fails(
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
-    assert await zha_lock.async_get_occupied_indices(3) is None
+    codes = await zha_lock.async_get_usercodes(range(1, 4))
+    # Unreadable, not empty: the index holds something we could not read, and
+    # calling that empty is what lets a real credential be overwritten.
+    assert codes[2] is SlotCredential.unreadable()
+    assert codes[1].is_empty and codes[3].is_empty
 
 
 async def test_occupied_indices_counts_a_write_only_slot(
@@ -971,4 +979,27 @@ async def test_occupied_indices_counts_a_write_only_slot(
         )()
     )
 
-    assert await zha_lock.async_get_occupied_indices(2) == frozenset({1, 2})
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+    assert codes[1] is SlotCredential.unreadable()
+    assert codes[2] is SlotCredential.unreadable()
+
+
+async def test_unparseable_response_is_unreadable_not_empty(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A reply we cannot parse is not an answer that the slot is free.
+
+    Calling it empty would tell sync the slot is confirmed cleared, and tell
+    allocation the index is available -- both from a response nothing
+    understood.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(return_value="unexpected shape")
+
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+
+    assert codes[1] is SlotCredential.unreadable()
+    assert codes[2] is SlotCredential.unreadable()

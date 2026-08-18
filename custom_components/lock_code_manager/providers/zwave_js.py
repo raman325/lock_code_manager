@@ -8,7 +8,7 @@ provider's role in the data flow.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -259,21 +259,7 @@ class ZWaveJSLock(BaseLock):
             return SlotCredential.unreadable()
         return SlotCredential.known(code)
 
-    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
-        """
-        Report occupancy from the node read, which already covers every user.
-
-        ``async_get_users`` is not scoped to the slots Lock Code Manager
-        manages here, so a code programmed by hand is already in the answer.
-        """
-        return frozenset(
-            credential.slot
-            for user in await self.async_get_users()
-            for credential in user.pin_credentials
-            if credential.is_present and credential.slot <= limit
-        )
-
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read every user and all of their credentials from the lock.
 
@@ -287,6 +273,10 @@ class ZWaveJSLock(BaseLock):
         extra read. Z-Wave credential types with no domain equivalent
         (BLE, UWB, DESFIRE, unspecified/eye/hand biometrics) are
         dropped.
+
+        ``slots`` is ignored: the node read covers every user in one call,
+        so narrowing the question would save nothing. The projection bounds
+        the answer.
 
         Uses the unified ``access_control`` API which dispatches to UC
         or U3C internally per node-zwave-js v15.24.3+. A User Code CC
@@ -330,7 +320,9 @@ class ZWaveJSLock(BaseLock):
             )
         return list(users_by_id.values())
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """
         Project to slots, then rescue occupied slots the unified read left valueless.
 
@@ -340,7 +332,7 @@ class ZWaveJSLock(BaseLock):
         from the value database must not redirect which user a write
         targets. Read-repair belongs to the read.
         """
-        codes = await super().async_get_usercodes()
+        codes = await super().async_get_usercodes(slots)
         return self._overlay_uc_occupancy(codes)
 
     def _overlay_uc_occupancy(

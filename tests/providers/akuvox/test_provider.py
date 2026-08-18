@@ -1048,7 +1048,9 @@ async def test_occupied_indices_sees_tags_no_entry_manages(
     with patch.object(akuvox_lock, "_async_list_users", AsyncMock(return_value=users)):
         # The untagged user claims no slot: an Akuvox user is addressed by its
         # own identifier, not by a slot number.
-        assert await akuvox_lock.async_get_occupied_indices(10) == frozenset({1, 7})
+        codes = await akuvox_lock.async_get_usercodes(range(1, 11))
+    assert codes[1].is_present
+    assert codes[7].is_present
 
 
 async def test_occupied_indices_ignores_users_from_elsewhere(
@@ -1060,4 +1062,23 @@ async def test_occupied_indices_ignores_users_from_elsewhere(
         {"name": "lcm:4:FromCloud", "source_type": "9", "private_pin": "5678"},
     ]
     with patch.object(akuvox_lock, "_async_list_users", AsyncMock(return_value=users)):
-        assert await akuvox_lock.async_get_occupied_indices(10) == frozenset({1})
+        codes = await akuvox_lock.async_get_usercodes(range(1, 11))
+    assert codes[1].is_present
+    assert codes[4].is_empty
+
+
+async def test_list_users_without_a_user_list_is_an_error(
+    akuvox_lock: AkuvoxLock,
+) -> None:
+    """A response carrying no user list is a shape we do not understand.
+
+    Reading it as a device with no users would report every slot as free,
+    which is the answer that gets a real credential overwritten.
+    """
+    with (
+        patch.object(
+            akuvox_lock, "async_call_service", AsyncMock(return_value={"ok": True})
+        ),
+        pytest.raises(LockCodeManagerError, match="no 'users' key"),
+    ):
+        await akuvox_lock._async_list_users()

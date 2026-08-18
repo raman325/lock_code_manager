@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 import logging
 from typing import Literal, TypedDict
@@ -105,15 +106,7 @@ class VirtualLock(BaseLock):
         self._data.pop(slot_key)
         return True
 
-    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
-        """Report every stored slot, managed by this entry or not."""
-        return frozenset(
-            slot_num
-            for key in self._data
-            if (slot_num := parse_slot_num(key)) is not None and slot_num <= limit
-        )
-
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Return users by reading all stored and managed slots.
 
@@ -123,7 +116,7 @@ class VirtualLock(BaseLock):
         like the lock-reset config flow step can detect codes not managed
         by Lock Code Manager.
         """
-        managed_slots = self.managed_slots
+        managed_slots = self.managed_slots if slots is None else set(slots)
         stored_slots = set()
         for k in self._data:
             slot_num = parse_slot_num(k)

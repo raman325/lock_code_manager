@@ -8,7 +8,7 @@ See ARCHITECTURE.md for the provider interface contract.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -1339,13 +1339,16 @@ class BaseLock:
         return bool(changed)
 
     async def _project_users_to_slots(
-        self, credential_type: CredentialType
+        self,
+        credential_type: CredentialType,
+        slots: Collection[int] | None = None,
     ) -> dict[int, SlotCredential]:
         """
         Project the lock's users to a slot -> ``SlotCredential`` map.
 
         Every managed slot is present even when empty: the projection
-        starts from ``managed_slots`` mapped to ``SlotCredential.empty()``
+        starts from ``slots`` -- or ``managed_slots`` when the caller names
+        none -- mapped to ``SlotCredential.empty()``
         and then overlays the credentials of ``credential_type`` read via
         ``async_get_users``. This preserves the slot-keyed contract the
         coordinator, sync manager, and slot entities depend on -- a
@@ -1371,17 +1374,20 @@ class BaseLock:
         (do users configure "PIN slots 1-10" and "password slots 1-5"
         separately, or is each slot polymorphic?).
         """
-        codes = {slot: SlotCredential.empty() for slot in self.managed_slots}
+        scope = self.managed_slots if slots is None else slots
+        codes = {slot: SlotCredential.empty() for slot in scope}
         codes.update(
             {
                 credential.slot: credential.state
-                for user in await self.async_get_users()
+                for user in await self.async_get_users(slots)
                 for credential in user.credentials_of_type(credential_type)
             }
         )
         return codes
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """
         Return the slot -> ``SlotCredential`` map for Personal Identification Numbers.
 
@@ -1389,8 +1395,15 @@ class BaseLock:
         ``_project_users_to_slots``; preserved as a stable name because
         the coordinator, sync manager, and slot entities are all
         Personal Identification Number-scoped today.
+
+        ``slots`` widens the read past the slots this integration manages,
+        for callers that need to know what the lock holds rather than what
+        this integration put there. Everything read-repairing happens on
+        this side of the seam, so a caller asking a wider question gets the
+        repairs too -- which is why occupancy is derived from here and not
+        read separately.
         """
-        return await self._project_users_to_slots(CredentialType.PIN)
+        return await self._project_users_to_slots(CredentialType.PIN, slots)
 
     @final
     async def _get_cached_capabilities(self) -> LockCapabilities:
@@ -1777,7 +1790,7 @@ class BaseLock:
             "Override to delete a credential from the lock.",
         )
 
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read every user and their credentials from the lock.
 
@@ -1785,35 +1798,23 @@ class BaseLock:
         providers map their integration's user list; slot-only providers
         project each occupied slot to a single-credential user via
         ``user_from_slot``.
+
+        ``slots`` names which credential indices to report on; ``None``
+        means the slots this integration manages. Providers that read the
+        whole lock in one call may ignore it -- the projection bounds the
+        answer. Providers that must ask the lock about one index at a time
+        MUST honour it, or a caller widening the question walks the lock's
+        entire advertised capacity one round trip at a time.
+
+        A wide scope is the caller's to justify. The whole read is one
+        rate-limited operation, so on a per-index provider it holds the
+        operation lock for every round trip it makes -- blocking the poll
+        and any set or clear behind it for as long as that takes.
         """
         self._raise_not_implemented(
             "async_get_users",
             "Override to read users and credentials from the lock.",
         )
-
-    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
-        """
-        Return which Personal Identification Number indices in 1..limit are taken.
-
-        Reports what is on the DEVICE, whoever put it there. That is what
-        separates this from ``async_get_users``, which is deliberately scoped
-        to the users Lock Code Manager manages because it also decides where
-        writes land. A code programmed by hand occupies an index just as
-        firmly as one this integration wrote, so allocation needs the wider
-        view or it will hand a new user somebody else's index.
-
-        ``limit`` bounds the work. Locks that can only be asked about one
-        index at a time would otherwise have to walk their entire advertised
-        capacity to report a handful of numbers; a caller that finds the
-        window too full to satisfy it asks again with a wider one.
-
-        ``None`` means the lock could not say, and callers must treat it as
-        unknown rather than empty -- issuing an index against a lock that
-        never answered is how a real credential gets overwritten. The base
-        returns ``None`` so a provider that cannot answer refuses by default
-        rather than by omission.
-        """
-        return None
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """
@@ -1837,14 +1838,32 @@ class BaseLock:
         self, limit: int
     ) -> frozenset[int] | None:
         """
-        Rate-limited wrapper around async_get_occupied_indices().
+        Return which slot numbers in 1..limit this lock holds, or None.
 
-        A failed read becomes ``None`` rather than an exception: unknown is
-        already a value this returns, and every caller has to handle it.
+        These are slot numbers, not device credential indices. The two
+        coincide on every provider where allocation consults this, because
+        it only consults locks whose credential index IS the slot number
+        (``credential_index_follows_slot``). Where they diverge -- Matter,
+        which allocates its own index -- the number here is the Lock Code
+        Manager slot recovered from the user's tag, and allocation knows not
+        to treat it as a device index.
+
+        Derived from ``async_get_usercodes`` rather than read separately, so
+        that whatever a provider does to make its read honest -- Z-Wave's
+        User Code CC occupancy overlay, most of all -- applies here too. A
+        second read path would have to repeat every one of those repairs, and
+        the one it missed would report an occupied slot as free.
+
+        An index whose value could not be read still counts as occupied: it
+        holds something, and over-reserving costs a user a slot number, while
+        under-reserving costs them the code on their door.
+
+        ``None`` means the lock could not be read at all, which callers must
+        treat as unknown rather than free.
         """
         try:
-            return await self._execute_rate_limited(
-                "get", partial(self.async_get_occupied_indices, limit)
+            codes = await self._execute_rate_limited(
+                "get", partial(self.async_get_usercodes, range(1, limit + 1))
             )
         except LockCodeManagerError as err:
             _LOGGER.debug(
@@ -1853,6 +1872,11 @@ class BaseLock:
                 err,
             )
             return None
+        return frozenset(
+            slot
+            for slot, credential in codes.items()
+            if credential.is_present and 1 <= slot <= limit
+        )
 
     @final
     async def async_call_service(

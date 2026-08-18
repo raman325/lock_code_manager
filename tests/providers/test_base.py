@@ -173,49 +173,64 @@ async def test_describe_link_health_defaults_to_none(hass: HomeAssistant) -> Non
     assert lock.describe_link_health() is None
 
 
-async def test_occupied_indices_defaults_to_unknown(hass: HomeAssistant) -> None:
-    """A provider that cannot report occupancy refuses by default.
-
-    Returning an empty set instead would make every unimplemented provider
-    look like an empty lock, and allocation would issue indices over codes it
-    never asked about.
-    """
+def _bare_lock(hass: HomeAssistant, unique_id: str) -> MockLCMLock:
+    """Build a reachable lock whose read can be stubbed."""
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
     lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "test",
-        "test_lock_occupancy_default",
-        config_entry=config_entry,
+        "lock", "test", unique_id, config_entry=config_entry
     )
-    lock = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
-
-    assert await lock.async_get_occupied_indices(10) is None
-    assert await lock.async_internal_get_occupied_indices(10) is None
+    return MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
 
 
-async def test_internal_occupied_indices_turns_a_failed_read_into_unknown(
+async def test_occupied_indices_counts_everything_the_lock_holds(
     hass: HomeAssistant,
 ) -> None:
-    """A provider error is unknown, which callers already have to handle."""
-    entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "test",
-        "test_lock_occupancy_error",
-        config_entry=config_entry,
-    )
-    lock = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+    """Occupancy is derived from the read, so every repair the read does counts.
+
+    An index whose value could not be read still holds something. Reserving
+    it costs a user a slot number; handing it out costs them the code on
+    their door.
+    """
+    lock = _bare_lock(hass, "test_lock_occupancy_derivation")
+
+    codes = {
+        1: SlotCredential.known("1234"),
+        2: SlotCredential.empty(),
+        3: SlotCredential.unreadable(),
+        12: SlotCredential.known("9999"),
+    }
+    with patch.object(lock, "async_get_usercodes", AsyncMock(return_value=codes)):
+        # 12 is outside the window the caller asked about.
+        assert await lock.async_internal_get_occupied_indices(10) == frozenset({1, 3})
+
+
+async def test_occupied_indices_is_unknown_when_the_lock_cannot_be_read(
+    hass: HomeAssistant,
+) -> None:
+    """A lock that cannot be reached reports unknown, never empty."""
+    lock = _bare_lock(hass, "test_lock_occupancy_error")
 
     with patch.object(
         lock,
-        "async_get_occupied_indices",
+        "async_get_usercodes",
         AsyncMock(side_effect=LockDisconnected("asleep")),
     ):
         assert await lock.async_internal_get_occupied_indices(10) is None
+
+
+async def test_occupied_indices_asks_only_about_the_window(
+    hass: HomeAssistant,
+) -> None:
+    """The read is scoped, so a per-index lock is not walked end to end."""
+    lock = _bare_lock(hass, "test_lock_occupancy_window")
+
+    read = AsyncMock(return_value={})
+    with patch.object(lock, "async_get_usercodes", read):
+        await lock.async_internal_get_occupied_indices(3)
+
+    assert list(read.await_args.args[0]) == [1, 2, 3]
 
 
 class _PushSetupRaisesLock(MockLCMLock):

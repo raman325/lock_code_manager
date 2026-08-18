@@ -303,4 +303,5 @@ async def test_occupied_indices_reports_stored_slots(virtual_lock: VirtualLock) 
     virtual_lock._data["3"] = {"code": "1234", "name": "programmed by hand"}
     virtual_lock._data["11"] = {"code": "5678", "name": "beyond the window"}
 
-    assert await virtual_lock.async_get_occupied_indices(10) == frozenset({3})
+    codes = await virtual_lock.async_get_usercodes(range(1, 11))
+    assert codes[3].is_present

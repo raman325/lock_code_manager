@@ -1086,7 +1086,9 @@ async def test_occupied_indices_sees_tags_no_entry_manages(
 
     # Slot 7 is tagged but unmanaged; the untagged code claims no slot at all,
     # because a Schlage code is addressed by its own identifier.
-    assert await schlage_lock.async_get_occupied_indices(10) == frozenset({1, 7})
+    codes = await schlage_lock.async_get_usercodes(range(1, 11))
+    assert codes[1].is_present
+    assert codes[7].is_present
 
 
 async def test_occupied_indices_respects_the_limit(
@@ -1105,4 +1107,6 @@ async def test_occupied_indices_respects_the_limit(
         hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=mock_response)
     )
 
-    assert await schlage_lock.async_get_occupied_indices(5) == frozenset({1})
+    codes = await schlage_lock.async_get_usercodes(range(1, 6))
+    assert codes[1].is_present
+    assert 9 not in codes

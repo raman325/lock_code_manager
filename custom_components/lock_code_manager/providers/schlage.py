@@ -19,6 +19,7 @@ service returns masked PINs (``****``), so occupied slots report
 
 from __future__ import annotations
 
+from collections.abc import Collection
 import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -293,30 +294,7 @@ class SchlageLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
-    async def async_get_occupied_indices(self, limit: int) -> frozenset[int] | None:
-        """
-        Report the slot numbers this lock's tagged codes claim.
-
-        A Schlage code is addressed by its own identifier, not by a slot
-        number -- the slot number lives in the code's NAME, put there by this
-        integration. So an untagged code, however it was programmed, occupies
-        no slot number and cannot collide with one allocation issues. What it
-        does consume is one of the lock's finite code entries, which is a
-        matter of capacity rather than of which index is free.
-
-        Reading the tags still matters: a tag left behind by a configuration
-        that has since been removed claims a slot number nothing else knows
-        about.
-        """
-        codes = await self._async_get_codes()
-        return frozenset(
-            slot_num
-            for code_data in codes.values()
-            if (slot_num := _parse_tag(code_data.get("name", ""))[0]) is not None
-            and slot_num <= limit
-        )
-
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Return users by reading all tagged codes from the Schlage lock.
 
@@ -327,7 +305,7 @@ class SchlageLock(BaseLock):
         fall within the managed set are returned. Auto-tagging of unmanaged
         codes is handled separately by ``_async_tag_unmanaged_codes()``.
         """
-        managed_slots = self.managed_slots
+        managed_slots = self.managed_slots if slots is None else set(slots)
         if not managed_slots:
             return []
 
