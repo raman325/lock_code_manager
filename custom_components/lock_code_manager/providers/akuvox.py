@@ -124,15 +124,20 @@ class AkuvoxLock(BaseLock):
                 f"Malformed list_users entity response from {entity_id}: "
                 f"expected dict, got {type(entity_response).__name__}"
             )
-        # A response with no user list at all is a shape this does not
+        # A response with no usable user list is a shape this does not
         # understand, not a device with no users. Returning an empty list
         # would say "every slot is free", which is the answer that gets a
-        # real credential overwritten.
-        if "users" not in entity_response:
+        # real credential overwritten. The type is checked as well as the
+        # key: a wrongly typed value would otherwise surface as a bare
+        # TypeError from the caller's loop, past every handler that knows
+        # what to do with this integration's own errors.
+        users = entity_response.get("users")
+        if not isinstance(users, list):
             raise LockCodeManagerProviderError(
-                f"Malformed list_users entity response from {entity_id}: no 'users' key"
+                f"Malformed list_users entity response from {entity_id}: "
+                f"expected a list of users, got {type(users).__name__}"
             )
-        return entity_response["users"]
+        return users
 
     async def _async_add_user(self, name: str, pin: str) -> None:
         """Add a new user with the given name and PIN."""

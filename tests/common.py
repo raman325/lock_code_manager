@@ -206,9 +206,12 @@ class MockLCMLock(BaseLock):
         codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
         if slots is None:
             return codes
-        # Answer about exactly what was asked, the way a real lock does: a slot
-        # in the scope that holds nothing is empty, not absent.
-        return {slot: codes.get(slot, SlotCredential.empty()) for slot in slots}
+        # Mirrors the base projection, including the part that matters: a slot
+        # in the scope that holds nothing is empty, and a slot the lock holds
+        # OUTSIDE the scope is still reported. Answering with exactly the
+        # scope would model the one shape where a caller's own bounds check
+        # is a no-op.
+        return {**dict.fromkeys(slots, SlotCredential.empty()), **codes}
 
 
 @dataclass(repr=False, eq=False)

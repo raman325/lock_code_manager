@@ -305,3 +305,6 @@ async def test_occupied_indices_reports_stored_slots(virtual_lock: VirtualLock) 
 
     codes = await virtual_lock.async_get_usercodes(range(1, 11))
     assert codes[3].is_present
+    # Stored slots outside the scope are reported too -- the projection seeds
+    # the scope but never drops what the lock actually holds.
+    assert codes[11].is_present

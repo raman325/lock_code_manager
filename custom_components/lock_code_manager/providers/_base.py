@@ -1846,10 +1846,11 @@ class BaseLock:
         These are slot numbers, not device credential indices. The two
         coincide on every provider where allocation consults this, because
         it only consults locks whose credential index IS the slot number
-        (``credential_index_follows_slot``). Where they diverge -- Matter,
-        which allocates its own index -- the number here is the Lock Code
-        Manager slot recovered from the user's tag, and allocation knows not
-        to treat it as a device index.
+        (``credential_index_follows_slot``). Matter is the exception both
+        ways: it allocates its own index, so allocation does not consult it,
+        and the number reported here is the Lock Code Manager slot from the
+        user's tag -- or, for a user this integration never tagged, the raw
+        Matter credential index standing in for one.
 
         Derived from ``async_get_usercodes`` rather than read separately, so
         that whatever a provider does to make its read honest -- Z-Wave's

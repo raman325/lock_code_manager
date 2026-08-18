@@ -1067,18 +1067,23 @@ async def test_occupied_indices_ignores_users_from_elsewhere(
     assert codes[4].is_empty
 
 
-async def test_list_users_without_a_user_list_is_an_error(
-    akuvox_lock: AkuvoxLock,
+@pytest.mark.parametrize("users", [None, {"1": "a"}, "nope"])
+async def test_list_users_without_a_usable_user_list_is_an_error(
+    akuvox_lock: AkuvoxLock, users: object
 ) -> None:
-    """A response carrying no user list is a shape we do not understand.
+    """A response carrying no usable user list is a shape we do not understand.
 
     Reading it as a device with no users would report every slot as free,
-    which is the answer that gets a real credential overwritten.
+    which is the answer that gets a real credential overwritten. A wrongly
+    typed value has to raise for the same reason -- and has to raise the
+    integration's own error, or it escapes every handler as a bare TypeError.
     """
     with (
         patch.object(
-            akuvox_lock, "async_call_service", AsyncMock(return_value={"ok": True})
+            akuvox_lock,
+            "async_call_service",
+            AsyncMock(return_value={"users": users}),
         ),
-        pytest.raises(LockCodeManagerError, match="no 'users' key"),
+        pytest.raises(LockCodeManagerError, match="expected a list of users"),
     ):
         await akuvox_lock._async_list_users()

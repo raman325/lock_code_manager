@@ -346,11 +346,13 @@ class ZHALock(BaseLock):
         cluster answers a single index per round trip, so ``slots`` bounds
         the work and must be honoured.
 
-        Anything the lock will not put a value to -- a failed read, a
-        response shape this cannot parse, an enabled slot whose code the
-        lock withholds -- is ``unreadable``, never ``empty``. ``empty``
-        means confirmed cleared, and confirming that wrongly makes sync
-        reprogram a slot that already holds a code.
+        ``empty`` means confirmed cleared, and only the ``AVAILABLE`` status
+        says that. Everything else the lock will not put a readable value to
+        -- a failed read, a response shape this cannot parse, a slot whose
+        code the lock withholds, a slot the ZCL calls ``DISABLED`` (occupied
+        but not currently accepted) -- is ``unreadable``. Confirming a clear
+        wrongly makes sync reprogram a slot that already holds a code, and
+        tells allocation an occupied credential index is free.
         """
         cluster = await self._get_connected_cluster()
         scope = self.managed_slots if slots is None else slots
@@ -387,10 +389,17 @@ class ZHALock(BaseLock):
                     slot_num,
                 )
                 slot_states[slot_num] = SlotCredential.unreadable()
-            elif parsed[0] != DoorLock.UserStatus.Enabled:
+                continue
+
+            user_status, pin_code = parsed
+            # AVAILABLE is the only status that means the slot holds nothing.
+            # DISABLED is the ZCL's occupied-but-inactive: there is a code
+            # there, the lock just will not accept it right now. NOT_SUPPORTED
+            # is not a free slot either -- a write to it fails.
+            if user_status == DoorLock.UserStatus.Available:
                 slot_states[slot_num] = SlotCredential.empty()
-            elif parsed[1]:
-                slot_states[slot_num] = SlotCredential.known(parsed[1])
+            elif pin_code:
+                slot_states[slot_num] = SlotCredential.known(pin_code)
             else:
                 slot_states[slot_num] = SlotCredential.unreadable()
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]

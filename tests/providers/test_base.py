@@ -1,6 +1,7 @@
 """Test base class."""
 
 import asyncio
+from collections.abc import Collection
 from datetime import datetime, timedelta
 import logging
 import time
@@ -173,15 +174,43 @@ async def test_describe_link_health_defaults_to_none(hass: HomeAssistant) -> Non
     assert lock.describe_link_health() is None
 
 
-def _bare_lock(hass: HomeAssistant, unique_id: str) -> MockLCMLock:
-    """Build a reachable lock whose read can be stubbed."""
+def _lock_args(hass: HomeAssistant, unique_id: str) -> tuple:
+    """Build the positional arguments every provider is constructed with."""
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
     lock_entity = entity_reg.async_get_or_create(
         "lock", "test", unique_id, config_entry=config_entry
     )
-    return MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+    return (hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+
+def _bare_lock(hass: HomeAssistant, unique_id: str) -> MockLCMLock:
+    """Build a reachable lock whose read can be stubbed."""
+    return MockLCMLock(*_lock_args(hass, unique_id))
+
+
+class _ScopedReadLock(MockLCMLock):
+    """A lock that can only answer about the indices it was asked about.
+
+    The shape of ZHA and Zigbee2MQTT, which cost one device round trip per
+    index. For these the scope is not an optimization -- a read that loses it
+    answers a different question entirely.
+    """
+
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """Answer about exactly the scope, and nothing else."""
+        scope = self.managed_slots if slots is None else slots
+        return {
+            slot: (
+                SlotCredential.known(self.codes[slot])
+                if slot in self.codes
+                else SlotCredential.empty()
+            )
+            for slot in scope
+        }
 
 
 async def test_occupied_indices_reads_a_real_provider_end_to_end(
@@ -190,13 +219,18 @@ async def test_occupied_indices_reads_a_real_provider_end_to_end(
     """The derivation runs against a provider read, not a stubbed one.
 
     Every other test here patches ``async_get_usercodes``, which proves the
-    filtering and nothing about the seam it sits on. This one drives a
-    provider that implements the scope, so a signature that cannot accept it
-    fails here rather than in whatever lands next.
+    filtering and nothing about the seam under it. This drives a provider
+    that can only answer about the indices it was given, so a derivation that
+    dropped the scope would ask about the slots this entry manages -- none --
+    and report an empty lock.
     """
-    lock = _bare_lock(hass, "test_lock_occupancy_end_to_end")
+    lock = _ScopedReadLock(
+        *_lock_args(hass, "test_lock_occupancy_end_to_end"),
+    )
     lock.codes = {2: "1234", 9: "5678"}
 
+    assert not lock.managed_slots
+    # 9 is real but outside the window, so it is not an answer to this question.
     assert await lock.async_internal_get_occupied_indices(5) == frozenset({2})
 
 

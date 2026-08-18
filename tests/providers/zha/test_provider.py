@@ -1004,3 +1004,56 @@ async def test_unparseable_response_is_unreadable_not_empty(
 
     assert codes[1] is SlotCredential.unreadable()
     assert codes[2] is SlotCredential.unreadable()
+
+
+@pytest.mark.parametrize(
+    ("user_status", "code"),
+    [
+        (DoorLock.UserStatus.Disabled, "1234"),
+        (DoorLock.UserStatus.Disabled, ""),
+        (DoorLock.UserStatus.Not_Supported, ""),
+    ],
+)
+async def test_only_available_means_the_slot_is_free(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+    user_status: int,
+    code: str,
+) -> None:
+    """DISABLED holds a code the lock is refusing, not an empty slot.
+
+    The ZCL has four statuses and only AVAILABLE means nothing is there.
+    Reading DISABLED as cleared tells sync to reprogram a slot that already
+    holds a code, and tells allocation the index is free to hand out.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type("Response", (), {"user_status": user_status, "code": code})()
+    )
+
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+
+    assert codes[1].is_present
+    assert codes[2].is_present
+
+
+async def test_available_is_an_empty_slot(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """The one status that does mean cleared still reads as cleared."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
+        )()
+    )
+
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+
+    assert codes[1].is_empty
+    assert codes[2].is_empty
