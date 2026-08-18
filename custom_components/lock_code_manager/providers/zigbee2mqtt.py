@@ -115,6 +115,7 @@ class Zigbee2MQTTLock(BaseLock):
     _last_users_states: dict[int, SlotCredential] = field(
         init=False, default_factory=dict
     )
+    _subscribed_topic: str | None = field(init=False, default=None)
 
     @property
     def domain(self) -> str:
@@ -370,19 +371,27 @@ class Zigbee2MQTTLock(BaseLock):
                         future.set_result(SlotCredential.empty())
 
     async def _async_ensure_device_subscription(self) -> None:
-        """Subscribe to the Z2M device topic; idempotent."""
-        if self._push_unsubs:
-            return
-
+        """Subscribe to the Z2M device topic; idempotent and drift-aware."""
         if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
 
         topic = self._get_topic()
         if not topic:
+            if self._push_unsubs:
+                # Resolution is transiently unavailable; keep the existing
+                # subscription rather than tearing down a working one.
+                return
             raise LockDisconnected(
                 f"Cannot subscribe for {self.lock.entity_id} — "
-                "not a Zigbee2MQTT device or discovery topic unavailable"
+                "device topic not resolvable from MQTT discovery data"
             )
+
+        if self._push_unsubs and self._subscribed_topic == topic:
+            return
+
+        # Topic changed (rename / bridge migration) or first subscribe.
+        self._clear_push_unsubs()
+        self._subscribed_topic = None
 
         def message_received(msg: ReceiveMessage) -> None:
             """Handle incoming MQTT messages (may run off the event loop)."""
@@ -410,6 +419,7 @@ class Zigbee2MQTTLock(BaseLock):
                 f"Failed to subscribe to MQTT for {self.lock.entity_id}"
             ) from err
         self._register_push_unsub(unsub)
+        self._subscribed_topic = topic
         LOGGER.debug("Subscribed to MQTT topic %s for %s", topic, self.lock.entity_id)
 
     @callback
@@ -419,10 +429,10 @@ class Zigbee2MQTTLock(BaseLock):
 
         Primary subscribe is ``await`` in ``async_setup``.
         """
-        if self._push_unsubs:
+        topic = self._get_topic()
+        if self._push_unsubs and (topic is None or self._subscribed_topic == topic):
             return
 
-        topic = self._get_topic()
         if not topic:
             LOGGER.debug(
                 "Cannot subscribe to push updates for %s - no topic",
@@ -466,6 +476,7 @@ class Zigbee2MQTTLock(BaseLock):
         """Unsubscribe from MQTT updates."""
         had_subscription = bool(self._push_unsubs)
         self._clear_push_unsubs()
+        self._subscribed_topic = None
         if had_subscription:
             LOGGER.debug("Unsubscribed from MQTT for %s", self.lock.entity_id)
 
@@ -632,6 +643,18 @@ class Zigbee2MQTTLock(BaseLock):
 
         if not await self.async_is_device_available():
             raise LockDisconnected("Device not available")
+
+        # Renames/bridge migrations with no disconnect self-heal here: the
+        # 5-minute poll re-checks that the push subscription still matches
+        # the currently resolved topic.
+        try:
+            await self._async_ensure_device_subscription()
+        except LockDisconnected as err:
+            LOGGER.debug(
+                "Lock %s: could not refresh push subscription before poll: %s",
+                self.lock.entity_id,
+                err,
+            )
 
         get_topic = self._get_topic("get")
         if not get_topic:

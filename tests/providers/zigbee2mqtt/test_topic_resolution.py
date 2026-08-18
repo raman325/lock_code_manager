@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from homeassistant.components.mqtt import debug_info as mqtt_debug_info
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -11,7 +13,12 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
 
-from .conftest import Z2M_FULL_TOPIC, _minimal_lock, async_discover_z2m_lock
+from .conftest import (
+    Z2M_FULL_TOPIC,
+    Z2M_TOPIC_NAME,
+    _minimal_lock,
+    async_discover_z2m_lock,
+)
 
 
 def _build_lock(hass: HomeAssistant, lock_entity: er.RegistryEntry) -> Zigbee2MQTTLock:
@@ -96,3 +103,46 @@ async def test_resolve_device_topic_non_z2m_device(
 ) -> None:
     """A device without a zigbee2mqtt_* identifier never resolves a topic."""
     assert zigbee2mqtt_lock_wrong_identifier._resolve_device_topic() is None
+
+
+async def test_push_subscription_moves_on_topic_drift(
+    hass: HomeAssistant, mqtt_lock_discovered: er.RegistryEntry
+) -> None:
+    """A re-fired discovery with a new base topic moves the push subscription."""
+    lock = _build_lock(hass, mqtt_lock_discovered)
+    await lock._async_ensure_device_subscription()
+    assert lock._subscribed_topic == Z2M_FULL_TOPIC
+
+    # Bridge base topic changes (e.g. Z2M reconfigured); discovery re-fires.
+    await async_discover_z2m_lock(hass, base_topic="renamed_bridge")
+
+    lock.setup_push_subscription()
+    await hass.async_block_till_done()
+    assert lock._subscribed_topic == f"renamed_bridge/{Z2M_TOPIC_NAME}"
+
+
+async def test_push_subscription_kept_when_topic_transiently_unresolvable(
+    hass: HomeAssistant, mqtt_lock_discovered: er.RegistryEntry
+) -> None:
+    """If resolution transiently fails, the existing subscription is kept."""
+    lock = _build_lock(hass, mqtt_lock_discovered)
+    await lock._async_ensure_device_subscription()
+    assert lock._push_unsubs
+
+    with patch.object(lock, "_resolve_device_topic", return_value=None):
+        lock.setup_push_subscription()
+        await hass.async_block_till_done()
+
+    assert lock._push_unsubs
+    assert lock._subscribed_topic == Z2M_FULL_TOPIC
+
+
+async def test_teardown_clears_subscribed_topic(
+    hass: HomeAssistant, mqtt_lock_discovered: er.RegistryEntry
+) -> None:
+    """Teardown resets the recorded topic so re-setup subscribes fresh."""
+    lock = _build_lock(hass, mqtt_lock_discovered)
+    await lock._async_ensure_device_subscription()
+    lock.teardown_push_subscription()
+    assert lock._subscribed_topic is None
+    assert not lock._push_unsubs
