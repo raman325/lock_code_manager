@@ -75,7 +75,6 @@ class BaseLockCodeManagerEntity(Entity):
         self.ent_reg = ent_reg
 
         self._attr_translation_key = key
-        self._attr_translation_placeholders = {"slot_num": str(slot_num)}
 
         self._attr_device_info = build_slot_device_info(config_entry, slot_num)
 
@@ -338,10 +337,7 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
         # The lock therefore has to be named by the ENTITY. Sitting on the
         # slot device, one per lock, the slot number alone would name every
         # one of them the same thing.
-        self._attr_translation_placeholders = {
-            "slot_num": str(slot_num),
-            "lock_name": lock.display_name,
-        }
+        self._attr_translation_placeholders = {"lock_name": lock.display_name}
 
         self._attr_unique_id = build_slot_unique_id(
             self.base_unique_id, slot_num, self.key, lock.lock.entity_id
