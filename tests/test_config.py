@@ -462,8 +462,8 @@ def test_setting_the_name_re_keys_the_user() -> None:
 
     assert set(reloaded.users) == {"Bob"}
     assert "name" not in reloaded.users["Bob"]
-    assert reloaded.slot_for("Bob") == 1
-    assert reloaded.user("Alice") == {}
+    assert reloaded.assignment.slot("Bob") == 1
+    assert "Alice" not in reloaded.users
 
 
 def test_with_slot_field_set_updates_existing_field() -> None:

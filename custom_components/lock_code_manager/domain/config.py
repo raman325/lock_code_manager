@@ -59,12 +59,10 @@ class EntryConfig:
     # Derived once at construction: the instance is immutable and cached, and
     # the slot view is read per entry per lock on some paths.
     _by_slot: Mapping[int, Mapping[str, Any]] = field(init=False, repr=False)
-    _slot_of: Mapping[str, int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Build the slot-keyed projection and its reverse index."""
+        """Build the slot-keyed projection."""
         by_slot: dict[int, Mapping[str, Any]] = {}
-        slot_of: dict[str, int] = {}
         for name, user in self.users.items():
             slot_num = self.assignment.slot(name)
             if slot_num is None:
@@ -74,9 +72,7 @@ class EntryConfig:
             # Key LAST so it wins: a `name` surviving inside a user dict must
             # not shadow the identity this user is stored under.
             by_slot[slot_num] = MappingProxyType({**user, CONF_NAME: name})
-            slot_of[_identity(name)] = slot_num
         object.__setattr__(self, "_by_slot", MappingProxyType(by_slot))
-        object.__setattr__(self, "_slot_of", MappingProxyType(slot_of))
 
     @classmethod
     def empty(cls) -> EntryConfig:
@@ -170,18 +166,6 @@ class EntryConfig:
     def has_lock(self, lock_entity_id: str) -> bool:
         """Return True if this entry manages the given lock."""
         return lock_entity_id in self.locks
-
-    def user(self, name: str) -> Mapping[str, Any]:
-        """Return a user's configuration, or an empty mapping if absent."""
-        wanted = _identity(name)
-        return next(
-            (user for known, user in self.users.items() if _identity(known) == wanted),
-            _EMPTY_EXTRA,
-        )
-
-    def slot_for(self, name: str) -> int | None:
-        """Return the slot number a user occupies, or None if they hold none."""
-        return self._slot_of.get(_identity(name))
 
     def name_for(self, slot_num: int | str) -> str | None:
         """Return the user occupying a slot, or None if it is unoccupied."""
