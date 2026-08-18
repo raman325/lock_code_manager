@@ -1,4 +1,4 @@
-hypothesis>=6.165.7
+hypothesis>=6.165.9
 pylint-strict-informational>=0.1
 pytest>=9.0.3
 pytest-homeassistant-custom-component==0.13.355
