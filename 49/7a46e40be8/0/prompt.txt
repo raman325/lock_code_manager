@@ -1085,3 +1085,7 @@ do we need compatibility shims? will they be removed by the itme we are done? I 
 ---
 
 run review and identify any additional indirection we can remove
+
+---
+
+while we wait keep hunting for indirection (nested functions that should be flattened, unnecessary abstractions, etc.) and dead code
