@@ -14,6 +14,7 @@ from custom_components.lock_code_manager.config_flow import (
     LockCodeManagerFlowHandler,
     _async_query_locks,
     _LockQuery,
+    _LockQuerySkipped,
 )
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
@@ -41,6 +42,27 @@ from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, MockLCMLock
 GET_ALL_CODES_PATCH = (
     "custom_components.lock_code_manager.config_flow._async_query_locks"
 )
+
+
+def _holding(*occupied: int):
+    """Patch the lock read so it answers with exactly these slots occupied.
+
+    The scope is honoured, the way a per-index provider honours it, so a test
+    that widens the window sees the wider answer.
+    """
+
+    async def _read(self, slots=None):
+        scope = self.managed_slots if slots is None else slots
+        return {
+            slot: (
+                SlotCredential.known("0000")
+                if slot in occupied
+                else SlotCredential.empty()
+            )
+            for slot in scope
+        }
+
+    return patch.object(MockLCMLock, "async_get_usercodes", _read)
 
 
 def _answers(existing: dict[str, dict[int, SlotCredential]]):
@@ -147,7 +169,7 @@ async def _init_flow_to_user_step(hass: HomeAssistant) -> str:
     return result["flow_id"]
 
 
-async def test_config_flow_ui(hass: HomeAssistant):
+async def test_config_flow_ui(hass: HomeAssistant, mock_lock_config_entry):
     """Test UI based config flow with slot number incrementing correctly."""
     flow_id = await _start_ui_config_flow(hass)
 
@@ -178,17 +200,18 @@ async def test_config_flow_ui(hass: HomeAssistant):
             "User 3": {CONF_ENABLED: True, CONF_PIN: "9012"},
             "User 4": {CONF_ENABLED: True, CONF_PIN: "3456"},
         },
-        # Numbers the user never chose: the lowest free on the lock.
+        # Numbers the user never chose: the lowest free on the lock, which
+        # already holds codes at 1 and 2.
         CONF_SLOT_ASSIGNMENT: {
-            "user 1": 1,
-            "user 2": 2,
-            "user 3": 3,
-            "user 4": 4,
+            "user 1": 3,
+            "user 2": 4,
+            "user 3": 5,
+            "user 4": 6,
         },
     }
 
 
-async def test_config_flow_ui_error(hass: HomeAssistant):
+async def test_config_flow_ui_error(hass: HomeAssistant, mock_lock_config_entry):
     """Test error in UI based config flow."""
     flow_id = await _start_ui_config_flow(hass)
 
@@ -400,7 +423,9 @@ async def test_config_flow_two_entries_same_locks(
     assert result["type"] == "create_entry"
 
 
-async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
+async def test_config_flow_ui_scheduler_entity_excluded(
+    hass: HomeAssistant, mock_lock_config_entry
+):
     """Test that scheduler-component entities are rejected during config flow."""
     # Create a mock scheduler entity in registry
     ent_reg = er.async_get(hass)
@@ -437,7 +462,9 @@ async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
 # --- Existing-codes confirmation step tests ---
 
 
-async def test_ui_setup_allocates_around_existing_codes(hass: HomeAssistant):
+async def test_ui_setup_allocates_around_existing_codes(
+    hass: HomeAssistant, mock_lock_config_entry
+):
     """Setup skips slots that already hold a code instead of asking about them.
 
     There is no prompt because there is nothing to overwrite: the numbers are
@@ -481,35 +508,28 @@ async def test_ui_setup_allocates_around_existing_codes(hass: HomeAssistant):
     assert result["data"][CONF_SLOT_ASSIGNMENT] == {"alice": 3, "raman": 4}
 
 
-async def test_ui_setup_refuses_when_a_lock_cannot_be_read(hass: HomeAssistant):
+async def test_ui_setup_refuses_when_a_lock_cannot_be_read(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
     """A lock that did not answer makes occupancy unknown, and setup stops.
 
-    Unreadable is not free. Issuing a number here could put a user's code over
-    a credential programmed by hand on a lock that was merely unreachable.
+    Unreadable is not free. Issuing a number here could put a user's code
+    over a credential programmed by hand on a lock that was merely
+    unreachable.
     """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    async def _unreadable(hass, dev_reg, ent_reg, lock_entity_ids):
-        return [
-            _LockQuery(
-                lock_entity_id=lock,
-                managed=True,
-                credential_index_follows_slot=True,
-                codes=None,
-            )
-            for lock in lock_entity_ids
-        ]
-
-    with patch(GET_ALL_CODES_PATCH, side_effect=_unreadable):
-        flow_id = await _init_flow_to_user_step(hass)
-        await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
+    with patch.object(
+        MockLCMLock,
+        "async_get_usercodes",
+        AsyncMock(side_effect=LockDisconnected("asleep")),
+    ):
         result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "ui"}
+            flow_id, {CONF_NUM_USERS: 2}
         )
 
-    # Refused on the way in to the count form, not after names and PINs have
-    # been typed -- nothing collected there could change the answer.
+    # Refused before a single name or PIN was collected.
     assert result["type"] == "abort"
     assert result["reason"] == "occupancy_unknown"
     assert LOCK_1_ENTITY_ID in result["description_placeholders"]["locks"]
@@ -580,7 +600,9 @@ async def test_yaml_existing_codes_confirm_cancel(hass: HomeAssistant):
     assert result["reason"] == "existing_codes_cancelled"
 
 
-async def test_ui_no_existing_codes_skips_confirm(hass: HomeAssistant):
+async def test_ui_no_existing_codes_skips_confirm(
+    hass: HomeAssistant, mock_lock_config_entry
+):
     """UI path: no existing codes -> skip confirm step entirely."""
     with patch(GET_ALL_CODES_PATCH, side_effect=_answers({})):
         flow_id = await _init_flow_to_user_step(hass)
@@ -1271,6 +1293,112 @@ async def test_config_flow_yaml_accepts_slot_within_capacity(
     assert result["type"] == "create_entry"
 
 
+async def test_setup_refuses_when_a_lock_has_no_provider(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A lock we cannot build a provider for is unread, not empty.
+
+    Lock Code Manager will still write to it once the entry loads, so
+    allocation must not issue numbers it was never able to check against it.
+    """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with patch(
+        "custom_components.lock_code_manager.config_flow._async_build_lock_instance",
+        side_effect=_LockQuerySkipped(LOCK_1_ENTITY_ID, managed=True),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "occupancy_unknown"
+    assert LOCK_1_ENTITY_ID in result["description_placeholders"]["locks"]
+
+
+async def test_setup_ignores_a_lock_on_an_unsupported_platform(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A lock this integration will not write to cannot constrain numbering."""
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with patch(
+        "custom_components.lock_code_manager.config_flow._async_build_lock_instance",
+        side_effect=_LockQuerySkipped(LOCK_1_ENTITY_ID, managed=False),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "code_slot"
+
+
+async def test_setup_reads_only_as_far_as_it_has_to(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The window starts at the number of users and widens by what is in the way.
+
+    Locks that answer one index per round trip make the width of this read
+    its cost, so a lock is never walked to its advertised capacity to place a
+    handful of users.
+    """
+    windows: list[int] = []
+
+    async def _read(self, slots=None):
+        scope = list(self.managed_slots if slots is None else slots)
+        windows.append(max(scope, default=0))
+        return {
+            slot: (
+                SlotCredential.known("0000")
+                if slot in (1, 2, 3)
+                else SlotCredential.empty()
+            )
+            for slot in scope
+        }
+
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _read):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+        for name in ("Raman", "Alice"):
+            result = await hass.config_entries.flow.async_configure(
+                flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
+            )
+
+    assert result["type"] == "create_entry"
+    # Slots 1-3 are taken, so the two users land on 4 and 5.
+    assert result["data"][CONF_SLOT_ASSIGNMENT] == {"alice": 4, "raman": 5}
+    # Asked about 2, found 2 in the way, asked about 4, found 3 in the way,
+    # asked about 5. Never about the lock's whole capacity.
+    assert windows == [2, 4, 5]
+
+
+async def test_setup_does_not_widen_when_nothing_is_in_the_way(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """An empty lock costs exactly one read of exactly the users asked for."""
+    windows: list[int] = []
+
+    async def _read(self, slots=None):
+        scope = list(self.managed_slots if slots is None else slots)
+        windows.append(max(scope, default=0))
+        return dict.fromkeys(scope, SlotCredential.empty())
+
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _read):
+        await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 3})
+
+    assert windows == [3]
+
+
 async def test_config_flow_ui_rejects_more_users_than_the_lock_holds(
     hass: HomeAssistant, mock_lock_config_entry
 ):
@@ -1285,7 +1413,7 @@ async def test_config_flow_ui_rejects_more_users_than_the_lock_holds(
     probe_registered, probe_capabilities = _capacity_probe(
         return_value=_capabilities_with_slots(2)
     )
-    with probe_registered, probe_capabilities:
+    with probe_registered, probe_capabilities, _holding():
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 3}
         )
@@ -1298,7 +1426,7 @@ async def test_config_flow_ui_rejects_more_users_than_the_lock_holds(
     assert result["description_placeholders"]["room"] == "2"
     assert result["description_placeholders"]["taken"] == "0"
 
-    with probe_registered, probe_capabilities:
+    with probe_registered, probe_capabilities, _holding():
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 2}
         )
@@ -1315,18 +1443,13 @@ async def test_config_flow_ui_room_accounts_for_codes_already_on_the_lock(
     Reporting raw capacity would tell someone with a nearly-full lock they
     can add far more users than they can.
     """
-    existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}}
-    with patch(GET_ALL_CODES_PATCH, side_effect=_answers(existing)):
-        flow_id = await _init_flow_to_user_step(hass)
-        await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
+    flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
     probe_registered, probe_capabilities = _capacity_probe(
         return_value=_capabilities_with_slots(3)
     )
-    with probe_registered, probe_capabilities:
+    with probe_registered, probe_capabilities, _holding(1):
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 3}
         )
@@ -1454,7 +1577,9 @@ async def test_config_flow_capacity_check_survives_unexpected_error(
     assert "provider blew up" in caplog.text
 
 
-async def test_config_flow_ui_accepts_a_name_containing_a_pipe(hass: HomeAssistant):
+async def test_config_flow_ui_accepts_a_name_containing_a_pipe(
+    hass: HomeAssistant, mock_lock_config_entry
+):
     """A "|" in a name is ordinary text now, not a rejected character.
 
     It was rejected only while entity and device identifiers were keyed by the
@@ -1471,7 +1596,9 @@ async def test_config_flow_ui_accepts_a_name_containing_a_pipe(hass: HomeAssista
     assert not result["errors"]
 
 
-async def test_config_flow_ui_rejects_a_missing_name(hass: HomeAssistant):
+async def test_config_flow_ui_rejects_a_missing_name(
+    hass: HomeAssistant, mock_lock_config_entry
+):
     """A slot must be named, because the name is becoming the identity.
 
     Now the ONLY rule left in this branch: the separator rule that used to
@@ -1487,7 +1614,9 @@ async def test_config_flow_ui_rejects_a_missing_name(hass: HomeAssistant):
     assert result["errors"] == {CONF_NAME: "name_required"}
 
 
-async def test_config_flow_ui_rejects_duplicate_name(hass: HomeAssistant):
+async def test_config_flow_ui_rejects_duplicate_name(
+    hass: HomeAssistant, mock_lock_config_entry
+):
     """Two slots in one entry cannot share a name, ignoring case."""
     flow_id = await _start_ui_config_flow(hass)
 

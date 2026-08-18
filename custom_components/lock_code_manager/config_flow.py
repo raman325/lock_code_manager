@@ -219,6 +219,25 @@ async def _async_validate_slots_yaml(
     return parsed_slots, errors, placeholders
 
 
+def _too_many_users_placeholders(
+    placeholders: dict[str, Any], num_users: int, taken: int
+) -> dict[str, Any]:
+    """
+    Describe a count that will not fit, in terms of the room actually left.
+
+    The YAML path can tell the user to renumber. Here the count is the only
+    thing they picked, and how much room they have depends on what the locks
+    already hold, so both numbers have to be in the message.
+    """
+    num_slots = int(placeholders.get("num_slots", 0))
+    return {
+        **placeholders,
+        "num_users": str(num_users),
+        "taken": str(taken),
+        "room": str(max(num_slots - taken, 0)),
+    }
+
+
 class _LockQuerySkipped(LockCodeManagerError):
     """
     Raised when no provider could be built for a lock.
@@ -343,28 +362,6 @@ async def _async_query_locks(
     return results
 
 
-def _occupancy_from(
-    queries: Iterable[_LockQuery], claimed_by_other_entries: Iterable[int]
-) -> Occupancy:
-    """Build the allocation view of what those locks reported."""
-    return Occupancy(
-        locks=tuple(
-            LockOccupancy(
-                lock_entity_id=query.lock_entity_id,
-                credential_index_follows_slot=query.credential_index_follows_slot,
-                managed=query.managed,
-                occupied=None
-                if query.codes is None
-                else frozenset(
-                    slot for slot, code in query.codes.items() if code.is_present
-                ),
-            )
-            for query in queries
-        ),
-        claimed_by_other_entries=frozenset(claimed_by_other_entries),
-    )
-
-
 def _codes_by_lock(
     queries: Iterable[_LockQuery],
 ) -> dict[str, dict[int, SlotCredential]]:
@@ -475,6 +472,9 @@ class LockCodeManagerFlowHandler(
         self.dev_reg: dr.DeviceRegistry = None
         self._users_to_configure = 0
         self._lock_queries: list[_LockQuery] = []
+        # The numbers allocation must avoid, settled when the user said how
+        # many users they wanted.
+        self._unavailable: frozenset[int] = frozenset()
         self._init_existing_codes_state()
 
     async def async_step_user(
@@ -518,44 +518,142 @@ class LockCodeManagerFlowHandler(
         """Allow user to choose a path for configuration."""
         return self.async_show_menu(step_id="choose_path", menu_options=["ui", "yaml"])
 
-    def _occupancy(self) -> Occupancy:
-        """Return what the configured locks reported about their contents."""
-        return _occupancy_from(
-            self._lock_queries,
-            {
+    async def _async_read_occupancy(self, window: int) -> Occupancy:
+        """Ask every configured lock which of the numbers 1..window it holds."""
+        dev_reg = dr.async_get(self.hass)
+        ent_reg = er.async_get(self.hass)
+        locks: list[LockOccupancy] = []
+        for lock_entity_id in self.data[CONF_LOCKS]:
+            try:
+                lock_instance = _async_build_lock_instance(
+                    self.hass, dev_reg, ent_reg, lock_entity_id
+                )
+            except _LockQuerySkipped as skipped:
+                locks.append(
+                    LockOccupancy(
+                        lock_entity_id=lock_entity_id,
+                        # Unknowable without a provider. Assuming the lock
+                        # addresses credentials by slot number is the
+                        # assumption that makes allocation refuse rather than
+                        # guess.
+                        credential_index_follows_slot=skipped.managed,
+                        managed=skipped.managed,
+                        occupied=None,
+                    )
+                )
+                continue
+            locks.append(
+                LockOccupancy(
+                    lock_entity_id=lock_entity_id,
+                    credential_index_follows_slot=(
+                        lock_instance.credential_index_follows_slot
+                    ),
+                    managed=True,
+                    occupied=await lock_instance.async_internal_get_occupied_indices(
+                        window
+                    ),
+                )
+            )
+        return Occupancy(
+            locks=tuple(locks),
+            claimed_by_other_entries=frozenset(
                 slot
                 for lock_entity_id in self.data[CONF_LOCKS]
                 for slot in get_managed_slots(self.hass, lock_entity_id)
-            },
+            ),
         )
+
+    async def _async_allocate_for(
+        self, num_users: int
+    ) -> tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]:
+        """
+        Find numbers for ``num_users``, reading only as far as it has to.
+
+        Locks that answer one index per round trip make the width of this
+        read the cost of it, so it starts at the number of users and widens
+        only by what turned out to be in the way. A lock is never walked to
+        its advertised capacity to place a handful of users.
+
+        Widening stops when the numbers it would need are past what a lock
+        can hold, which is the same refusal as asking for too many users --
+        because on a full lock that is what it is.
+
+        Returns the numbers allocation must avoid, verified across a window
+        wide enough to hold everyone. The users themselves are numbered from
+        it later, once they have names.
+        """
+        window = num_users
+        while True:
+            occupancy = await self._async_read_occupancy(window)
+            if not occupancy.is_known:
+                # Unreadable is not free: issuing a number could overwrite a
+                # credential programmed by hand on a lock that did not answer.
+                return (
+                    None,
+                    {"base": "occupancy_unknown"},
+                    {"locks": ", ".join(occupancy.unreadable)},
+                )
+
+            unavailable = occupancy.unavailable
+            taken_in_window = sum(1 for slot in unavailable if slot <= window)
+            if window - taken_in_window >= num_users:
+                break
+
+            # Every number in the way pushes the last user one further out.
+            wider = num_users + taken_in_window
+            errors, placeholders = await _async_check_slot_capacity(
+                self.hass, self.data[CONF_LOCKS], [wider]
+            )
+            if errors or wider <= window:
+                return (
+                    None,
+                    {"base": "too_many_users"},
+                    _too_many_users_placeholders(
+                        placeholders, num_users, taken_in_window
+                    ),
+                )
+            window = wider
+
+        assignment = SlotAssignment.empty().reconcile(
+            map(str, range(num_users)), start=1, unavailable=unavailable
+        )
+        errors, placeholders = await _async_check_slot_capacity(
+            self.hass, self.data[CONF_LOCKS], assignment.slots.values()
+        )
+        if errors:
+            return (
+                None,
+                {"base": "too_many_users"},
+                _too_many_users_placeholders(placeholders, num_users, taken_in_window),
+            )
+        return unavailable, {}, {}
 
     async def async_step_ui(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Ask how many users to configure."""
-        occupancy = self._occupancy()
-        if not occupancy.is_known:
-            # Unreadable is not free: issuing a number could overwrite a
-            # credential programmed by hand on a lock that simply did not
-            # answer. The locks were read before this step and nothing after
-            # it can change the answer, so refusing here costs the user
-            # nothing -- refusing later would discard every name and PIN they
-            # had already typed.
-            return self.async_abort(
-                reason="occupancy_unknown",
-                description_placeholders={"locks": ", ".join(occupancy.unreadable)},
-            )
-
         errors: dict[str, str] = {}
         description_placeholders: dict[str, Any] = {}
         if user_input is not None:
             num_users = user_input[CONF_NUM_USERS]
-            errors, description_placeholders = await self._async_check_room_for(
-                num_users, occupancy
-            )
-            if not errors:
+            # Settled before a single name is collected. Which users get
+            # configured does not change which numbers allocation issues, so
+            # the count alone decides whether they fit -- and a refusal here
+            # is one the user can still act on.
+            (
+                unavailable,
+                errors,
+                description_placeholders,
+            ) = await self._async_allocate_for(num_users)
+            if unavailable is not None:
                 self._users_to_configure = num_users
+                self._unavailable = unavailable
                 return await self.async_step_code_slot()
+            if "occupancy_unknown" in errors.values():
+                return self.async_abort(
+                    reason="occupancy_unknown",
+                    description_placeholders=description_placeholders,
+                )
 
         return self.async_show_form(
             step_id="ui",
@@ -569,43 +667,6 @@ class LockCodeManagerFlowHandler(
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=False,
-        )
-
-    async def _async_check_room_for(
-        self, num_users: int, occupancy: Occupancy
-    ) -> tuple[dict[str, str], dict[str, Any]]:
-        """
-        Reject a count the locks cannot hold, while it can still be corrected.
-
-        Which users are configured does not affect WHICH numbers allocation
-        issues -- it always takes the lowest free ones -- so the count alone
-        decides whether they fit. Checking it here turns what would be a dead
-        end after the last user form into a corrigible answer on this one.
-        """
-        errors, placeholders = await _async_check_slot_capacity(
-            self.hass,
-            self.data[CONF_LOCKS],
-            self._allocate(map(str, range(num_users))).slots.values(),
-        )
-        if not errors:
-            return {}, {}
-
-        # The YAML path can tell the user to renumber. Here the count is the
-        # only thing they picked, and how much room they have depends on what
-        # the locks already hold, so both numbers have to be in the message.
-        num_slots = int(placeholders["num_slots"])
-        taken = sum(1 for slot in occupancy.unavailable if 1 <= slot <= num_slots)
-        return {"base": "too_many_users"}, {
-            **placeholders,
-            "num_users": str(num_users),
-            "taken": str(taken),
-            "room": str(num_slots - taken),
-        }
-
-    def _allocate(self, users: Iterable[str]) -> SlotAssignment:
-        """Give every user the lowest slot number nothing else holds."""
-        return SlotAssignment.empty().reconcile(
-            users, start=1, unavailable=self._occupancy().unavailable
         )
 
     async def async_step_code_slot(
@@ -674,7 +735,9 @@ class LockCodeManagerFlowHandler(
         # Both refusals -- unreadable locks and a count that will not fit --
         # were settled in async_step_ui, against the same occupancy and the
         # same count. Nothing collected since can change either answer.
-        assignment = self._allocate(self.data[CONF_USERS])
+        assignment = SlotAssignment.empty().reconcile(
+            self.data[CONF_USERS], start=1, unavailable=self._unavailable
+        )
         self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
         return await self._create_entry(title=self.title, data=self.data)
 
