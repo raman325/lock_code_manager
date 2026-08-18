@@ -2170,3 +2170,165 @@ async def test_rename_saved_while_entry_was_not_loaded(
     assert survivor.unique_id == f"{entry_id}|Alicia|pin"
     moved = dev_reg.async_get_device(identifiers={(DOMAIN, f"{entry_id}|Alicia")})
     assert moved is not None and moved.id == device.id
+
+
+async def test_swap_saved_while_entry_was_not_loaded(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Two users trading names while the entry was down, with no migration.
+
+    A matrix cell, not a reported bug. The unprocessed-save path was only ever
+    tested with a SIMPLE rename, and the migrating variant of the swap is what
+    exposed the double-apply. A swap is the shape that resolves through the
+    parking logic rather than the collision guard, so it is the one that
+    crosses two users' rows when anything about the ordering is wrong -- and
+    the version 3 entry point will stop existing after this release, leaving
+    this cell as the only cover for it.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "Alice", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "Bob", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+        },
+        options={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "Bob", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "Alice", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+        },
+        unique_id="Swap While Failed",
+        version=4,
+    )
+    config_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    entry_id = config_entry.entry_id
+    alice_row = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|Alice|pin", config_entry=config_entry
+    ).entity_id
+    bob_row = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|Bob|pin", config_entry=config_entry
+    ).entity_id
+    alice_device = dev_reg.async_get_or_create(
+        config_entry_id=entry_id, identifiers={(DOMAIN, f"{entry_id}|Alice")}
+    ).id
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Slot 1 is Bob now, and slot 1's row is the one that has to carry it.
+    assert ent_reg.async_get(alice_row).unique_id == f"{entry_id}|Bob|pin"
+    assert ent_reg.async_get(bob_row).unique_id == f"{entry_id}|Alice|pin"
+    # The devices trade too, as the same rows -- so areas and labels survive.
+    assert (
+        dev_reg.async_get_device(identifiers={(DOMAIN, f"{entry_id}|Bob")}).id
+        == alice_device
+    )
+
+
+async def test_chain_saved_while_entry_was_not_loaded(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A rename chain saved while the entry was down.
+
+    A matrix cell. Chains resolve through repeat-until-stable rather than
+    parking, and the ordering they depend on is the opposite of a swap's: the
+    tail must move before the segment pointing at it, or the collision guard
+    strands the whole chain. Only the loaded and migrating variants were
+    covered.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "A", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "B", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+        },
+        # A -> B and B -> C: slot 1 wants the name slot 2 is vacating.
+        options={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "B", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "C", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+        },
+        unique_id="Chain While Failed",
+        version=4,
+    )
+    config_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    a_row = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|A|pin", config_entry=config_entry
+    ).entity_id
+    b_row = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|B|pin", config_entry=config_entry
+    ).entity_id
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert ent_reg.async_get(a_row).unique_id == f"{entry_id}|B|pin"
+    assert ent_reg.async_get(b_row).unique_id == f"{entry_id}|C|pin"
+
+
+async def test_rename_onto_a_name_a_new_slot_also_wants(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A rename and an addition contending for one name, in one submission.
+
+    A matrix cell. The listener runs removals, then renames, then additions,
+    and the removal-versus-rename contention has a test; this is the other
+    side of it. The addition must land on the name only after the rename has
+    vacated it -- otherwise the new slot's entities register first and the
+    rename finds its target occupied, stranding the existing user's rows on a
+    name that now belongs to somebody else.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "test1", CONF_ENABLED: True, CONF_PIN: "1234"},
+            },
+        },
+        unique_id="Rename Versus Addition",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    pin_entity = ent_reg.async_get_entity_id("text", DOMAIN, f"{entry_id}|test1|pin")
+    assert pin_entity is not None
+
+    # Slot 1 renames to "test2" while a brand-new slot 2 claims "test1".
+    hass.config_entries.async_update_entry(
+        config_entry,
+        options={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "test2", CONF_ENABLED: True, CONF_PIN: "1234"},
+                2: {CONF_NAME: "test1", CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+        },
+    )
+    await hass.async_block_till_done()
+
+    # The existing user kept their row, moved to the new name.
+    survivor = ent_reg.async_get(pin_entity)
+    assert survivor is not None
+    assert survivor.unique_id == f"{entry_id}|test2|pin"
+    # And the new user got the vacated name on a row of their own.
+    new_row = ent_reg.async_get_entity_id("text", DOMAIN, f"{entry_id}|test1|pin")
+    assert new_row is not None and new_row != pin_entity
