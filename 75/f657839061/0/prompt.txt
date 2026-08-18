@@ -930,3 +930,16 @@ fix the z2m coverage gap first, then open teh PR for the separator branch, then 
 ---
 
 I don't think in this new world we have start slots right? users shouldn't think about slots at all. We just pick up the first available non LCM slots
+
+---
+
+1. this is fine
+2. I am ok with this tradeoff
+
+---
+
+continue
+
+---
+
+do the internal change too, everything needs to be consistent
