@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "8842ff5cdbb9",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-config-flow",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/88/42ff5cdbb9/0/metadata.json",
+      "transcript": "/88/42ff5cdbb9/0/full.jsonl",
+      "compact_transcript": "/88/42ff5cdbb9/0/transcript.jsonl",
+      "content_hash": "/88/42ff5cdbb9/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 28477,
+    "cache_read_tokens": 14200566,
+    "output_tokens": 21529,
+    "api_call_count": 23
+  }
+}
