@@ -26,7 +26,7 @@ from typing import Any
 
 from homeassistant.const import CONF_NAME
 
-from .names import normalize_slot_names
+from .names import normalize_name, normalize_slot_names
 
 CONF_SLOT_ASSIGNMENT = "slot_assignment"
 
@@ -39,6 +39,39 @@ class SlotAssignment:
 
     slots: Mapping[str, int]
 
+    def __post_init__(self) -> None:
+        """
+        Normalize the names and freeze the mapping.
+
+        Normalizing here rather than at each method makes it an invariant of
+        the type: a name can only ever be stored in one form, so it cannot
+        match on one path and miss on another. Missing means looking like a
+        different user and being renumbered, which moves that user's
+        credential on every lock. Stored data predating this is normalized on
+        read for the same reason.
+
+        Freezing closes the one hole the factories leave: the plain
+        constructor accepted a live dict, which a caller could then mutate
+        under the identity check ``assign`` uses to decide whether to write.
+        """
+        object.__setattr__(
+            self,
+            "slots",
+            MappingProxyType(
+                {normalize_name(name): slot for name, slot in self.slots.items()}
+            ),
+        )
+
+    def __hash__(self) -> int:
+        """
+        Hash by content.
+
+        ``frozen=True`` advertises hashability, but the generated ``__hash__``
+        hashes the mapping field and raises. Sorting to a tuple keeps the
+        promise the decorator makes instead of leaving a runtime trap.
+        """
+        return hash(tuple(sorted(self.slots.items())))
+
     @classmethod
     def empty(cls) -> SlotAssignment:
         """Return the assignment for an entry with no users."""
@@ -46,7 +79,16 @@ class SlotAssignment:
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> SlotAssignment:
-        """Read the assignment out of an entry's stored bookkeeping."""
+        """
+        Read the assignment out of an entry's stored bookkeeping.
+
+        Takes ONE mapping deliberately. Configuration is read options-first
+        and falls back to data (``EntryConfig.from_entry``), but the
+        assignment must be read from the same side the users came from, or a
+        stale copy renumbers everyone on the next start. Consumers pass the
+        already-merged mapping rather than an entry, so there is no second
+        precedence rule here to get out of step with the first.
+        """
         raw = mapping.get(CONF_SLOT_ASSIGNMENT) or {}
         return cls(slots=MappingProxyType({str(k): int(v) for k, v in raw.items()}))
 
@@ -69,16 +111,35 @@ class SlotAssignment:
         every lock -- the failure this whole design exists to avoid, arriving
         through the one operation that is supposed to be free.
 
-        Built as a fresh mapping rather than moved key by key, so a swap
-        (``A -> B`` and ``B -> A``) resolves without needing an order.
+        A rename target may be a name somebody else still holds, and that is
+        legal rather than a conflict: the holder must be departing in the same
+        submission, since two users cannot share a name in the result. So the
+        renamed entry WINS and the entry sitting on the target is dropped.
+        Renaming into a target with a plain re-key instead lets whichever the
+        mapping happens to iterate last overwrite the other -- which for the
+        chain ``A -> B``, ``B -> C`` with ``C`` deleted moved the user
+        formerly named B from index 2 to index 3, and gave a different answer
+        for a different insertion order.
+
+        The two halves are built over disjoint key sets, so the result does
+        not depend on iteration order for chains any more than for swaps.
         """
-        if not renames:
+        renames = {
+            normalize_name(old): normalize_name(new) for old, new in renames.items()
+        }
+        targets = set(renames.values())
+        renamed = {
+            renames[name]: slot for name, slot in self.slots.items() if name in renames
+        }
+        kept = {
+            name: slot
+            for name, slot in self.slots.items()
+            if name not in renames and name not in targets
+        }
+        moved = {**kept, **renamed}
+        if moved == dict(self.slots):
             return self
-        return SlotAssignment(
-            slots=MappingProxyType(
-                {renames.get(name, name): slot for name, slot in self.slots.items()}
-            )
-        )
+        return SlotAssignment(slots=MappingProxyType(moved))
 
     def assign(self, names: Iterable[str]) -> SlotAssignment:
         """
@@ -92,7 +153,11 @@ class SlotAssignment:
         Returns ``self`` when nothing differs, so callers can use identity to
         decide whether a write is needed.
         """
-        wanted = list(dict.fromkeys(names))
+        # Normalized here, not assumed. A name reaching this boundary in its
+        # raw form -- one caller storing the repaired name while another
+        # passes what the user typed -- would look like a different user and
+        # renumber them, moving their credential on every lock.
+        wanted = list(dict.fromkeys(normalize_name(name) for name in names))
         assigned = {name: self.slots[name] for name in wanted if name in self.slots}
 
         taken = set(assigned.values())

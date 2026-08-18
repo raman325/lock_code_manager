@@ -21,6 +21,7 @@ from hypothesis import assume, given, strategies as st
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
+from custom_components.lock_code_manager.domain.names import normalize_slot_names
 from custom_components.lock_code_manager.domain.slot_assignment import (
     SlotAssignment,
     users_from_slots,
@@ -233,21 +234,96 @@ def test_renaming_never_renumbers_anyone(
     ``assign`` alone cannot see a rename -- it looks like a deletion plus an
     addition, so it frees the old name's slot and reissues it in iteration
     order, landing two renamed users on each other's index. Re-keying first
-    is what keeps the rename free, including for a swap.
+    is what keeps the rename free.
+
+    Chained renames are deliberately NOT excluded. An earlier version of this
+    property assumed away the case where a rename target is a name somebody
+    still holds, on the reasoning that the name rules reject it upstream. They
+    do not: ``A -> B``, ``B -> C`` with ``C`` deleted ends with the unique
+    names {B, C}, so it is a legal submission -- and it was the exact shape
+    that moved a user from index 2 to index 3. Filtering it out is what let
+    the defect through.
     """
     before = SlotAssignment.empty().assign(names)
     renames = {old: new for old, new in renames.items() if old in before.slots}
-    # A rename onto a name someone else still holds is a collision the name
-    # rules reject upstream, not something this has to resolve.
+    # Two users renaming to the SAME name is a genuine conflict the name
+    # rules reject, and not something this has to resolve.
     assume(len(set(renames.values())) == len(renames))
-    assume(not set(renames.values()) & (set(before.slots) - set(renames)))
 
     after = before.with_renames(renames)
 
     for old, new in renames.items():
         assert after.slot(new) == before.slot(old)
-    for name in set(before.slots) - set(renames):
+    # Anyone neither renamed nor displaced by a rename keeps their number.
+    for name in set(before.slots) - set(renames) - set(renames.values()):
         assert after.slot(name) == before.slot(name)
+
+
+@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3))
+def test_renaming_does_not_depend_on_insertion_order(
+    names: list[str], renames: dict[str, str]
+) -> None:
+    """The same renames give the same answer whatever order the map holds.
+
+    The first implementation re-keyed in place, so whichever entry iterated
+    last overwrote the other and a differently-ordered mapping produced a
+    different assignment. Order-dependence in bookkeeping that decides
+    credential indices is not a style question.
+    """
+    before = SlotAssignment.empty().assign(names)
+    renames = {old: new for old, new in renames.items() if old in before.slots}
+    assume(len(set(renames.values())) == len(renames))
+
+    reversed_order = SlotAssignment(slots=dict(reversed(list(before.slots.items()))))
+
+    assert dict(before.with_renames(renames).slots) == dict(
+        reversed_order.with_renames(renames).slots
+    )
+
+
+@given(stored=stored_slot_mappings())
+def test_repair_pairs_each_user_with_their_own_fields_and_slot(
+    stored: dict,
+) -> None:
+    """Repaired names stay attached to the right fields and the right slot.
+
+    The conversion properties run only on already-valid input, so nothing
+    pinned the pairing THROUGH the repair. A migration that swapped two
+    repaired slots' codes would satisfy every count-based property while
+    giving two people each other's code.
+    """
+    users, assignment, _ = users_from_slots(stored)
+    repaired, _ = normalize_slot_names(stored)
+
+    for raw_key, slot in repaired.items():
+        name = slot[CONF_NAME]
+        assert assignment.slot(name) == int(raw_key)
+        assert users[name] == {k: v for k, v in slot.items() if k != CONF_NAME}
+
+
+@given(names=NAME_SETS, pad=st.sampled_from([" ", "  ", "\t"]))
+def test_a_whitespace_variant_is_the_same_user(names: list[str], pad: str) -> None:
+    """``"Raman "`` and ``"Raman"`` must never be two different users.
+
+    Names arrive here from more than one place -- the repaired configuration,
+    and whatever a caller passes straight through -- and the two forms are
+    indistinguishable on screen. Treating them as different users renumbers
+    somebody, which moves their credential on every lock.
+
+    Covers both directions, because normalizing only the incoming names left
+    a stored key in its raw form still missing: assignment stored padded and
+    looked up bare, and assignment stored bare and looked up padded.
+    """
+    bare = SlotAssignment.empty().assign(names)
+    padded_lookup = bare.assign([f"{pad}{name}{pad}" for name in names])
+
+    assert padded_lookup is bare
+
+    stored_padded = SlotAssignment(
+        slots={f"{pad}{n}{pad}": s for n, s in bare.slots.items()}
+    )
+    for name in names:
+        assert stored_padded.slot(name) == bare.slot(name)
 
 
 @given(names=NAME_SETS)
@@ -274,3 +350,9 @@ def test_assignment_survives_a_round_trip_through_storage(
     restored = SlotAssignment.from_mapping(assignment.to_dict())
 
     assert dict(restored.slots) == dict(assignment.slots)
+    # Equal assignments must hash equally. ``frozen=True`` advertises
+    # hashability, but the generated __hash__ hashes the mapping field and
+    # raises, so the promise has to be kept explicitly or it is a runtime trap
+    # for the first caller to use one as a dict key or in a set.
+    assert restored == assignment
+    assert hash(restored) == hash(assignment)
