@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from homeassistant.components.mqtt import debug_info as mqtt_debug_info
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.domain.credentials import (
+    credential_from_slot,
+)
+from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -146,3 +153,37 @@ async def test_teardown_clears_subscribed_topic(
     lock.teardown_push_subscription()
     assert lock._subscribed_topic is None
     assert not lock._push_unsubs
+
+
+async def test_unresolvable_topic_never_publishes(
+    hass: HomeAssistant,
+    mqtt_mock,
+    zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    mqtt_teardown,
+) -> None:
+    """No discovery data → LockDisconnected, and nothing is published anywhere."""
+    lock = zigbee2mqtt_lock_with_device
+    mqtt_mock.async_publish.reset_mock()
+
+    credential = credential_from_slot(1, SlotCredential.known("1234"))
+    with pytest.raises(LockDisconnected):
+        await lock.async_set_credential(
+            1, credential, "1234", name=None, source="direct"
+        )
+    with pytest.raises(LockDisconnected):
+        await lock.async_get_users()
+
+    mqtt_mock.async_publish.assert_not_called()
+
+
+async def test_two_bridges_resolve_independent_topics(
+    hass: HomeAssistant, mqtt_lock_discovered: er.RegistryEntry
+) -> None:
+    """Locks on different bridges with different base topics don't cross wires."""
+    second = await async_discover_z2m_lock(
+        hass, ieee="0xbee2", name="Outbuilding", base_topic="z2m_outbuilding"
+    )
+    lock_a = _build_lock(hass, mqtt_lock_discovered)
+    lock_b = _build_lock(hass, second)
+    assert lock_a._resolve_device_topic() == Z2M_FULL_TOPIC
+    assert lock_b._resolve_device_topic() == "z2m_outbuilding/Outbuilding"
