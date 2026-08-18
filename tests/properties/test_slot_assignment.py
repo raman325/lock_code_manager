@@ -23,6 +23,7 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
 from custom_components.lock_code_manager.domain.names import normalize_slot_names
 from custom_components.lock_code_manager.domain.slot_assignment import (
+    CONF_SLOT_ASSIGNMENT,
     SlotAssignment,
     _identity,
     users_from_slots,
@@ -376,3 +377,153 @@ def test_assignment_survives_a_round_trip_through_storage(
     # for the first caller to use one as a dict key or in a set.
     assert restored == assignment
     assert hash(restored) == hash(assignment)
+
+
+@given(history=EDIT_HISTORIES, start=START)
+def test_slots_never_exceed_the_most_users_ever_configured_at_once(
+    history: list[list[str]], start: int
+) -> None:
+    """Numbers stay inside ``start`` plus the high-water mark of CONCURRENT users.
+
+    This is the property that justifies reusing slot numbers at all, and it
+    went missing in a rewrite while the pull request description went on
+    citing it by name. On most providers the slot IS the lock's credential
+    index, and a number above the advertised capacity can never be written.
+
+    A never-reused number satisfies this for no bound: it climbs with every
+    user ever created and eventually leaves the lock's range entirely. Reuse
+    is what keeps the numbering tight, which is why the slot number is the
+    right thing to key on and a monotonically increasing handle is not.
+    """
+    assignment = SlotAssignment.empty()
+    high_water = 0
+    for configured in history:
+        assignment = assignment.reconcile(configured, start=start)
+        high_water = max(high_water, len(configured))
+        assert all(
+            start <= s <= start + high_water - 1 for s in assignment.slots.values()
+        )
+
+
+@given(names=NAME_SETS, start=START)
+def test_allocation_does_not_depend_on_how_names_are_ordered(
+    names: list[str], start: int
+) -> None:
+    """The same users get the same numbers however the caller iterates them.
+
+    ``names`` is typed as an iterable, so a caller may hand over a set or a
+    ``dict.keys()`` view. Order-dependent allocation would give one
+    configuration different credential indices from run to run.
+    """
+    forward = SlotAssignment.empty().reconcile(names, start=start)
+    backward = SlotAssignment.empty().reconcile(list(reversed(names)), start=start)
+
+    assert dict(forward.slots) == dict(backward.slots)
+
+
+@given(
+    names=NAME_SETS,
+    start=START,
+    renames=st.dictionaries(NAMES, st.sampled_from(["Wren", "Vic"]), max_size=2),
+)
+def test_a_rename_to_somebody_absent_leaves_the_source_alone(
+    names: list[str], start: int, renames: dict[str, str]
+) -> None:
+    """A rename target missing from the new names must be inert, not destructive.
+
+    The input contradicts itself -- the user is being renamed to somebody the
+    configuration does not contain -- and the harmless reading is to ignore
+    it. Honouring it halfway dropped the source from the survivors and
+    reallocated them from ``start``, moving the credential of a user who was
+    never part of the edit.
+    """
+    before = SlotAssignment.empty().reconcile(names, start=start)
+    absent = {
+        old: new
+        for old, new in renames.items()
+        if _identity(new) not in {_identity(n) for n in names}
+    }
+
+    after = before.reconcile(names, start=start, renames=absent)
+
+    assert dict(after.slots) == dict(before.slots)
+
+
+@given(
+    slots=st.dictionaries(NAMES, st.integers(min_value=1, max_value=6), max_size=4),
+    start=START,
+)
+def test_a_double_booked_slot_is_repaired(slots: dict[str, int], start: int) -> None:
+    """Two users on one credential index must not survive a reconcile.
+
+    Only reachable from bookkeeping that was already inconsistent, but nothing
+    else repairs it, so it would persist for good -- and both users would
+    write over each other on the lock every sync.
+    """
+    reconciled = SlotAssignment(slots=slots).reconcile(list(slots), start=start)
+
+    numbers = list(reconciled.slots.values())
+    assert len(numbers) == len(set(numbers))
+    assert set(reconciled.slots) == {_identity(n) for n in slots}
+
+
+def test_a_collapsed_identity_keeps_the_lower_slot() -> None:
+    """Two keys reducing to one identity keep the LOWER number, as documented.
+
+    Covered but unpinned before: mutating ``min`` to ``max`` passed every
+    property, because nothing constructed a mapping whose keys collapse.
+    """
+    assert dict(SlotAssignment(slots={"Raman": 4, "raman ": 2}).slots) == {"raman": 2}
+
+
+def test_a_string_slot_number_is_coerced() -> None:
+    """The constructor accepts what storage yields and normalizes it.
+
+    This coercion is the type-level defence against the string-key
+    double-booking the branch previously shipped, and mutating it away passed
+    every property -- no test handed a string slot value to the constructor.
+    """
+    assignment = SlotAssignment(slots={"alice": "3"})
+
+    assert assignment.slot("Alice") == 3
+    assert dict(assignment.reconcile(["Alice", "Bob"], start=1).slots) == {
+        "alice": 3,
+        "bob": 1,
+    }
+
+
+def test_a_non_string_name_key_is_coerced_not_fatal() -> None:
+    """Stored bookkeeping with a non-string key must load, not abort setup.
+
+    ``normalize_name`` calls ``.strip()``, so an integer key raised
+    AttributeError and took the whole entry setup down with it. Reachable
+    from hand-edited storage, or from a writer that persisted the slot number
+    as the key by mistake. Nothing pinned the coercion until this test: the
+    mutation removing it passed all 23 properties.
+    """
+    assignment = SlotAssignment.from_mapping({CONF_SLOT_ASSIGNMENT: {1: 4}})
+
+    assert assignment.slot("1") == 4
+
+
+def test_two_renames_onto_one_target_resolve_the_same_way_every_time() -> None:
+    """Contradictory input still has to be deterministic.
+
+    ``validate_slot_names`` keeps two users from ending on one name, so this
+    is unreachable from the configuration flow -- but nothing in this type
+    enforces it, and the previous implementation let whichever entry the
+    stored mapping iterated first decide, so the same input produced
+    different credential indices on different runs. Resolved by sorted order
+    instead.
+
+    The property tests assume this case away, which is correct for them and
+    is why it needs an example here.
+    """
+    renames = {"alice": "Wren", "bob": "Wren"}
+
+    forward = SlotAssignment(slots={"alice": 1, "bob": 2})
+    backward = SlotAssignment(slots={"bob": 2, "alice": 1})
+
+    assert dict(forward.reconcile(["Wren"], start=1, renames=renames).slots) == dict(
+        backward.reconcile(["Wren"], start=1, renames=renames).slots
+    )

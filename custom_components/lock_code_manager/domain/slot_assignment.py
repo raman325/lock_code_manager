@@ -155,37 +155,71 @@ class SlotAssignment:
         forgotten argument write a new user's code over one of those --
         silently, and on a real door. Required makes it a type error.
 
+        A user already holding a slot keeps it even when ``start`` rises
+        above it or ``unavailable`` comes to include it. Never renumbering
+        somebody is the stronger guarantee: moving them rewrites their
+        credential on every lock and orphans their entities, whereas leaving
+        them put merely means the entry still holds a number it would not
+        choose today. ``start`` and ``unavailable`` therefore constrain
+        ALLOCATION, not tenure.
+
         Returns ``self`` when nothing differs, so callers can use identity to
         decide whether a write is needed.
         """
-        moves = {
-            _identity(old): _identity(new)
-            for old, new in (renames or {}).items()
-            if _identity(old) in self.slots
-        }
         wanted = list(dict.fromkeys(_identity(name) for name in names))
         surviving = set(wanted)
 
-        # A renamed user displaces whoever held the target name, because two
-        # users cannot share a name in the result -- so that holder is
-        # departing in this same submission.
+        # A move is only honoured when the source holds a slot AND the target
+        # is among the survivors. A rename whose target is absent contradicts
+        # the name set -- and left unfiltered it dropped the source from
+        # `kept` while `renamed` refused to take them, so a user who survived
+        # under their own name was reallocated from `start`.
+        #
+        # Two sources renaming onto one target is likewise contradictory
+        # (``validate_slot_names`` rejects it upstream). Resolved by sorted
+        # order rather than by whichever the stored mapping happened to
+        # iterate first, so the same input always gives the same answer.
+        honoured: dict[str, str] = {}
+        claimed: set[str] = set()
+        for old in sorted(renames or {}, key=_identity):
+            source, target = _identity(old), _identity((renames or {})[old])
+            if source not in self.slots or target not in surviving:
+                continue
+            if target in claimed:
+                continue
+            honoured[source] = target
+            claimed.add(target)
+
         renamed = {
-            moves[name]: slot
+            honoured[name]: slot
             for name, slot in self.slots.items()
-            if name in moves and moves[name] in surviving
+            if name in honoured
         }
         kept = {
             name: slot
             for name, slot in self.slots.items()
-            if name not in moves and name in surviving and name not in renamed
+            if name not in honoured and name in surviving and name not in renamed
         }
-        carried = {**kept, **renamed}
 
-        taken = set(carried.values()) | set(unavailable)
-        candidate = start
-        for name in wanted:
-            if name in carried:
+        # Two users on one number would write over each other on the lock.
+        # Only reachable from bookkeeping that was already inconsistent, but
+        # nothing else repairs it, so it would persist for good.
+        carried: dict[str, int] = {}
+        held: set[int] = set()
+        for name in sorted({**kept, **renamed}):
+            slot = {**kept, **renamed}[name]
+            if slot in held:
                 continue
+            held.add(slot)
+            carried[name] = slot
+
+        taken = held | set(unavailable)
+        candidate = start
+        # Sorted so the answer does not depend on how the caller ordered
+        # ``names``. The signature accepts any iterable, and a set or
+        # ``dict.keys()`` from an unordered source would otherwise give the
+        # same configuration different credential indices from run to run.
+        for name in sorted(name for name in wanted if name not in carried):
             while candidate in taken:
                 candidate += 1
             carried[name] = candidate
