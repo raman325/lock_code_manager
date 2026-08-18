@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "3b87438ddb1b",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-migration",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/domain/config.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_config.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3b/87438ddb1b/0/metadata.json",
+      "transcript": "/3b/87438ddb1b/0/full.jsonl",
+      "compact_transcript": "/3b/87438ddb1b/0/transcript.jsonl",
+      "content_hash": "/3b/87438ddb1b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 31309,
+    "cache_read_tokens": 16822843,
+    "output_tokens": 22953,
+    "api_call_count": 21
+  }
+}
