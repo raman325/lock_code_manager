@@ -236,7 +236,7 @@
   },
   "exceptions": {
     "name_not_unique": {
-      "message": "Code slot {conflicting_slot} already uses that name. Names must be unique within a Lock Code Manager entry."
+      "message": "{conflicting_name} already uses that name. Names must be unique within a Lock Code Manager entry."
     },
     "name_required": {
       "message": "Code slot {slot_num} needs a name. The name identifies this user on your locks."

@@ -162,7 +162,11 @@ async def test_set_name_rejects_another_slots_name(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Renaming a slot onto another slot's name is refused, ignoring case."""
+    """Renaming onto another user's name is refused, ignoring case.
+
+    The conflict is reported by NAME: a user who holds no slot still owns a
+    name, and has no number to point at.
+    """
     other = hass.states.get(SLOT_1_NAME_ENTITY).state
 
     with pytest.raises(ServiceValidationError) as err:
@@ -174,7 +178,7 @@ async def test_set_name_rejects_another_slots_name(
             blocking=True,
         )
     assert err.value.translation_key == "name_not_unique"
-    assert err.value.translation_placeholders["conflicting_slot"] == "1"
+    assert err.value.translation_placeholders["conflicting_name"] == other
 
 
 async def test_set_name_normalizes_whitespace(

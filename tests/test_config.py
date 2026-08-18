@@ -20,6 +20,9 @@ from custom_components.lock_code_manager.domain.config import (
     parse_slot_device_identifier,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.domain.slot_assignment import (
+    CONF_SLOT_ASSIGNMENT,
+)
 
 
 def _slot(pin: str = "1234", name: str | None = None) -> dict:
@@ -734,3 +737,20 @@ def test_renaming_onto_an_existing_user_is_refused() -> None:
     )
 
     assert config.with_user_field_set("Bob", "name", "Alice") is config
+
+
+def test_two_stored_names_with_one_identity_keep_the_first() -> None:
+    """Stored users differing only by case or padding collapse to one.
+
+    Keeping both would put them on a single slot while the name lookups
+    disagreed about which of them holds it, so a display would show one user
+    and a write would land on the other.
+    """
+    config = EntryConfig.from_mapping(
+        {
+            CONF_USERS: {"Bob": {"pin": "1111"}, "bob ": {"pin": "2222"}},
+            CONF_SLOT_ASSIGNMENT: {"bob": 1},
+        }
+    )
+
+    assert dict(config.users) == {"Bob": {"pin": "1111"}}

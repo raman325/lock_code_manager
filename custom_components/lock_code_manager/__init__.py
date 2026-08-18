@@ -567,15 +567,17 @@ def _setup_entry_after_start(
         # Move data into options so the update listener can work.
         #
         # Resolved through EntryConfig rather than by merging the two raw
-        # dicts. A non-empty options here holds an options-flow save the entry
-        # could not process while it was failed, and the two sides may be in
-        # different shapes; merging them raw yields a mapping carrying both,
-        # and reading a mix of shapes discards whichever loses. EntryConfig
-        # picks one side whole and emits one shape.
+        # dicts: the sides may be in different shapes, and reading a mix
+        # discards whichever loses. EntryConfig picks one side whole.
+        #
+        # Built from the entry, NOT from the cached view: the cache is only
+        # refreshed by the update listener, which has not run yet, so a
+        # service call during startup would be overwritten by a stale
+        # snapshot.
         hass.config_entries.async_update_entry(
             config_entry,
             data={},
-            options=get_entry_config(config_entry).to_dict(),
+            options=EntryConfig.from_entry(config_entry).to_dict(),
         )
     else:
         hass.async_create_task(

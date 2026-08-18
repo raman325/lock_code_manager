@@ -111,14 +111,13 @@ class EntryConfig:
             **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
             CONF_LOCKS: entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, [])),
         }
-        for key in (CONF_USERS, CONF_SLOTS):
+        # The assignment comes from the SAME side as the users it numbers. A
+        # user-keyed side always carries its own, and a slot-keyed one derives
+        # it from the slot keys; taking it from the other side could pair
+        # users with numbering that predates them.
+        for key in (CONF_USERS, CONF_SLOTS, CONF_SLOT_ASSIGNMENT):
             if key in config_side:
                 merged[key] = config_side[key]
-        assignment = entry.options.get(
-            CONF_SLOT_ASSIGNMENT, entry.data.get(CONF_SLOT_ASSIGNMENT)
-        )
-        if assignment is not None:
-            merged[CONF_SLOT_ASSIGNMENT] = assignment
         return cls.from_mapping(merged)
 
     @classmethod
@@ -126,8 +125,9 @@ class EntryConfig:
         """
         Build EntryConfig from a raw config mapping.
 
-        Accepts the pre-version-3 slot-keyed shape as input only; see
-        :func:`_users_from_slot_shape`. Nothing writes that shape any more.
+        Accepts the pre-version-3 slot-keyed shape as input only, converted
+        by :func:`.slot_assignment.users_from_slots`. Nothing writes that
+        shape any more.
         """
         raw_users = mapping.get(CONF_USERS)
         if raw_users is None:
@@ -137,9 +137,16 @@ class EntryConfig:
             converted, assignment, _ = users_from_slots(mapping.get(CONF_SLOTS) or {})
             users = dict(converted)
         else:
-            users = {
-                normalize_name(name): dict(user) for name, user in raw_users.items()
-            }
+            # Two keys reducing to one identity keep the FIRST. Both
+            # surviving would put them on one slot while the name lookups
+            # disagreed about which of them holds it, so a display would show
+            # one user and a write would land on the other.
+            users = {}
+            for name, user in raw_users.items():
+                normalized = normalize_name(name)
+                if any(_identity(seen) == _identity(normalized) for seen in users):
+                    continue
+                users[normalized] = dict(user)
             assignment = SlotAssignment.from_mapping(mapping)
         return cls(
             locks=tuple(mapping.get(CONF_LOCKS, [])),

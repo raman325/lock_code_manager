@@ -209,23 +209,27 @@ class SlotEntityCoordinator:
         """
         Apply a slot name write requested by the text entity.
 
-        The name is the identity Lock Code Manager is moving to key on, so
-        this path enforces the same rules the config flow does. Without it
-        the ordinary way to rename a slot in the frontend would be a hole
-        straight through them: an empty name, one containing the reserved
-        separator, or a duplicate of another slot's would land in the
-        config entry unchallenged.
+        The name is the identity the configuration is keyed by, so this path
+        enforces the same rules the config flow does. Without it the ordinary
+        way to rename a user in the frontend would be a hole straight through
+        them: an empty name, or a duplicate of somebody else's, would land in
+        the config entry unchallenged.
         """
         name = normalize_name(value)
         if error := name_error(name):
             raise InvalidNameError(error, self._slot_num)
 
+        # Compared against every configured user, not only those holding a
+        # slot: a user without one is still a name that cannot be taken, and
+        # renaming onto them would be refused further down without an error
+        # ever reaching the caller.
+        config = get_entry_config(self._config_entry)
+        mine = config.name_for(self._slot_num)
         conflict = next(
             (
                 other
-                for other, slot in get_entry_config(self._config_entry).slots.items()
-                if other != self._slot_num
-                and normalize_name(slot.get(CONF_NAME)).casefold() == name.casefold()
+                for other in config.users
+                if other != mine and other.casefold() == name.casefold()
             ),
             None,
         )
@@ -469,14 +473,14 @@ class InvalidNameError(HomeAssistantError):
     """
 
     def __init__(
-        self, error_key: str, slot_num: int, conflicting_slot: int | None = None
+        self, error_key: str, slot_num: int, conflicting_name: str | None = None
     ) -> None:
-        """Store the error key and the slots involved."""
+        """Store the error key, the slot written to, and any user in the way."""
         self.error_key = error_key
         self.slot_num = slot_num
-        self.conflicting_slot = conflicting_slot
+        self.conflicting_name = conflicting_name
         self.placeholders = {
             "slot_num": str(slot_num),
-            "conflicting_slot": str(conflicting_slot),
+            "conflicting_name": str(conflicting_name),
         }
         super().__init__(f"{error_key} (slot {slot_num})")
