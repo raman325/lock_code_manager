@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "3f95eee6b82c",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-lock-occupancy",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/3f/95eee6b82c/0/metadata.json",
+      "transcript": "/3f/95eee6b82c/0/full.jsonl",
+      "compact_transcript": "/3f/95eee6b82c/0/transcript.jsonl",
+      "content_hash": "/3f/95eee6b82c/0/content_hash.txt",
+      "prompt": "/3f/95eee6b82c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 1079665,
+    "cache_read_tokens": 15310748,
+    "output_tokens": 24649,
+    "api_call_count": 30
+  }
+}
