@@ -71,6 +71,13 @@
         },
         "description": "The config is expected to be a dictionary where the key is the slot number. For more information, check the docs.",
         "title": "Configure slots"
+      },
+      "reauth_confirm": {
+        "data": {
+          "locks": "Locks"
+        },
+        "description": "The lock `{lock}`, in the configuration for `{name}`, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
+        "title": "Update locks for {name}"
       }
     }
   },

@@ -11,40 +11,41 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 
 from ..const import CONF_LOCKS, CONF_SLOTS, CONF_USERS
+from .names import normalize_name
 from .slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment, _identity
 
-_EMPTY_SLOTS: Mapping[int, Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_USERS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
 _EMPTY_EXTRA: Mapping[str, Any] = MappingProxyType({})
 
 # The keys EntryConfig models directly. Everything else in the entry is
 # internal bookkeeping and rides along in `extra`.
-_CONFIG_KEYS = frozenset({CONF_LOCKS, CONF_SLOTS})
+_CONFIG_KEYS = frozenset({CONF_LOCKS, CONF_SLOTS, CONF_USERS, CONF_SLOT_ASSIGNMENT})
 
 
-def _slots_from_users(mapping: Mapping[str, Any]) -> Mapping[Any, Mapping[str, Any]]:
+def _users_from_slot_shape(
+    raw_slots: Mapping[Any, Mapping[str, Any]],
+) -> tuple[Mapping[str, Mapping[str, Any]], SlotAssignment]:
     """
-    Rebuild the slot-keyed view from the user-keyed storage shape.
+    Accept the pre-version-3 slot-keyed shape as INPUT.
 
-    Storage moved to ``users`` in version 3; the rest of the integration still
-    works in slot numbers, and will for another increment or two. Rebuilding
-    here keeps that one change confined to this function -- every reader goes
-    through ``EntryConfig``, so none of them has to know which shape is on
-    disk.
+    One-directional and temporary. Nothing writes this shape any more --
+    :meth:`EntryConfig.to_dict` only ever emits the user-keyed one -- so there
+    is a single storage format and a single internal model. This exists purely
+    because the config flow still assembles slot-keyed input; it goes when
+    that does, and its absence will be a loud KeyError rather than a silent
+    reversion.
 
-    A user with no assigned slot is skipped rather than guessed at. Guessing
-    would put their code on a credential index somebody else may hold.
+    An unnamed slot falls back to its generated name rather than being
+    dropped, because a version 2 entry is allowed to have one.
     """
-    users = mapping.get(CONF_USERS)
-    if not users:
-        return {}
-    assignment = SlotAssignment.from_mapping(mapping)
-    rebuilt: dict[int, dict[str, Any]] = {}
-    for name, user in users.items():
-        slot_num = assignment.slot(name)
-        if slot_num is None:
-            continue
-        rebuilt[slot_num] = {CONF_NAME: name, **user}
-    return rebuilt
+    users: dict[str, dict[str, Any]] = {}
+    assignment: dict[str, int] = {}
+    for raw_num, slot in sorted(raw_slots.items(), key=lambda kv: int(kv[0])):
+        slot_num = int(raw_num)
+        name = normalize_name(slot.get(CONF_NAME)) or f"User {slot_num}"
+        users[name] = {k: v for k, v in slot.items() if k != CONF_NAME}
+        assignment[name] = slot_num
+    return MappingProxyType(users), SlotAssignment(slots=assignment)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,126 +53,158 @@ class EntryConfig:
     """
     Typed, normalized view of an LCM entry's configuration.
 
-    Slot keys are normalized to ``int`` at construction (the on-disk
-    JSON representation uses ``str``; voluptuous-validated user input
-    uses ``int``). ``slots`` is a deeply read-only mapping
-    (``MappingProxyType`` at both levels) so instances can be cached
-    without defensive copies.
+    Keyed by USER. The name is the identity: it is what the configuration is
+    stored under, what the dashboard shows, and what every layer above the
+    provider boundary works in. The slot number survives as internal
+    bookkeeping in :attr:`assignment`, and is looked up at exactly two places
+    -- provider writes, where it IS the lock's credential index, and registry
+    identifiers, which key on it so a rename moves nothing.
 
-    An instance is cached on ``LockCodeManagerConfigEntryRuntimeData.config``
-    and refreshed by the update listener. Most callers should access it
-    via ``entry.runtime_data.config``. Iteration helpers that walk
-    ``hass.config_entries.async_entries(DOMAIN)`` use
-    :func:`get_entry_config` to handle the unloaded-entry case.
+    Deeply read-only (``MappingProxyType`` throughout) so instances can be
+    cached without defensive copies. An instance is cached on
+    ``LockCodeManagerConfigEntryRuntimeData.config`` and refreshed by the
+    update listener; most callers should reach it via
+    ``entry.runtime_data.config``, or :func:`get_entry_config` for entries
+    that may not be loaded.
     """
 
     locks: tuple[str, ...]
-    slots: Mapping[int, Mapping[str, Any]]
+    users: Mapping[str, Mapping[str, Any]]
+    assignment: SlotAssignment
     # Every other top-level key in the entry, carried through verbatim.
     #
     # Deliberately has NO default. to_dict() feeds async_update_entry
     # directly, so a field that could be forgotten at a construction site
-    # would silently ERASE that bookkeeping on the next write. That is not
-    # hypothetical: without this, the update listener's terminal write dropped
-    # `users` and `slot_assignment` on every pass, so the migrated entry
-    # reverted to the slot-keyed shape and setup looped. Requiring the field
-    # makes mypy the check instead of memory.
+    # would silently ERASE whatever it holds on the next write. That is not
+    # hypothetical -- it erased the migrated shape on every listener pass and
+    # sent setup into a loop. Requiring it makes mypy the check, not memory.
     extra: Mapping[str, Any]
 
     @classmethod
     def empty(cls) -> EntryConfig:
-        """
-        Return a config representing an entry with no locks or slots.
-
-        Used as the initial value for ``runtime_data.config`` before the
-        entry's data has been read.
-        """
-        return cls(locks=(), slots=_EMPTY_SLOTS, extra=_EMPTY_EXTRA)
+        """Return a config for an entry with no locks and no users."""
+        return cls(
+            locks=(),
+            users=_EMPTY_USERS,
+            assignment=SlotAssignment.empty(),
+            extra=_EMPTY_EXTRA,
+        )
 
     @classmethod
     def from_entry(cls, entry: ConfigEntry) -> EntryConfig:
         """
         Build EntryConfig from a config entry, options-preferred.
 
-        Uses options-preferred precedence: during options-flow updates
-        the new config is in ``options`` while ``data`` still holds the
-        old config.
+        During an options-flow update the new configuration is in ``options``
+        while ``data`` still holds the old one. Bookkeeping is merged from
+        both sides rather than taken options-preferred: setup moves everything
+        from data into options and the listener moves it back, so which side
+        holds it depends on where in that cycle we are.
         """
-        # Bookkeeping is merged from BOTH sides rather than taken
-        # options-preferred the way configuration is. _setup_entry_after_start
-        # moves everything from data into options and the listener moves it
-        # back, so which side holds it depends on where in that cycle we are.
-        return cls.from_mapping(
-            {
-                **{k: v for k, v in entry.data.items() if k not in _CONFIG_KEYS},
-                **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
-                CONF_LOCKS: entry.options.get(
-                    CONF_LOCKS, entry.data.get(CONF_LOCKS, [])
-                ),
-                # Only set when a side actually HAS it. Defaulting to {} here
-                # would hand from_mapping an empty mapping rather than an
-                # absent key, so it would never rebuild the slot view from
-                # `users` -- and every reader would see an entry with no users
-                # at all.
-                **(
-                    {CONF_SLOTS: slots}
-                    if (
-                        slots := entry.options.get(
-                            CONF_SLOTS, entry.data.get(CONF_SLOTS)
-                        )
-                    )
-                    is not None
-                    else {}
-                ),
-            }
-        )
+        merged: dict[str, Any] = {
+            **{k: v for k, v in entry.data.items() if k not in _CONFIG_KEYS},
+            **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
+            CONF_LOCKS: entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, [])),
+        }
+        for key in (CONF_USERS, CONF_SLOT_ASSIGNMENT, CONF_SLOTS):
+            # Only set when a side actually HAS it. Defaulting to an empty
+            # mapping would make "absent" indistinguishable from "empty", and
+            # from_mapping would read an entry with users as having none.
+            value = entry.options.get(key, entry.data.get(key))
+            if value is not None:
+                merged[key] = value
+        return cls.from_mapping(merged)
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> EntryConfig:
         """
-        Build EntryConfig from a raw config mapping (data, options, or input).
+        Build EntryConfig from a raw config mapping.
 
-        Slot keys are normalized to ``int`` regardless of source. Inner
-        slot config dicts are wrapped in ``MappingProxyType`` so the
-        whole structure is read-only.
+        Accepts the pre-version-3 slot-keyed shape as input only; see
+        :func:`_users_from_slot_shape`. Nothing writes that shape any more.
         """
-        raw_slots = mapping.get(CONF_SLOTS)
-        if raw_slots is None:
-            raw_slots = _slots_from_users(mapping)
-        raw_locks = mapping.get(CONF_LOCKS, [])
+        raw_users = mapping.get(CONF_USERS)
+        if raw_users is None:
+            users, assignment = _users_from_slot_shape(mapping.get(CONF_SLOTS) or {})
+        else:
+            users = MappingProxyType(
+                {
+                    normalize_name(name): MappingProxyType(dict(user))
+                    for name, user in raw_users.items()
+                }
+            )
+            assignment = SlotAssignment.from_mapping(mapping)
         return cls(
-            locks=tuple(raw_locks),
-            slots=MappingProxyType(
-                {int(k): MappingProxyType(dict(v)) for k, v in raw_slots.items()}
+            locks=tuple(mapping.get(CONF_LOCKS, [])),
+            users=MappingProxyType(
+                {name: MappingProxyType(dict(user)) for name, user in users.items()}
             ),
+            assignment=assignment,
             extra=MappingProxyType(
                 {k: v for k, v in mapping.items() if k not in _CONFIG_KEYS}
             ),
+        )
+
+    @property
+    def slots(self) -> Mapping[int, Mapping[str, Any]]:
+        """
+        Return the slot-keyed view.
+
+        TEMPORARY, and derived rather than stored -- there is one model, and
+        this is a projection of it. It exists so the twenty-eight remaining
+        slot-keyed call sites can move one at a time instead of in a single
+        change nobody could review. Delete it, and this docstring, once they
+        have.
+
+        A user holding no slot is omitted: inventing a number would put their
+        code on a credential index somebody else may hold.
+        """
+        return MappingProxyType(
+            {
+                slot_num: MappingProxyType({CONF_NAME: name, **user})
+                for name, user in self.users.items()
+                if (slot_num := self.assignment.slot(name)) is not None
+            }
         )
 
     def has_lock(self, lock_entity_id: str) -> bool:
         """Return True if this entry manages the given lock."""
         return lock_entity_id in self.locks
 
-    def has_slot(self, slot_num: int | str) -> bool:
-        """
-        Return True if this entry manages the given slot number.
+    def has_user(self, name: str) -> bool:
+        """Return True if this entry configures a user with that name."""
+        return _identity(name) in {_identity(known) for known in self.users}
 
-        Accepts ``int`` or ``str`` to absorb the slot-key type variance
-        in the codebase (entities created during the listener may carry
-        either type as ``self.slot_num``). Internal storage is always
-        ``int``-keyed.
-        """
-        return int(slot_num) in self.slots
+    def user(self, name: str) -> Mapping[str, Any]:
+        """Return a user's configuration, or an empty mapping if absent."""
+        wanted = _identity(name)
+        return next(
+            (user for known, user in self.users.items() if _identity(known) == wanted),
+            _EMPTY_EXTRA,
+        )
+
+    def slot_for(self, name: str) -> int | None:
+        """Return the slot number a user occupies, or None if they hold none."""
+        return self.assignment.slot(name)
+
+    def name_for(self, slot_num: int | str) -> str | None:
+        """Return the user occupying a slot, or None if it is unoccupied."""
+        wanted = int(slot_num)
+        return next(
+            (name for name in self.users if self.assignment.slot(name) == wanted),
+            None,
+        )
+
+    def has_slot(self, slot_num: int | str) -> bool:
+        """Return True if a user occupies the given slot number."""
+        return self.name_for(slot_num) is not None
 
     def slot(self, slot_num: int | str) -> Mapping[str, Any]:
-        """
-        Return the slot config dict, or an empty mapping if absent.
-
-        Like :meth:`has_slot`, accepts ``int`` or ``str`` so callers
-        don't need to cast at every read site.
-        """
-        return self.slots.get(int(slot_num), {})
+        """Return the slot-shaped view of whoever occupies ``slot_num``."""
+        name = self.name_for(slot_num)
+        if name is None:
+            return _EMPTY_EXTRA
+        return MappingProxyType({CONF_NAME: name, **self.user(name)})
 
     def __sub__(self, other: EntryConfig) -> EntryConfigDiff:
         """
@@ -179,109 +212,79 @@ class EntryConfig:
 
         Sugar for ``EntryConfigDiff(old=self, new=other)``. Reads as
         ``old_config - new_config`` — note this is a *delta* (both adds
-        and removes), not strict set subtraction. The result includes
-        what changed in either direction.
+        and removes), not strict set subtraction.
 
         Returns ``NotImplemented`` for non-``EntryConfig`` operands so
-        Python's operator protocol falls back to ``__rsub__`` and
-        ultimately raises a clear ``TypeError`` rather than letting the
-        misuse fail deep inside ``EntryConfigDiff.__post_init__``.
+        Python's operator protocol raises a clear ``TypeError`` rather than
+        failing deep inside ``EntryConfigDiff.__post_init__``.
         """
         if not isinstance(other, EntryConfig):
             return NotImplemented
         return EntryConfigDiff(old=self, new=other)
 
+    def with_user_field_set(self, name: str, key: str, value: Any) -> EntryConfig:
+        """Return a copy with one user's field set, creating the user if new."""
+        stored = next(
+            (known for known in self.users if _identity(known) == _identity(name)),
+            normalize_name(name),
+        )
+        new_users = {k: dict(v) for k, v in self.users.items()}
+        new_users.setdefault(stored, {})[key] = value
+        return EntryConfig(
+            locks=self.locks,
+            users=MappingProxyType(
+                {k: MappingProxyType(v) for k, v in new_users.items()}
+            ),
+            assignment=self.assignment,
+            extra=self.extra,
+        )
+
+    def with_user_field_removed(self, name: str, key: str) -> EntryConfig:
+        """Return a copy with one user's field removed; a no-op if absent."""
+        stored = next(
+            (known for known in self.users if _identity(known) == _identity(name)), None
+        )
+        if stored is None or key not in self.users[stored]:
+            return self
+        new_users = {k: dict(v) for k, v in self.users.items()}
+        new_users[stored].pop(key, None)
+        return EntryConfig(
+            locks=self.locks,
+            users=MappingProxyType(
+                {k: MappingProxyType(v) for k, v in new_users.items()}
+            ),
+            assignment=self.assignment,
+            extra=self.extra,
+        )
+
     def with_slot_field_set(
         self, slot_num: int | str, key: str, value: Any
     ) -> EntryConfig:
-        """
-        Return a new EntryConfig with one slot's field set to ``value``.
-
-        Creates the slot if it doesn't already exist. Used by writer
-        paths (entity field updates, condition entity set service) to
-        produce the new config to hand to ``async_update_entry``, paired
-        with :meth:`to_dict`.
-        """
-        sn = int(slot_num)
-        new_slots: dict[int, dict[str, Any]] = {
-            k: dict(v) for k, v in self.slots.items()
-        }
-        new_slots.setdefault(sn, {})[key] = value
-        return EntryConfig(
-            locks=self.locks,
-            slots=MappingProxyType(
-                {k: MappingProxyType(v) for k, v in new_slots.items()}
-            ),
-            extra=self.extra,
-        )
+        """Set a field on whoever occupies ``slot_num``. TEMPORARY, as :attr:`slots`."""
+        name = self.name_for(slot_num)
+        if name is None:
+            return self
+        return self.with_user_field_set(name, key, value)
 
     def with_slot_field_removed(self, slot_num: int | str, key: str) -> EntryConfig:
-        """
-        Return a new EntryConfig with one slot's field removed.
-
-        No-op (returns ``self``) if the slot or key is already absent.
-        """
-        sn = int(slot_num)
-        if sn not in self.slots or key not in self.slots[sn]:
+        """Remove a field from whoever occupies ``slot_num``. TEMPORARY."""
+        name = self.name_for(slot_num)
+        if name is None:
             return self
-        new_slots: dict[int, dict[str, Any]] = {
-            k: dict(v) for k, v in self.slots.items()
-        }
-        new_slots[sn].pop(key, None)
-        return EntryConfig(
-            locks=self.locks,
-            slots=MappingProxyType(
-                {k: MappingProxyType(v) for k, v in new_slots.items()}
-            ),
-            extra=self.extra,
-        )
+        return self.with_user_field_removed(name, key)
 
     def to_dict(self) -> dict[str, Any]:
         """
         Return a plain mutable dict suitable for ``async_update_entry``.
 
-        Only includes the keys EntryConfig knows about (CONF_LOCKS and
-        CONF_SLOTS). Inner slot dicts are plain ``dict`` (not
-        ``MappingProxyType``) so HA's storage layer can serialize them.
-
-        Callers preserving other top-level keys in ``entry.data`` /
-        ``entry.options`` should merge: ``{**dict(entry.data),
-        **new_config.to_dict()}``. In practice LCM entries only carry
-        these two keys.
+        Emits the user-keyed shape only. There is one storage format, so a
+        write can never revert the entry to a previous one.
         """
-        # Emits the STORAGE shape, projected from the internal one. The
-        # internal view stays slot-keyed because the rest of the integration
-        # still works in slot numbers; only what reaches disk changed.
-        #
-        # Projected rather than carried through from `extra`, because edits
-        # land on the slot view -- a text entity setting a name or a code
-        # writes there. Re-emitting a stale copy of `users` would persist the
-        # configuration as it was before the edit.
-        #
-        # A slot with no name cannot be keyed by one, so the whole entry falls
-        # back to the slot-keyed form rather than dropping that user. Reachable
-        # only mid-config-flow, before validation has run.
-        carried = {
-            k: v
-            for k, v in self.extra.items()
-            if k not in (CONF_USERS, CONF_SLOT_ASSIGNMENT)
-        }
-        if any(not slot.get(CONF_NAME) for slot in self.slots.values()):
-            return {
-                **carried,
-                CONF_LOCKS: list(self.locks),
-                CONF_SLOTS: {k: dict(v) for k, v in self.slots.items()},
-            }
         return {
-            **carried,
+            **dict(self.extra),
             CONF_LOCKS: list(self.locks),
-            CONF_USERS: {
-                slot[CONF_NAME]: {k: v for k, v in slot.items() if k != CONF_NAME}
-                for slot in self.slots.values()
-            },
-            CONF_SLOT_ASSIGNMENT: {
-                _identity(slot[CONF_NAME]): num for num, slot in self.slots.items()
-            },
+            CONF_USERS: {name: dict(user) for name, user in self.users.items()},
+            CONF_SLOT_ASSIGNMENT: dict(self.assignment.slots),
         }
 
 

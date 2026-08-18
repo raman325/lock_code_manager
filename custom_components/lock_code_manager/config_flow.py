@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from functools import partial
 import logging
 from typing import Any
@@ -408,9 +408,6 @@ class LockCodeManagerFlowHandler(
         self.dev_reg: dr.DeviceRegistry = None
         self.slots_to_configure: list[int] = []
         self._init_existing_codes_state()
-        # See async_step_reauth: the entry's own data arrives as user_input,
-        # so only the flow's own history distinguishes a real submission.
-        self._form_shown = False
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -601,21 +598,26 @@ class LockCodeManagerFlowHandler(
             last_step=True,
         )
 
-    async def async_step_reauth(self, user_input: dict[str, Any] | None = None):
+    async def async_step_reauth(self, entry_data: Mapping[str, Any] | None = None):
         """
-        Handle reauth flow step.
+        Entry point for reauth. Home Assistant passes the ENTRY'S OWN DATA here.
 
-        ``async_start_reauth`` hands the ENTRY'S OWN DATA to this step as
-        ``user_input``, so "did the user submit the form?" cannot be answered
-        by inspecting it. It used to be answered by testing for the presence
-        of a configuration key, which stopped working the moment that key
-        left the entry: every initial invocation then read as a submission,
-        so the step updated the entry, reloaded it, and aborted -- and since
-        the reload fails setup again, that is an unbounded loop rather than a
-        wrong screen.
+        Delegated immediately, and the argument ignored, so the confirm step
+        can read ``user_input is None`` as "render the form" without having to
+        guess whether its caller was Home Assistant or the user. Answering
+        that by inspecting the payload -- testing for a configuration key --
+        turned into an unbounded setup loop the moment that key left the
+        entry, because a mistaken "the user submitted" updates the entry and
+        reloads it, and the reload fails setup again.
+        """
+        return await self.async_step_reauth_confirm()
 
-        ``_form_shown`` answers it directly instead. A flow instance shows
-        the form before it can receive one back.
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None):
+        """
+        Handle the reauth form.
+
+        Reached only through :meth:`async_step_reauth`, so ``user_input is
+        None`` unambiguously means "render the form".
         """
         config_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
@@ -673,9 +675,8 @@ class LockCodeManagerFlowHandler(
                 )
                 return self.async_abort(reason="locks_updated")
 
-        self._form_shown = True
         return self.async_show_form(
-            step_id="reauth",
+            step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
                     vol.Required(
