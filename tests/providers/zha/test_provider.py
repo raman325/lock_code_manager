@@ -936,15 +936,16 @@ async def test_occupied_indices_stops_at_the_limit(
     assert cluster.get_pin_code.await_count == 3
 
 
-async def test_occupied_indices_unknown_when_one_index_fails(
+async def test_a_failed_index_is_unreadable_not_empty(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """One unreadable index makes the whole answer unknown, not partial.
+    """An index the lock did not answer about is not an empty index.
 
-    A partial answer understates what is occupied, and an understated answer
-    is the one that overwrites a code.
+    Calling it empty understates what the lock holds, and an understated
+    answer is the one that overwrites a code. Only a read that fails outright
+    makes occupancy unknown; a single index does not.
     """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None

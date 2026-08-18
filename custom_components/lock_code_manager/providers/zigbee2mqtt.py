@@ -687,11 +687,6 @@ class Zigbee2MQTTLock(BaseLock):
         timeouts can fail an entire refresh and leave the coordinator with no
         data, which makes sync skip every slot (see
         ``SlotSyncManager._resolve_credential_snapshot``).
-
-        Publish, timeout and read failures all produce an unreadable
-        credential rather than an empty one, so sync does not take a
-        transient MQTT problem for a confirmed-empty slot and storm
-        reprogramming once MQTT recovers.
         """
         loop = asyncio.get_running_loop()
         future = loop.create_future()

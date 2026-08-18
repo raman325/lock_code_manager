@@ -275,8 +275,8 @@ class ZWaveJSLock(BaseLock):
         dropped.
 
         ``slots`` is ignored: the node read covers every user in one call,
-        so narrowing the question would save nothing. The projection bounds
-        the answer.
+        so narrowing the question would save nothing. The answer may
+        therefore name slots outside the scope, which callers filter.
 
         Uses the unified ``access_control`` API which dispatches to UC
         or U3C internally per node-zwave-js v15.24.3+. A User Code CC

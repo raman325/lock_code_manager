@@ -463,8 +463,9 @@ class MatterLock(BaseLock):
         filtered out because the coordinator and sync manager only manage PIN slots.
 
         ``slots`` is ignored: this reads every user on the device in one
-        call. What comes back is keyed by Lock Code Manager slot, recovered
-        from each user's tag -- not by Matter credential index, which the
+        call, so the answer may name slots outside the scope. What comes
+        back is keyed by Lock Code Manager slot, recovered from each user's
+        tag -- not by Matter credential index, which the
         lock allocates itself. Allocation knows not to read anything into a
         Matter index for that reason (``credential_index_follows_slot``),
         but the slots reported here are still real claims on a number.

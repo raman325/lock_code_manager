@@ -184,6 +184,22 @@ def _bare_lock(hass: HomeAssistant, unique_id: str) -> MockLCMLock:
     return MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
 
 
+async def test_occupied_indices_reads_a_real_provider_end_to_end(
+    hass: HomeAssistant,
+) -> None:
+    """The derivation runs against a provider read, not a stubbed one.
+
+    Every other test here patches ``async_get_usercodes``, which proves the
+    filtering and nothing about the seam it sits on. This one drives a
+    provider that implements the scope, so a signature that cannot accept it
+    fails here rather than in whatever lands next.
+    """
+    lock = _bare_lock(hass, "test_lock_occupancy_end_to_end")
+    lock.codes = {2: "1234", 9: "5678"}
+
+    assert await lock.async_internal_get_occupied_indices(5) == frozenset({2})
+
+
 async def test_occupied_indices_counts_everything_the_lock_holds(
     hass: HomeAssistant,
 ) -> None:

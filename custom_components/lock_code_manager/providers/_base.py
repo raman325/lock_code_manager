@@ -1800,11 +1800,14 @@ class BaseLock:
         ``user_from_slot``.
 
         ``slots`` names which credential indices to report on; ``None``
-        means the slots this integration manages. Providers that read the
-        whole lock in one call may ignore it -- the projection bounds the
-        answer. Providers that must ask the lock about one index at a time
-        MUST honour it, or a caller widening the question walks the lock's
-        entire advertised capacity one round trip at a time.
+        means the slots this integration manages. Providers that must ask
+        the lock about one index at a time MUST honour it, or a caller
+        widening the question walks the lock's entire advertised capacity
+        one round trip at a time. Providers that read the whole lock in one
+        call may ignore it, because the result is allowed to EXCEED the
+        scope -- the projection seeds the scope but overlays everything the
+        provider reports, so an unmanaged occupied slot stays visible on the
+        default path. A caller that needs the answer bounded must bound it.
 
         A wide scope is the caller's to justify. The whole read is one
         rate-limited operation, so on a per-index provider it holds the
