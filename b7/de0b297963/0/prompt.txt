@@ -1,0 +1,881 @@
+I'm thinking we need to move away from a slot based perspective to a user based perspective. That matches the HA unified credential API and also allows us to support e.g. multiple input types right?
+
+---
+
+yes
+
+---
+
+I don't think users should have to manage ids. If i create a user named, raman, do I care what slot they fill into?
+
+---
+
+I don't think users should have to manage ids. If i create a user named, raman, do I care what slot they fill into? thta's why list semantics seem reasonable. We need a set really because order doesn't matter and there's a uniqueness to each user
+
+---
+
+yes
+
+---
+
+move forward until all work is done and then open a PR
+
+---
+
+I think the reason I am struggling with the design is because we allow users to update the config directly. There's a way to make this smart such that users don't have to add an extra dimension they don't care about. I realize though that we also want to consider guest situations, so it's almost like we need a hybrid of users and slots, but not really because users tdon't care about slots. Help?
+
+---
+
+remember this shouldn't be a breaking change for users in the sense that things should just work when we migrate them
+
+---
+
+we can look up the old unique ID and update it
+
+---
+
+how many PRs will we have?
+
+---
+
+do we actually change unique IDs? or is that not in this PR. What does this PR do
+
+---
+
+run code review on this PR. Then walk me through how to test it
+
+---
+
+<task-notification>
+<task-id>a9bfadc5dc0625056</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a9bfadc5dc0625056.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1415" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I reviewed PR #1415 (`feat/credential-addressing`) with a full careful pass over the source diff plus surrounding context, verified every call site of the renamed/re-signatured APIs, and ran the full suite (1491 passed, 3 skipped) and mypy (only pre-existing errors, none on changed lines).
+
+No `ReportFindings` tool is available in this environment, so findings are stated here.
+
+**Verdict: the PR is what it claims — a mechanical, behavior-preserving addressing refactor.** I found no correctness bugs. All production callers of `desired_credential` / `is_verified` / `mark_verified` were converted (`sensor.py:88`, `providers/_base.py:1209`, `providers/zwave_js.py:889`), `SlotSyncManager` has exactly one constructor (`binary_sensor.py:144`), and `self._value_key` replaced every `CONF_PIN` entity-map lookup in `sync.py` with none left behind. `build_slot_unique_id` is f-string based so the `int()`-coercion move produces identical unique IDs.
+
+Four low-severity findings:
+
+- `custom_components/lock_code_manager/domain/sync.py:179` — the defensive `int()` on the slot number is no longer applied on the verification path. Previously `calculate_in_sync` called `is_verified(self._slot_num)` where `_slot_num = int(slot_num)`; it now passes `self._address`, whose `user_ref` is the raw value handed to `pin_address()` in `binary_sensor.py:150`, and `_user_ref_of` returns it uncoerced. The coordinator's `_unverified` set holds only ints (`_normalize_keys`). Inert today because `EntryConfig.from_mapping` int-coerces slot keys, but the surrounding `int(self.slot_num)` calls exist precisely to defend against a string slot number; if one ever reached here, `is_verified` would return `True` for every slot, silently disabling the unverified gate and letting a slot read in-sync while an optimistic write is still unconfirmed. Cheap fix: coerce in `pin_address` or return `int(address.user_ref)` from `_user_ref_of`.
+- `custom_components/lock_code_manager/domain/coordinator.py:48` — `address.credential_type is not CredentialType.PIN` is an identity check on a `NamedTuple` field with no runtime validation, against a `StrEnum`. `CredentialAddress(1, "pin")` — semantically a PIN address, and what any round-trip through JSON/diagnostics would produce — compares equal but not identical and is rejected with "Only PIN credentials are addressable". `!=` would be equivalent today and robust to that.
+- `custom_components/lock_code_manager/domain/sync.py:78` — the comment above `_VALUE_ENTITY_KEYS` says only "value-writable types appear" and gives learn-at-device credentials (fingerprint, face) as the exclusion rationale, but `RFID`, `NFC`, and `PASSWORD` are value-writable and are also absent. A future implementer wiring up RFID will hit `ValueError` from `value_entity_key` inside `SlotSyncManager.__init__` (i.e. entity platform setup fails) while the comment implies the omission was intentional-by-category rather than just not-yet-mapped.
+- `custom_components/lock_code_manager/providers/zigbee2mqtt.py:640` — stale comment referencing `SlotSyncManager._resolve_slot_state`, renamed to `_resolve_credential_snapshot` in this PR. Same stale name in `tests/test_binary_sensor.py:1988` and `:1995`.</result>
+<usage><subagent_tokens>114624</subagent_tokens><tool_uses>30</tool_uses><duration_ms>284267</duration_ms></usage>
+</task-notification>
+
+---
+
+cleared and set and it worked
+
+---
+
+merge it and start B
+
+---
+
+run code review on 1416
+
+---
+
+<task-notification>
+<task-id>a17b6253172c17564</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a17b6253172c17564.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1416" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The `ReportFindings` tool is not available in this environment (searched; no match), so I'm reporting inline.
+
+## Review: PR #1416 — `refactor: key coordinator storage by CredentialAddress`
+
+**Verification performed on the branch:** full suite `1494 passed, 3 skipped`; `ruff check`/`ruff format` clean; coverage `100.00%` (coordinator.py, sync.py, websocket.py, diagnostics.py, sensor.py, binary_sensor.py, `_base.py` all at 100%).
+
+**Correctness of the migration itself: clean.** I traced every call site of the old int-keyed `coordinator.data` and each one is either migrated or provably equivalent:
+
+- `sync.py:414/435`, `sensor.py:79/96`, `binary_sensor.py:158` — `_checked()` coerces `user_ref` to `int`, matching what the old direct `int(...)` lookups did. No behavior change.
+- `websocket.py:851` dropped the `and coordinator.data` guard, but `self.data` is initialized to `{}` in `__init__` and HA only reassigns it on successful refresh, so `{}.get(...)` → `None` is identical to the old short-circuit.
+- `_normalize_keys` is the sole producer of storage keys in every production path (`async_get_usercodes`, `push_update`, `_async_drift_check`, `async_confirm_pending_writes`), so stored `user_ref` is always `int` and `credentials_by_slot()`'s `sorted(data.items())` in the websocket payload stays sortable.
+- I checked the `StrEnum` hash/eq trap (`CredentialAddress(1, "pin")` vs `CredentialAddress(1, CredentialType.PIN)`): hashes match, so the loose `!=` guard in `_checked` vs the `is` comparison in `credentials_by_slot` is not a live inconsistency.
+
+### Findings (3, all low)
+
+`tests/test_diagnostics.py:214` — `assert 3 not in coordinator.data` is now vacuously true. The key flip makes `coordinator.data` `CredentialAddress`-keyed, so a bare `int` can never be a member; this pre-condition guard, which used to pin "slot 3 was never reported by the lock," can no longer fail regardless of coordinator state. It's the one `coordinator.data` key usage in `tests/` the mechanical re-key missed (grep-confirmed). Should be `pin_address(3) not in coordinator.data`. The test's real assertion (`slot_3_lock_1["coordinator_code"] is None`) still holds, so nothing is broken today — just an assertion that silently stopped guarding.
+
+`tests/providers/zwave_js/test_events.py:561` (and `:481`, `:781`, `:805`, `:836`; same pattern at `tests/providers/matter/test_provider.py:1475`, `:1510`, `:1545`, `:1652`) — the re-keyed `mock_coordinator.data = {pin_address(N): ...}` seeds are dead. Neither `zwave_js.py` nor `matter.py` reads `coordinator.data` (only `desired_credential` at `zwave_js.py:889`). I verified empirically: replacing the seed with `{}` leaves all 27 tests in `test_events.py` passing. The re-key is churn that reads as if it pins a storage-shape contract but pins nothing — worth either deleting the seeds or converting one into a real assertion, given this repo's 100%-line-but-unasserted history.
+
+`custom_components/lock_code_manager/domain/coordinator.py:186` — the new comment says `_pending_writes` is device-slot-keyed and "today the two coincide," and the PR body goes further: slot-keying there is "correct permanently, not pending migration." That claim doesn't hold for the capability this PR exists to enable. Once a slot stores two credential types, `_apply_read` iterates both `(5, PIN)` and `(5, RFID)`, both index `_pending_writes[5]`, and the first one processed executes `del self._lock._pending_writes[slot]`. The second address then sees `pending is None`, falls into the `else` branch, and gets `self._unverified.discard(address)` — an optimistic write that was never confirmed is silently marked verified, and `calculate_in_sync` will report success for it. Not reachable today (PIN-only), but it means `_pending_writes` does need to become address-keyed before a second type lands, contrary to the PR description.</result>
+<usage><subagent_tokens>146047</subagent_tokens><tool_uses>41</tool_uses><duration_ms>485896</duration_ms></usage>
+</task-notification>
+
+---
+
+merge and proceed
+
+---
+
+run code review
+
+---
+
+<task-notification>
+<task-id>bwepeixqu</task-id>
+<tool-use-id>toolu_01Tt65GujBfhAbAp1W4CRK1u</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/bwepeixqu.output</output-file>
+<status>failed</status>
+<summary>Background command "Wait for HA startup then check LCM logs" failed with exit code 255</summary>
+</task-notification>
+
+---
+
+run code review
+
+---
+
+<task-notification>
+<task-id>a65dc5ecc6a623f2e</task-id>
+<tool-use-id>toolu_013UXEv3a4azAKzQoPivHTWZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a65dc5ecc6a623f2e.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1417" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1417 (`feat/v3-user-schema`, 2 commits, base `v3`). Note: no `ReportFindings` tool is available in this session (searched the deferred tool list — it isn't there), so findings are given directly below.
+
+**What I verified as sound.** I brute-forced `normalize_slot_names` over all 2- and 3-slot combinations of a nasty candidate set (`None`, `""`, `"  "`, `"|"`, `"A"`, `"a"`, `"A 2"`, `"A|"`, `" A "`, `"User 1"`, `"User 2"`, `"A 2 2"`) and it holds every invariant it claims: output names are always present, separator-free, stripped, case-insensitively unique, idempotent under a second pass, and always accepted by `validate_slot_names`. The two-pass reserve/repair split is correct, and numeric ordering does make it deterministic. The migration block matches the shape of the v1→v2 and v2→v3 blocks and chains correctly. I also confirmed every config-writing path is now covered: `services.py` guards with `has_slot()` so it cannot create a nameless slot, `async_step_reauth` never touches slots, the TypeScript frontend is read-only over config entries, and the update listener only round-trips existing config. `pytest tests/test_names.py tests/test_text.py tests/test_config_flow.py tests/test_init.py` → 134 passed in a fresh worktree.
+
+Findings, all in the low/medium band — I found no hard correctness bug:
+
+- `custom_components/lock_code_manager/config_flow.py:196` — **medium.** `if CONF_NAME in str(err)` matches the substring `"name"` anywhere in the voluptuous error text, including the *path*, so unrelated failures are reported as `name_required`. Confirmed by running the schema: `{1: {"name": "Raman", "enabled": True, "pin": "1234", "friendly_name": "x"}}` yields `"extra keys not allowed @ data[1]['friendly_name']"`, and the user is told "Every code slot needs a name" for a slot that has one — sending them to exactly the logs this branch was written to avoid. Any key containing `name` (`username`, `display_name`) does it. Check `CONF_NAME in getattr(err, "path", [])` instead, which is exact and also survives a nested-path error.
+
+- `custom_components/lock_code_manager/config_flow.py:204` — **medium.** `validate_slot_names` returns the offending slot number and the flow passes it through as `{"slot_num": slot_num}`, but none of the three new strings in `strings.json` / `translations/en.json` reference `{slot_num}`. The placeholder is dead: a user submitting a 30-slot YAML block with one duplicate sees "Another code slot in this entry already uses that name" and has to find it by eye. This is precisely the outcome the `validate_slot_names` docstring says the return value exists to prevent ("'one of your slots has a duplicate name' is not actionable"). The frontend does format error strings with `description_placeholders`, so adding `(slot {slot_num})` to the three messages is all that's needed.
+
+- `custom_components/lock_code_manager/domain/slot_coordinator.py:459` — **low.** `InvalidNameError`'s docstring says it "carries the translation key so the entity can render the same message the config flow shows, rather than inventing a second wording", but `self.error_key` is never read: `text.py:83` raises `ServiceValidationError(str(err))`, i.e. the hardcoded English `messages` dict, which is a second wording *and* is not localized. A non-English user renaming a slot in the frontend gets an English toast whose text differs from the config-flow message for the same rule. `ServiceValidationError(translation_domain=DOMAIN, translation_key=self.error_key, translation_placeholders=...)` would deliver what the docstring promises. Relatedly, `InvalidNameError` subclasses `Exception` rather than `HomeAssistantError`, so any future caller that forgets the `try` turns a validation refusal into a 500-style unknown error.
+
+- `custom_components/lock_code_manager/strings.json:132` — **low.** While adding the three name keys to the `options.error` block, note that `slots_already_configured` is still missing from it (it exists only under `config.error`). The options flow reaches that error through the same `_async_validate_slots_yaml` → `_check_common_slots` path, so an options-flow user who submits slots owned by another entry sees the raw key `slots_already_configured` rendered instead of a message. Pre-existing, but it is in the block being edited and is a one-line fix.
+
+- `custom_components/lock_code_manager/config_flow.py:48` — **low, process.** Making `CONF_NAME` `vol.Required` is a user-facing breaking change for the hand-written-YAML path, and the wiki still documents the opposite: `Configuration-Structure.md:5` reads `name: fake_name  # this is optional`. Anyone copying that example into the YAML config or options flow now gets rejected. Existing entries are fine (the migration repairs them and the options flow pre-fills the repaired config), so the blast radius is small — but the wiki page needs updating alongside the merge, and per the repo's PR conventions the "Breaking change" checkbox is arguably the right one here rather than "New feature".</result>
+<usage><subagent_tokens>154231</subagent_tokens><tool_uses>40</tool_uses><duration_ms>474775</duration_ms></usage>
+</task-notification>
+
+---
+
+is it a breaking change for handwritten YAML? The YAML has to be input using the options flow or config flow right? so it gets converted automatically. The shape will change for users but nothing breaks
+
+---
+
+1417 merged
+
+---
+
+yes continue and open PR when done
+
+---
+
+continue. We will need to test everything live pre-release
+
+---
+
+<task-notification>
+<task-id>a00e35bb8f4949e2a</task-id>
+<tool-use-id>toolu_01Lu2ELkhwXU9pxQrXX6PxFW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a00e35bb8f4949e2a.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I reviewed the diff (`git diff origin/v3...pr-1422`, base branch `v3`). The `ReportFindings` tool is not available in this environment, so findings are stated directly below.
+
+## Findings
+
+**1. `ts/generate-view.ts:149` — HIGH: frontend still parses the slot number out of segment 1 of the unique ID.**
+`createLockCodeManagerEntity` does `slotNum: parseInt(split[1], 10)` on `entity.unique_id`. After this PR segment 1 is the user's name, so `parseInt("Alice")` is `NaN`. `getSlotMapping` (generate-view.ts:291/304/307) filters with `entity.slotNum === slotNum`, which never matches, so a user with `use_slot_cards: false` (the legacy entities-card path in `slot-section-strategy.ts:85`) gets slot sections with no main entities, no code sensors, and no code-event entity. The vitest fixtures use slot-numbered unique IDs, so the TS suite stays green while production breaks. `getEntityDisplayName` (line 182) also silently stops stripping the `Code slot N ` prefix.
+
+**2. `custom_components/lock_code_manager/__init__.py:1139` — HIGH: renaming a user through the options/YAML flow never moves the registry identifiers.**
+`async_rename_identifiers_for_slot` is only called from `SlotEntityCoordinator.async_request_name_update` (the text entity). The options flow writes the whole slots block, and `async_update_listener` only acts on `slots_added`/`slots_removed`/`locks_*` — a name change on an existing slot is invisible to it. Concretely: edit slot 1's name from "Alice" to "Bob" in the options flow, restart. Entities re-register under `{entry}|Bob|…` while the registry still holds `{entry}|Alice|…`; the `{entry}|Alice` device is then pruned by `_async_prune_orphaned_slot_devices` at setup, which cascades in HA (`entity_registry.async_device_modified`) to deleting every one of that slot's entity registry rows — history, customizations, and any manually-assigned entity IDs go with them. This is exactly the duplicate/orphan outcome the PR states it must avoid, left open on one of the two rename paths.
+
+**3. `custom_components/lock_code_manager/domain/identifier_migration.py:153` — MEDIUM: the rename path has neither of the safety guards the migration path has.**
+`async_migrate_identifiers_to_names` wraps `async_update_entity` in `try/except ValueError` and pre-checks the device target; `async_rename_identifiers` does neither. If a target unique ID is already taken (a leftover row from a slot whose device removal failed — see finding 4), `async_update_entity` raises `ValueError` mid-loop: some entities are already on the new name, the rest are not, and `_write_config_fields` never runs — so the registry is split even though the docstring at line 138 promises "a failure leaves both the registry and the configuration on the old name." The raw `ValueError` also surfaces to the user from `text.async_set_value` instead of an `InvalidNameError`. Separately, `dr.async_update_device` performs no identifier-collision check (HA's `_async_update_device` just assigns `new_identifiers`), so a colliding device rename silently produces two devices sharing one identifier and corrupts `async_get_device` lookups.
+
+**4. `custom_components/lock_code_manager/__init__.py:921` — MEDIUM: identifiers are built from `normalize_name()` but compared against the raw config value.**
+`slot_name()` (queries.py) returns `normalize_name(name)`, so devices/entities are keyed on the stripped name. But `_async_prune_orphaned_slot_devices` builds `configured` from raw `slot.get(CONF_NAME)`, and so do `async_remove_config_entry_device` (line 969), `removed_user_names` (line 1160), `slot_for_name` (queries.py), and `async_rename_identifiers_for_slot` (identifier_migration.py:176). The YAML/options path stores names verbatim — `CODE_SLOT_SCHEMA` is `cv.string` and `_async_validate_slots_yaml` validates without normalizing (config_flow.py:48, 208) — so `name: "Alice "` is storable. Then the device `{entry}|Alice` parses to `"Alice"`, which is not in `{"Alice "}`, so on *every* setup the user's device is pruned and HA cascades the removal to all of that slot's entity registry rows. The same slot also can never be renamed via the text entity, because `old_prefix` is built from the raw `"Alice "`.
+
+**5. `custom_components/lock_code_manager/domain/identifier_migration.py:110` — MEDIUM: a collision-skipped device is deleted by the next setup anyway.**
+When the device rewrite is skipped (target exists), the device keeps `{entry}|{slot_num}`. `parse_user_device_identifier` no longer round-trip-validates the suffix, so at the next `async_setup_entry` that device parses as the "name" `"3"`, is not in the configured names, and `_async_prune_orphaned_slot_devices` removes it — taking its entities with it. Same for the entity-collision branch at line 88: the row keeps the old unique ID and is orphaned. That directly contradicts the PR's stated guarantee that collisions are "logged and skipped, never resolved by deleting."
+
+**6. `custom_components/lock_code_manager/entity.py:65` — MEDIUM-LOW: "a rename tears the entity down and rebuilds it" is not true, and a stale cached unique ID can strand a sync manager.**
+A text-entity rename writes to `data` with empty `options`, and `async_update_listener` early-returns before any entity work (`__init__.py:1096`), so nothing is rebuilt. `SlotSyncManager` captures `slot_name(...)` once at construction (`sync.py:199-215`) and `_build_entity_id_map` only caches IDs it has already resolved (`sync.py:356-359`). If a rename lands while any of the four role entities is still unresolved (e.g. during startup), that manager looks up the old-name unique ID forever, `_resolve_credential_snapshot` keeps returning `None`, and the slot stops syncing until the entry reloads.
+
+**7. `custom_components/lock_code_manager/domain/config.py:325` — LOW: the retained legacy builders are dead and their contract is misleading.**
+`build_slot_unique_id`, `build_slot_device_identifier`, and `parse_slot_device_identifier` now say they are "retained only so the migration can find the entries it needs to rewrite," but nothing calls them — the migration builds `f"{entry_id}|{slot_num}"` inline (`identifier_migration.py:105`) and matches unique IDs by splitting. Either route the migration through them or drop them; as written a future edit to the migration format has two sources of truth again, which is the exact failure the PR fixed in `websocket.py`/`diagnostics.py`.</result>
+<usage><subagent_tokens>140781</subagent_tokens><tool_uses>58</tool_uses><duration_ms>565327</duration_ms></usage>
+</task-notification>
+
+---
+
+go for review
+
+---
+
+<task-notification>
+<task-id>ae27e64ee3c06039d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/ae27e64ee3c06039d.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I reviewed PR #1422 (`feat/v3-name-unique-ids`, head `6a182d2a`, base `v3`). No `ReportFindings` tool was available in this session, so the findings are stated inline below. I verified the two high-severity ones empirically with throwaway probes (since removed); the full Python suite (1531 passed) and TS suite (716 passed) both pass, which is exactly why these slipped through.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/__init__.py:1124` — HIGH. The `return` in the rename branch aborts the rest of `async_update_listener`, so an options-flow submission that renames a user *and* changes anything structural is half-applied, and the pending `options` are never committed to `data`.**
+
+The options flow rewrites the whole slots block, so "rename slot 1 and add slot 3" is one update. Verified: after such an update, slot 3's entities are never created (`data` still holds 2 slots, `options` stays non-empty), and `_async_notify_lovelace_dashboards` is never reached.
+
+Worse, the stale `options` then poison the next write. Verified sequence: rename slot 1 via options → early return leaves `data` stale and `options` set → user edits slot 1's PIN via the text entity → the listener now runs the full path with `new_config = EntryConfig.from_mapping(config_entry.options)` (the stale options) and finishes with `async_update_entry(data=new_config.to_dict(), options={})`, **silently reverting the PIN edit**:
+
+```
+FINAL slot 1: {'name': 'Zaphod', 'pin': '1234', 'enabled': True}   # expected pin '4321'
+```
+
+The rename rewrite needs to happen without skipping the rest of the function (the `if not config_entry.options: return` guard below already covers the text-entity path).
+
+**2. `ts/generate-view.ts:166` — HIGH. `buildSlotNumForName` reads `configEntryData.slots` as slot→name, but the websocket sends slot→*condition entity id*, so every entity resolves to `slotNum: NaN` and the slot-section strategy renders nothing.**
+
+`websocket.py:417` builds that payload as `{k: v.get(CONF_ENTITY_ID) for k, v in entry_config.slots.items()}` — the same map `getSlotMapping` reads at `generate-view.ts:338` as `calendarEntityId`. The existing fixtures confirm it (`slots: { 1: 'calendar.slot_1', 2: null }`). Verified with the real payload shape:
+
+```
+MAP: [ [ 'calendar.test_1', 2 ] ]
+slotNum: NaN   (expected 1)
+```
+
+Every unit test passes because they hand-build a `Map&lt;name, slotNum&gt;` that the production caller can never produce. Either add the name to the websocket payload (new key, or change `slots` to carry both) or derive the map from the unique IDs themselves.
+
+**3. `custom_components/lock_code_manager/domain/identifier_migration.py:81` — LOW. The rewrite loop can orphan a row when one slot's name is the digit string of another slot's number, and the "skip on collision" fallback is then undone by the orphan prune.**
+
+With slots `{1: "2", 2: "Bob"}` and registry order slot 1 first, `entry|1|pin` → `entry|2|pin` collides with slot 2's live row → logged and skipped. Slot 2's row then moves to `entry|Bob|pin`, freeing `entry|2|pin`, so at setup slot 1 registers a *new* row under a *new* entity ID while the old row lingers — the duplicate-registration outcome the module's docstring says the design must avoid. The docstring only considers this hazard for re-runs, not within a single run; processing `mapping` in an order that resolves the chain (or two passes, like `normalize_slot_names` already does) would close it. Related: a device left under its old numeric identifier by the same collision path is deleted outright by `_async_prune_orphaned_slot_devices` on the next setup (its name isn't configured), taking its entities with it — contradicting the "collisions are never resolved by deleting" guarantee.
+
+**4. `tests/test_config.py:479` and `tests/properties/test_identifier_codec.py:1` — LOW. Passing tests unrelated to this change were deleted without replacement.**
+
+`test_to_dict_round_trips_through_from_mapping`, `test_to_dict_produces_plain_mutable_dicts`, `test_has_changes_is_true_for_each_field_alone` (explicitly written to close a mutation-testing gap on the `has_changes` disjuncts) and the property test `test_parse_is_total` are all gone; none of them touch the slot→name codecs this PR replaces. `to_dict`/`from_mapping` and the four `has_changes` disjuncts are unchanged code that is now unpinned.</result>
+<usage><subagent_tokens>169410</subagent_tokens><tool_uses>56</tool_uses><duration_ms>647150</duration_ms></usage>
+</task-notification>
+
+---
+
+do a fourth review
+
+---
+
+<task-notification>
+<task-id>a1c1a57adf0103863</task-id>
+<tool-use-id>toolu_01Fd2ETNYYeQFsUsQmF8zCGn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a1c1a57adf0103863.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1422 (`feat/v3-name-unique-ids`) at its actual head `6544ead5` — note the local `pr-1422` branch is two commits stale (`626e57c9`), so I fetched the PR head into `refs/remotes/pr/1422` and reviewed in a throwaway worktree (since removed). Full suite passes there (1541 passed, 3 skipped). Findings 1 and 2 were confirmed empirically with throwaway probe tests, not just by reading.
+
+No `ReportFindings` tool is available in this environment, so the findings are below.
+
+**Findings**
+
+- `custom_components/lock_code_manager/domain/identifier_migration.py:148` — **high**: `async_rename_identifiers` is single-pass with no collision retry, and `__init__.py:1127` calls it per slot in slot order, before slot removals. Verified: an options submission renaming slot 1 `test1`→`test2` and slot 2 `test2`→`test3` logs 10 "target already in use" warnings and leaves all 9 of slot 1's entity rows plus its device stranded on `…|test1…` while its configured name is `test2`. Until a reload that slot silently stops converging (`SlotSyncManager._unique_ids_for_current_name` resolves nothing), `async_disable_slot` can't find its `enabled` switch, and the frontend resolves no entities for that user. Across a restart (rows survive shutdown; they're only deleted on unload) the fresh entities register under `…|test2…`, collide on entity_id and get `_2` suffixes — the duplicate this module exists to prevent — plus a stale device the prune now refuses to reap. The migration has an explicit repeat-until-stable loop for exactly this; the rename path needs the same, or must run after `slots_to_remove` processing.
+- `custom_components/lock_code_manager/domain/identifier_migration.py:88` — **medium**: the repeat-until-stable loop can rewrite one slot's rows onto a *different* slot's identifier when a name is a decimal string. Verified with `slots={1:{name:"2"}, 2:{name:"Bob"}}` and only slot 1's rows seeded: pass 1 moves `…|1|pin`→`…|2|pin`, pass 2 reads segment `2`, maps it to `Bob`, and moves it again to `…|Bob|pin`. Slot 1's registry row — its entity_id, history, and every automation targeting it — becomes Bob's PIN entity. The docstring at :65-69 claims this "cannot happen in practice because the config entry version gates this to a single run"; the double rewrite happens *within* one run. Fix: track entity ids already moved this run and skip them on later passes.
+- `custom_components/lock_code_manager/domain/identifier_migration.py:71` — **low**: the mapping uses the raw `slot[CONF_NAME]`, while every runtime builder resolves through `queries.slot_name()`, which applies `normalize_name()`. A v4 entry whose YAML-entered name has surrounding whitespace (the v4 flow did not normalize — this PR adds that at `config_flow.py:216`) migrates to `…|Raman |pin` while the entities that register are `…|Raman|pin`: every row orphaned and duplicated. Same raw-vs-normalized divergence at `__init__.py:925` and `__init__.py:983`, which compare identifier-derived names against the raw config value.
+- `custom_components/lock_code_manager/__init__.py:936` — **low**: the new "never remove a device that still has entities" guard is vacuous on the reload path. LCM deletes its own entity registry rows during unload, and the prune runs at the top of `async_setup_entry` before platforms are forwarded, so `er.async_entries_for_device` returns 0 for every device there (confirmed by instrumenting the prune across a reload). It only bites on a cold restart; the comment reads as if it protects both.
+- `ts/generate-view.ts:210` — **low**: the new strip and its comment assert "the device is named after the user now", but `entity.py:76` still sets `name=f"{config_entry.title} Code slot {slot_num}"` — the device name was never changed. So `^{userName}\s*` strips a prefix HA never prepends, and mangles labels when a name prefixes the entity name: a user named `P` renders the PIN entity as "IN" (only an exactly-empty result is rescued by the `if (!name)` fallback).
+- `custom_components/lock_code_manager/domain/names.py:23` — **nit**: the `NAME_SEPARATOR` comment still documents identifiers as `{entry_id}|{slot_num}` and refers readers to `parse_slot_device_identifier`, which this PR deletes.
+
+One environment note: early on I ran `git checkout refs/remotes/pr/1422 -- .` in your main checkout, which reverted the uncommitted change to `.entire/.gitignore` before I switched to a worktree. The file is tool-managed and currently matches HEAD; the rest of the tree is restored and clean.</result>
+<usage><subagent_tokens>202259</subagent_tokens><tool_uses>75</tool_uses><duration_ms>947308</duration_ms></usage>
+</task-notification>
+
+---
+
+should B2 be split further?
+
+---
+
+do the consolidation then run the code review
+
+---
+
+<task-notification>
+<task-id>afecdd7318b394f50</task-id>
+<tool-use-id>toolu_01CCyPqScTtJWsJWeeF8mi4e</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/afecdd7318b394f50.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1422 (`feat: key entity and device identifiers by user name`, head `669f356f` vs base `v3`). I read every hunk and verified the two most serious findings with throwaway probe tests against the PR branch (removed afterward; the suite is green at 1558 passed).
+
+There is no `ReportFindings` tool available in this session, so the findings are below.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/__init__.py:1134` — high.** The rename block runs at the *top* of `async_update_listener`, before the removed slots' entities and devices are torn down (~line 1200-1218). An options submission that removes a user and reassigns their name to another slot — remove slot 2 (`test2`), rename slot 1 `test1` → `test2` — hits every target still occupied. Verified: all 9 of slot 1's entity rows and its device stay on `…|test1`, with 10 "target already in use" warnings, while the config says `test2`. On the next restart the entities register under `…|test2|*`, minting duplicate entity IDs and orphaning the originals — precisely the outcome `identifier_migration`'s module docstring says the design must avoid. Note a naive reorder is not enough: `_async_remove_slot_devices` (line 1218) resolves the departing slot's device *by name*, so if the rename ran first it would delete the renamed slot's device and cascade-delete its entities. The freed names and the renames have to be resolved together.
+
+**2. `custom_components/lock_code_manager/domain/identifier_migration.py:121` — medium.** The device pass is a single ordered walk of `mapping`, while the entity pass repeats until stable. A chained rename strands the device: verified with `async_rename_identifiers(hass, eid, {"test1": "test2", "test2": "test3"})` seeded with both devices — `test1`'s device stays at `…|test1` (warning logged) while `test2`'s moves to `…|test3`, even though `…|test2` is free by the end. The result depends on `mapping` insertion order, so the same submission succeeds or fails depending on slot ordering. `test_rename_resolves_a_chain_within_one_submission` asserts only the entity rows, which is why this is green. The entity loop's repeat-until-stable structure needs to cover the device pass too (or both passes need to interleave).
+
+**3. `custom_components/lock_code_manager/domain/queries.py:131` — low.** `slot_for_name` compares the **raw** config value (`slot.get(CONF_NAME) == name`) against a name recovered from an identifier, which is always the **normalized** form. Every other consumer normalizes (`slot_name`, `_async_prune_orphaned_slot_devices`, `async_remove_config_entry_device`). The v4→v5 migration normalizes the *identifier* but leaves the stored config name padded — a state the migration's own docstring says exists for YAML-configured v4 entries — so for those entries `async_get_device_diagnostics` on a slot device silently returns entry-level diagnostics instead of slot diagnostics. Normalizing here (and ideally writing normalized names back in the v4→v5 migration) closes it.
+
+**4. `custom_components/lock_code_manager/websocket.py:424` — low/medium.** `ATTR_SLOT_NAMES` sends the raw config name, but `buildSlotNumForName` in `ts/generate-view.ts` keys its lookup on it and matches against segment 1 of the unique ID, which is normalized. Same padded-v4-name cohort as #3: every entity resolves to `NaN` and every slot section renders empty — the exact failure the new comment in `createLockCodeManagerEntity` warns about. The same blank-section outcome also follows any rename the migration/rename path had to skip on collision (registry keeps the old name, config carries the new one), so the "leave it on the old identifier, it keeps working" fallback is not actually transparent to the dashboard.
+
+**5. `custom_components/lock_code_manager/__init__.py:951` — low.** Adding `and not er.async_entries_for_device(...)` to the orphan sweep makes it a no-op on the path where it mattered. On a cold restart the previous session's entity rows are still in the registry, so a device orphaned while the entry was unloaded (or by a config edited outside HA) has entities and is never pruned — and nothing later removes those rows, since unload only removes rows for *configured* slots. That reopens the stuck-undeletable-device shape of issue #1399 for that path; the guard should probably test for rows that the entry will actually re-create rather than for any rows at all.
+
+## Notes (not filed as findings)
+
+- I initially suspected the text-entity rename path was dead, because `_write_config_fields` eagerly overwrites `runtime_data.config` before the listener task runs, which would make `previous_config` equal the new config. It works only because HA starts update-listener tasks eagerly, so the listener body runs synchronously up to its first `await`, inside `async_update_entry`. Correct today, but the rename path depends on an undocumented HA scheduling detail; a comment at `__init__.py:1112` noting that would be worth adding.
+- A whitespace-only rename produces an identity mapping (`{"Bob": "Bob"}`), and the device pass then logs `cannot move device X to X -- target already exists`. Harmless, but an `old == new: continue` guard would suppress the noise.
+- `_get_slot_in_sync_entity_ids` recomputes `slot_name_by_entry_id` inside the per-lock loop; pure inefficiency.</result>
+<usage><subagent_tokens>190868</subagent_tokens><tool_uses>57</tool_uses><duration_ms>640558</duration_ms></usage>
+</task-notification>
+
+---
+
+,ick off the review and then write the design while its ongoing
+
+---
+
+<task-notification>
+<task-id>a24f3a7e25dd6c2b3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a24f3a7e25dd6c2b3.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The `ReportFindings` tool is not available in this environment (searched; no match), so findings are below.
+
+## Review: PR #1422 — `feat: key entity and device identifiers by user name`
+
+Two of these are reproduced with runnable tests (I wrote them in a scratch worktree, ran them against the branch, and deleted them).
+
+### Findings
+
+**1. `custom_components/lock_code_manager/domain/identifier_migration.py:124` — HIGH.** The device remap loop has neither of the two guards the entity loop above it has: no "already moved this run" tracking and no repeat-until-stable pass. Two concrete failures, both reproduced against the branch with `{1: {name: "2"}, 2: {name: "Bob"}}`:
+- *Double move.* If slot 2 has no device row yet, iteration 1 moves slot 1's device `{eid}|1` → `{eid}|2`; iteration 2 then looks up `{eid}|2`, finds the device it just moved, and moves it again to `{eid}|Bob`. Slot 1's device row — with its area, name "Code slot 1", and entity rows — ends up as Bob's device. This is the exact hazard the docstring says is prevented ("Rows already moved this run are never moved again"); that sentence is only true of entities.
+- *Strand.* If slot 2's device does exist, iteration 1 hits the collision check and skips, iteration 2 frees `{eid}|2`, and nothing retries slot 1 — it stays on `{eid}|1` forever. `test_rewrite_resolves_a_collision_chain` covers this for entities; there is no device equivalent.
+
+**2. `custom_components/lock_code_manager/__init__.py:928` — HIGH.** `_async_prune_orphaned_slot_devices` deletes any device whose parsed name is not in the configured set, and Home Assistant cascades a device removal to every entity registry row on that device belonging to the same config entry (`homeassistant/helpers/entity_registry.py`, `_handle_device_registry_update`). So every device the migration deliberately *skipped* on collision (finding 1, and `test_rewrite_leaves_device_alone_on_collision`) is reaped on the very next `async_setup_entry`, taking its entities' IDs, history, and customizations with it. That inverts the stated design: "Collisions are logged and skipped, never resolved by deleting." Reproduced: seed a device `{eid}|Bob` with one entity, config name `Bobby`, call the function — both device and entity row are gone. The guard reverted in commit `9289cf1f` was what prevented this; its removal needs a different fix than reinstating it wholesale (e.g. only prune devices whose identifier no longer parses to *any* live entity's unique-ID segment).
+
+**3. `custom_components/lock_code_manager/domain/slot_coordinator.py:236` — HIGH.** The comment says "The registry rewrite is NOT done here. It runs from the config entry update listener," but commit `9289cf1f` removed the rename block from `async_update_listener` entirely. As shipped, renaming a user (name text entity or options flow) writes the new name to config and moves nothing in the registry. On the next restart the slot's device is still identified by the old name, so finding 2 fires: device pruned, entity rows cascaded away, and the entities re-register under fresh unique IDs and fresh entity IDs — breaking every automation/dashboard reference. Rename is a routine operation and was harmless before this PR (identifiers were slot-keyed). The PR body still claims "Renaming a user runs the same rewrite, before the config write," which is no longer true. At minimum this needs to be called out as a known regression, and ideally rename should be blocked or the prune neutered until the follow-up lands.
+
+**4. `custom_components/lock_code_manager/entity.py:63` — LOW.** Same stale claim: "This is NOT refreshed on rename … the rename moves that [registry row]." Nothing moves the registry row any more. Comment should be corrected alongside finding 3 so the next reader doesn't conclude rename is handled.
+
+**5. `ts/generate-view.ts:141` — LOW.** `slotNumForName` is optional, and when omitted every entity silently gets `slotNum: NaN` — which is precisely the failure this change was fixing (NaN matches no slot, sections render empty). There is one production caller today and it passes the map, but the optional parameter re-arms the same silent trap for the next caller. Making it required would make the mistake a compile error.
+
+### Verified as correct
+- All callers of the renamed builders (`build_user_unique_id`, `build_user_device_identifier`, `parse_user_device_identifier`) and of the re-signatured websocket helpers (`_slot_unique_id`, `_build_slot_entities`, `_in_sync_entity_id`) are updated; no stragglers.
+- No import cycle from `domain/util.py` → `domain/queries.py`.
+- Entity-side chain resolution, cycle termination, and normalization on migrate are all correct and well covered.
+- `slot_names` normalization on the websocket side matches what the frontend compares against, and the generated JS bundle is in sync with `ts/`.</result>
+<usage><subagent_tokens>160176</subagent_tokens><tool_uses>48</tool_uses><duration_ms>456082</duration_ms></usage>
+</task-notification>
+
+---
+
+two random thoughts:
+
+1. should rename be remove then add instead?
+2. should slots be keyed by name  now? put another way, should we demote the concept of a slot and just ask for the number of users?
+
+---
+
+fix the spec, fold both into b2c design then run codee review on 1422
+
+---
+
+what version do we start at in the current release and end at with this release? It feels like we're treating these PRs as separate releases, but the version only needs to bump once for the entire release
+
+---
+
+I am talking about hte config entry version
+
+---
+
+fix PR description
+
+---
+
+<task-notification>
+<task-id>a9ea079384fb17afb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a9ea079384fb17afb.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1422 (`feat/v3-name-unique-ids`, base `v3`, 28 files) hunk by hunk, opened surrounding code, and verified the interesting hypotheses with throwaway probe tests in a scratch worktree. Full suite passes (1559 passed, 3 skipped, ~57s).
+
+Note: no `ReportFindings` tool is exposed in this session (searched the deferred tool list; it isn't there), so findings are below.
+
+**Verified non-issues** (worth recording, since they look wrong on paper):
+- I suspected `_write_config_fields`'s eager `runtime_data.config` refresh would make `previous_config` already-new and silently no-op the text-entity rename. It does not: `hass.async_create_task` starts eagerly, so the listener body runs synchronously inside `async_update_entry` before the refresh. Probe confirmed the rename moves both the entity rows and the device.
+- Removal-before-rename ordering, chain resolution (`a→b` alongside `b→c`), prefix safety (`Ram` vs `Raman`), and the `entry_id`-only hub device all behave as documented.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/domain/identifier_migration.py:103` — medium. A cyclic rename (two users swapping names in one options submission) strands every row, and the rows then belong to the wrong user.** Verified: renaming slot 1 `test1→test2` and slot 2 `test2→test1` in one `async_update_entry(options=…)` moves nothing — 18 entity warnings plus 2 device warnings — because each target is held by the other slot, which is also in the mapping. "Leaving as-is" is safe when the occupant is unrelated, but here slot 1's rows sit under `…|test1|…`, a name that now belongs to slot 2. On the next restart entities register by current name, so slot 1's entities adopt slot 2's registry rows: entity IDs, history, and device assignment cross over (slot 1's entities land on the device titled "Code slot 2"). A cycle needs a two-phase move through a temporary segment (e.g. move to `…|name|&lt;uuid&gt;|…` first, then to the target), or the rename should be refused up front. As written the only signal is log warnings — no repair issue.
+
+**2. `custom_components/lock_code_manager/__init__.py:927` — medium. A device left behind by the collision fallback is guaranteed to be deleted by the orphan sweep on the next setup, contradicting the "leaving as-is" promise.** `_async_prune_orphaned_slot_devices` prunes any device whose parsed identifier is not a configured name. After a blocked rename `A→B`, the device stays on `entry|A` while the config now says `B`, so the very next `async_setup_entry` prunes it. Probe: with a stale `entry|Bob` device blocking the move, renaming slot 1 to "Bob" logged "cannot move device … target already exists", and after a reload `entry|test1` was gone — the slot's device row (its area, labels, name_by_user) destroyed, its entities re-pointed at the unrelated stale device. The same applies to a v4→v5 migration whose device move collides. Either the prune needs to skip identifiers it just warned about, or the collision path needs to reconcile rather than warn.
+
+**3. `custom_components/lock_code_manager/domain/identifier_migration.py:182` — low. The v4→v5 migration logs a false "cannot move device X to X — target already exists" for any slot whose name equals its own slot number.** `async_rename_identifiers` filters identity mappings for exactly this reason (line 213-220); `async_migrate_identifiers_to_names` does not. Probe with `{1: {"name": "1"}}` and a seeded `entry|1` device: `changed == 0` and a warning naming the same identifier on both sides. Harmless to state but it points users at a nonexistent problem during an upgrade.
+
+**4. `custom_components/lock_code_manager/domain/queries.py:110` (consumer `domain/util.py:138`) — low. `slot_name`'s fallback shares a namespace with user-chosen names, so a lookup for an unconfigured slot can resolve another user's entity.** `fallback_name(n)` returns `"User {n}"`, which is also exactly what the v3→v4 migration hands out, so a real slot can legitimately be named "User 3". `async_disable_slot` is the one caller that can hit the fallback (it runs for a slot that may already have left the config), and it does not verify the resolved entity belongs to the requested slot — it just calls `switch.turn_off` on whatever it found. Scenario: slot 5 is named "User 3", slot 3 is removed from config, a pending sync failure calls `async_disable_slot(..., slot_num=3)` → resolves slot 5's `enabled` switch and disables the wrong user. Cheap fix: return `None` from a strict variant and have `async_disable_slot` bail rather than fall back.
+
+**5. `custom_components/lock_code_manager/websocket.py:429` — low. `ATTR_SLOT_NAMES` sends the raw config name while identifiers are built from `slot_name()`, which falls back.** Every other identifier site in this PR routes through `slot_name` / `slot_name_by_entry_id`; this one uses `normalize_name(v.get(CONF_NAME))` directly. For a slot with no name the payload carries `""` while the entities carry `"User N"`, so `buildSlotNumForName` maps `"" → slot` and every entity for that slot resolves to `NaN` — the exact "section renders empty" failure the comment above it warns about. Post-v4 every slot has a name, so this is latent rather than live, but using `slot_name` here would make the two sides structurally incapable of disagreeing.</result>
+<usage><subagent_tokens>214767</subagent_tokens><tool_uses>68</tool_uses><duration_ms>930929</duration_ms></usage>
+</task-notification>
+
+---
+
+run the eigth
+
+---
+
+<task-notification>
+<task-id>ab2daa40d260da3c6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/ab2daa40d260da3c6.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1422 (`feat/v3-name-unique-ids` → `v3`), full diff of `custom_components/` and `ts/`, with the surrounding files opened for context. I could not submit via `ReportFindings` — that tool is not exposed in this environment (`ToolSearch` returns no match), so the findings are below.
+
+Findings (3), two of them verified by running code against the PR branch.
+
+**1. `custom_components/lock_code_manager/domain/identifier_migration.py:220` — HIGH: `_async_remap_segment` loops forever when a chain's final target is occupied by a row that is not itself in the mapping.**
+When a pass moves nothing, the stall handler picks `cycle_segment` as any `old` where `old in pending and new in mapping`, parks it on a fresh `lcm-parked-N`, and loops. The parked segment is deliberately *not* marked as moved, so it stays in `pending`, and its target is still a mapping key — so the very next stalled pass re-parks the segment it just parked, onto `lcm-parked-N+1`, unboundedly. Nothing bounds the number of parks or excludes an already-parked segment.
+
+Verified repro on the branch (hangs; killed at 30s):
+
+```python
+_seed(f"{eid}|A|pin"); _seed(f"{eid}|B|pin"); _seed(f"{eid}|C|pin")
+async_rename_identifiers(hass, eid, {"A": "B", "B": "C"})   # never returns
+```
+
+`C`'s row only has to be something the mapping doesn't cover — a slot removed from config while HA was down, or a row this same module left behind via its own "cannot move … leaving as-is" path. Both entry points are `@callback` (synchronous), so this wedges the HA event loop permanently. `async_migrate_identifiers_to_names` shares the primitive and runs from `async_migrate_entry`, so the equivalent shape (`{1: name "2", 2: name "5"}` plus a stale `entry|5|…` row) hangs HA at startup, and since the version bump happens *after* the call the entry never leaves version 3, so every subsequent restart hangs too.
+
+**2. `custom_components/lock_code_manager/domain/identifier_migration.py:88` — MEDIUM: `_async_park_segment` omits the unique-ID collision pre-check the main loop has, so `async_update_entity` can raise mid-run.**
+The main entity loop guards every move with `if ent_reg.async_get_entity_id(...) is not None: continue`. The park path calls `ent_reg.async_update_entity(entity.entity_id, new_unique_id=...)` unguarded, and HA's `EntityRegistry._async_update_entity` raises `ValueError("Unique id '…' is already in use by …")` on conflict. `_temporary_segment` only checks the *mapping* for collisions, never the registry — so a registry row already sitting at `{entry_id}|lcm-parked-0|…` collides. That row exists if a user is literally named `lcm-parked-0`, or (more reachably) if a previous run was interrupted after parking — which finding 1 makes likely, since the hang leaves parked rows behind and a subsequent restart picks `lcm-parked-0` again. The raise propagates out of `async_migrate_entry`/`async_update_listener` with identifiers half-moved.
+
+**3. `custom_components/lock_code_manager/__init__.py:1146` (with `domain/slot_coordinator.py:342`) — MEDIUM: renaming via the name text entity only works because `async_update_listener` has no `await` before its early return; the invariant is unprotected and untested.**
+`_write_config_fields` eagerly overwrites `runtime_data.config` immediately after `async_update_entry`. The only reason `_async_apply_renames` still sees a rename is that HA's eager task start runs the listener body synchronously inside `async_update_entry`, and the data-only path reaches `return` without suspending — so `previous_config` is captured before the eager refresh. Verified counterfactual: inserting a single `await asyncio.sleep(0)` at the top of `async_update_listener` makes the registry row stay at `{eid}|test1|pin` after renaming to `renamed`, i.e. every text-entity rename silently stops moving identifiers. The failure mode is the destructive one the PR description calls out — config holds the new name, the registry holds the old, and `_async_prune_orphaned_slot_devices` reaps the device on the next setup, cascading to the entity rows. No end-to-end test covers this path (`tests/test_slot_coordinator.py:851` only asserts the config field is written; the e2e rename tests all go through the options flow), so the suite would stay green through the regression.
+
+Things I checked that are clean: every inline identifier construction is now routed through the shared builders (no stragglers left in Python); the migration/rename `moved_entity_ids` / `moved_device_ids` guards correctly prevent double-walking `{"1": "2", "2": "Bob"}`; `check_name` is behaviour-preserving on all three write paths and the config flow's self-collision concern doesn't apply (the options flow uses the YAML path, and `async_step_code_slot` adds the slot only after validating); `parse_user_device_identifier` still rejects the entry's own device; the TS `slotNumForName` map has exactly one live caller and reads `slot_names`, not `slots`. I also ran e2e probes for a two-user name swap and for rename-then-reload — both behave correctly.</result>
+<usage><subagent_tokens>189004</subagent_tokens><tool_uses>45</tool_uses><duration_ms>740980</duration_ms></usage>
+</task-notification>
+
+---
+
+from now on when we do tests, we start with property tests, then go to e2e tests, integration tests, finally unit tests. Does that make sense? Basically we want to go from most comprehensive to pointed tests/regression avoidance
+
+---
+
+were you able to save to mempalace?
+
+---
+
+<task-notification>
+<task-id>a79aa98f2235b3729</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a79aa98f2235b3729.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I could not locate a `ReportFindings` tool in this environment (searched by name and by keyword), so I'm reporting the findings directly here.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/__init__.py:657` — HIGH: a rename saved while the entry is not loaded is never applied, and the setup-time sweep then destroys the slot's registry rows.**
+Identifier moves happen in exactly two places: `async_migrate_entry` and `async_update_listener`. The update listener is only registered while the entry is loaded (`_setup_entry_after_start:594`), and the code explicitly acknowledges that options can be saved while the entry is failed (`__init__.py:606-610`: *"a non-empty options here holds an options-flow save the entry could not process (no listener was registered while it was failed)"*). In that case, on the next setup: `runtime_data.config` is built options-preferred, so it already holds the **new** names; `_async_prune_orphaned_slot_devices` at line 657 runs before anything else and sees the devices sitting on the **old** names as unconfigured, so `dev_reg.async_remove_device` fires — and HA cascades that to every entity registry row on the device. Then when the listener finally runs, `previous_config` is *also* the options-derived (new) config, so `names_changed` is empty and `_async_apply_renames` is a no-op. Concrete scenario: a lock entity goes missing → LCM raises `ConfigEntryError` → the user opens the entry's options, fixes the lock and renames slot 1 "Alice"→"Alicia" in the same submission → on the next successful setup, slot 1's device and all its entity rows are deleted and re-registered with fresh entity IDs, breaking every automation/dashboard reference. This is the exact outcome the module is written to prevent. A setup-time reconcile (or making the prune tolerant of a name that is a pending rename source) is needed.
+
+**2. `custom_components/lock_code_manager/domain/identifier_migration.py:272` — MEDIUM: the "leave as-is" fallback for an unmovable row is not actually non-destructive.**
+The warning path deliberately leaves an entity on its old identifier "where deleting the row to free the target would take the user's automations with it". But the device it belongs to is left on the old identifier too, and `_async_prune_orphaned_slot_devices` (`__init__.py:914`) removes any device whose parsed name is not in the current config — which cascades to precisely those entity rows on the next setup. So a partial-failure warning today becomes a silent full deletion at the next restart, contradicting the stated contract.
+
+**3. `custom_components/lock_code_manager/domain/identifier_migration.py:248` — LOW/MEDIUM: `_temporary_segment`'s "already present in the registry" check only looks at entity unique IDs, not device identifiers.**
+Its docstring says the candidate is "checked against the mapping *and* against the segments already present in the registry: a row can be sitting on a parking name from a previous interrupted run, and moving onto it would raise mid-pass." The set passed in is built purely from `entity.unique_id.split("|")[1]`. A leftover `lcm-parked-N` **device** with no entity rows (exactly the "previous interrupted run" case) is invisible to that check, and `_async_park_segment` then calls `async_update_device` with no collision pre-check — the same call the main loop notes "does NOT validate identifier collisions". Result: two devices sharing `(DOMAIN, entry|lcm-parked-0)`, corrupting every `async_get_device` lookup that follows.
+
+**4. `custom_components/lock_code_manager/domain/identifier_migration.py:239` — LOW: cycle detection is entity-only, so a device-only cycle is never broken.**
+`pending` is derived exclusively from unmoved entity rows. If a swap exists among device rows but no entity row is left pending (all entities already moved, or the slot's entities were removed), `_cycle_member` returns `None`, the loop breaks, and both devices stay on each other's old identifiers with only a warning — after which finding 1/2's prune deletes them.
+
+**5. `custom_components/lock_code_manager/domain/sync.py:346` — LOW: uses the permissive `slot_name` where the same hazard was hardened elsewhere.**
+`async_disable_slot` was deliberately switched to `configured_slot_name` with the comment "the fallback shares a namespace with real names ('User 3' is both), so an unconfigured slot 3 could resolve a different user's switch and disable them instead". `_unique_ids_for_current_name` still uses `slot_name`, which falls back to `fallback_name(slot_num)`. For a slot removed from config while a sync manager still has an unresolved key (the window between the listener's config refresh and `invoke_entity_removers_for_slot` completing, which spans an `await`), the manager would resolve and cache a *different* user's PIN/name/active/code entities and drive lock writes from them. Narrow, but it's the same class of bug the PR fixed one call site away.
+
+**6. `custom_components/lock_code_manager/__init__.py:232` — LOW: `or` instead of key-presence changes precedence versus `EntryConfig.from_entry`.**
+`new_slots_source = new_options.get(CONF_SLOTS) or new_data.get(CONF_SLOTS, {})` treats an *empty* `options[CONF_SLOTS]` as absent and falls back to `data`, whereas `EntryConfig.from_entry` uses `entry.options.get(CONF_SLOTS, entry.data.get(...))` and would return the empty options value. An entry whose options hold a "all slots removed" save (again, the saved-while-failed case) would have its identifiers migrated to the stale `data` names, disagreeing with the config the rest of the integration reads.
+
+**7. `custom_components/lock_code_manager/__init__.py:931` and `:1210` — LOW: two device-name derivations disagree with `entity.py`'s.**
+Entities build their device identifier from `slot_name()` (falls back to `"User {n}"`), but `_async_prune_orphaned_slot_devices`'s `configured` set and `_async_remove_slot_devices`'s `removed_user_names` both use the raw `normalize_name(slot.get(CONF_NAME))` and drop `""`. A slot stored without a name would therefore have a device at `entry|User N` that is (a) never removed on slot deletion and (b) pruned on every setup, cascade-deleting its entities each restart. Not reachable through today's write paths (migration and all three validators require a name), but the two sides must agree and currently only agree by accident.
+
+## Notes
+- Reviewed `origin/v3...origin/feat/v3-name-unique-ids` (PR #1422, 30 files). The `_async_remap_segment` core algorithm holds up under trace: chains, `{"1":"2","2":"Bob"}` double-move, 2-cycles and 3-cycles, and the parking loop all terminate correctly, and the "unique targets" invariant means a parked segment can never hold already-moved rows.
+- The `previous_config` capture in `async_update_listener` is correct despite `_write_config_fields`'s eager `runtime_data.config` refresh — HA's `async_create_task` defaults to `eager_start=True`, so the listener's synchronous prefix runs inside `async_update_entry` before that refresh.
+- Housekeeping: while setting up the diff I ran `git checkout -- .` in `/Users/raman/projects/lock_code_manager` and discarded the pre-existing uncommitted modification to `.entire/.gitignore`. Nothing else in the working tree was touched.</result>
+<usage><subagent_tokens>192102</subagent_tokens><tool_uses>57</tool_uses><duration_ms>810324</duration_ms></usage>
+</task-notification>
+
+---
+
+try now
+
+---
+
+try now
+
+---
+
+try now!
+
+---
+
+yes work through those and check on mempalace
+
+---
+
+continue by first filing everything needed to mempalace, then continue with the plan
+
+---
+
+<task-notification>
+<task-id>a13cb897f8ea0c7eb</task-id>
+<tool-use-id>toolu_01CSGYRAFAPkG128uRA5N9i7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a13cb897f8ea0c7eb.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1422" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1422 (`feat/v3-name-unique-ids`, 15 commits, base `v3`). No `ReportFindings` tool is available in this environment, so findings are stated inline below.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/__init__.py:677` — HIGH — the setup-time rename reconciliation double-applies on top of the v3→v4 migration and swaps two users' registry rows.**
+`async_migrate_entry` migrates identifiers onto the **options** names (`new_slots_source` prefers `new_options[CONF_SLOTS]`), but then leaves both `data` and `options` populated. `async_setup_entry` sees `config_entry.data and config_entry.options` and applies the `data → options` rename diff *again*. For a chain the collision guard saves it, but for a **cycle** the parking logic happily resolves it — undoing the migration.
+
+Verified with a probe test (v3 entry, unprocessed options save that swaps two names):
+```
+data:    {1: Alice, 2: Bob}   options: {1: Bob, 2: Alice}   version=3
+seeded:  &lt;entry&gt;|1|pin , &lt;entry&gt;|2|pin
+result:  slot 1's row -&gt; &lt;entry&gt;|Alice|pin   (config says slot 1 is "Bob")
+         slot 2's row -&gt; &lt;entry&gt;|Bob|pin     (config says slot 2 is "Alice")
+         devices likewise crossed
+```
+The two users end up on each other's registry rows, entity IDs, recorder history, and device — exactly the cross-contamination the module exists to prevent. The equivalent v4-only case (no migration) resolves correctly, so the defect is specifically migration-then-reconcile. Suggested fix: skip the setup reconcile when the migration just ran this startup, or migrate onto the **data** names and let the setup reconcile carry the options delta.
+
+**2. `custom_components/lock_code_manager/domain/slot_coordinator.py:340` (with `__init__.py:1179`) — MEDIUM — the text-entity rename path depends on an undefended ordering invariant.**
+`_write_config_fields` calls `async_update_entry` and then immediately overwrites `runtime_data.config`. The listener's `previous_config = runtime_data.config` is only correct because HA's `hass.async_create_task(..., eager_start=True)` runs `async_update_listener` synchronously to its first suspension, and the data-only path has no `await` before `_async_apply_renames`. Confirmed `eager_start: bool = True` in the pinned HA 2026.8.0. This is documented only in a test docstring (`tests/test_text.py::test_set_name_moves_registry_identifiers`), not in the code that depends on it. Adding any `await` above the rename block — or HA changing that default — silently stops every text-entity rename from moving identifiers, leaving config on the new name and the registry on the old. Passing the pre-write config (or the old name) explicitly from `_write_config_fields` would remove the dependency.
+
+**3. `custom_components/lock_code_manager/domain/sync.py:373` — LOW/MEDIUM — `_build_entity_id_map` reports "fully resolved" for an empty map.**
+`_unique_ids_for_current_name()` now returns `{}` when `configured_slot_name` is `None`, so the loop body never runs, `missing` stays `False`, and the function returns `True`. `_setup_state_tracking` then takes the "all entity IDs available" branch, subscribes to an empty `_tracked_entity_ids`, and sets `_tracking_all_states = False` — which permanently disables `_try_upgrade_state_tracking`'s recovery path. The manager then only re-evaluates on the periodic tick, never on state changes. Before this change the map was never empty. Returning `False` for the no-name case would keep the catch-all subscription.
+
+**4. `custom_components/lock_code_manager/domain/identifier_migration.py:4` — LOW — module docstring names the wrong migration.**
+"The version 4 to 5 migration moves slot numbers into that segment" (and the following paragraph repeats the same clause). The code runs inside the `config_entry.version == 3` block and bumps to 4. Misleading for whoever writes the next migration.
+
+**5. `ts/generate-view.ts:143` — LOW — `slotNumForName` is optional, so a missed call site degrades silently.**
+`createLockCodeManagerEntity(entity)` without the map yields `slotNum: NaN` for every entity, which matches no slot and renders every section empty — the exact regression the PR describes fixing. Every caller (including all tests) now passes the map, so making the parameter required would turn a future missed call site into a compile error instead of a blank dashboard.
+
+## Verified as correct (things I specifically probed or traced)
+
+- Cycle parking (`_cycle_member` / `_temporary_segment` / `_async_park_segment`) terminates and resolves swaps correctly for the pure-rename case; the "never move a row twice" and "blocker that is itself due to move" guards both hold. A v4 swap saved while unloaded resolves correctly end-to-end.
+- Chained renames (`a→b`, `b→c`) are protected by the entity/device collision pre-checks rather than corrupting.
+- `_async_apply_renames` is not double-applied on the normal options-flow path (the terminal `async_update_entry(data=…, options={})` re-entry diffs to empty).
+- Removals → renames → additions ordering in the update listener is correct, including `_async_remove_slot_devices` resolving departing slots by their old names.
+- `parse_user_device_identifier` still returns `None` for the entry's own device and for other entries' devices; non-LCM devices are filtered by the `domain == DOMAIN` check before parsing.
+- The generated JS bundle was rebuilt and contains the `slot_names` read.
+- `tests/test_identifier_migration.py`, `tests/test_text.py`, and `tests/properties/` pass on the branch (87 passed).</result>
+<usage><subagent_tokens>214569</subagent_tokens><tool_uses>58</tool_uses><duration_ms>804944</duration_ms></usage>
+</task-notification>
+
+---
+
+are we checking for properties we should add after each run?
+
+---
+
+fill those three matrix cells
+
+---
+
+yes
+
+---
+
+how many more PRs do we have to go?
+
+---
+
+ok we should do a full backup/restore for safety so we can do a clean update and test
+
+---
+
+fold it in
+
+---
+
+1. never reuse
+2. verify
+
+---
+
+should they see a slot number? in our design, isn't the slot umber an internal thing if needed?
+
+---
+
+yes
+
+---
+
+yes
+
+---
+
+close 1422 then run code review on this one[
+
+---
+
+<task-notification>
+<task-id>adfbca04c19db1901</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/adfbca04c19db1901.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1425" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no `ReportFindings` tool available in this session (searched the deferred tool list twice), so the findings are reported directly below.
+
+I reviewed `origin/v3...origin/feat/v3-user-config-shape` (PR #1425: `domain/slot_assignment.py` + `tests/properties/test_slot_assignment.py`), read the surrounding `domain/config.py`, `domain/names.py`, `config_flow.py`, and the existing `async_migrate_entry`, and executed the new code against edge-case inputs to confirm each finding.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/domain/slot_assignment.py:106` — HIGH: `users_from_slots` does not normalize slot keys to `int`, and str keys let two users share a slot.**
+`EntryConfig.from_mapping` coerces with `int(k)` and documents why ("the on-disk JSON representation uses `str`"); the existing `async_migrate_entry` walks `data_dict[CONF_SLOTS]` raw and defensively does `str(slot_num)` / `key=int` for the same reason. `users_from_slots` takes a raw `Mapping` and does neither, so the natural caller — a migration reading `config_entry.data[CONF_SLOTS]` after a restart — gets string keys straight through into `SlotAssignment.slots` values. Verified:
+
+```
+users_from_slots({'1': {'name': 'Raman', 'pin': '1'}})  -&gt; slots={'Raman': '1'}
+  .assign(['Raman', 'Alice'])                           -&gt; {'Raman': '1', 'Alice': 1}
+```
+
+`taken` holds `'1'`, `candidate` is the int `1`, the `while candidate in taken` guard never fires, and Alice is issued slot 1 on top of Raman. On `credential_index_follows_slot` providers that writes Alice's PIN over Raman's credential on every lock, and the collision persists (`from_mapping`'s `int(v)` coerces both to `1` on reload). Separately, `sorted(slots.items())` over string keys orders `'10'` before `'2'`, so the duplicate-name tiebreak is lexicographic rather than numeric.
+
+**2. `custom_components/lock_code_manager/domain/slot_assignment.py:107` — MEDIUM: the "run the name repair first" precondition is unenforced on a one-way-door migration.**
+`normalize_slot_names` (PR #1417) exists in `domain/names.py` but has no production caller yet — only tests. Meanwhile `CONF_NAME` is `vol.Optional` in `CODE_SLOT_SCHEMA`, and `sync.py:369` states outright that "the name entity (CONF_NAME) is optional — STATE_UNKNOWN is its normal state when no name is configured". So both hazard inputs are reachable from real v2 entries:
+- nameless slot → `slot[CONF_NAME]` raises a bare `KeyError` mid-migration (verified);
+- two slots sharing a name → verified `users_from_slots({1: {'name':'Raman','pin':'1'}, 2: {'name':'Raman','pin':'2'}})` returns `({'Raman': {'pin': '2'}}, {'Raman': 2})` — slot 1's user and PIN vanish silently **and** the survivor is renumbered 1→2, orphaning their entities and moving their credential index, which is the exact failure `test_conversion_renumbers_nobody` is meant to forbid.
+
+Given the migration has no code-level rollback, this should either call `normalize_slot_names` itself or raise on a missing/duplicate name rather than relying on an uncalled helper.
+
+**3. `custom_components/lock_code_manager/domain/slot_assignment.py:76` — LOW: `assign` is order-dependent for new names, so two renames in one edit can swap slots.**
+The module docstring promises "a rename moves nothing in either registry", but a rename is indistinguishable from delete+add here, and freed slots are handed out in `names` iteration order. Verified: from `{'A': 1, 'B': 2, 'C': 3}`, renaming A→X and C→Y in one options-flow submit where the re-keyed `users` dict iterates `B, Y, X` yields `{'B': 2, 'Y': 1, 'X': 3}` — both renamed users land on the other's index, rewriting both credentials on every lock and orphaning both entity sets. Worth either documenting that callers must pass names in slot order, or accepting an explicit rename map.
+
+**4. `tests/properties/test_slot_assignment.py:110` — LOW: the properties never compose the two halves, which is why finding 1 is invisible.**
+Every `assign` property seeds from `SlotAssignment.empty()`, and `slot_mappings` always emits `int` keys and de-duplicated names. The production sequence is `users_from_slots(...)` → `assign(...)` on subsequent edits, and that composition is never exercised — `test_two_users_never_share_a_slot` would have caught the string-key collision immediately had it started from a migrated assignment. Adding a variant of `slot_mappings` that emits `str` keys (as storage does) and seeding the history properties from `users_from_slots` closes the gap.</result>
+<usage><subagent_tokens>105023</subagent_tokens><tool_uses>32</tool_uses><duration_ms>291916</duration_ms></usage>
+</task-notification>
+
+---
+
+yes
+
+---
+
+<task-notification>
+<task-id>a6b5a21a2277d30b5</task-id>
+<tool-use-id>toolu_018BFxcoW9bwoLNZDDVq4E4c</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a6b5a21a2277d30b5.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1425" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1425 (`feat/v3-user-config-shape` → `v3`), a 419-line addition of `slot_assignment.py` plus its Hypothesis properties. I ran the new tests (12 pass, 100% coverage of the new module) and probed the data model directly with the project venv to confirm each finding empirically.
+
+Note: no `ReportFindings` tool is exposed in this session (`ToolSearch` returned no match), so findings are reported inline below.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/domain/slot_assignment.py:77` — HIGH. `with_renames` silently drops a user and renumbers another when a rename target is a name still held; the outcome depends on `self.slots` insertion order.**
+The dict comprehension `{renames.get(name, name): slot for name, slot in self.slots.items()}` lets a rename target collide with an existing key, and last-write-wins. Verified:
+```
+{'A':1,'B':2,'C':3}.with_renames({'A':'B','B':'C'})  -&gt;  {'B':1, 'C':3}
+SlotAssignment(slots={'C':3,'B':2,'A':1}).with_renames(same) -&gt; {'C':2, 'B':1}
+```
+Concrete legal edit: user renames A→B, renames B→C, and deletes C in one submission — final names `{B, C}` are unique, so the upstream name rules accept it. Forward order moves the user formerly named B from credential index 2 to index 3 (credential rewritten on every lock, entities orphaned) — precisely the failure the whole design exists to prevent. Reversed insertion order gives a different answer, contradicting the docstring's claim that it "resolves without needing an order". The simpler `{'Alice':1,'Bob':2}.with_renames({'Alice':'Bob'})` → `{'Bob': 2}` shows the mapping can also shrink, silently losing a slot. The docstring's swap argument only covers full permutations; partial/chained renames need the mapping resolved as a permutation (or the collision refused loudly).
+
+**2. `custom_components/lock_code_manager/domain/slot_assignment.py:83` — MEDIUM. Names are used as keys without `normalize_name`, so a whitespace variant renumbers a user.**
+`domain/names.py` declares itself "the single place those three rules live," but neither `assign` nor `with_renames` normalizes. Verified: `{'Raman ':3, 'Alice':2}.assign(['Raman','Alice'])` → `{'Alice':2, 'Raman':1}` — Raman moves from index 3 to index 1. Reachable as soon as one caller stores the normalized name in `users` while passing the raw submitted name (or vice versa) into `assign`/`with_renames`. Either normalize at this boundary or state in the docstring that all names arriving here are pre-normalized.
+
+**3. `custom_components/lock_code_manager/domain/slot_assignment.py:75` — LOW. `with_renames` breaks the identity contract that `assign` documents.**
+`assign` promises "returns `self` when nothing differs, so callers can use identity to decide whether a write is needed." `with_renames` returns `self` only when `renames` is falsy — a non-empty but inapplicable map (e.g. `{'Zed':'Yan'}` where Zed holds no slot) returns a fresh, content-identical object. A caller doing `new = old.with_renames(r).assign(names); if new is not old: async_update_entry(...)` then writes and reloads the entry for a no-op. Verified: `a.with_renames({'Zed':'Yan'})` returns a new object with `{'Alice':1,'Bob':2}` unchanged.
+
+**4. `custom_components/lock_code_manager/domain/slot_assignment.py:36` — LOW. `frozen=True` implies hashability, but hashing raises.**
+`hash(SlotAssignment(...))` → `TypeError: unhashable type: 'dict'` (the generated `__hash__` hashes the `MappingProxyType` field). Any future use in a set, dict key, or `lru_cache` key fails at runtime rather than at type-check time. Either `eq=False`/custom `__hash__` over `tuple(sorted(...))`, or document that it is deliberately unhashable.
+
+**5. `custom_components/lock_code_manager/domain/slot_assignment.py:40` — LOW. Immutability is only shallow on the direct constructor.**
+`from_mapping`, `assign`, `with_renames`, `empty`, and `users_from_slots` all wrap in `MappingProxyType`, but `SlotAssignment(slots={...})` accepts a live mutable dict (I used this in probes, and the test file does not). A caller retaining that dict can mutate the "frozen" value out from under `assign`'s identity-based short circuit. A `__post_init__` coercing to `MappingProxyType` closes the one hole.
+
+**6. `custom_components/lock_code_manager/domain/slot_assignment.py:48` — LOW. `from_mapping` takes a single mapping, but the codebase resolves slots with options-over-data precedence.**
+`domain/config.py:62-63` reads `entry.options.get(CONF_SLOTS, entry.data.get(CONF_SLOTS, {}))`, and the v3→v4 migration in `custom_components/lock_code_manager/__init__.py:218-223` repairs `CONF_SLOTS` in *both* dicts independently. A follow-up that persists `slot_assignment` into only one of them, or reads it from `entry.data` while users come from `entry.options`, gets an empty/stale assignment and renumbers every user on the next start. Worth a docstring line naming which dict is authoritative before the consuming PR lands.
+
+**7. `tests/properties/test_slot_assignment.py:229` — LOW (test gap). The `assume` in `test_renaming_never_renumbers_anyone` excludes exactly the case that fails.**
+`assume(not set(renames.values()) &amp; (set(before.slots) - set(renames)))` filters out chained renames where the final target is a currently-held name — the shape in finding 1. The comment justifies it as "a collision the name rules reject upstream," but the chain A→B, B→C with C deleted is *not* rejected upstream (final names are unique) and does reach `with_renames`.
+
+**8. `tests/properties/test_slot_assignment.py:200` — LOW (test gap). No property pins field↔name pairing through the name-repair path.**
+`test_conversion_loses_no_field` and `test_conversion_round_trips` run only on `slot_mappings`, which never produces a missing or duplicate name, so repair is never exercised for pairing. The two `stored_slot_mappings` properties assert only counts and `set(assignment.slots.values()) == {int(k) for k in stored}`. A mis-pairing that swapped two repaired slots' pins would pass every current property. Asserting `assignment.slot(repaired_name) == int(key)` and field equality against the repaired slots would close it.</result>
+<usage><subagent_tokens>100929</subagent_tokens><tool_uses>19</tool_uses><duration_ms>352982</duration_ms></usage>
+</task-notification>
+
+---
+
+Yes
+
+---
+
+<task-notification>
+<task-id>a5412dc64ef7f84ff</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a5412dc64ef7f84ff.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1425" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I reviewed PR #1425 (`feat/v3-user-config-shape`, base `v3`): the new `domain/slot_assignment.py` plus its property tests. All 15 property tests pass; I verified each finding below by executing the real code in a worktree at the PR head.
+
+Note: no `ReportFindings` tool is exposed in this environment (I searched the deferred tool list), so the findings are reported here.
+
+**Findings**
+
+- `custom_components/lock_code_manager/domain/slot_assignment.py:134` — HIGH. `with_renames` unconditionally drops any entry whose name is a rename *target*, even when the corresponding source held no slot. So a rename map that contains a source not present in the assignment silently deletes an unrelated user's slot, and the following `assign` renumbers them — the exact failure the module exists to prevent. Verified: from `{Alice: 1, Cleaner: 3}`, `with_renames({"Ghost": "Cleaner"})` → `{Alice: 1}`, then `assign(["Alice","Cleaner"])` → `Cleaner: 2` (moved 3→2, credential rewritten to a different index on every lock). The same shape makes the operation non-idempotent: replaying an already-applied rename map (`with_renames({"Raman":"Ray"})` twice) drops `Ray` entirely. The rename property test explicitly filters sources with `if old in before.slots`, so this case is excluded from coverage. Consider keeping the target only when some source actually surrendered a slot.
+
+- `custom_components/lock_code_manager/domain/slot_assignment.py:164` — HIGH. `assign` allocates the lowest free number starting at 1, with no awareness of the entry's configured start slot or of slot numbers owned by another config entry on a shared lock. Both constraints exist today (`CONF_START_SLOT`/`DEFAULT_START` in `config_flow.py:485`, and `_check_common_slots`, which rejects `slots_already_configured` when two entries overlap on a common lock). Verified: `users_from_slots({5: Alice, 6: Bob})` preserves `{Alice: 5, Bob: 6}`, but adding a user yields `Cleaner: 1` — below the range the user deliberately chose (typically because 1-4 hold manually programmed codes) and potentially a slot another LCM entry already manages on the same lock. Since `credential_index_follows_slot` makes this a real device index, the new user overwrites an existing credential. The high-water-mark property enshrines the 1-based policy, so this is the right point to decide it.
+
+- `custom_components/lock_code_manager/domain/slot_assignment.py:99` — MEDIUM. `slot()` looks up `self.slots.get(name)` without calling `normalize_name`. Keys are normalized in `__post_init__` and inputs are normalized in `assign`/`with_renames`, so this is the one accessor that breaks the stated invariant ("a name can only ever be stored in one form, so it cannot match on one path and miss on another"). Verified: `assign(["Raman"]).slot("Raman ")` returns `None`, so a caller passing an unstripped name sees the user as holding no slot. The test at `tests/properties/test_slot_assignment.py:305` claims to cover "both directions" but only exercises stored-padded/looked-up-bare (line 322-326); the failing direction — bare storage, padded lookup — is untested.
+
+- `custom_components/lock_code_manager/domain/slot_assignment.py:42` — MEDIUM. `__post_init__` makes name normalization a type invariant but leaves slot *values* uncoerced, so the plain constructor still admits the string slot numbers that `from_mapping` and `users_from_slots` were changed to coerce. Verified: `SlotAssignment(slots={"Alice": "1"}).assign(["Alice","Cleaner"])` → `{Alice: "1", Cleaner: 1}` — two users on credential index 1, the exact double-booking the docstring says was fixed. Any future caller that constructs directly from `entry.data[CONF_SLOT_ASSIGNMENT]` instead of via `from_mapping` resurrects it; `int(slot)` in `__post_init__` closes it for good.
+
+- `custom_components/lock_code_manager/domain/slot_assignment.py:42` — LOW. The normalizing dict comprehension silently collapses two keys that normalize to the same name, keeping whichever iterates last. Verified: `SlotAssignment(slots={"Alice": 1, "Alice ": 2})` → `{Alice: 2}`; a user's slot disappears with no error on a path the module describes as having no rollback. Raising (or preferring the lowest slot) would fail loudly instead.
+
+- `custom_components/lock_code_manager/domain/slot_assignment.py:160` — LOW. Name identity here is case-sensitive, while `domain/names.py` defines name identity case-insensitively (`deduplicate` and `validate_slot_names` both casefold). `SlotAssignment` therefore accepts `{"Bob": 1, "BOB": 2}` — two credential indices for what the rest of the system calls one user — and a case-only rename that a caller does not route through `with_renames` reads as delete + add. Worth aligning the comparison key with `names.py` now, before consumers land.</result>
+<usage><subagent_tokens>104749</subagent_tokens><tool_uses>22</tool_uses><duration_ms>350437</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a348af509b0d6a59e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a348af509b0d6a59e.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1425" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The `ReportFindings` tool is not available in this environment, so I'm reporting findings directly below.
+
+## Review of PR #1425 — `feat: convert slot-keyed configuration to name-keyed users`
+
+I checked out the PR head into a worktree and executed the property suite. **CI will be red**: two of the nineteen properties fail, under both the `dev` and `ci` Hypothesis profiles, despite the PR body claiming "Full suite: 1545 passed, 100% coverage."
+
+```
+FAILED tests/properties/test_slot_assignment.py::test_renaming_never_removes_a_user
+FAILED tests/properties/test_slot_assignment.py::test_replaying_a_rename_never_loses_a_user
+2 failed, 17 passed
+```
+
+### Findings
+
+**1. `custom_components/lock_code_manager/domain/slot_assignment.py:143` — HIGH — `with_renames` deletes an uninvolved user when a rename target is a live name.**
+`renamed` displaces whoever holds the target unconditionally, and `kept` then excludes that name. With `{raman: 1, alice: 2}` and `renames={"Raman": "Alice"}` the result is `{alice: 1}` — the original Alice is gone and the surviving `alice` now points at credential index 1 instead of 2. Reproduced directly, and it is what falsifies `test_renaming_never_removes_a_user` (`assert 1 == 2, slot('alice')`). The docstring argues the target holder "must be departing in the same submission," but the code does not check that, and the property as written forbids it. Either the guard or the property has to change — as it stands the branch does not build.
+
+**2. `custom_components/lock_code_manager/domain/slot_assignment.py:143` — HIGH — replaying a rename map loses a user, which is the exact defect the docstring claims round 3 fixed.**
+The docstring says a target is displaced "only when a source actually surrendered a slot… Dropping it unconditionally… made replaying an already-applied map erase its own result, so the operation was not idempotent." It still does, via a chain. Reproduced:
+```
+before {'raman': 1, 'alice': 2}
+once   {'alice': 1, 'bob': 2}     # renames = {Raman: Alice, Alice: Bob}
+twice  {'bob': 1}                 # a user vanished
+```
+On the second application `Raman` no longer holds a slot so it is filtered out of `moves`, but `Alice -&gt; Bob` still displaces the `bob` entry that the first application created. The surviving user is also renumbered from 2 to 1, moving their credential index on every lock. This falsifies `test_replaying_a_rename_never_loses_a_user`.
+
+**3. `tests/properties/test_slot_assignment.py:252` (and `:278`) — HIGH — the two rename properties are vacuous; `with_renames` has zero effective coverage.**
+Patch 4 made `SlotAssignment` keys casefolded, but `test_renaming_never_renumbers_anyone` and `test_renaming_does_not_depend_on_insertion_order` still filter with `if old in before.slots`. Every generated name in `NAMES` is capitalized, so `"Raman" in {"raman", "alice", …}` is always `False` and `renames` is always `{}` — `with_renames({})` short-circuits to `return self` and every assertion is trivially true. Verified by mutation: replacing the entire body of `with_renames` with `return self` makes **all four** rename tests pass (`4 passed`). The order-independence property, added specifically to pin the round-2 fix, currently pins nothing. Fix: filter on `_identity(old)`, matching how `test_renaming_never_removes_a_user` uses `k.casefold()`.
+
+**4. `custom_components/lock_code_manager/domain/slot_assignment.py:111` — MEDIUM — `from_mapping` lost its key coercion; a non-string key now raises `AttributeError` instead of being normalized.**
+Patch 4 replaced `cls(slots=MappingProxyType({str(k): int(v) …}))` with `cls(slots=mapping.get(CONF_SLOT_ASSIGNMENT) or {})`. `__post_init__` picked up the *value* coercion (`int(slot)`) but not the *key* coercion, and `normalize_name` does `(name or "").strip()`:
+```
+SlotAssignment.from_mapping({"slot_assignment": {1: 1}})
+-&gt; AttributeError: 'int' object has no attribute 'strip'
+```
+That aborts entry setup rather than degrading. The `__post_init__` docstring explicitly justifies coercing values there because "a caller reading `entry.data` directly… would reintroduce the double-booking" — the same argument applies to keys, and the same defence was just removed. Add `str(name)` (or a guard) alongside `int(slot)`.
+
+**5. `custom_components/lock_code_manager/domain/slot_assignment.py:113` — LOW — the persisted assignment keys diverge from the persisted user keys.**
+`users_from_slots` returns `users` keyed by the *display* name while `to_dict()` writes the *casefolded* identity:
+```
+users keys: ['Raman'] | to_dict: {'slot_assignment': {'raman': 1}}
+```
+Lookups through `slot()` are fine, but `slots` is a public field on a frozen dataclass and the mapping is the persisted on-disk shape. Any consumer that does `entry.data[CONF_SLOT_ASSIGNMENT][name]` — the obvious thing to write when reading stored bookkeeping — gets a `KeyError` for every user whose name is not already lowercase. Worth either storing the display name as a value or documenting the invariant at `to_dict`, before the migration and entity topology land on top of it.
+
+**6. `custom_components/lock_code_manager/domain/slot_assignment.py:165` — LOW — `start: int = 1` defaults to the hazard its own docstring describes.**
+The docstring argues at length that "allocating from 1 unconditionally would write a new user's code over" a hand-programmed credential, then makes exactly that the default. There are no callers yet, so a forgotten keyword argument is silent and untestable. Making `start` required (or defaulting it from `CONF_START_SLOT` at a single seam) would make the omission a type error rather than a device write.</result>
+<usage><subagent_tokens>118914</subagent_tokens><tool_uses>20</tool_uses><duration_ms>288548</duration_ms></usage>
+</task-notification>
+
+---
+
+reverify earlier commits then run it
+
+---
+
+<task-notification>
+<task-id>a196813b9092d439e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a196813b9092d439e.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1425" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No `ReportFindings` tool is available in this session, so I'm reporting inline as instructed.
+
+## Review: PR #1425 — `feat: convert slot-keyed configuration to name-keyed users` (base `v3`)
+
+Scope: two new files, `custom_components/lock_code_manager/domain/slot_assignment.py` (229 lines) and `tests/properties/test_slot_assignment.py`. Nothing imports either yet (grep across `custom_components/` and `tests/` confirms zero consumers), so every finding is latent rather than live. All findings below were reproduced by executing the branch code in a throwaway worktree.
+
+### Findings
+
+**1. `custom_components/lock_code_manager/domain/slot_assignment.py:177` — MEDIUM: a rename whose target is absent from `names` renumbers the still-present source user.**
+`moves` (line 161) is filtered only on the *old* name existing in `self.slots`. `renamed` (172) then drops any move whose target is not in `surviving`, but `kept` (177) still excludes the source because `name not in moves` is false. The user falls out of `carried` entirely and is re-allocated from `start`. Reproduced:
+```
+before: {'alice': 5, 'bob': 6}
+reconcile(["Alice","Bob"], start=1, renames={"Alice":"Wren"})
+after : {'bob': 6, 'alice': 1}      # Alice 5 -&gt; 1
+```
+Alice survives the edit under her own name yet her credential index moves on every lock and her entities/device are orphaned — precisely the failure the module's docstring says the design exists to prevent. Filtering `moves` up front on `_identity(new) in surviving` makes the contradictory input inert instead of destructive. No property covers it: `test_renaming_keeps_the_users_slot` builds `after_names` as `[moves.get(n, n) for n in names]`, so the target is always in `names`.
+
+**2. `slot_assignment.py:81` — MEDIUM (test gap): the documented "keeps the LOWER slot" tie-break is unasserted; mutating `min` → `max` passes all 17 property tests.** Verified by patching the line and running `pytest tests/properties/test_slot_assignment.py -q` → `17 passed`. The collapse branch is only reached when two keys reduce to one identity, and no test constructs such a mapping (`test_a_whitespace_variant_is_the_same_user` pads all keys uniformly, so identities stay distinct). The line is covered but the behavior is not pinned. Same class of gap the repo hit in PR #1403/#1404.
+
+**3. `slot_assignment.py:80` — MEDIUM (test gap): the `int(slot)` coercion is likewise unasserted.** Mutating `number = int(slot)` → `number = slot` also passes `17 passed`. The docstring calls this coercion the type-level defense against exactly the string-key double-booking the branch previously shipped ("a caller reading `entry.data` directly instead of through `from_mapping`"), but `users_from_slots` already ints its keys at line 228, so no test ever hands a string slot value to the constructor. A direct `SlotAssignment(slots={"a": "3"})` case would pin it.
+
+**4. `slot_assignment.py:77` — MEDIUM: `__post_init__` canonicalizes keys but never checks slot *value* uniqueness, so a corrupt stored assignment double-books a credential index silently and permanently.** Reproduced:
+```
+SlotAssignment(slots={"alice": 2, "bob": 2}).reconcile(["alice","bob"], start=1)
+-&gt; {'alice': 2, 'bob': 2}
+```
+Both users are `kept`, so reconcile never repairs it and the two write to the same index on the lock forever. The class already chose to defensively repair the *key* collision it can only get from corrupt storage; the value collision, which is the more dangerous of the two, passes through untouched. `test_two_users_never_share_a_slot` only ever starts from `empty()`, and `test_editing_after_a_migration_never_double_books_a_slot` starts from `users_from_slots`, which can't produce duplicate values — neither can reach a loaded-from-storage duplicate.
+
+**5. `slot_assignment.py:186` — LOW/MEDIUM: allocation is order-dependent on `names`, which is typed `Iterable[str]`.** Reproduced:
+```
+empty().reconcile(["Zoe","Yan"], start=1) -&gt; {'zoe': 1, 'yan': 2}
+empty().reconcile(["Yan","Zoe"], start=1) -&gt; {'yan': 1, 'zoe': 2}
+```
+The signature invites a caller to pass a `set` or `dict.keys()` from an unordered source, which would give the same configuration different credential indices across runs. `test_renaming_does_not_depend_on_insertion_order` covers only the *stored* mapping's order (it flips `before.slots`), not `names`.
+
+**6. `slot_assignment.py:172` — LOW: two renames onto one target produce an order-dependent winner.** Reproduced:
+```
+{'alice':1,'bob':2}.reconcile(["Wren"], renames={"alice":"Wren","bob":"Wren"}) -&gt; {'wren': 2}
+{'bob':2,'alice':1}.reconcile(["Wren"], renames={"alice":"Wren","bob":"Wren"}) -&gt; {'wren': 1}
+```
+Same logical input, different credential index, decided by stored-dict insertion order. Both property tests that touch renames `assume(len({_identity(v) for v in moves.values()}) == len(moves))` this away. `validate_slot_names` should keep it unreachable from the config flow, but nothing in this type enforces it.
+
+**7. PR description cites a property that does not exist in the diff.** The body argues the monotonic-handle alternative was rejected because "`test_slots_never_exceed_the_most_users_ever_configured_at_once` states that as a property, and it is exactly the one a monotonic handle cannot satisfy." No such test is in `tests/properties/test_slot_assignment.py` (the 17 tests are listed in the diff; none states a bound on the maximum slot). The boundedness claim that motivates the whole reuse design is currently untested. The invariant does hold for the implementation — assigned slots stay within `[start, start + max_ever_users - 1]` absent `unavailable` — so this is a missing property, not a defect.
+
+**8. `slot_assignment.py:194` — LOW: `reconcile` returns `self` even when a carried user occupies a now-`unavailable` slot.** Reproduced: `SlotAssignment(slots={"alice":3}).reconcile(["alice"], start=1, unavailable={3})` returns the identical object. Since the docstring tells callers to "use identity to decide whether a write is needed," a slot that another entry has since claimed on a shared lock produces a "nothing to do" answer. The same applies to a raised `CONF_START_SLOT`: `{"alice":1}.reconcile(["Alice","Zoe"], start=10)` leaves Alice on slot 1, below the boundary the docstring says protects hand-programmed codes. Both may be the intended "never renumber" trade-off, but neither is stated, and `unavailable` is documented only as applying to new users.
+
+### Nothing wrong with these (checked and cleared)
+- The explicit `__hash__` does survive `@dataclass(frozen=True, slots=True)` — `has_explicit_hash` makes the decorator's hash action a no-op. Verified: `hash(a) == hash(b)` for equal instances.
+- Chained renames (`{a:b, b:c}`) and cycles/swaps (`{a:b, b:a}`) both resolve correctly; the single-pass `renamed`/`kept` split handles them without an ordering step.
+- `users_from_slots` cannot collapse two users into one key: `normalize_slot_names` already guarantees case-insensitively unique names via `deduplicate`, so the `min` collapse in `__post_init__` is unreachable from the migration path.
+- The `candidate` cursor not resetting per user is correct — `taken` only grows, so it still yields the lowest free number at or above `start`.</result>
+<usage><subagent_tokens>104128</subagent_tokens><tool_uses>21</tool_uses><duration_ms>341505</duration_ms></usage>
+</task-notification>
