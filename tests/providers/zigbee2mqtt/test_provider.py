@@ -45,29 +45,37 @@ class TestNativeTransportContract(ProviderNativeTransportContractTests):
     """Documents that the native-transport contract does not apply to Z2M reads."""
 
 
-def test_zigbee2mqtt_provider_properties_and_no_device_entry_skips_name() -> None:
-    """Provider metadata and friendly name path when the lock has no device entry."""
+def test_zigbee2mqtt_provider_properties_and_no_device_entry_resolves_no_topic() -> (
+    None
+):
+    """Provider metadata and topic resolution when the lock has no device entry."""
     lock = _minimal_lock()
     assert lock.domain == MQTT_DOMAIN
     assert lock.supports_push is True
     assert lock.usercode_scan_interval == timedelta(minutes=5)
     assert lock.hard_refresh_interval == timedelta(hours=1)
     assert lock.connection_check_interval == timedelta(seconds=30)
-    assert lock._get_friendly_name() is None
+    assert lock._resolve_device_topic() is None
 
 
-async def test_get_friendly_name_rejects_non_z2m_bridge(
+async def test_non_z2m_bridge_not_connected(
     zigbee2mqtt_lock_wrong_identifier: Zigbee2MQTTLock,
 ) -> None:
-    """MQTT devices without a zigbee2mqtt_* identifier do not yield a topic name."""
-    assert zigbee2mqtt_lock_wrong_identifier._get_friendly_name() is None
+    """MQTT devices without a zigbee2mqtt_* identifier resolve no topic and stay disconnected."""
+    lock = zigbee2mqtt_lock_wrong_identifier
+    assert lock._resolve_device_topic() is None
+    with patch(
+        "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+        return_value=True,
+    ):
+        assert await lock.async_is_integration_connected() is False
 
 
 async def test_async_is_integration_connected_paths(
     hass: HomeAssistant,
     zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
 ) -> None:
-    """MQTT availability and Z2M friendly name gate integration connectivity."""
+    """MQTT availability and discovery topic resolution gate integration connectivity."""
     lock = zigbee2mqtt_lock_with_device
 
     hass.states.async_set(lock.lock.entity_id, "locked")
@@ -82,9 +90,22 @@ async def test_async_is_integration_connected_paths(
             "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
             return_value=True,
         ),
-        patch.object(lock, "_get_friendly_name", return_value=None),
+        patch.object(Zigbee2MQTTLock, "_resolve_device_topic", return_value=None),
     ):
         assert await lock.async_is_integration_connected() is False
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+            return_value=True,
+        ),
+        patch.object(
+            Zigbee2MQTTLock,
+            "_resolve_device_topic",
+            return_value="zigbee2mqtt/Test Lock",
+        ),
+    ):
+        assert await lock.async_is_integration_connected() is True
 
 
 async def test_async_is_device_available_reflects_entity_state(

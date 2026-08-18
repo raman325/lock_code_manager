@@ -33,9 +33,6 @@ from ._base import BaseLock
 from ._util import parse_slot_num
 from .const import LOGGER
 
-# Default Zigbee2MQTT base topic
-DEFAULT_BASE_TOPIC = "zigbee2mqtt"
-
 # Zigbee2MQTT action values for lock/unlock events triggered by PIN entry.
 # These come from the DoorLock cluster's OperatingEventNotification and
 # ProgrammingEventNotification via zigbee-herdsman-converters.
@@ -109,8 +106,6 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
 class Zigbee2MQTTLock(BaseLock):
     """Class to represent Zigbee2MQTT lock."""
 
-    _base_topic: str = field(init=False, default=DEFAULT_BASE_TOPIC)
-    _friendly_name: str | None = field(init=False, default=None)
     _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
         init=False, default_factory=dict
     )
@@ -205,54 +200,20 @@ class Zigbee2MQTTLock(BaseLock):
             return None
         return None
 
-    def _get_friendly_name(self) -> str | None:
-        """
-        Get the Zigbee2MQTT friendly name for this device.
-
-        Reads ``device_registry`` name on each call so renames stay aligned with the
-        Zigbee2MQTT friendly name (cached value alone would go stale).
-        """
-        if not self.device_entry:
-            LOGGER.debug("No device entry for %s", self.lock.entity_id)
-            return None
-
-        # Check if this is a Zigbee2MQTT device by identifiers
-        is_z2m = any(
-            len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_")
-            for identifier in self.device_entry.identifiers
-        )
-
-        if not is_z2m:
-            LOGGER.debug("Device %s is not a Zigbee2MQTT device", self.lock.entity_id)
-            return None
-
-        name = self.device_entry.name
-        if name != self._friendly_name:
-            self._friendly_name = name
-            LOGGER.debug(
-                "Zigbee2MQTT friendly name for %s: %s",
-                self.lock.entity_id,
-                name,
-            )
-        return name
-
     def _get_topic(self, suffix: str = "") -> str | None:
-        """Get the MQTT topic for this device."""
-        friendly_name = self._get_friendly_name()
-        if not friendly_name:
+        """Get the MQTT topic for this device, resolved from discovery data."""
+        device_topic = self._resolve_device_topic()
+        if not device_topic:
             return None
         if suffix:
-            return f"{self._base_topic}/{friendly_name}/{suffix}"
-        return f"{self._base_topic}/{friendly_name}"
+            return f"{device_topic}/{suffix}"
+        return device_topic
 
     def _maybe_raise_wrong_bridge_disconnect(self) -> None:
         """Raise when MQTT works but this entity cannot map to a Zigbee2MQTT topic."""
         if self.device_entry is None:
             return
-        if any(
-            len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_")
-            for identifier in self.device_entry.identifiers
-        ):
+        if self._is_z2m_device():
             return
         raise LockDisconnected(
             "This entity is not a Zigbee2MQTT lock (device registry lacks a "
@@ -263,8 +224,7 @@ class Zigbee2MQTTLock(BaseLock):
         """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
             return False
-
-        return bool(self._get_friendly_name())
+        return bool(self._resolve_device_topic())
 
     async def async_is_device_available(self) -> bool:
         """Return whether the lock entity reports an operational state."""
@@ -421,7 +381,7 @@ class Zigbee2MQTTLock(BaseLock):
         if not topic:
             raise LockDisconnected(
                 f"Cannot subscribe for {self.lock.entity_id} — "
-                "not a Zigbee2MQTT device or friendly name unavailable"
+                "not a Zigbee2MQTT device or discovery topic unavailable"
             )
 
         def message_received(msg: ReceiveMessage) -> None:
