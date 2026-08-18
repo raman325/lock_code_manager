@@ -3,10 +3,23 @@
 from __future__ import annotations
 
 from homeassistant.components.mqtt import debug_info as mqtt_debug_info
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .conftest import Z2M_FULL_TOPIC
+from custom_components.lock_code_manager.providers.zigbee2mqtt import (
+    Zigbee2MQTTLock,
+)
+
+from .conftest import Z2M_FULL_TOPIC, _minimal_lock, async_discover_z2m_lock
+
+
+def _build_lock(hass: HomeAssistant, lock_entity: er.RegistryEntry) -> Zigbee2MQTTLock:
+    """Construct a provider instance around a discovered lock entity."""
+    mqtt_entry: ConfigEntry = hass.config_entries.async_entries("mqtt")[0]
+    return Zigbee2MQTTLock(
+        hass, dr.async_get(hass), er.async_get(hass), mqtt_entry, lock_entity
+    )
 
 
 async def test_debug_info_shape_pin(
@@ -30,3 +43,56 @@ async def test_debug_info_shape_pin(
     payload = entry["discovery_data"]["payload"]
     assert payload["state_topic"] == Z2M_FULL_TOPIC
     assert payload["command_topic"] == f"{Z2M_FULL_TOPIC}/set"
+
+
+async def test_resolve_device_topic_from_state_topic(
+    hass: HomeAssistant, mqtt_lock_discovered: er.RegistryEntry
+) -> None:
+    """The device topic comes verbatim from the discovery state_topic."""
+    lock = _build_lock(hass, mqtt_lock_discovered)
+    assert lock._resolve_device_topic() == Z2M_FULL_TOPIC
+    assert lock._get_topic() == Z2M_FULL_TOPIC
+    assert lock._get_topic("set") == f"{Z2M_FULL_TOPIC}/set"
+    assert lock._get_topic("get") == f"{Z2M_FULL_TOPIC}/get"
+
+
+async def test_resolve_device_topic_multi_level_base_topic(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """Multi-level base topics (home/z2m) resolve verbatim — no wildcard parsing."""
+    entity = await async_discover_z2m_lock(
+        hass, ieee="0xdeadbeef", name="BackDoor", base_topic="home/z2m"
+    )
+    lock = _build_lock(hass, entity)
+    assert lock._resolve_device_topic() == "home/z2m/BackDoor"
+
+
+async def test_resolve_device_topic_command_topic_fallback(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """Without a state_topic, the command_topic minus /set is used."""
+    entity = await async_discover_z2m_lock(
+        hass, ieee="0xfeed", name="SideDoor", include_state_topic=False
+    )
+    lock = _build_lock(hass, entity)
+    assert lock._resolve_device_topic() == "zigbee2mqtt/SideDoor"
+
+
+def test_resolve_device_topic_no_device_id() -> None:
+    """A lock entity without a device resolves to no topic."""
+    lock = _minimal_lock()
+    assert lock._resolve_device_topic() is None
+
+
+async def test_resolve_device_topic_no_discovery_data(
+    hass: HomeAssistant, zigbee2mqtt_lock_with_device: Zigbee2MQTTLock
+) -> None:
+    """A registry-created entity with no discovery data resolves to no topic."""
+    assert zigbee2mqtt_lock_with_device._resolve_device_topic() is None
+
+
+async def test_resolve_device_topic_non_z2m_device(
+    hass: HomeAssistant, zigbee2mqtt_lock_wrong_identifier: Zigbee2MQTTLock
+) -> None:
+    """A device without a zigbee2mqtt_* identifier never resolves a topic."""
+    assert zigbee2mqtt_lock_wrong_identifier._resolve_device_topic() is None

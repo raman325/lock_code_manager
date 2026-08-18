@@ -12,6 +12,7 @@ from homeassistant.components.mqtt import (
     DOMAIN as MQTT_DOMAIN,
     async_publish,
     async_subscribe,
+    debug_info as mqtt_debug_info,
 )
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
@@ -152,6 +153,57 @@ class Zigbee2MQTTLock(BaseLock):
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Subscribe to the device topic before the coordinator runs its first poll."""
         await self._async_ensure_device_subscription()
+
+    def _is_z2m_device(self) -> bool:
+        """Return whether the device registry marks this as a Zigbee2MQTT device."""
+        if not self.device_entry:
+            return False
+        return any(
+            len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_")
+            for identifier in self.device_entry.identifiers
+        )
+
+    def _resolve_device_topic(self) -> str | None:
+        """
+        Resolve this lock's Zigbee2MQTT device topic from its MQTT discovery data.
+
+        The discovery payload Zigbee2MQTT publishes carries the exact topics
+        (``state_topic`` is ``<base_topic>/<friendly_name>``), so custom,
+        multi-level, and per-bridge base topics all work verbatim with no
+        reconstruction. Returns None whenever the topic cannot be determined —
+        callers must treat that as disconnected rather than guess a topic.
+        """
+        if not self._is_z2m_device():
+            return None
+        device_id = self.lock.device_id
+        if not device_id:
+            return None
+        try:
+            info = mqtt_debug_info.info_for_device(self.hass, device_id)
+        except KeyError:
+            # MQTT integration data not loaded.
+            LOGGER.debug("MQTT debug info unavailable for %s", self.lock.entity_id)
+            return None
+        for entity_info in info.get("entities", []):
+            if entity_info.get("entity_id") != self.lock.entity_id:
+                continue
+            discovery_data = entity_info.get("discovery_data") or {}
+            payload = discovery_data.get("payload")
+            if not isinstance(payload, dict):
+                LOGGER.debug("No discovery payload for %s", self.lock.entity_id)
+                return None
+            state_topic = payload.get("state_topic")
+            if isinstance(state_topic, str) and state_topic:
+                return state_topic
+            command_topic = payload.get("command_topic")
+            if isinstance(command_topic, str) and command_topic.endswith("/set"):
+                return command_topic.removesuffix("/set")
+            LOGGER.debug(
+                "Discovery payload for %s has no usable topic",
+                self.lock.entity_id,
+            )
+            return None
+        return None
 
     def _get_friendly_name(self) -> str | None:
         """
