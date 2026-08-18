@@ -603,12 +603,9 @@ class LockCodeManagerFlowHandler(
         Entry point for reauth. Home Assistant passes the ENTRY'S OWN DATA here.
 
         Delegated immediately, and the argument ignored, so the confirm step
-        can read ``user_input is None`` as "render the form" without having to
-        guess whether its caller was Home Assistant or the user. Answering
-        that by inspecting the payload -- testing for a configuration key --
-        turned into an unbounded setup loop the moment that key left the
-        entry, because a mistaken "the user submitted" updates the entry and
-        reloads it, and the reload fails setup again.
+        can read ``user_input is None`` as "render the form" rather than
+        inspecting the payload to guess whether its caller was Home Assistant
+        or the user. Guessing wrong updates the entry and reloads it.
         """
         return await self.async_step_reauth_confirm()
 
@@ -660,11 +657,13 @@ class LockCodeManagerFlowHandler(
                 # merges options-preferred, so leaving stale options in
                 # place would silently override this reauth fix on the
                 # next load.
+                # Resolved through EntryConfig, not by merging raw dicts: the
+                # two sides may be in different shapes, and a raw merge carries
+                # both, discarding the very save this block exists to consume.
                 self.hass.config_entries.async_update_entry(
                     config_entry,
                     data={
-                        **config_entry.data,
-                        **config_entry.options,
+                        **get_entry_config(config_entry).to_dict(),
                         **user_input,
                     },
                     options={},

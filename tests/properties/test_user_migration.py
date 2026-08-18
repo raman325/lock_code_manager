@@ -1,18 +1,13 @@
 """
 Property-based tests for the version 3 configuration migration.
 
-Written from `docs/superpowers/specs/2026-08-18-b2c-invariants.md` BEFORE the
-implementation, so they state what the migration must honour rather than
-describing what it happens to do. The numbered references below are that
-document's constraints.
-
-The migration has no rollback (constraint 12), so every failure mode here is
-permanent for the user it happens to:
+The migration has no rollback, so every failure mode here is permanent for
+the user it happens to:
 
 * **something is lost** -- a user, or a field of one. Silent, because the
   result is still a valid configuration.
 * **somebody is renumbered** -- the slot is the credential index on most
-  providers (constraint 1), so a changed number moves that person's code to a
+  providers, so a changed number moves that person's code to a
   different index on every lock and orphans their entities.
 * **a retired key survives** -- `start_slot` and `num_slots` no longer mean
   anything, and a stale one would be read by something eventually.
@@ -55,11 +50,10 @@ SLOT_CONFIGS = st.builds(
 def v2_entries(draw: st.DrawFn) -> dict:
     """Entry mappings shaped like STORAGE, including the awkward ones.
 
-    Keys are strings because that is the on-disk JSON form. Names may be
-    missing or duplicated, both reachable from a version 2 entry where the
-    name is optional (constraint 7). The start slot is drawn above 1 often
-    enough that "preserved, not renumbered" is a real assertion rather than a
-    coincidence of everything starting at 1.
+    Keys are strings, as the on-disk JSON form yields. Names may be missing or
+    duplicated, both reachable from a version 2 entry where the name is
+    optional. The start slot is drawn above 1 often enough that "preserved,
+    not renumbered" is a real assertion rather than a coincidence.
     """
     configs = draw(st.lists(SLOT_CONFIGS, max_size=4))
     start = draw(st.integers(min_value=1, max_value=12))
@@ -92,11 +86,11 @@ def test_every_slot_becomes_exactly_one_user(entry: dict) -> None:
 
 @given(entry=v2_entries())
 def test_nobody_is_renumbered(entry: dict) -> None:
-    """Each user keeps the slot number they already occupied (constraint 1).
+    """Each user keeps the slot number they already occupied.
 
-    The whole reason the migration is safe: the slot is what identifiers key
-    on and what addresses the credential on the lock, so a changed number
-    orphans that user's entities AND writes their code to a different index.
+    The slot is what identifiers key on and what addresses the credential on
+    the lock, so a changed number orphans that user's entities and writes
+    their code to a different index.
     """
     migrated, _ = migrate_to_users(entry)
     assignment = SlotAssignment(slots=migrated[CONF_SLOT_ASSIGNMENT])
@@ -128,10 +122,10 @@ def test_no_field_is_lost_except_the_name(entry: dict) -> None:
 
 @given(entry=v2_entries())
 def test_the_retired_keys_are_gone(entry: dict) -> None:
-    """slots, start_slot and num_slots no longer mean anything.
+    """slots, start_slot and num_slots have no meaning in the new shape.
 
-    There is no start slot any more -- allocation takes the lowest slot not
-    already occupied. A stale key would eventually be read by something.
+    Allocation takes the lowest unoccupied slot, so a start slot configures
+    nothing; a stale key would eventually be read by something.
     """
     migrated, _ = migrate_to_users(entry)
 
@@ -154,15 +148,12 @@ def test_everything_else_is_carried_through(entry: dict) -> None:
 def test_user_keys_keep_the_name_as_displayed(entry: dict) -> None:
     """The key is the name as typed, not a casefolded version of it.
 
-    This property said the opposite when first written, and implementing the
-    reader is what exposed it: the name stopped being a field when it became
-    the key, so the key is now the ONLY place capitalization survives. The
-    configuration is hand-editable, and someone who typed "Raman" getting
-    "raman" back is a bug.
+    The name stopped being a field when it became the key, so the key is the
+    only place a user's capitalization survives. The configuration is
+    hand-editable, and someone who typed "Raman" should get "Raman" back.
 
-    Uniqueness stays case-insensitive regardless (constraint 8) --
-    names.deduplicate guarantees no two differ only by case, and lookups fold
-    it. Storage keeps the display; comparison folds the case.
+    Uniqueness stays case-insensitive: storage keeps the display form,
+    comparison folds the case.
     """
     migrated, _ = migrate_to_users(entry)
 
@@ -176,8 +167,8 @@ def test_user_keys_keep_the_name_as_displayed(entry: dict) -> None:
 def test_migrating_twice_changes_nothing(entry: dict) -> None:
     """A migration that runs again must be a no-op.
 
-    It should not run twice -- the version stamp prevents it -- but a
-    migration with no rollback should not depend on that for its safety.
+    The version stamp should prevent a second run, but a migration with no
+    rollback should not depend on that.
     """
     once, _ = migrate_to_users(entry)
     twice, renamed = migrate_to_users(once)

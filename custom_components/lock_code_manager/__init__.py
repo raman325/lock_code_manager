@@ -209,19 +209,12 @@ async def async_migrate_entry(
             )
 
     if config_entry.version == 3:
-        # Two halves of ONE version bump, because they ship as one release and
-        # no released schema ever sat between them.
+        # Two halves of one version bump: name every slot, then key the
+        # configuration by that name and demote the slot number to internal
+        # bookkeeping.
         #
-        # First: give every slot a present, entry-unique name. The name is
-        # becoming the key the configuration is stored under, so an absent one
-        # has nothing to key on and a duplicate cannot be represented at all.
-        #
-        # Then: reshape from slots to users, demoting the slot number to
-        # internal bookkeeping.
-        #
-        # NO REGISTRY WRITES happen anywhere in here. Entity and device
-        # identifiers keep the slot number, so there is nothing to move --
-        # which is what makes a migration with no rollback safe to ship.
+        # No registry writes happen here. Entity and device identifiers keep
+        # the slot number, so there is nothing to move.
         new_data, renamed_in_data = migrate_to_users(config_entry.data)
         new_options, renamed_in_options = migrate_to_users(config_entry.options)
         renamed = set(renamed_in_data) | set(renamed_in_options)
@@ -571,16 +564,18 @@ def _setup_entry_after_start(
         config_entry.async_on_unload(_clear_listener_registered)
 
     if config_entry.data:
-        # Move data from data to options so update listener can work.
-        # Merge options-preferred (matching EntryConfig.from_entry): a
-        # non-empty options here holds an options-flow save the entry
-        # could not process (no listener was registered while it was
-        # failed) — overwriting it with data would silently discard the
-        # user's fix.
+        # Move data into options so the update listener can work.
+        #
+        # Resolved through EntryConfig rather than by merging the two raw
+        # dicts. A non-empty options here holds an options-flow save the entry
+        # could not process while it was failed, and the two sides may be in
+        # different shapes; merging them raw yields a mapping carrying both,
+        # and reading a mix of shapes discards whichever loses. EntryConfig
+        # picks one side whole and emits one shape.
         hass.config_entries.async_update_entry(
             config_entry,
             data={},
-            options={**config_entry.data, **config_entry.options},
+            options=get_entry_config(config_entry).to_dict(),
         )
     else:
         hass.async_create_task(

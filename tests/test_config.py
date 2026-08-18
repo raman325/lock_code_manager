@@ -25,9 +25,8 @@ from custom_components.lock_code_manager.domain.queries import get_entry_config
 def _slot(pin: str = "1234", name: str | None = None) -> dict:
     """Trivial slot config dict for tests.
 
-    Carries a name because the name is the key the configuration is stored
-    under now, so a slot without one gets a generated name rather than
-    staying nameless.
+    A slot without a name gets a generated one, since the name is the key the
+    configuration is stored under.
     """
     return {"pin": pin, "enabled": True, **({"name": name} if name else {})}
 
@@ -424,10 +423,8 @@ def test_get_entry_config_falls_back_when_runtime_data_lacks_config() -> None:
 def test_with_slot_field_set_cannot_create_a_user() -> None:
     """Setting a field on an unoccupied slot is a no-op, not a creation.
 
-    A user is created by NAME now, and a bare slot number does not supply
-    one. The slot-keyed setter is a temporary shim over the user-keyed one
-    and can only reach somebody who already exists; inventing a name here
-    would put a user on the lock that nobody asked for.
+    A user is created by name, and a bare slot number supplies none. Inventing
+    one would put a user on the lock that nobody asked for.
     """
     config = EntryConfig.from_mapping(
         {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
@@ -439,11 +436,9 @@ def test_with_slot_field_set_cannot_create_a_user() -> None:
 def test_with_user_field_set_does_not_create_a_user() -> None:
     """Setting a field on somebody who does not exist is a no-op.
 
-    Creating a user also has to allocate them a slot, and this cannot -- it
-    has no view of what is occupied on the locks. A user created without one
-    is persisted in `users`, omitted from every slot-keyed consumer, never
-    reaches a lock, and is dropped the next time the configuration round-trips.
-    Creation gets an implementation when allocation does.
+    Creating a user also has to allocate them a slot, which this has no view to
+    do. One created without a slot reaches no lock and is dropped the next time
+    the configuration round-trips.
     """
     config = EntryConfig.from_mapping(
         {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
@@ -455,10 +450,8 @@ def test_with_user_field_set_does_not_create_a_user() -> None:
 def test_setting_the_name_re_keys_the_user() -> None:
     """The name is the identity, so setting it moves the user, not a field.
 
-    Stored as a field it looks right through the slot projection -- the inner
-    value shadows the key -- while the actual identity goes permanently stale:
-    after a reload the user cannot be found by their new name and holds no
-    slot.
+    Stored as a field, the user could not be found by their new name after a
+    reload and would hold no slot.
     """
     config = EntryConfig.from_mapping(
         {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: {**_slot(), "name": "Alice"}}}
@@ -717,11 +710,27 @@ def test_build_slot_unique_id_variants_never_collide() -> None:
 def test_renaming_somebody_who_does_not_exist_is_a_no_op() -> None:
     """A rename naming an unknown user changes nothing.
 
-    Reachable from a stale rename map -- one computed against a configuration
-    that has since moved on. Creating the target instead would add a user
-    holding no slot, who never reaches a lock and is dropped on the next
-    round-trip.
+    Reachable from a rename map computed against a configuration that has since
+    moved on. Creating the target would add a user holding no slot.
     """
     config = EntryConfig.from_mapping({CONF_SLOTS: {1: {**_slot(), "name": "Raman"}}})
 
     assert config.with_user_renamed("Ghost", "Wren") is config
+
+
+def test_renaming_onto_an_existing_user_is_refused() -> None:
+    """A rename onto somebody else's name must not collapse two users into one.
+
+    Re-keying without the check deletes the target: their configuration is
+    gone and their slot is freed for reallocation.
+    """
+    config = EntryConfig.from_mapping(
+        {
+            CONF_SLOTS: {
+                1: {**_slot("1111"), "name": "Alice"},
+                2: {**_slot("2222"), "name": "Bob"},
+            }
+        }
+    )
+
+    assert config.with_user_field_set("Bob", "name", "Alice") is config
