@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "f1c1d48dd1fc",
+  "strategy": "manual-commit",
+  "branch": "fix/lcm-owns-its-devices",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/f1/c1d48dd1fc/0/metadata.json",
+      "transcript": "/f1/c1d48dd1fc/0/full.jsonl",
+      "compact_transcript": "/f1/c1d48dd1fc/0/transcript.jsonl",
+      "content_hash": "/f1/c1d48dd1fc/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 116,
+    "cache_creation_tokens": 84148,
+    "cache_read_tokens": 23403699,
+    "output_tokens": 55292,
+    "api_call_count": 58
+  }
+}
