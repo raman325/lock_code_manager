@@ -883,3 +883,26 @@ Same logical input, different credential index, decided by stored-dict insertion
 ---
 
 yes
+
+---
+
+<task-notification>
+<task-id>a221ef1dc6648287e</task-id>
+<tool-use-id>toolu_01AQNG3qXeaUHg1Uovg4karZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a221ef1dc6648287e.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1425" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. No `ReportFindings` tool is available in this session, so findings are below. I reviewed the two new files on `origin/feat/v3-user-config-shape` (581b5d4c) against `v3`, ran the new suite (25 passed, 100% line coverage of the new module), ruff and mypy (clean for these files), and empirically probed `reconcile`/`users_from_slots` with targeted cases and my own Hypothesis fuzz of the "bystander is never renumbered", "no two users share a slot", and "domain is exactly `names`" invariants — those three held under renames + `start` + `unavailable` churn.
+
+**Findings**
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/domain/slot_assignment.py:184` — **MEDIUM.** `for old in sorted(renames or {}, key=_identity)` only orders by *source* identity, and `honoured[source] = target` lets a later entry overwrite an earlier one while the earlier entry's target stays in `claimed`. Two rename keys reducing to one identity therefore (a) make the result depend on the mapping's insertion order — exactly the nondeterminism `test_two_renames_onto_one_target_resolve_the_same_way_every_time` says was eliminated — and (b) silently block a *legitimate* rename onto the abandoned target. Verified: `SlotAssignment({"Alice":1,"Bob":5,"Carl":2}).reconcile(["Wren","Vic","Carl"], start=1, renames={"Alice":"Wren","alice ":"Vic","Bob":"Wren"})` yields `{'carl':2,'vic':1,'wren':3}` — Bob→Wren was dropped, so Bob's credential moves from index 5 to 3 on every lock and his entities are orphaned; the module's stated purpose is to never do that. Also `{"Alice":"Wren","alice":"Vic"}` vs the same dict built in the other order gives `wren:1/vic:3` vs `vic:1/wren:3`. `__post_init__` canonicalizes `slots` keys to identity form; `renames` keys never get the same treatment. Reduce `renames` to identity form (deterministically, e.g. keyed on `(_identity(k), _identity(v))`) before the loop.
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/domain/slot_assignment.py:262` — **LOW.** `assignment[name] = int(raw_slot_num)` can map two users onto one number: `__post_init__` de-duplicates colliding *names* but never colliding *slot values*, and nothing upstream checks that the slot keys are distinct after `int()`. `users_from_slots({'01': {...'A'}, '1': {...'B'}})` returns `{'a': 1, 'b': 1}` — both users on credential index 1, persisted straight out of a migration that per project notes has no rollback. They overwrite each other on the lock every sync until some later `reconcile` silently moves one. `stored_slot_mappings` can't generate key collisions, so `test_migration_always_produces_one_user_per_slot` doesn't catch it. Worth applying the same conflict repair `reconcile` already has, or rejecting duplicate coerced keys.
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/domain/slot_assignment.py:163` — **LOW.** "`start` and `unavailable` therefore constrain ALLOCATION, not tenure" — the justification that follows ("the entry still holds a number it would not choose today") is true for `start` but not for `unavailable`. The test at `tests/properties/test_slot_assignment.py:551` documents `unavailable` as numbers another entry owns on a shared lock; keeping a tenured user on such a number means two entries writing the same credential index forever, with no repair path (the `carried` dedupe is per-assignment and can't see the other entry). A conflict between tenure and `unavailable` should at least be surfaced to the caller rather than silently preserved.
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/domain/slot_assignment.py:111` — **LOW.** Hardening is asymmetric against the same threat model. `__post_init__` coerces `str(name)` specifically so hand-edited storage can't abort entry setup (pinned by `test_a_non_string_name_key_is_coerced_not_fatal`), but the sibling paths still raise: `SlotAssignment.from_mapping({"slot_assignment": ["x"]})` → `AttributeError: 'list' object has no attribute 'items'`, and a non-numeric slot value → `ValueError` at line 80. Both come from the same corrupted-storage scenario the `str()` coercion exists for, and both take the whole entry down.</result>
+<usage><subagent_tokens>123578</subagent_tokens><tool_uses>29</tool_uses><duration_ms>550663</duration_ms></usage>
+</task-notification>
