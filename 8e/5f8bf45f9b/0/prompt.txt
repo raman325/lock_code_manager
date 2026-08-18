@@ -619,3 +619,11 @@ fold it in
 ---
 
 should they see a slot number? in our design, isn't the slot umber an internal thing if needed?
+
+---
+
+yes
+
+---
+
+yes
