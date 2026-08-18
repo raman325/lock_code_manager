@@ -127,9 +127,7 @@ def test_no_reported_cycle_means_the_mapping_is_acyclic(
 
 
 @given(mapping=MAPPINGS, in_use=st.sets(SEGMENTS, max_size=4))
-def test_parking_name_never_collides(
-    mapping: dict[str, str], in_use: set[str]
-) -> None:
+def test_parking_name_never_collides(mapping: dict[str, str], in_use: set[str]) -> None:
     """The parking name is free on both sides and in the registry.
 
     Moving onto an occupied name raises mid-pass, leaving identifiers half
