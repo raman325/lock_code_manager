@@ -675,3 +675,49 @@ Every `assign` property seeds from `SlotAssignment.empty()`, and `slot_mappings`
 ---
 
 yes
+
+---
+
+<task-notification>
+<task-id>a6b5a21a2277d30b5</task-id>
+<tool-use-id>toolu_018BFxcoW9bwoLNZDDVq4E4c</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/dbfc231f-fc6a-4d2a-afa6-d892809f5b0a/tasks/a6b5a21a2277d30b5.output</output-file>
+<status>completed</status>
+<summary>Agent "/code-review 1425" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed PR #1425 (`feat/v3-user-config-shape` → `v3`), a 419-line addition of `slot_assignment.py` plus its Hypothesis properties. I ran the new tests (12 pass, 100% coverage of the new module) and probed the data model directly with the project venv to confirm each finding empirically.
+
+Note: no `ReportFindings` tool is exposed in this session (`ToolSearch` returned no match), so findings are reported inline below.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/domain/slot_assignment.py:77` — HIGH. `with_renames` silently drops a user and renumbers another when a rename target is a name still held; the outcome depends on `self.slots` insertion order.**
+The dict comprehension `{renames.get(name, name): slot for name, slot in self.slots.items()}` lets a rename target collide with an existing key, and last-write-wins. Verified:
+```
+{'A':1,'B':2,'C':3}.with_renames({'A':'B','B':'C'})  -&gt;  {'B':1, 'C':3}
+SlotAssignment(slots={'C':3,'B':2,'A':1}).with_renames(same) -&gt; {'C':2, 'B':1}
+```
+Concrete legal edit: user renames A→B, renames B→C, and deletes C in one submission — final names `{B, C}` are unique, so the upstream name rules accept it. Forward order moves the user formerly named B from credential index 2 to index 3 (credential rewritten on every lock, entities orphaned) — precisely the failure the whole design exists to prevent. Reversed insertion order gives a different answer, contradicting the docstring's claim that it "resolves without needing an order". The simpler `{'Alice':1,'Bob':2}.with_renames({'Alice':'Bob'})` → `{'Bob': 2}` shows the mapping can also shrink, silently losing a slot. The docstring's swap argument only covers full permutations; partial/chained renames need the mapping resolved as a permutation (or the collision refused loudly).
+
+**2. `custom_components/lock_code_manager/domain/slot_assignment.py:83` — MEDIUM. Names are used as keys without `normalize_name`, so a whitespace variant renumbers a user.**
+`domain/names.py` declares itself "the single place those three rules live," but neither `assign` nor `with_renames` normalizes. Verified: `{'Raman ':3, 'Alice':2}.assign(['Raman','Alice'])` → `{'Alice':2, 'Raman':1}` — Raman moves from index 3 to index 1. Reachable as soon as one caller stores the normalized name in `users` while passing the raw submitted name (or vice versa) into `assign`/`with_renames`. Either normalize at this boundary or state in the docstring that all names arriving here are pre-normalized.
+
+**3. `custom_components/lock_code_manager/domain/slot_assignment.py:75` — LOW. `with_renames` breaks the identity contract that `assign` documents.**
+`assign` promises "returns `self` when nothing differs, so callers can use identity to decide whether a write is needed." `with_renames` returns `self` only when `renames` is falsy — a non-empty but inapplicable map (e.g. `{'Zed':'Yan'}` where Zed holds no slot) returns a fresh, content-identical object. A caller doing `new = old.with_renames(r).assign(names); if new is not old: async_update_entry(...)` then writes and reloads the entry for a no-op. Verified: `a.with_renames({'Zed':'Yan'})` returns a new object with `{'Alice':1,'Bob':2}` unchanged.
+
+**4. `custom_components/lock_code_manager/domain/slot_assignment.py:36` — LOW. `frozen=True` implies hashability, but hashing raises.**
+`hash(SlotAssignment(...))` → `TypeError: unhashable type: 'dict'` (the generated `__hash__` hashes the `MappingProxyType` field). Any future use in a set, dict key, or `lru_cache` key fails at runtime rather than at type-check time. Either `eq=False`/custom `__hash__` over `tuple(sorted(...))`, or document that it is deliberately unhashable.
+
+**5. `custom_components/lock_code_manager/domain/slot_assignment.py:40` — LOW. Immutability is only shallow on the direct constructor.**
+`from_mapping`, `assign`, `with_renames`, `empty`, and `users_from_slots` all wrap in `MappingProxyType`, but `SlotAssignment(slots={...})` accepts a live mutable dict (I used this in probes, and the test file does not). A caller retaining that dict can mutate the "frozen" value out from under `assign`'s identity-based short circuit. A `__post_init__` coercing to `MappingProxyType` closes the one hole.
+
+**6. `custom_components/lock_code_manager/domain/slot_assignment.py:48` — LOW. `from_mapping` takes a single mapping, but the codebase resolves slots with options-over-data precedence.**
+`domain/config.py:62-63` reads `entry.options.get(CONF_SLOTS, entry.data.get(CONF_SLOTS, {}))`, and the v3→v4 migration in `custom_components/lock_code_manager/__init__.py:218-223` repairs `CONF_SLOTS` in *both* dicts independently. A follow-up that persists `slot_assignment` into only one of them, or reads it from `entry.data` while users come from `entry.options`, gets an empty/stale assignment and renumbers every user on the next start. Worth a docstring line naming which dict is authoritative before the consuming PR lands.
+
+**7. `tests/properties/test_slot_assignment.py:229` — LOW (test gap). The `assume` in `test_renaming_never_renumbers_anyone` excludes exactly the case that fails.**
+`assume(not set(renames.values()) &amp; (set(before.slots) - set(renames)))` filters out chained renames where the final target is a currently-held name — the shape in finding 1. The comment justifies it as "a collision the name rules reject upstream," but the chain A→B, B→C with C deleted is *not* rejected upstream (final names are unique) and does reach `with_renames`.
+
+**8. `tests/properties/test_slot_assignment.py:200` — LOW (test gap). No property pins field↔name pairing through the name-repair path.**
+`test_conversion_loses_no_field` and `test_conversion_round_trips` run only on `slot_mappings`, which never produces a missing or duplicate name, so repair is never exercised for pairing. The two `stored_slot_mappings` properties assert only counts and `set(assignment.slots.values()) == {int(k) for k in stored}`. A mis-pairing that swapped two repaired slots' pins would pass every current property. Asserting `assignment.slot(repaired_name) == int(key)` and field equality against the repaired slots would close it.</result>
+<usage><subagent_tokens>100929</subagent_tokens><tool_uses>19</tool_uses><duration_ms>352982</duration_ms></usage>
+</task-notification>
