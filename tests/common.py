@@ -98,6 +98,9 @@ def _per_lock_entity_id(
     return entity_id
 
 
+# The integration the mock lock entities belong to.
+LOCK_DEVICE_DOMAIN = "test"
+
 SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
 SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
 SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
@@ -229,8 +232,13 @@ class MockLockEntity(LockEntity):
         self._attr_unique_id = slugify(name)
         self._attr_is_locked = False
         self._attr_has_entity_name = False
+        # The mock lock's device belongs to the mock lock's integration, not
+        # to Lock Code Manager. Using Lock Code Manager's domain here would
+        # make the device read as one of ours, and the sweep that moves
+        # entities off other integrations' devices would never be exercised
+        # against the shape it exists for.
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"lock.{slugify(name)}")}, name=name
+            identifiers={(LOCK_DEVICE_DOMAIN, f"lock.{slugify(name)}")}, name=name
         )
         super().__init__()
 

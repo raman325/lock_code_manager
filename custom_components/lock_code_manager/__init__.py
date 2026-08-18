@@ -867,11 +867,11 @@ def _async_reclaim_entities_from_foreign_devices(
     entities are moved to the slot device they belong to and the emptied copy
     is removed here.
 
-    Runs before the platforms are set up, so an entity that is disabled or
-    whose slot has since been removed -- neither of which is ever re-added --
-    is moved rather than deleted along with the copy it is sitting on. It also
-    runs before the orphaned-slot sweep, which then collects any slot device
-    this recreates for a slot that is no longer configured.
+    Runs before the platforms are set up, so a disabled entity -- which no
+    platform re-adds -- is moved rather than deleted along with the copy it
+    is sitting on. It also runs before the orphaned-slot sweep, so an entity
+    whose slot is no longer configured lands on that slot's device and is
+    removed with it, instead of the sweep leaving a device behind.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
@@ -915,6 +915,7 @@ def _async_reclaim_entities_from_foreign_devices(
         dev_reg.async_remove_device(device.id)
 
 
+@callback
 def _async_prune_orphaned_slot_devices(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:

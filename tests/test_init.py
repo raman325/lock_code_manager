@@ -66,6 +66,7 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    LOCK_DEVICE_DOMAIN,
     SLOT_1_IN_SYNC_ENTITY,
     MockLCMLock,
     in_sync_entity_id,
@@ -107,7 +108,7 @@ async def test_entry_setup_and_unload(
     ent_reg = er.async_get(hass)
 
     for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-        device = dev_reg.async_get_device({(DOMAIN, entity_id)})
+        device = dev_reg.async_get_device({(LOCK_DEVICE_DOMAIN, entity_id)})
         assert device
         assert device.config_entries == {mock_lock_entry_id}
         # Nothing of ours sits on the lock's own device. A device belongs to
@@ -247,7 +248,7 @@ async def test_entry_setup_and_unload(
 
     # LOCK_2 was removed from the LCM config entry; its device keeps its own
     # config entry and no longer has any LCM entities linked to it.
-    device = dev_reg.async_get_device({(DOMAIN, LOCK_2_ENTITY_ID)})
+    device = dev_reg.async_get_device({(LOCK_DEVICE_DOMAIN, LOCK_2_ENTITY_ID)})
     assert device
     assert device.config_entries == {mock_lock_entry_id}
     assert not [
@@ -1971,7 +1972,7 @@ async def test_setup_leaves_devices_of_other_integrations_alone(
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
 
-    lock_device = dev_reg.async_get_device({(DOMAIN, LOCK_1_ENTITY_ID)})
+    lock_device = dev_reg.async_get_device({(LOCK_DEVICE_DOMAIN, LOCK_1_ENTITY_ID)})
     assert lock_device
     before = {
         entry.entity_id
@@ -2173,5 +2174,52 @@ async def test_reclaim_does_not_resurrect_a_device_for_an_unconfigured_slot(
         is None
     )
     assert dev_reg.async_get(split.id) is None
+
+    await hass.config_entries.async_unload(entry_id)
+
+
+async def test_reclaim_moves_an_entity_off_the_lock_integrations_device(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The repair this exists for: an entity sitting on the lock's own device.
+
+    That is the state entities were left in before the device model changed --
+    attached to a device owned by the lock's integration, which Lock Code
+    Manager cannot display. It is the common case, and the one the mock lock
+    could not represent while its device carried this integration's domain.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    lock_device = dev_reg.async_get_device({(LOCK_DEVICE_DOMAIN, LOCK_1_ENTITY_ID)})
+    assert lock_device
+    assert lock_device.config_entries != {DOMAIN}
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="On The Lock Device"
+    )
+    config_entry.add_to_hass(hass)
+    entry_id = config_entry.entry_id
+
+    # Disabled so no platform re-homes it, isolating the sweep's own work.
+    stranded = ent_reg.async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{entry_id}|1|{ATTR_IN_SYNC}|{LOCK_1_ENTITY_ID}",
+        config_entry=config_entry,
+        device_id=lock_device.id,
+        disabled_by=er.RegistryEntryDisabler.USER,
+    )
+
+    await hass.config_entries.async_setup(entry_id)
+    await hass.async_block_till_done()
+
+    slot_device = dev_reg.async_get_device(
+        {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
+    )
+    assert slot_device
+    assert ent_reg.async_get(stranded.entity_id).device_id == slot_device.id
+    # The lock's own device is another integration's and must survive.
+    assert dev_reg.async_get(lock_device.id) is not None
 
     await hass.config_entries.async_unload(entry_id)
