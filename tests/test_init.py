@@ -1890,7 +1890,7 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
 
 
 async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
-    """v4 gives every slot a present, separator-free, entry-unique name.
+    """v4 gives every slot a present, entry-unique name.
 
     The name is becoming the identity Lock Code Manager keys on, so these
     three properties stop being cosmetic. A name the user already chose is
@@ -1921,6 +1921,6 @@ async def test_migration_v3_to_v4_names_every_slot(hass: HomeAssistant) -> None:
     assert slots[1][CONF_NAME] == "User 1"  # was unnamed
     assert slots[2][CONF_NAME] == "Raman"  # user's choice, untouched
     assert slots[3][CONF_NAME] == "Raman 2"  # collided with slot 2
-    assert slots[4][CONF_NAME] == "Ra man"  # separator stripped
+    assert slots[4][CONF_NAME] == "Ra|man"  # "|" is ordinary text now
     # Every other field survives.
     assert slots[1][CONF_PIN] == "1234"

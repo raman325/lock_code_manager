@@ -507,8 +507,8 @@ class LockCodeManagerFlowHandler(
                 errors[CONF_PIN] = "missing_pin_if_enabled"
 
             # The name is on its way to becoming the identity Lock Code
-            # Manager keys on, so it must be present, separator-free, and
-            # unique within the entry.
+            # Manager keys on, so it must be present and unique within the
+            # entry.
             if error := name_error(user_input.get(CONF_NAME)):
                 errors[CONF_NAME] = error
             else:

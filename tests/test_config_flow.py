@@ -1347,8 +1347,13 @@ async def test_config_flow_capacity_check_survives_unexpected_error(
     assert "provider blew up" in caplog.text
 
 
-async def test_config_flow_ui_rejects_name_with_separator(hass: HomeAssistant):
-    """A name containing the identifier separator is rejected up front."""
+async def test_config_flow_ui_accepts_a_name_containing_a_pipe(hass: HomeAssistant):
+    """A "|" in a name is ordinary text now, not a rejected character.
+
+    It was rejected only while entity and device identifiers were keyed by the
+    name and delimited by "|". They are keyed by the slot number, so nothing
+    parses a name any more and the restriction had no reason left.
+    """
     flow_id = await _start_ui_config_flow(hass)
 
     result = await hass.config_entries.flow.async_configure(
@@ -1356,7 +1361,23 @@ async def test_config_flow_ui_rejects_name_with_separator(hass: HomeAssistant):
     )
 
     assert result["type"] == "form"
-    assert result["errors"] == {CONF_NAME: "name_has_separator"}
+    assert not result["errors"]
+
+
+async def test_config_flow_ui_rejects_a_missing_name(hass: HomeAssistant):
+    """A slot must be named, because the name is becoming the identity.
+
+    Now the ONLY rule left in this branch: the separator rule that used to
+    share it is gone, and removing it left the error path with no test at all.
+    """
+    flow_id = await _start_ui_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "   ", CONF_ENABLED: True, CONF_PIN: "1234"}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_NAME: "name_required"}
 
 
 async def test_config_flow_ui_rejects_duplicate_name(hass: HomeAssistant):
@@ -1380,12 +1401,6 @@ async def test_config_flow_ui_rejects_duplicate_name(hass: HomeAssistant):
 @pytest.mark.parametrize(
     ("slots", "expected_error"),
     [
-        (
-            {
-                1: {CONF_NAME: "Ra|man", CONF_ENABLED: True, CONF_PIN: "1234"},
-            },
-            "name_has_separator",
-        ),
         (
             {
                 1: {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1234"},

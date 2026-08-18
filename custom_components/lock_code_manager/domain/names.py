@@ -2,11 +2,16 @@
 User-name rules for Lock Code Manager slots.
 
 A slot's name is on its way to becoming the identity Lock Code Manager keys
-on -- the config entry will store a set of named users rather than a mapping
-of slot numbers, and lock users will be tagged ``lcm:{name}``. That only
-works if every name is present, unique within its entry, and encodable.
+on -- the config entry will store a mapping of named users rather than one of
+slot numbers, and lock users will be tagged ``lcm:{name}``. That only works if
+every name is present and unique within its entry.
 
-This module is the single place those three rules live, so the config flow
+Encodability used to be a third rule: a name could not contain ``|``, because
+entity and device identifiers were delimited by it and keyed by the name. They
+are keyed by the slot number, so nothing parses a name any more and the
+restriction had no reason left to exist.
+
+This module is the single place those rules live, so the config flow
 (validating new input) and the migration (repairing existing data) cannot
 drift from each other.
 """
@@ -17,15 +22,6 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from homeassistant.const import CONF_NAME
-
-# Reserved because it delimits the identifiers Lock Code Manager builds from
-# entry-scoped parts: today the entity unique identifier
-# (``{entry_id}|{slot_num}|{key}``) and the device identifier
-# (``{entry_id}|{slot_num}``), and the name takes the slot number's place in
-# both once the configuration is keyed by user. A name containing it would
-# split into the wrong fields on the way back out -- see
-# ``parse_slot_device_identifier``.
-NAME_SEPARATOR = "|"
 
 
 def normalize_name(name: str | None) -> str:
@@ -49,8 +45,6 @@ def name_error(name: str | None) -> str | None:
     """
     if not normalize_name(name):
         return "name_required"
-    if NAME_SEPARATOR in name:  # type: ignore[operator]
-        return "name_has_separator"
     return None
 
 
@@ -128,9 +122,7 @@ def normalize_slot_names(
         if slot_num not in needs_repair:
             name = normalize_name(original)
         else:
-            name = normalize_name(
-                (original or "").replace(NAME_SEPARATOR, " ")
-            ) or fallback_name(int(slot_num))
+            name = normalize_name(original) or fallback_name(int(slot_num))
             name = deduplicate(name, taken)
             taken.append(name)
 
