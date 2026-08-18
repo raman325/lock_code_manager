@@ -527,3 +527,99 @@ def test_two_renames_onto_one_target_resolve_the_same_way_every_time() -> None:
     assert dict(forward.reconcile(["Wren"], start=1, renames=renames).slots) == dict(
         backward.reconcile(["Wren"], start=1, renames=renames).slots
     )
+
+
+@given(
+    names=NAME_SETS,
+    start=START,
+    renames=st.dictionaries(NAMES, st.sampled_from(["Wren", "Vic"]), max_size=2),
+)
+def test_renames_are_read_case_insensitively_too(
+    names: list[str], start: int, renames: dict[str, str]
+) -> None:
+    """The rename map is reduced to identity form, like the stored names are.
+
+    ``__post_init__`` canonicalizes the assignment's keys, but the rename map
+    arrives from a caller and got none of that treatment. Two keys meaning the
+    same user each took a turn: the later overwrote the earlier while the
+    earlier's target stayed claimed, so a third user's legitimate rename onto
+    that target was refused and they were renumbered onto a different
+    credential index.
+    """
+    before = SlotAssignment.empty().reconcile(names, start=start)
+    shouted = {old.upper(): new for old, new in renames.items()}
+    after_names = [renames.get(n, n) for n in names]
+
+    assert dict(
+        before.reconcile(after_names, start=start, renames=renames).slots
+    ) == dict(before.reconcile(after_names, start=start, renames=shouted).slots)
+
+
+@given(
+    renames=st.dictionaries(NAMES, st.sampled_from(["Wren", "Vic"]), max_size=3),
+    start=START,
+)
+def test_the_rename_mapping_order_does_not_change_the_answer(
+    renames: dict[str, str], start: int
+) -> None:
+    """Rebuilding the same rename map in another order gives the same result."""
+    before = SlotAssignment.empty().reconcile(["Alice", "Bob", "Carl"], start=start)
+    flipped = dict(reversed(list(renames.items())))
+    after_names = [renames.get(n, n) for n in ["Alice", "Bob", "Carl"]]
+
+    assert dict(
+        before.reconcile(after_names, start=start, renames=renames).slots
+    ) == dict(before.reconcile(after_names, start=start, renames=flipped).slots)
+
+
+def test_a_migration_cannot_persist_two_users_on_one_number() -> None:
+    """Slot keys that coerce to the same number must not double-book.
+
+    ``'01'`` and ``'1'`` are distinct keys in stored JSON and the same number
+    after coercion. Reachable only from hand-edited storage, but it would be
+    persisted straight out of a migration that has no rollback, and both users
+    would overwrite each other on the lock every sync.
+    """
+    _, assignment, _ = users_from_slots(
+        {"01": {CONF_NAME: "A", CONF_PIN: "1"}, "1": {CONF_NAME: "B", CONF_PIN: "2"}}
+    )
+
+    numbers = list(assignment.slots.values())
+    assert len(numbers) == len(set(numbers))
+    # The displaced user is reissued a number that respects the start slot,
+    # rather than being handed one below it at construction time.
+    assert dict(assignment.reconcile(["A", "B"], start=5).slots) == {"a": 1, "b": 5}
+
+
+def test_corrupt_stored_bookkeeping_degrades_instead_of_aborting_setup() -> None:
+    """Junk in storage must not take the whole entry down.
+
+    The same threat model the ``str()`` key coercion exists for. A user whose
+    stored number is unusable simply has none, and reconcile reissues one.
+    """
+    assert dict(SlotAssignment.from_mapping({CONF_SLOT_ASSIGNMENT: ["x"]}).slots) == {}
+    assert dict(SlotAssignment(slots={"a": "zzz", "b": 2}).slots) == {"b": 2}
+
+
+def test_two_rename_keys_meaning_one_user_resolve_deterministically() -> None:
+    """``Alice`` and ``alice `` are one user, so they get one turn, not two.
+
+    Iterating the raw mapping gave each a turn: the later overwrote the
+    earlier in the move table while the earlier's target stayed CLAIMED. A
+    third user renaming onto that abandoned target was then refused and
+    renumbered onto a different credential index -- and which of the two won
+    depended on the mapping's insertion order.
+
+    Needs an example rather than a property: the strategies generate distinct
+    names, so they cannot produce two keys with one identity, which is why
+    the mutation removing this survived every property.
+    """
+    before = SlotAssignment(slots={"Alice": 1, "Bob": 5, "Carl": 2})
+    forward = {"Alice": "Wren", "alice ": "Vic", "Bob": "Wren"}
+    backward = {"Bob": "Wren", "alice ": "Vic", "Alice": "Wren"}
+
+    assert dict(
+        before.reconcile(["Wren", "Vic", "Carl"], start=1, renames=forward).slots
+    ) == dict(
+        before.reconcile(["Wren", "Vic", "Carl"], start=1, renames=backward).slots
+    )

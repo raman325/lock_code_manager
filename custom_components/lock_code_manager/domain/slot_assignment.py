@@ -76,10 +76,35 @@ class SlotAssignment:
         """
         canonical: dict[str, int] = {}
         for name, slot in self.slots.items():
+            try:
+                number = int(slot)
+            except TypeError, ValueError:
+                # Unusable stored value. Dropping costs this user their slot,
+                # which reconcile then reissues; raising would take the whole
+                # entry down, and corrupt bookkeeping is exactly what the
+                # coercion above exists to survive.
+                continue
             key = _identity(str(name))
-            number = int(slot)
             canonical[key] = min(canonical.get(key, number), number)
-        object.__setattr__(self, "slots", MappingProxyType(canonical))
+
+        # No two users on one number, as an invariant of the TYPE. Reachable
+        # only from bookkeeping that was already inconsistent, but both users
+        # would otherwise write over each other on the lock every sync, and
+        # nothing else in the system repairs it.
+        #
+        # The loser is DROPPED rather than renumbered here, because this has
+        # no idea what the entry's start slot is -- reissuing from 1 could put
+        # them below it, on a code programmed by hand. reconcile knows, and
+        # gives them a number that respects it.
+        deduped: dict[str, int] = {}
+        held: set[int] = set()
+        for key in sorted(canonical):
+            number = canonical[key]
+            if number in held:
+                continue
+            held.add(number)
+            deduped[key] = number
+        object.__setattr__(self, "slots", MappingProxyType(deduped))
 
     def __hash__(self) -> int:
         """
@@ -108,7 +133,12 @@ class SlotAssignment:
         already-merged mapping rather than an entry, so there is no second
         precedence rule here to get out of step with the first.
         """
-        return cls(slots=mapping.get(CONF_SLOT_ASSIGNMENT) or {})
+        stored = mapping.get(CONF_SLOT_ASSIGNMENT)
+        # Anything that is not a mapping carries nothing worth keeping, and
+        # reconcile rebuilds the assignment from the configured users anyway.
+        # Raising here would abort entry setup over hand-edited storage, which
+        # is the same threat model the coercions below exist for.
+        return cls(slots=stored if isinstance(stored, Mapping) else {})
 
     def to_dict(self) -> dict[str, Any]:
         """Return the bookkeeping to persist beside the configuration."""
@@ -156,12 +186,20 @@ class SlotAssignment:
         silently, and on a real door. Required makes it a type error.
 
         A user already holding a slot keeps it even when ``start`` rises
-        above it or ``unavailable`` comes to include it. Never renumbering
-        somebody is the stronger guarantee: moving them rewrites their
-        credential on every lock and orphans their entities, whereas leaving
-        them put merely means the entry still holds a number it would not
-        choose today. ``start`` and ``unavailable`` therefore constrain
-        ALLOCATION, not tenure.
+        above it or ``unavailable`` comes to include it: both constrain
+        ALLOCATION, not tenure. Moving somebody rewrites their credential on
+        every lock and orphans their entities, which is worse than the entry
+        holding a number it would not choose today.
+
+        That trade is clean for ``start`` and NOT clean for ``unavailable``.
+        A tenured user on a number another entry owns means two entries
+        writing one credential index, which nothing here can repair -- this
+        type cannot see the other entry. It is left standing because the
+        alternative is renumbering somebody without being asked, and because
+        ``config_flow._check_common_slots`` is what prevents the overlap
+        arising in the first place. If a consumer ever needs the conflict
+        surfaced rather than absorbed, that belongs at the seam that knows
+        about other entries, not here.
 
         Returns ``self`` when nothing differs, so callers can use identity to
         decide whether a write is needed.
@@ -179,10 +217,20 @@ class SlotAssignment:
         # (``validate_slot_names`` rejects it upstream). Resolved by sorted
         # order rather than by whichever the stored mapping happened to
         # iterate first, so the same input always gives the same answer.
+        # Reduce to identity form FIRST. Iterating the raw mapping let two
+        # keys that mean the same user (``Alice`` and ``alice ``) each take a
+        # turn: the later overwrote the earlier while the earlier's target
+        # stayed claimed, so a third user's legitimate rename onto that target
+        # was refused and they were renumbered. It also made the answer depend
+        # on the mapping's insertion order.
+        wanted_moves: dict[str, str] = {}
+        for old in sorted(renames or {}, key=lambda key: (_identity(key), str(key))):
+            wanted_moves.setdefault(_identity(old), _identity((renames or {})[old]))
+
         honoured: dict[str, str] = {}
         claimed: set[str] = set()
-        for old in sorted(renames or {}, key=_identity):
-            source, target = _identity(old), _identity((renames or {})[old])
+        for source in sorted(wanted_moves):
+            target = wanted_moves[source]
             if source not in self.slots or target not in surviving:
                 continue
             if target in claimed:
@@ -201,19 +249,8 @@ class SlotAssignment:
             if name not in honoured and name in surviving and name not in renamed
         }
 
-        # Two users on one number would write over each other on the lock.
-        # Only reachable from bookkeeping that was already inconsistent, but
-        # nothing else repairs it, so it would persist for good.
-        carried: dict[str, int] = {}
-        held: set[int] = set()
-        for name in sorted({**kept, **renamed}):
-            slot = {**kept, **renamed}[name]
-            if slot in held:
-                continue
-            held.add(slot)
-            carried[name] = slot
-
-        taken = held | set(unavailable)
+        carried = {**kept, **renamed}
+        taken = set(carried.values()) | set(unavailable)
         candidate = start
         # Sorted so the answer does not depend on how the caller ordered
         # ``names``. The signature accepts any iterable, and a set or
