@@ -63,7 +63,7 @@ from .exceptions import (
     LockOperationUnsupported,
 )
 from .models import SlotCredential, SyncState
-from .queries import slot_name
+from .queries import configured_slot_name
 from .resilience import CircuitBreaker
 from .util import async_disable_slot
 
@@ -343,7 +343,14 @@ class SlotSyncManager:
         """
         entry_id = self._config_entry.entry_id
         lock_entity_id = self._lock.lock.entity_id
-        user_name = slot_name(self._config_entry, self._slot_num)
+        # Strict, for the same reason async_disable_slot is: the fallback
+        # shares a namespace with real names ("User 3" is both). A slot
+        # removed from config while this manager still has an unresolved key
+        # would otherwise resolve a DIFFERENT user's entities and drive lock
+        # writes from them. No configured name means nothing to resolve.
+        user_name = configured_slot_name(self._config_entry, self._slot_num)
+        if user_name is None:
+            return {}
         return {
             self._value_key: (
                 TEXT_DOMAIN,

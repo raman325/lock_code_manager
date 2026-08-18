@@ -18,6 +18,7 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager import _async_prune_orphaned_slot_devices
 from custom_components.lock_code_manager.const import ATTR_IN_SYNC, DOMAIN
 from custom_components.lock_code_manager.domain.identifier_migration import (
     _temporary_segment,
@@ -513,3 +514,90 @@ async def test_rename_leaves_a_populated_blocking_device(
     assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Alice")}) is not None
     assert dev_reg.async_get(blocker.id) is not None
     assert "target already exists" in caplog.text
+
+
+async def test_a_device_only_swap_is_resolved(hass: HomeAssistant, entry) -> None:
+    """A cycle among devices with no pending entity rows is still broken.
+
+    Cycle detection read only unmoved entity rows, so a swap whose entities
+    had already moved (or been removed) was never seen as a cycle: both
+    devices kept each other's old identifiers with only a warning, and the
+    orphan sweep then reaped them.
+    """
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    alice = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Alice")}, name="Alice"
+    )
+    bob = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Bob")}, name="Bob"
+    )
+
+    async_rename_identifiers(hass, eid, {"Alice": "Bob", "Bob": "Alice"})
+
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Bob")}).id == alice.id
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Alice")}).id == bob.id
+
+
+async def test_parking_name_avoids_a_leftover_parked_device(
+    hass: HomeAssistant, entry
+) -> None:
+    """A parked device from an interrupted run does not get collided with.
+
+    The parking-name check scanned entity unique IDs only, so a leftover
+    parked DEVICE with no rows -- exactly the interrupted-run case -- was
+    invisible, and async_update_device does not validate collisions.
+    """
+    dev_reg = dr.async_get(hass)
+    eid = entry.entry_id
+    leftover = dev_reg.async_get_or_create(
+        config_entry_id=eid,
+        identifiers={(DOMAIN, f"{eid}|lcm-parked-0")},
+        name="leftover",
+    )
+    alice = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Alice")}, name="Alice"
+    )
+    dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Bob")}, name="Bob"
+    )
+
+    async_rename_identifiers(hass, eid, {"Alice": "Bob", "Bob": "Alice"})
+
+    # The leftover is untouched and still its own device.
+    still_there = dev_reg.async_get_device(
+        identifiers={(DOMAIN, f"{eid}|lcm-parked-0")}
+    )
+    assert still_there is not None and still_there.id == leftover.id
+    # And the swap completed around it.
+    assert dev_reg.async_get_device(identifiers={(DOMAIN, f"{eid}|Bob")}).id == alice.id
+
+
+async def test_sweep_spares_a_device_that_still_has_entities(
+    hass: HomeAssistant, entry
+) -> None:
+    """A device the rename could not move keeps its entities.
+
+    Home Assistant cascades a device removal to every row on it, so sweeping
+    a device whose move was skipped destroys exactly the entities the
+    collision fallback promised to leave working.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    eid = entry.entry_id
+    stranded = dev_reg.async_get_or_create(
+        config_entry_id=eid, identifiers={(DOMAIN, f"{eid}|Alice")}, name="Alice"
+    )
+    row = ent_reg.async_get_or_create(
+        TEXT_DOMAIN,
+        DOMAIN,
+        f"{eid}|Alice|pin",
+        config_entry=entry,
+        device_id=stranded.id,
+    )
+
+    # "Alice" is not configured -- the sweep's trigger condition.
+    _async_prune_orphaned_slot_devices(hass, entry)
+
+    assert dev_reg.async_get(stranded.id) is not None
+    assert ent_reg.async_get(row.entity_id) is not None

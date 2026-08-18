@@ -2053,3 +2053,59 @@ async def test_migration_uses_repaired_names_for_identifiers(
     assert config_entry.version == 4
     assert config_entry.data[CONF_SLOTS][1][CONF_NAME] == "User 1"
     assert ent_reg.async_get(seeded).unique_id == f"{entry_id}|User 1|pin"
+
+
+async def test_rename_saved_while_entry_was_not_loaded(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A rename saved while the entry was failed is still applied at setup.
+
+    The update listener is only registered while the entry is loaded, so an
+    options-flow save made against a failed entry is never seen by it. Setup
+    is then the only place holding both sides: data has the names the
+    registry is still on, options has the ones the rest of setup is about to
+    use.
+
+    Without reconciling there, the orphan sweep sees the renamed user's
+    device on a name no longer configured, removes it, and Home Assistant
+    cascades that to every entity row on it -- the destruction this module
+    exists to prevent.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {1: {CONF_NAME: "Alice", CONF_ENABLED: True, CONF_PIN: "1234"}},
+        },
+        # The unprocessed save: same slot, new name.
+        options={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "Alicia", CONF_ENABLED: True, CONF_PIN: "1234"}
+            },
+        },
+        unique_id="Rename While Failed",
+        version=4,
+    )
+    config_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    entry_id = config_entry.entry_id
+    # The registry is still on the old name, as it would be.
+    stale = ent_reg.async_get_or_create(
+        "text", DOMAIN, f"{entry_id}|Alice|pin", config_entry=config_entry
+    )
+    device = dev_reg.async_get_or_create(
+        config_entry_id=entry_id, identifiers={(DOMAIN, f"{entry_id}|Alice")}
+    )
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Same rows, moved -- not deleted and re-created.
+    survivor = ent_reg.async_get(stale.entity_id)
+    assert survivor is not None
+    assert survivor.unique_id == f"{entry_id}|Alicia|pin"
+    moved = dev_reg.async_get_device(identifiers={(DOMAIN, f"{entry_id}|Alicia")})
+    assert moved is not None and moved.id == device.id

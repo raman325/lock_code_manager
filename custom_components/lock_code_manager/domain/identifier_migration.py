@@ -25,7 +25,11 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import DOMAIN
-from .config import build_slot_device_identifier, build_user_device_identifier
+from .config import (
+    build_slot_device_identifier,
+    build_user_device_identifier,
+    parse_user_device_identifier,
+)
 from .names import normalize_name
 
 _LOGGER = logging.getLogger(__name__)
@@ -242,6 +246,17 @@ def _async_remap_segment(
             if entity.entity_id not in moved_entity_ids
             and _remapped(entity.unique_id, entry_id, mapping) is not None
         }
+        # Devices too. A swap among devices with no entity rows left pending
+        # -- all entities already moved, or the slot's entities removed --
+        # would otherwise never be seen as a cycle, and both devices would
+        # sit on each other's old identifiers with only a warning.
+        pending |= {
+            old_segment
+            for old_segment, old in old_device_identifier.items()
+            if (device := dev_reg.async_get_device(identifiers={(DOMAIN, old)}))
+            is not None
+            and device.id not in moved_device_ids
+        }
         cycle_segment = _cycle_member(mapping, pending)
         if cycle_segment is None:
             break
@@ -252,6 +267,18 @@ def _async_remap_segment(
                 for entity in er.async_entries_for_config_entry(ent_reg, entry_id)
                 if entity.unique_id.startswith(f"{entry_id}|")
                 and len(entity.unique_id.split("|")) >= 3
+            }
+            # Device identifiers as well. A leftover parked DEVICE with no
+            # entity rows -- exactly the interrupted-run case the parking
+            # name is meant to dodge -- is invisible to an entity-only scan,
+            # and async_update_device does not validate collisions.
+            | {
+                segment
+                for device in dr.async_entries_for_config_entry(dev_reg, entry_id)
+                for domain, identifier in device.identifiers
+                if domain == DOMAIN
+                and (segment := parse_user_device_identifier(entry_id, identifier))
+                is not None
             },
         )
         _async_park_segment(hass, entry_id, cycle_segment, temp, old_device_identifier)

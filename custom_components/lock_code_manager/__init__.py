@@ -96,14 +96,14 @@ from .domain.models import (
     LockCodeManagerConfigEntry,
     LockCodeManagerConfigEntryRuntimeData,
 )
-from .domain.names import normalize_name, normalize_slot_names
+from .domain.names import fallback_name, normalize_name, normalize_slot_names
 from .domain.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
     generate_pin,
 )
-from .domain.queries import get_entry_config
+from .domain.queries import get_entry_config, slot_name
 from .domain.services import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -229,7 +229,15 @@ async def async_migrate_entry(
         # Read the REPAIRED slots, not the entry, because the repair has not
         # been written back yet -- the identifiers must move to the names the
         # entry is about to hold, not the ones it currently holds.
-        new_slots_source = new_options.get(CONF_SLOTS) or new_data.get(CONF_SLOTS, {})
+        # Key presence, not truthiness, matching EntryConfig.from_entry. An
+        # options save that removed every slot stores an EMPTY mapping, and
+        # falling back to data there would migrate identifiers onto stale
+        # names the rest of the integration no longer reads.
+        new_slots_source = (
+            new_options[CONF_SLOTS]
+            if CONF_SLOTS in new_options
+            else new_data.get(CONF_SLOTS, {})
+        )
         if renamed:
             _LOGGER.info(
                 "%s (%s): named %d previously-unnamed or conflicting slot(s): %s. "
@@ -654,6 +662,26 @@ async def async_setup_entry(
         name=config_entry.title,
         serial_number=entry_id,
     )
+    # Before the sweep, and before any platform is forwarded.
+    #
+    # A non-empty options alongside non-empty data is an options-flow save the
+    # entry could not process, because the update listener is only registered
+    # while the entry is loaded. That save may have renamed users, and this is
+    # the only point holding both sides: data has the names the registry is
+    # still on, options has the ones the rest of setup is about to use.
+    #
+    # Ordering is the whole point. After the sweep, every renamed user's
+    # device looks unconfigured and is removed, cascading to its entity rows.
+    # After the platform forward, a fresh device already occupies the new name
+    # and blocks the move.
+    if config_entry.data and config_entry.options:
+        _async_apply_renames(
+            hass,
+            config_entry,
+            EntryConfig.from_mapping(config_entry.data),
+            EntryConfig.from_mapping({**config_entry.data, **config_entry.options}),
+        )
+
     _async_prune_orphaned_slot_devices(hass, config_entry)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
@@ -924,13 +952,18 @@ def _async_prune_orphaned_slot_devices(
     unloaded.
     """
     dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
     # Normalized, because identifiers are built from the normalized name.
     # Comparing against the raw config value made a padded name look
     # unconfigured, so its device was pruned on every setup.
+    # Derived through slot_name, the same resolver entity.py builds device
+    # identifiers from. Deriving it separately meant a slot stored without a
+    # name had a device at "User N" that this set never contained -- pruned on
+    # every setup, cascading to its entities each restart.
     configured = {
-        normalize_name(slot.get(CONF_NAME))
-        for slot in get_entry_config(config_entry).slots.values()
+        slot_name(config_entry, slot_num)
+        for slot_num in get_entry_config(config_entry).slots
     }
     orphaned = {
         user_name
@@ -940,6 +973,18 @@ def _async_prune_orphaned_slot_devices(
         and (user_name := parse_user_device_identifier(entry_id, identifier))
         is not None
         and user_name not in configured
+        # Never remove a device that still hosts entity rows. Home Assistant
+        # cascades a device removal to every row on it, so this sweep would
+        # destroy the entities of any user whose device the rename or
+        # migration could not move -- inverting the promise that a collision
+        # is logged and skipped, never resolved by deleting.
+        #
+        # Cost, stated plainly: issue #1399's auto-cleanup narrows to devices
+        # with no rows left. A slot removed while Home Assistant was down
+        # keeps its device until the user deletes it, which the removal hook
+        # added by that same issue exists to allow. A lingering device the
+        # user can delete beats deleting a live user's history.
+        and not er.async_entries_for_device(ent_reg, device.id, True)
     }
     if orphaned:
         _LOGGER.debug(
@@ -978,8 +1023,8 @@ async def async_remove_config_entry_device(
     if not user_names:
         return False
     return user_names.isdisjoint(
-        normalize_name(slot.get(CONF_NAME))
-        for slot in get_entry_config(config_entry).slots.values()
+        slot_name(config_entry, slot_num)
+        for slot_num in get_entry_config(config_entry).slots
     )
 
 
@@ -1090,6 +1135,7 @@ def _async_apply_renames(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     previous_config: EntryConfig,
+    new_config: EntryConfig | None = None,
 ) -> None:
     """
     Move registry identifiers for every user renamed in this update.
@@ -1099,7 +1145,9 @@ def _async_apply_renames(
     reaps, cascading to the entity rows and the automations that reference
     them.
     """
-    renames = (previous_config - config_entry.runtime_data.config).names_changed
+    renames = (
+        previous_config - (new_config or config_entry.runtime_data.config)
+    ).names_changed
     if not renames:
         return
     _LOGGER.debug(
@@ -1207,9 +1255,12 @@ async def async_update_listener(
         # Names come from the OLD slot config carried in the diff: these
         # slots are gone from the new config, so their names cannot be looked
         # up there, and the device was created under the real name.
+        # Same resolver, so a slot stored without a name resolves to the
+        # generated name its device was actually created under.
         removed_user_names = {
-            normalize_name(slot.get(CONF_NAME)) for slot in slots_to_remove.values()
-        } - {""}
+            normalize_name(slot.get(CONF_NAME)) or fallback_name(int(slot_num))
+            for slot_num, slot in slots_to_remove.items()
+        }
         # After the entity removers have run, so the registry teardown order
         # matches a normal removal (entities first, then their device).
         _async_remove_slot_devices(hass, config_entry, removed_user_names)

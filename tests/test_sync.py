@@ -2147,3 +2147,23 @@ class TestValueEntityKey:
         """
         with pytest.raises(ValueError, match="has no value entity key"):
             value_entity_key(credential_type)
+
+
+def test_unique_ids_are_empty_for_an_unconfigured_slot() -> None:
+    """A manager whose slot left the config resolves nothing.
+
+    Falling back to a generated name here would resolve a DIFFERENT user's
+    entities -- "User 3" is both a fallback and a name a user can hold -- and
+    the manager would then drive lock writes from them.
+    """
+    manager = SlotSyncManager.__new__(SlotSyncManager)
+    manager._slot_num = 99
+    manager._config_entry = MagicMock()
+    manager._value_key = CONF_PIN
+    manager._lock = MagicMock()
+
+    with patch(
+        "custom_components.lock_code_manager.domain.sync.configured_slot_name",
+        return_value=None,
+    ):
+        assert manager._unique_ids_for_current_name() == {}
