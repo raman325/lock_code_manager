@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "5dc4a9511b8a",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-lock-occupancy",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/schlage.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zha.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/akuvox/test_provider.py",
+    "tests/providers/schlage/test_provider.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_seam.py",
+    "tests/providers/virtual/test_provider.py",
+    "tests/providers/zha/test_provider.py",
+    "tests/providers/zigbee2mqtt/test_provider.py",
+    "tests/providers/zwave_js/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5d/c4a9511b8a/0/metadata.json",
+      "transcript": "/5d/c4a9511b8a/0/full.jsonl",
+      "compact_transcript": "/5d/c4a9511b8a/0/transcript.jsonl",
+      "content_hash": "/5d/c4a9511b8a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 12241,
+    "cache_read_tokens": 6685950,
+    "output_tokens": 8137,
+    "api_call_count": 15
+  }
+}
