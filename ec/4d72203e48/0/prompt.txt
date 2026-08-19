@@ -2110,3 +2110,19 @@ versus 31 for a single read of 1..31. On `zha` and `zigbee2mqtt` (`async_get_use
 Four MEDIUMs, no HIGHs. By the stated criterion (**no HIGH, no MEDIUM**), this is **not ready to merge**. Nothing found can issue an unverified slot number — the safety property the branch exists for holds under proof and under 16 killed mutations — but M-1 undermines the branch's own performance thesis with measured numbers, M-2 leaves the replacement for `_check_common_slots` completely unpinned, and M-3 makes a transient lock state end setup with a message that describes a recovery the code does not provide.</result>
 <usage><subagent_tokens>226209</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1869440</duration_ms></usage>
 </task-notification>
+
+---
+
+I'm confused - why can't we just track a window as we go through our search? we shouldn't have to recheck the same slot over and over
+
+---
+
+Each provider should be able to determine when the window has been exceeded. In some cases it may be based on an advertised capacity, on others a spec, on others a reasonable limit. We're effectively talking about running a next through windows until a stop iteration is thrown by the provider if that makes sense. It might not be that mechanism but that's how I have it in my head. The fact that slots within the provider's capacity could be disabled/not supported is separate from beyond the capacity
+
+---
+
+do it in whichever order you think is best. Whatever order we want to do it in, have 1433 run on code review while you work ont he other one
+
+---
+
+do it in whichever order you think is best. Whatever order we want to do it in, have 1433 run on code review while you work ont he other one. For Schlage and Akuvox, you should look at the API. For virtual I think we set our own cap
