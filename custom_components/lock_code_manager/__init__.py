@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable, Sequence
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -100,6 +101,7 @@ from .domain.pin_generator import (
     generate_pin,
 )
 from .domain.queries import get_entry_config
+from .domain.references import format_moved
 from .domain.services import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -249,10 +251,11 @@ async def async_migrate_entry(
                 translation_key="entity_ids_renamed",
                 translation_placeholders={
                     "entry_title": config_entry.title,
-                    "renames": "\n".join(
-                        f"- `{was}` is now `{now}`" for was, now in sorted(re_slugged)
-                    ),
+                    "renames": format_moved(dict(re_slugged)),
                 },
+                # The flow looks up who still points at these when the user
+                # opens it; the migration only knows what moved.
+                data={"moved": json.dumps(dict(re_slugged))},
             )
         if renamed:
             _LOGGER.info(
