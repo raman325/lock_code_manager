@@ -30,7 +30,7 @@ from ..domain.credentials import (
 )
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
-from ._base import BaseLock
+from ._base import MAX_MANAGED_SLOT, BaseLock
 from ._util import parse_slot_num
 from .const import LOGGER
 
@@ -751,6 +751,19 @@ class Zigbee2MQTTLock(BaseLock):
         finally:
             self._pending_codes.pop(slot_num, None)
         return credential
+
+    async def async_get_max_slot(self) -> int:
+        """
+        Fall back to the integration's limit: the bridge is not asked.
+
+        Zigbee2MQTT publishes device definitions on its bridge topic, and a
+        lock's ``pin_code`` expose can carry the user range, but this
+        provider subscribes only to the device's own topic. Reading the
+        definition is worth doing -- this is a lock that answers one index
+        per round trip, so the limit is what the search costs -- and wants a
+        real bridge payload to work from rather than a guessed shape.
+        """
+        return MAX_MANAGED_SLOT
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Perform hard refresh and return all codes."""
