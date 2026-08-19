@@ -87,8 +87,8 @@ def _condition_renamed(users: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
                 **{k: v for k, v in fields.items() if k != CONF_ENTITY_ID},
                 CONF_CONDITION: fields[CONF_ENTITY_ID],
             }
-            if CONF_ENTITY_ID in fields
-            else dict(fields)
+            if CONF_ENTITY_ID in fields and CONF_CONDITION not in fields
+            else {k: v for k, v in fields.items() if k != CONF_ENTITY_ID}
         )
         for name, fields in users.items()
     }

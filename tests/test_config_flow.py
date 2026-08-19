@@ -1872,3 +1872,48 @@ async def test_reauth_reports_a_slot_another_entry_already_manages(
 
     assert errors == {"base": "slots_already_configured"}
     assert placeholders["entry_title"] == "other"
+
+
+async def test_an_entry_may_reuse_a_number_it_just_released(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    An entry's own numbers are not a constraint on itself.
+
+    The ones it keeps are held by tenure; the one it is releasing in the very
+    same submission is free. Counting them as taken pushed every replacement
+    onto a higher number, so an entry edited enough times would run out of
+    room on a lock with plenty left.
+    """
+    flow_id, _ = await _start_options_flow(hass)
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            {
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                # "User 1" held slot 1 and is gone.
+                CONF_USERS: {"Replacement": {CONF_ENABLED: True, CONF_PIN: "5555"}},
+            },
+        )
+
+    assert result["data"][CONF_SLOT_ASSIGNMENT] == {"replacement": 1}
+
+
+async def test_another_entry_still_holds_its_numbers(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Excluding an entry from its own claims must not excuse anyone else's."""
+    flow_id, _ = await _start_options_flow(hass, locks=[LOCK_1_ENTITY_ID])
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            {
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_USERS: {"Newcomer": {CONF_ENABLED: True, CONF_PIN: "5555"}},
+            },
+        )
+
+    taken = get_entry_config(lock_code_manager_config_entry).slot_numbers
+    assert not set(result["data"][CONF_SLOT_ASSIGNMENT].values()) & set(taken)

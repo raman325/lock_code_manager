@@ -304,6 +304,9 @@ class _AllocatesSlotsMixin:
 
     _allocation_locks: Sequence[str] = ()
 
+    # The entry this flow is editing, if any. Setup is not editing one.
+    _entry_being_edited: ConfigEntry | None = None
+
     async def _async_read_occupancy(self, indices: Collection[int]) -> Occupancy:
         """
         Ask every configured lock which of ``indices`` it holds.
@@ -383,7 +386,9 @@ class _AllocatesSlotsMixin:
             claimed_by_other_entries=frozenset(
                 slot
                 for lock_entity_id in self._allocation_locks
-                for slot in get_managed_slots(self.hass, lock_entity_id)
+                for slot in get_managed_slots(
+                    self.hass, lock_entity_id, excluding=self._entry_being_edited
+                )
             ),
         )
 
@@ -912,6 +917,9 @@ class LockCodeManagerOptionsFlow(_AllocatesSlotsMixin, config_entries.OptionsFlo
 
         if user_input:
             self._allocation_locks = user_input[CONF_LOCKS]
+            # Its own numbers do not constrain it: kept ones are held by
+            # tenure, released ones are free for whoever comes next.
+            self._entry_being_edited = self.config_entry
             (
                 users,
                 validation_errors,

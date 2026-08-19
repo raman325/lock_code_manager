@@ -70,6 +70,7 @@ from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
+from custom_components.lock_code_manager.domain.user_migration import migrate_to_users
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,
@@ -2726,3 +2727,26 @@ async def test_migration_survives_an_event_entity_that_already_moved(
     assert entry.state is ConfigEntryState.LOADED
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+def test_migration_keeps_the_condition_already_set() -> None:
+    """
+    A user carrying both fields keeps the current one.
+
+    Only reachable from a configuration written part-way through this
+    release's changes, but taking the legacy value would quietly undo
+    whatever set the new one.
+    """
+    migrated, _ = migrate_to_users(
+        {
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {
+                "Raman": {
+                    "entity_id": "binary_sensor.stale",
+                    CONF_CONDITION: "binary_sensor.current",
+                }
+            },
+        }
+    )
+
+    assert migrated[CONF_USERS]["Raman"] == {CONF_CONDITION: "binary_sensor.current"}
