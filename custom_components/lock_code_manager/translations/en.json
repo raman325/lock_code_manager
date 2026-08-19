@@ -245,11 +245,8 @@
         "step": {
           "init": {
             "title": "Entity IDs now follow your users' names",
-            "description": "Lock Code Manager identifies each user by name rather than by slot number, so the entity IDs in **{entry_title}** were renamed:\n\n{renames}\n\nHistory and statistics moved with them, and dashboards built by Lock Code Manager keep working.\n\n**Will be updated for you**\n\n{fixable}\n\n**You will need to update these yourself**\n\nThese are defined somewhere Lock Code Manager must not edit, such as `configuration.yaml`, a package, a dashboard or a template:\n\n{unfixable}\n\nSubmit to update the automations and scripts listed above. They are rewritten in `automations.yaml` and `scripts.yaml`, the files the Home Assistant user interface manages, so any comments you added to those files by hand will not survive."
+            "description": "Lock Code Manager identifies each user by name rather than by slot number, so the entity IDs in **{entry_title}** were renamed:\n\n{renames}\n\nHistory and statistics moved with them, and dashboards built by Lock Code Manager keep working.\n\n**These still refer to the old IDs and need updating**\n\n{referrers}\n\nFor an automation built from a Lock Code Manager blueprint, the quickest fix is to open it and pick the entity again, or recreate it. Lock Code Manager does not edit your automations for you.\n\nSubmit to dismiss this message."
           }
-        },
-        "abort": {
-          "write_failed": "Lock Code Manager could not write to automations.yaml or scripts.yaml, so nothing was changed. Check the Home Assistant log for the reason, then run this repair again."
         }
       }
     }

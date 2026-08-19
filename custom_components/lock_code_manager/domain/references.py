@@ -1,25 +1,35 @@
 """
-Repointing automations and scripts at entity IDs that moved.
+Finding what still points at an entity ID that moved.
 
 Home Assistant repoints recorder history when an entity ID changes, but an ID
 written into an automation is just a string in a config file and nothing
 rewrites it. The frontend's rename dialog offers to; a migration does not go
 through the frontend.
 
-What can be rewritten is bounded by where the configuration lives.
-``automations.yaml`` and ``scripts.yaml`` are the files Home Assistant's own
-config API owns and rewrites wholesale, so editing them is in keeping with how
-they are already treated. Anything defined in ``configuration.yaml``, in a
-package, in a dashboard or in a template belongs to somebody else and is
-reported rather than touched: a fix that silently covers half the references
-is worse than one that says what it missed, because the user stops looking.
+This only ever READS. Rewriting somebody's ``automations.yaml`` was tried and
+abandoned: saving the file back resolves away whatever the loader resolved on
+the way in, so an ``!include`` returns inlined with the file it pointed at
+orphaned, and a ``!secret`` returns as the secret in plain text. Four rounds of
+review found a new way for it to damage a configuration each time, to save the
+user re-picking an entity in a dialog. Telling them precisely what to look at
+is the part that was worth having.
+
+Two sources, because neither sees everything:
+
+* Home Assistant knows which loaded automations and scripts reference an
+  entity, including ones defined anywhere at all -- but only as
+  ``referenced_entities``, computed from the rendered config, which does not
+  include IDs used inside a template.
+* Reading the managed files catches those, and catches configs that failed to
+  load, but only for the two files Home Assistant's own config API owns.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import logging
+from pathlib import Path
 import re
 from typing import Any
 
@@ -27,94 +37,71 @@ from homeassistant.components import automation, script
 from homeassistant.config import AUTOMATION_CONFIG_PATH, SCRIPT_CONFIG_PATH
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import entity_registry as er
-from homeassistant.util.yaml import load_yaml, save_yaml
+from homeassistant.util.yaml import load_yaml
 
-# ``automations.yaml`` holds a list of automation dicts, each carrying its own
-# ``id``; ``scripts.yaml`` holds a mapping of object id to script dict. Both
-# are rewritten whole, which is what Home Assistant's config API does to them.
 _LOGGER = logging.getLogger(__name__)
 
 AUTOMATION_DOMAIN = "automation"
 SCRIPT_DOMAIN = "script"
 
+# ``automations.yaml`` holds a list of automation dicts, each carrying its own
+# ``id``; ``scripts.yaml`` holds a mapping of object id to script dict.
 _FILES = {
     AUTOMATION_DOMAIN: AUTOMATION_CONFIG_PATH,
     SCRIPT_DOMAIN: SCRIPT_CONFIG_PATH,
 }
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Referrers:
-    """What still points at a moved entity ID, split by what can be fixed."""
+    """What still points at a moved entity ID, as the user would name it."""
 
-    # Config keys, per domain, of entries in a file this can rewrite.
-    fixable: dict[str, set[str]] = field(default_factory=dict)
-    # How to describe those entries to the user.
-    labels: list[str] = field(default_factory=list)
-    # Entity IDs referencing a moved ID from somewhere this must not write.
-    unfixable: set[str] = field(default_factory=set)
+    labels: tuple[str, ...]
 
     @property
     def total(self) -> int:
-        """Return how many configs reference a moved ID."""
-        return sum(len(found) for found in self.fixable.values()) + len(self.unfixable)
+        """Return how many automations and scripts still point at one."""
+        return len(self.labels)
 
 
 async def async_find_referrers(
     hass: HomeAssistant, moved: Mapping[str, str]
 ) -> Referrers:
     """
-    Return what still points at a moved entity ID.
+    Return everything still pointing at a moved entity ID.
 
-    The FILES are the source of truth for what can be fixed, not
-    ``automations_with_entity``. That helper reads loaded automation entities
-    and reports only ``referenced_entities``, so it misses an automation that
-    failed to load and misses a blueprint input used solely inside a template
-    -- which is exactly how the shipped Slot Usage blueprints use theirs.
-
-    The loaded-entity lookup is still used, for the opposite job: finding
-    references that are NOT in these files and therefore cannot be touched.
+    Runs when the user opens the repair rather than during the migration:
+    ``automations_with_entity`` reads the LOADED automation entities, and
+    while a config entry is setting up the automation component may not have
+    started.
     """
-    referrers = Referrers()
+    labels: set[str] = set()
     for domain in _FILES:
-        found = await hass.async_add_executor_job(_matching_keys, hass, domain, moved)
-        if found:
-            referrers.fixable[domain] = set(found)
-            referrers.labels.extend(found.values())
-
-    ent_reg = er.async_get(hass)
-    for old_entity_id in moved:
-        for domain, lookup in (
-            (AUTOMATION_DOMAIN, automation.automations_with_entity),
-            (SCRIPT_DOMAIN, script.scripts_with_entity),
-        ):
-            for referring in lookup(hass, old_entity_id):
-                # A user-interface-managed automation or script is stored
-                # under the key that becomes its unique ID; anything whose key
-                # is not in the file is defined somewhere else.
-                entry = ent_reg.async_get(referring)
-                key = entry.unique_id if entry else None
-                if key not in referrers.fixable.get(domain, set()):
-                    referrers.unfixable.add(referring)
-    return referrers
-
-
-async def async_repoint(
-    hass: HomeAssistant, moved: Mapping[str, str], referrers: Referrers
-) -> int:
-    """
-    Rewrite the fixable files so they name the new entity IDs.
-
-    Returns how many configs changed. Reloading is the caller's to do; this
-    only touches files.
-    """
-    changed = 0
-    for domain, keys in referrers.fixable.items():
-        changed += await hass.async_add_executor_job(
-            _repoint_file, hass, domain, keys, dict(moved)
+        labels |= await hass.async_add_executor_job(
+            _labels_in_file, hass, domain, moved
         )
-    return changed
+
+    for old_entity_id in moved:
+        for lookup in (
+            automation.automations_with_entity,
+            script.scripts_with_entity,
+        ):
+            for entity_id in lookup(hass, old_entity_id):
+                state = hass.states.get(entity_id)
+                labels.add(state.name if state else entity_id)
+
+    return Referrers(labels=tuple(sorted(labels)))
+
+
+def _labels_in_file(
+    hass: HomeAssistant, domain: str, moved: Mapping[str, str]
+) -> set[str]:
+    """Return how to name each config in one file that mentions a moved ID."""
+    return {
+        str(config.get("alias") or key) if isinstance(config, dict) else key
+        for key, config in _entries(_load(hass, domain), domain)
+        if _mentions(config, moved)
+    }
 
 
 def _entries(loaded: Any, domain: str) -> list[tuple[str, Any]]:
@@ -128,45 +115,20 @@ def _entries(loaded: Any, domain: str) -> list[tuple[str, Any]]:
     return [(str(key), value) for key, value in loaded.items()]
 
 
-def _matching_keys(
-    hass: HomeAssistant, domain: str, moved: Mapping[str, str]
-) -> dict[str, str]:
-    """Return ``{key: label}`` for entries mentioning a moved ID."""
-    return {
-        key: str(config.get("alias") or key) if isinstance(config, dict) else key
-        for key, config in _entries(_load(hass, domain), domain)
-        if _mentions(config, moved)
-    }
-
-
-def _rewrite(value: str, moved: Mapping[str, str]) -> str:
-    """
-    Return ``value`` with every moved entity ID replaced.
-
-    An ID is usually the whole string, but it can also sit inside a template
-    -- ``{{ states('text.raman_pin') }}`` -- which nothing else in Home
-    Assistant reports as a reference.
-
-    ONE pass over the string, not one pass per rename. Applying the renames
-    in turn lets a value rewritten by an earlier rule be rewritten again by a
-    later one, so ``a -> b`` and ``b -> c`` in the same batch would carry an
-    ``a`` all the way to ``c``.
-
-    The boundaries treat ``_`` and ``.`` as parts of an ID, so a longer ID
-    that merely begins with a moved one is left alone.
-    """
-    if not moved:
-        return value
-    pattern = "|".join(re.escape(old) for old in sorted(moved, key=len, reverse=True))
-    return re.sub(
-        rf"(?<![\w.])({pattern})(?![\w.])", lambda match: moved[match.group(1)], value
-    )
-
-
 def _mentions(config: Any, moved: Mapping[str, str]) -> bool:
-    """Return whether a moved entity ID appears anywhere inside ``config``."""
+    """
+    Return whether a moved entity ID appears anywhere inside ``config``.
+
+    Keys as well as values, and inside longer strings as well as whole ones:
+    an ID can be the key in ``entities: {text.raman_pin: ...}`` and can sit
+    inside ``{{ states('text.raman_pin') }}``. The boundaries treat ``_`` and
+    ``.`` as parts of an ID, so a longer ID that merely begins with a moved
+    one is somebody else.
+    """
     if isinstance(config, str):
-        return _rewrite(config, moved) != config
+        return any(
+            re.search(rf"(?<![\w.]){re.escape(old)}(?![\w.])", config) for old in moved
+        )
     if isinstance(config, dict):
         return any(
             _mentions(key, moved) or _mentions(value, moved)
@@ -177,64 +139,20 @@ def _mentions(config: Any, moved: Mapping[str, str]) -> bool:
     return False
 
 
-def _substitute(config: Any, moved: Mapping[str, str]) -> bool:
-    """
-    Replace every moved entity ID inside ``config``, in place.
-
-    Keys as well as values: an entity ID is the key in shapes like
-    ``entities: {text.raman_pin: "1234"}``.
-    """
-    if isinstance(config, list):
-        replaced = False
-        for index, item in enumerate(config):
-            if isinstance(item, str):
-                if (rewritten := _rewrite(item, moved)) != item:
-                    config[index] = rewritten
-                    replaced = True
-            elif _substitute(item, moved):
-                replaced = True
-        return replaced
-
-    if not isinstance(config, dict):
-        return False
-
-    replaced = False
-    for key in list(config):
-        value = config[key]
-        if isinstance(value, str):
-            if (rewritten := _rewrite(value, moved)) != value:
-                config[key] = rewritten
-                replaced = True
-        elif _substitute(value, moved):
-            replaced = True
-        if isinstance(key, str) and (new_key := _rewrite(key, moved)) != key:
-            if new_key in config:
-                # Both the old and the new ID are already keys here. Moving
-                # the old one on top would throw away whatever the new one
-                # holds, and this is the user's own configuration.
-                _LOGGER.warning(
-                    "Left %s alone: %s is already set alongside it",
-                    key,
-                    new_key,
-                )
-                continue
-            config[new_key] = config.pop(key)
-            replaced = True
-    return replaced
-
-
 def _load(hass: HomeAssistant, domain: str) -> Any:
     """Read a config file, treating an absent or malformed one as empty."""
     empty: Any = [] if domain == AUTOMATION_DOMAIN else {}
+    path = hass.config.path(_FILES[domain])
+    if not Path(path).exists():
+        return empty
     try:
-        loaded = load_yaml(hass.config.path(_FILES[domain]))
-    except FileNotFoundError, OSError, ValueError, HomeAssistantError:
-        # A file that will not parse cannot be rewritten, and must not take
-        # the whole repair down with it: an install part-way through an
-        # upgrade is exactly where a broken automations file turns up, and
-        # the other file may still be fixable.
+        loaded = load_yaml(path)
+    except OSError, ValueError, HomeAssistantError:
+        # A file that will not parse is one this cannot read for references.
+        # Home Assistant still reports whatever it managed to load from it.
         _LOGGER.warning(
-            "Could not read %s, so nothing in it can be repointed",
+            "Could not read %s while looking for references to renamed "
+            "entities; anything defined in it may need checking by hand",
             _FILES[domain],
             exc_info=True,
         )
@@ -242,37 +160,11 @@ def _load(hass: HomeAssistant, domain: str) -> Any:
     return loaded if isinstance(loaded, type(empty)) else empty
 
 
-def _repoint_file(
-    hass: HomeAssistant, domain: str, keys: set[str], moved: dict[str, str]
-) -> int:
-    """Rewrite one config file's matching entries. Runs in an executor."""
-    loaded = _load(hass, domain)
-    changed = sum(
-        _substitute(config, moved)
-        for key, config in _entries(loaded, domain)
-        if key in keys
-    )
-    if not changed:
-        return 0
-    try:
-        save_yaml(hass.config.path(_FILES[domain]), loaded)
-    except OSError, HomeAssistantError:
-        # The user asked for these to be updated, so failing quietly and
-        # reporting a count would be a lie about what happened.
-        _LOGGER.exception("Could not write %s", _FILES[domain])
-        raise
-    return changed
-
-
 def format_moved(moved: Mapping[str, str]) -> str:
     """Return the moved IDs as a markdown list for a repair description."""
     return "\n".join(f"- `{was}` is now `{now}`" for was, now in sorted(moved.items()))
 
 
-def format_entities(hass: HomeAssistant, entity_ids: Iterable[str]) -> str:
-    """Return entities as a markdown list, named as the user sees them."""
-    return "\n".join(
-        f"- {state.name if (state := hass.states.get(entity_id)) else entity_id}"
-        f" (`{entity_id}`)"
-        for entity_id in sorted(entity_ids)
-    )
+def format_labels(labels: Iterable[str]) -> str:
+    """Return the referring configs as a markdown list."""
+    return "\n".join(f"- {label}" for label in labels) or "- (none found)"
