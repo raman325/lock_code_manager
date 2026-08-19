@@ -29,17 +29,21 @@ blueprint:
     1. Create an `input_number` helper (Settings → Devices & Services → Helpers)
        with min=-1, max=your desired limit, and step=1.
 
-    2. Import this blueprint and configure it with the PIN used event entity,
-       enabled switch entity, and the helper you just created.
+    2. Import this blueprint and configure it with the credential used event
+       entity, enabled switch entity, and the helper you just created.
   domain: automation
   # yamllint disable-line rule:line-length
   source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/slot_usage_limiter.yaml
   input:
+    # The key stays as it is: it is what every automation already built from
+    # this blueprint has stored, and renaming it makes each of them fail to
+    # load with a missing input. Only the label is user-visible.
     pin_used_entity:
-      name: PIN used event entity
+      name: Credential used event entity
       description: >
-        The Lock Code Manager event entity that fires when the PIN is used
-        (e.g. `event.raman`, named for the user who holds the slot).
+        The Lock Code Manager event entity that fires when this user's
+        credential is used (e.g. `event.raman`, named for the user who holds
+        the slot).
       selector:
         entity:
           domain: event
