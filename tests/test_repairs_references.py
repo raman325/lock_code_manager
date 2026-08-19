@@ -187,3 +187,79 @@ async def test_a_broken_automations_file_does_not_break_the_repair(
     assert result["type"] in ("form", "create_entry")
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_reference_inside_a_template_is_found_and_rewritten(
+    hass: HomeAssistant, mock_lock_config_entry, tmp_path
+) -> None:
+    """
+    An entity ID is not always the whole string.
+
+    Nothing in Home Assistant reports an ID used inside a template as a
+    reference -- ``referenced_entities`` is built from the rendered config,
+    not from template bodies -- so an automation like this would have been
+    left broken AND left off the list of things needing attention.
+
+    The lookalike pins the boundaries: an ID that merely begins with a moved
+    one is a different entity and must not be touched.
+    """
+    hass.config.config_dir = str(tmp_path)
+    (tmp_path / "configuration.yaml").write_text("", encoding="utf-8")
+    automations = tmp_path / AUTOMATION_CONFIG_PATH
+    save_yaml(
+        str(automations),
+        [
+            {
+                "id": "templated",
+                "alias": "Uses a template",
+                "conditions": [
+                    {
+                        "condition": "template",
+                        "value_template": f"{{{{ states('{OLD_PIN_ENTITY}') }}}}",
+                    }
+                ],
+            },
+            {
+                "id": "keyed",
+                "alias": "Keyed",
+                "actions": [
+                    {
+                        "action": "scene.apply",
+                        "data": {"entities": {OLD_PIN_ENTITY: "1234"}},
+                    }
+                ],
+            },
+            {
+                "id": "lookalike",
+                "alias": "A different entity",
+                "triggers": [
+                    {"trigger": "state", "entity_id": f"{OLD_PIN_ENTITY}_backup"}
+                ],
+            },
+        ],
+    )
+
+    entry = await _migrated_entry(hass)
+    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+
+    flow = await async_create_fix_flow(hass, issue_id, issue.data)
+    flow.hass = hass
+    form = await flow.async_step_init()
+    listed = form["description_placeholders"]["fixable"]
+    assert "Uses a template" in listed
+    assert "Keyed" in listed
+    assert "A different entity" not in listed
+
+    await flow.async_step_init({})
+    await hass.async_block_till_done()
+
+    stored = load_yaml(str(automations))
+    assert NEW_PIN_ENTITY in stored[0]["conditions"][0]["value_template"]
+    # The ID can be the key, not only the value.
+    assert NEW_PIN_ENTITY in stored[1]["actions"][0]["data"]["entities"]
+    # A longer ID that starts with a moved one is somebody else.
+    assert stored[2]["triggers"][0]["entity_id"] == f"{OLD_PIN_ENTITY}_backup"
+
+    await hass.config_entries.async_unload(entry.entry_id)

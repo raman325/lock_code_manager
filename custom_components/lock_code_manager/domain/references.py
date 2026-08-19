@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 import logging
+import re
 from typing import Any
 
 from homeassistant.components import automation, script
@@ -138,15 +139,71 @@ def _matching_keys(
     }
 
 
+def _rewrite(value: str, moved: Mapping[str, str]) -> str:
+    """
+    Return ``value`` with every moved entity ID replaced.
+
+    An ID is usually the whole string, but it can also sit inside a template
+    -- ``{{ states('text.raman_pin') }}`` -- which nothing else in Home
+    Assistant reports as a reference. The boundaries stop a longer ID that
+    merely begins with this one from being rewritten, since ``_`` and ``.``
+    are both parts of an entity ID rather than separators.
+    """
+    if value in moved:
+        return moved[value]
+    for old, new_id in moved.items():
+        value = re.sub(rf"(?<![\w.]){re.escape(old)}(?![\w.])", new_id, value)
+    return value
+
+
 def _mentions(config: Any, moved: Mapping[str, str]) -> bool:
     """Return whether a moved entity ID appears anywhere inside ``config``."""
     if isinstance(config, str):
-        return config in moved
+        return _rewrite(config, moved) != config
     if isinstance(config, dict):
-        return any(_mentions(value, moved) for value in config.values())
+        return any(
+            _mentions(key, moved) or _mentions(value, moved)
+            for key, value in config.items()
+        )
     if isinstance(config, list):
         return any(_mentions(item, moved) for item in config)
     return False
+
+
+def _substitute(config: Any, moved: Mapping[str, str]) -> bool:
+    """
+    Replace every moved entity ID inside ``config``, in place.
+
+    Keys as well as values: an entity ID is the key in shapes like
+    ``entities: {text.raman_pin: "1234"}``.
+    """
+    if isinstance(config, list):
+        replaced = False
+        for index, item in enumerate(config):
+            if isinstance(item, str):
+                if (rewritten := _rewrite(item, moved)) != item:
+                    config[index] = rewritten
+                    replaced = True
+            elif _substitute(item, moved):
+                replaced = True
+        return replaced
+
+    if not isinstance(config, dict):
+        return False
+
+    replaced = False
+    for key in list(config):
+        value = config[key]
+        if isinstance(value, str):
+            if (rewritten := _rewrite(value, moved)) != value:
+                config[key] = rewritten
+                replaced = True
+        elif _substitute(value, moved):
+            replaced = True
+        if isinstance(key, str) and (new_key := _rewrite(key, moved)) != key:
+            config[new_key] = config.pop(key)
+            replaced = True
+    return replaced
 
 
 def _load(hass: HomeAssistant, domain: str) -> Any:
@@ -181,31 +238,6 @@ def _repoint_file(
     if changed:
         save_yaml(hass.config.path(_FILES[domain]), loaded)
     return changed
-
-
-def _substitute(config: Any, moved: Mapping[str, str]) -> bool:
-    """
-    Replace every moved entity ID inside ``config``, in place.
-
-    Matches WHOLE strings only. An entity ID can appear as a bare value or in
-    a list, and a substring replacement would corrupt a template that merely
-    mentions one.
-    """
-    if isinstance(config, dict):
-        items: Iterable[tuple[Any, Any]] = list(config.items())
-    elif isinstance(config, list):
-        items = list(enumerate(config))
-    else:
-        return False
-
-    replaced = False
-    for key, value in items:
-        if isinstance(value, str) and value in moved:
-            config[key] = moved[value]
-            replaced = True
-        elif _substitute(value, moved):
-            replaced = True
-    return replaced
 
 
 def format_moved(moved: Mapping[str, str]) -> str:
