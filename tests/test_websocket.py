@@ -91,6 +91,7 @@ from .common import (
     SLOT_1_ENABLED_ENTITY,
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
+    SLOT_2_EVENT_ENTITY,
 )
 from .conftest import async_initial_tick, async_trigger_sync_tick
 
@@ -366,7 +367,7 @@ async def test_subscribe_lock_codes_entity_state_change(
     assert event["type"] == "event"
 
     # Change an LCM entity state (enabled switch for slot 1)
-    enabled_entity_id = "switch.mock_title_code_slot_1_enabled"
+    enabled_entity_id = SLOT_1_ENABLED_ENTITY
     hass.states.async_set(enabled_entity_id, STATE_OFF)
     await hass.async_block_till_done()
 
@@ -402,7 +403,7 @@ async def test_subscribe_lock_codes_ignores_metadata_changes(
     assert event["type"] == "event"
 
     # Change only metadata (same state value, different attributes)
-    enabled_entity_id = "switch.mock_title_code_slot_1_enabled"
+    enabled_entity_id = SLOT_1_ENABLED_ENTITY
     current_state = hass.states.get(enabled_entity_id)
     hass.states.async_set(
         enabled_entity_id,
@@ -681,7 +682,7 @@ async def test_subscribe_code_slot_state_change(
     assert event["type"] == "event"
 
     # Change an entity state (enabled switch for slot 1)
-    enabled_entity_id = "switch.mock_title_code_slot_1_enabled"
+    enabled_entity_id = SLOT_1_ENABLED_ENTITY
     hass.states.async_set(enabled_entity_id, STATE_OFF)
     await hass.async_block_till_done()
 
@@ -768,7 +769,7 @@ async def test_subscribe_code_slot_ignores_metadata_changes(
     assert event["type"] == "event"
 
     # Change only metadata (same state value, different attributes)
-    enabled_entity_id = "switch.mock_title_code_slot_1_enabled"
+    enabled_entity_id = SLOT_1_ENABLED_ENTITY
     current_state = hass.states.get(enabled_entity_id)
     hass.states.async_set(
         enabled_entity_id,
@@ -958,7 +959,7 @@ async def test_subscribe_code_slot_with_event_type(
 
     # Check event entity state to verify event_type is set (this is what
     # websocket code reads to determine last_used_lock_name)
-    event_state = hass.states.get("event.mock_title_code_slot_2")
+    event_state = hass.states.get(SLOT_2_EVENT_ENTITY)
     assert event_state is not None
     assert event_state.state not in ("unknown", "unavailable")
     assert event_state.attributes.get("event_type") == LOCK_1_ENTITY_ID
@@ -2642,7 +2643,7 @@ async def test_subscribe_lock_codes_entity_tracking_refreshes_on_update(
     real_ids = _get_slot_state_entity_ids(hass, LOCK_1_ENTITY_ID)
 
     # Create a synthetic new entity that will appear on the second call
-    new_entity_id = "switch.mock_title_code_slot_99_enabled"
+    new_entity_id = "switch.test99_enabled"
     hass.states.async_set(new_entity_id, STATE_ON)
     await hass.async_block_till_done()
 
@@ -2729,7 +2730,7 @@ async def test_subscribe_lock_codes_tracking_refresh_noop_when_unchanged(
     assert updated["type"] == "event"
 
     # Verify state tracking still works (entity state change produces update)
-    enabled_entity_id = "switch.mock_title_code_slot_1_enabled"
+    enabled_entity_id = SLOT_1_ENABLED_ENTITY
     hass.states.async_set(enabled_entity_id, STATE_OFF)
     await hass.async_block_till_done()
 
@@ -2757,7 +2758,7 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
     )
 
     # Create a synthetic new entity that will appear on subsequent calls
-    new_entity_id = "text.mock_title_code_slot_1_extra"
+    new_entity_id = "text.test1_extra"
     hass.states.async_set(new_entity_id, "test_value")
     await hass.async_block_till_done()
 

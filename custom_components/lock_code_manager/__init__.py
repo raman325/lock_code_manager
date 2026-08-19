@@ -944,6 +944,32 @@ def _async_reclaim_entities_from_foreign_devices(
 
 
 @callback
+def _async_rename_slot_devices(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """
+    Point each slot's device at the name of whoever holds it now.
+
+    DeviceInfo only names a device as it is created, so a rename would
+    otherwise leave the old name standing until the entity was rebuilt. It
+    runs before the update listener's entity work because the rename that
+    matters most -- the name text entity -- writes to data with empty options
+    and returns before any of that.
+
+    ``name_by_user`` is untouched, so a device the user renamed themselves
+    keeps their name.
+    """
+    dev_reg = dr.async_get(hass)
+    entry_id = config_entry.entry_id
+    config = get_entry_config(config_entry)
+    for slot_num, name in ((num, config.name_for(num)) for num in config.slot_numbers):
+        identifier = build_slot_device_identifier(entry_id, slot_num)
+        device = dev_reg.async_get_device(identifiers={(DOMAIN, identifier)})
+        if device is not None and name and device.name != name:
+            dev_reg.async_update_device(device.id, name=name)
+
+
+@callback
 def _async_prune_orphaned_slot_devices(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
@@ -1126,6 +1152,8 @@ async def async_update_listener(
     # same way.
     for coordinator in runtime_data.slot_coordinators.values():
         coordinator.notify_config_changed()
+
+    _async_rename_slot_devices(hass, config_entry)
 
     # No need to do entity creation/removal work if there are no options
     # because that only happens at the end of this function (data + empty

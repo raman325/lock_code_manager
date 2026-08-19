@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
     ATTR_VALUE,
@@ -33,6 +34,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
+    ATTR_ACTIVE,
     ATTR_CODE_SLOT,
     ATTR_LOCK_ENTITY_ID,
     ATTR_USERCODE,
@@ -70,6 +72,7 @@ from .common import (
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
     in_sync_entity_id,
+    slot_entity_id,
 )
 from .conftest import (
     async_advance_time,
@@ -392,7 +395,9 @@ async def test_startup_waits_for_valid_active_state(
     await hass.async_block_till_done()
 
     # Get the entity IDs
-    active_entity_id = "binary_sensor.test_lcm_code_slot_1_active"
+    active_entity_id = slot_entity_id(
+        hass, BINARY_SENSOR_DOMAIN, config_entry, 1, ATTR_ACTIVE
+    )
     in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
 
     # Verify entities exist
@@ -769,7 +774,9 @@ async def test_condition_entity_subscription_updates_on_config_change(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    active_entity = "binary_sensor.test_lcm_code_slot_1_active"
+    active_entity = slot_entity_id(
+        hass, BINARY_SENSOR_DOMAIN, config_entry, 1, ATTR_ACTIVE
+    )
 
     # Initial state: access_1 is ON, so slot should be active
     state = hass.states.get(active_entity)

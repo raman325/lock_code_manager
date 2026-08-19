@@ -10,6 +10,11 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
+from homeassistant.components.text import (
+    ATTR_VALUE,
+    DOMAIN as TEXT_DOMAIN,
+    SERVICE_SET_VALUE,
+)
 from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.const import (
     ATTR_CODE,
@@ -73,6 +78,7 @@ from .common import (
     LOCK_2_ENTITY_ID,
     LOCK_DEVICE_DOMAIN,
     SLOT_1_IN_SYNC_ENTITY,
+    SLOT_1_NAME_ENTITY,
     MockLCMLock,
     in_sync_entity_id,
 )
@@ -2392,3 +2398,50 @@ async def test_migration_of_a_real_world_entry_shape(
         )
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_slot_device_is_named_for_the_user_who_holds_it(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """The slot number is bookkeeping, so it must not be what the user reads."""
+    entry_id = lock_code_manager_config_entry.entry_id
+    dev_reg = dr.async_get(hass)
+    config = get_entry_config(lock_code_manager_config_entry)
+
+    for slot_num in config.slot_numbers:
+        device = dev_reg.async_get_device({(DOMAIN, f"{entry_id}|{slot_num}")})
+        assert device is not None
+        assert device.name == config.name_for(slot_num)
+
+
+async def test_renaming_a_user_renames_their_device(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Driven through the name entity, which is how a user actually renames.
+
+    That path writes to data with empty options, so it returns before the
+    update listener does any entity work -- the device would keep the old
+    name if the rename were handled alongside entity creation.
+    """
+    entry_id = lock_code_manager_config_entry.entry_id
+    dev_reg = dr.async_get(hass)
+    identifiers = {(DOMAIN, f"{entry_id}|1")}
+    before = get_entry_config(lock_code_manager_config_entry).name_for(1)
+    assert dev_reg.async_get_device(identifiers).name == before
+
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "Sherene"},
+        target={ATTR_ENTITY_ID: SLOT_1_NAME_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert get_entry_config(lock_code_manager_config_entry).name_for(1) == "Sherene"
+    assert dev_reg.async_get_device(identifiers).name == "Sherene"
