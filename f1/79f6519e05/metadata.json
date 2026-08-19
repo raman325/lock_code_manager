@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "f179f6519e05",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-device-naming",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/f1/79f6519e05/0/metadata.json",
+      "transcript": "/f1/79f6519e05/0/full.jsonl",
+      "compact_transcript": "/f1/79f6519e05/0/transcript.jsonl",
+      "content_hash": "/f1/79f6519e05/0/content_hash.txt",
+      "prompt": "/f1/79f6519e05/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4492,
+    "cache_creation_tokens": 10711331,
+    "cache_read_tokens": 1163934323,
+    "output_tokens": 1811382,
+    "api_call_count": 2249
+  }
+}
