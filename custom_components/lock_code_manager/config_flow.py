@@ -191,55 +191,29 @@ async def _async_validate_users_yaml(
     return parsed_users, {}, {}
 
 
-class _AllocatesSlotsMixin:
+async def _allocate_for(
+    hass: HomeAssistant,
+    locks: Sequence[str],
+    num_users: int,
+    *,
+    excluding: ConfigEntry | None = None,
+) -> tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]:
     """
-    Finding numbers for users, shared by the setup and editing flows.
+    Find numbers for ``num_users``, or say why it could not.
 
-    Neither flow asks anybody for a slot number: both name users and then
-    allocate around whatever the locks already hold. The allocation itself
-    lives in ``domain.allocation``, which the services call too; this turns
-    its refusals into the form errors a flow renders.
-
-    ``_allocation_locks`` is set by the flow before allocating, because
-    setup has the locks in its collected data and editing has them in the
-    submission being validated.
+    Allocation itself lives in ``domain.allocation``, which the services call
+    too; this only turns its refusals into the form errors a flow renders.
     """
-
-    # Supplied by whichever flow mixes this in; both have one.
-    hass: HomeAssistant
-
-    _allocation_locks: Sequence[str] = ()
-
-    # The entry this flow is editing, if any. Setup is not editing one.
-    _entry_being_edited: ConfigEntry | None = None
-
-    async def _async_allocate_for(
-        self, num_users: int
-    ) -> tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]:
-        """Find numbers for ``num_users``, or say why it could not."""
-        try:
-            unavailable = await async_allocate_for(
-                self.hass,
-                self._allocation_locks,
-                num_users,
-                excluding=self._entry_being_edited,
-            )
-        except SlotAllocationError as err:
-            return None, {"base": err.translation_key}, err.placeholders
-        return unavailable, {}, {}
-
-    async def _create_entry(
-        self, *, title: str, data: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Create the config entry."""
-        return self.async_create_entry(  # type: ignore[attr-defined]
-            title=title, data=data
+    try:
+        unavailable = await async_allocate_for(
+            hass, locks, num_users, excluding=excluding
         )
+    except SlotAllocationError as err:
+        return None, {"base": err.translation_key}, err.placeholders
+    return unavailable, {}, {}
 
 
-class LockCodeManagerFlowHandler(
-    _AllocatesSlotsMixin, config_entries.ConfigFlow, domain=DOMAIN
-):
+class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for Lock Code Manager."""
 
     VERSION = 4
@@ -270,7 +244,6 @@ class LockCodeManagerFlowHandler(
             await self.async_set_unique_id(slugify(self.title))
             self._abort_if_unique_id_configured()
             self.data = user_input
-            self._allocation_locks = user_input[CONF_LOCKS]
             return await self.async_step_choose_path()
 
         return self.async_show_form(
@@ -306,7 +279,7 @@ class LockCodeManagerFlowHandler(
                 unavailable,
                 errors,
                 description_placeholders,
-            ) = await self._async_allocate_for(num_users)
+            ) = await _allocate_for(self.hass, self.data[CONF_LOCKS], num_users)
             if unavailable is not None:
                 self._users_to_configure = num_users
                 self._unavailable = unavailable
@@ -401,7 +374,7 @@ class LockCodeManagerFlowHandler(
             self.data[CONF_USERS], start=1, unavailable=self._unavailable
         )
         self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
-        return await self._create_entry(title=self.title, data=self.data)
+        return self.async_create_entry(title=self.title, data=self.data)
 
     async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
         """Take a block of users, then allocate their numbers."""
@@ -429,7 +402,7 @@ class LockCodeManagerFlowHandler(
                     unavailable,
                     allocation_errors,
                     allocation_placeholders,
-                ) = await self._async_allocate_for(len(users))
+                ) = await _allocate_for(self.hass, self.data[CONF_LOCKS], len(users))
                 if unavailable is None:
                     return self.async_show_form(
                         step_id="yaml",
@@ -443,7 +416,7 @@ class LockCodeManagerFlowHandler(
                     users, start=1, unavailable=unavailable
                 )
                 self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
-                return await self._create_entry(title=self.title, data=self.data)
+                return self.async_create_entry(title=self.title, data=self.data)
 
         return self.async_show_form(
             step_id="yaml",
@@ -562,7 +535,7 @@ class LockCodeManagerFlowHandler(
         return LockCodeManagerOptionsFlow()
 
 
-class LockCodeManagerOptionsFlow(_AllocatesSlotsMixin, config_entries.OptionsFlow):
+class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
     """Options flow for Lock Code Manager."""
 
     async def async_step_init(
@@ -575,10 +548,6 @@ class LockCodeManagerOptionsFlow(_AllocatesSlotsMixin, config_entries.OptionsFlo
             user_input = {}
 
         if user_input:
-            self._allocation_locks = user_input[CONF_LOCKS]
-            # Its own numbers do not constrain it: kept ones are held by
-            # tenure, released ones are free for whoever comes next.
-            self._entry_being_edited = self.config_entry
             (
                 users,
                 validation_errors,
@@ -595,7 +564,14 @@ class LockCodeManagerOptionsFlow(_AllocatesSlotsMixin, config_entries.OptionsFlo
                     unavailable,
                     allocation_errors,
                     allocation_placeholders,
-                ) = await self._async_allocate_for(len(users))
+                ) = await _allocate_for(
+                    self.hass,
+                    user_input[CONF_LOCKS],
+                    len(users),
+                    # Its own numbers do not constrain it: kept ones are held
+                    # by tenure, released ones are free for whoever comes next.
+                    excluding=self.config_entry,
+                )
                 if unavailable is None:
                     errors.update(allocation_errors)
                     description_placeholders.update(allocation_placeholders)

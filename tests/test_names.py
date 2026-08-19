@@ -9,7 +9,6 @@ from custom_components.lock_code_manager.domain.names import (
     fallback_name,
     name_error,
     normalize_slot_names,
-    validate_slot_names,
 )
 
 
@@ -147,27 +146,6 @@ def test_normalize_accepts_string_slot_keys() -> None:
 
     assert repaired["1"][CONF_NAME] == "User 1"
     assert changed == ["1"]
-
-
-@pytest.mark.parametrize(
-    ("slots", "expected"),
-    [
-        ({1: {CONF_NAME: "Raman"}, 2: {CONF_NAME: "Alice"}}, None),
-        ({1: {CONF_ENABLED: True}}, ("1", "name_required")),
-        ({1: {CONF_NAME: "  "}}, ("1", "name_required")),
-        ({1: {CONF_NAME: "Raman"}, 2: {CONF_NAME: "raman"}}, ("2", "name_not_unique")),
-        # Whitespace-padded duplicates must be caught in BOTH orders. Comparing
-        # a stripped candidate against unstripped stored names caught only one.
-        ({1: {CONF_NAME: "Raman "}, 2: {CONF_NAME: "Raman"}}, ("2", "name_not_unique")),
-        (
-            {1: {CONF_NAME: "Raman"}, 2: {CONF_NAME: " Raman "}},
-            ("2", "name_not_unique"),
-        ),
-    ],
-)
-def test_validate_slot_names(slots, expected) -> None:
-    """Whole-set validation reports the offending slot and why."""
-    assert validate_slot_names(slots) == expected
 
 
 def test_normalize_does_not_steal_a_later_slots_valid_name() -> None:

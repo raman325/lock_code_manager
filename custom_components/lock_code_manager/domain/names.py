@@ -139,34 +139,6 @@ def normalize_slot_names(
     return repaired, changed
 
 
-def validate_slot_names(
-    slots: Mapping[Any, Mapping[str, Any]],
-) -> tuple[str, str] | None:
-    """
-    Return the first ``(slot_num, error_key)`` problem in ``slots``, else None.
-
-    The single-slot config flow validates one name at a time against the
-    slots already accepted, but the YAML and options flows submit every slot
-    at once and need the whole set checked together. Returning the offending
-    slot number lets the caller name it in the error, since "one of your
-    slots has a duplicate name" is not actionable.
-
-    Uniqueness is compared on the normalized, case-folded name, matching how
-    the migration deduplicates -- otherwise a pair the migration would repair
-    could be re-entered by hand.
-    """
-    seen: dict[str, str] = {}
-    for slot_num in sorted(slots, key=int):
-        name = slots[slot_num].get(CONF_NAME)
-        if error := name_error(name):
-            return str(slot_num), error
-        key = identity(name)
-        if key in seen:
-            return str(slot_num), "name_not_unique"
-        seen[key] = str(slot_num)
-    return None
-
-
 def validate_user_names(users: Mapping[str, Any]) -> tuple[str, str] | None:
     """
     Return the first ``(name, error_key)`` problem in ``users``, else None.
