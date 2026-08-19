@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "014bd81d97f5",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-card-by-name",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/generate-view.test.ts",
+    "ts/generate-view.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/01/4bd81d97f5/0/metadata.json",
+      "transcript": "/01/4bd81d97f5/0/full.jsonl",
+      "compact_transcript": "/01/4bd81d97f5/0/transcript.jsonl",
+      "content_hash": "/01/4bd81d97f5/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 12433,
+    "cache_read_tokens": 14605728,
+    "output_tokens": 7647,
+    "api_call_count": 15
+  }
+}
