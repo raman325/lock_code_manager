@@ -160,9 +160,43 @@
     }
   },
   "services": {
-    "hard_refresh_usercodes": {
-      "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
-      "name": "Hard refresh usercodes"
+    "clear_slot_condition": {
+      "name": "Clear slot condition",
+      "description": "Remove a code slot's condition entity, leaving its PIN active whenever the slot is enabled.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry that manages the slot."
+        },
+        "slot": {
+          "name": "Code slot",
+          "description": "The code slot within that entry."
+        }
+      }
+    },
+    "clear_usercode": {
+      "name": "Clear usercode",
+      "description": "Clear a slot on a lock directly, bypassing Lock Code Manager's own configuration. The next sync will rewrite it if the slot is one Lock Code Manager manages.",
+      "fields": {
+        "lock_entity_id": {
+          "name": "Lock",
+          "description": "The lock to act on."
+        },
+        "code_slot": {
+          "name": "Code slot",
+          "description": "The code slot on the lock, addressed by its number."
+        }
+      }
+    },
+    "deobfuscate_log": {
+      "name": "Deobfuscate log",
+      "description": "Replace mask_pin tokens (pin#xxxxxxxx) in pasted log text with the plaintext PINs configured in any loaded Lock Code Manager entry. WARNING: the response contains plaintext PINs — do not paste it into public issues, forums, or any shared channel.",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "The log text to deobfuscate. Paste raw log lines or a full log file."
+        }
+      }
     },
     "generate_pin": {
       "description": "Generate a random PIN that avoids known unsafe patterns (all-same digits, sequential digits, repeating sub-sequences, and common weak PINs). Returns the PIN via response_variable.",
@@ -174,13 +208,43 @@
         }
       }
     },
-    "deobfuscate_log": {
-      "name": "Deobfuscate log",
-      "description": "Replace mask_pin tokens (pin#xxxxxxxx) in pasted log text with the plaintext PINs configured in any loaded Lock Code Manager entry. WARNING: the response contains plaintext PINs — do not paste it into public issues, forums, or any shared channel.",
+    "hard_refresh_usercodes": {
+      "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
+      "name": "Hard refresh usercodes"
+    },
+    "set_slot_condition": {
+      "name": "Set slot condition",
+      "description": "Attach a condition entity to a code slot. The slot's PIN is active only while that entity says so.",
       "fields": {
-        "text": {
-          "name": "Text",
-          "description": "The log text to deobfuscate. Paste raw log lines or a full log file."
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry that manages the slot."
+        },
+        "slot": {
+          "name": "Code slot",
+          "description": "The code slot within that entry."
+        },
+        "entity_id": {
+          "name": "Condition entity",
+          "description": "The entity whose state decides when the slot's PIN is active."
+        }
+      }
+    },
+    "set_usercode": {
+      "name": "Set usercode",
+      "description": "Write a PIN directly to a slot on a lock, bypassing Lock Code Manager's own configuration. The next sync will overwrite it if the slot is one Lock Code Manager manages.",
+      "fields": {
+        "lock_entity_id": {
+          "name": "Lock",
+          "description": "The lock to act on."
+        },
+        "code_slot": {
+          "name": "Code slot",
+          "description": "The code slot on the lock, addressed by its number."
+        },
+        "usercode": {
+          "name": "Usercode",
+          "description": "The PIN to write."
         }
       }
     }
