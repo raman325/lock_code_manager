@@ -2243,7 +2243,7 @@ class TestSetSlotCondition:
 
         # Verify config entry was updated
         assert (
-            get_entry_config(lock_code_manager_config_entry).slot(1)["entity_id"]
+            get_entry_config(lock_code_manager_config_entry).slot(1)["condition"]
             == BINARY_SENSOR_TEST_ENTITY_ID
         )
 
@@ -2355,7 +2355,7 @@ class TestSetSlotCondition:
 
         # Verify update worked
         assert (
-            get_entry_config(lock_code_manager_config_entry).slot(1)["entity_id"]
+            get_entry_config(lock_code_manager_config_entry).slot(1)["condition"]
             == INPUT_BOOLEAN_TEST_ENTITY_ID
         )
 
@@ -2551,7 +2551,7 @@ class TestClearSlotCondition:
         ws_client = await hass_ws_client(hass)
 
         # Slot 2 has a calendar entity configured
-        assert "entity_id" in get_entry_config(lock_code_manager_config_entry).slot(2)
+        assert "condition" in get_entry_config(lock_code_manager_config_entry).slot(2)
 
         # Clear slot 2's entity_id
         await ws_client.send_json(

@@ -165,3 +165,26 @@ def validate_slot_names(
             return str(slot_num), "name_not_unique"
         seen[key] = str(slot_num)
     return None
+
+
+def validate_user_names(users: Mapping[str, Any]) -> tuple[str, str] | None:
+    """
+    Return the first ``(name, error_key)`` problem in ``users``, else None.
+
+    The editor submits users keyed by name, so a duplicate key cannot reach
+    here -- but two keys can still mean one user (``Bob`` and ``bob ``), and
+    that pair would collapse into a single user on the way into storage,
+    silently taking one of their credentials with it.
+
+    Returns the offending name so the caller can say which one, since "one of
+    your users has a duplicate name" is not actionable.
+    """
+    seen: dict[str, str] = {}
+    for name in users:
+        if error := name_error(name):
+            return name, error
+        key = identity(name)
+        if key in seen:
+            return name, "name_not_unique"
+        seen[key] = name
+    return None

@@ -20,8 +20,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import (
+    CONF_CONDITION,
     CONF_ENABLED,
-    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     STATE_OFF,
@@ -157,7 +157,7 @@ class SlotEntityCoordinator:
     @property
     def condition_entity_id(self) -> str | None:
         """Return the configured condition entity ID for this slot."""
-        return self._slot_config().get(CONF_ENTITY_ID)
+        return self._slot_config().get(CONF_CONDITION)
 
     # -- Registration (entities, sync managers) ------------------------------
 
@@ -399,7 +399,7 @@ class SlotEntityCoordinator:
         Compute the slot's active state from config + condition entity.
 
         Every relevant slot config key must be truthy. The condition
-        entity (``CONF_ENTITY_ID``) is truthy when its state is ``on``;
+        entity (``CONF_CONDITION``) is truthy when its state is ``on``;
         ``off`` is False and any other state (unknown, unavailable,
         missing) is None and treated as inactive.
         """
@@ -408,7 +408,7 @@ class SlotEntityCoordinator:
         for key, value in slot_config.items():
             if key in (EVENT_CREDENTIAL_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
                 continue
-            if key == CONF_ENTITY_ID:
+            if key == CONF_CONDITION:
                 hass_state = self._hass.states.get(value)
                 if hass_state is None:
                     states[key] = None

@@ -109,7 +109,7 @@ ATTR_SYNC_STATUS = "sync_status"
 # Code slot properties
 CONF_CALENDAR = "calendar"
 
-# Supported domains for condition entities (CONF_ENTITY_ID option)
+# Supported domains for condition entities (CONF_CONDITION option)
 CONDITION_ENTITY_DOMAINS = [
     "calendar",
     "binary_sensor",

@@ -21,8 +21,8 @@ from homeassistant.components.text import (
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    CONF_CONDITION,
     CONF_ENABLED,
-    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     STATE_OFF,
@@ -233,7 +233,7 @@ async def test_condition_entity_subscription_owned_by_coordinator(
                 CONF_NAME: "alice",
                 CONF_PIN: "1234",
                 CONF_ENABLED: True,
-                CONF_ENTITY_ID: "input_boolean.gate",
+                CONF_CONDITION: "input_boolean.gate",
             },
         },
     }
@@ -351,7 +351,7 @@ async def test_condition_entity_swap_resubscribes(
                 CONF_NAME: "alice",
                 CONF_PIN: "1234",
                 CONF_ENABLED: True,
-                CONF_ENTITY_ID: "input_boolean.gate_a",
+                CONF_CONDITION: "input_boolean.gate_a",
             },
         },
     }
@@ -370,7 +370,7 @@ async def test_condition_entity_swap_resubscribes(
                 CONF_NAME: "alice",
                 CONF_PIN: "1234",
                 CONF_ENABLED: True,
-                CONF_ENTITY_ID: "input_boolean.gate_b",
+                CONF_CONDITION: "input_boolean.gate_b",
             },
         },
     }
@@ -465,7 +465,7 @@ async def test_active_binary_sensor_does_not_self_track_state(
                 CONF_NAME: "alice",
                 CONF_PIN: "1234",
                 CONF_ENABLED: True,
-                CONF_ENTITY_ID: condition_entity,
+                CONF_CONDITION: condition_entity,
             },
         },
     }
@@ -663,7 +663,7 @@ async def test_handle_condition_state_change_after_stop_is_noop(
                 CONF_NAME: "alice",
                 CONF_PIN: "1234",
                 CONF_ENABLED: True,
-                CONF_ENTITY_ID: "input_boolean.gate_a",
+                CONF_CONDITION: "input_boolean.gate_a",
             },
         },
     }
@@ -946,7 +946,7 @@ async def test_recompute_active_missing_condition_entity_is_inactive(
                 CONF_NAME: "alice",
                 CONF_PIN: "1234",
                 CONF_ENABLED: True,
-                CONF_ENTITY_ID: "input_boolean.does_not_exist",
+                CONF_CONDITION: "input_boolean.does_not_exist",
             },
         },
     }
@@ -957,7 +957,7 @@ async def test_recompute_active_missing_condition_entity_is_inactive(
 
     coordinator = entry.runtime_data.slot_coordinators[1]
     assert coordinator.is_active is False
-    assert CONF_ENTITY_ID in coordinator.inactive_because_of
+    assert CONF_CONDITION in coordinator.inactive_because_of
 
     await hass.config_entries.async_unload(entry.entry_id)
 

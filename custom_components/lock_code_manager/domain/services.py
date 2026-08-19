@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.const import CONF_ENTITY_ID
+from homeassistant.const import CONF_CONDITION
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
@@ -55,7 +55,7 @@ async def async_set_slot_condition(
             "Unsupported-Condition-Entity-Integrations"
         )
 
-    new_config = config.with_slot_field_set(slot, CONF_ENTITY_ID, entity_id)
+    new_config = config.with_slot_field_set(slot, CONF_CONDITION, entity_id)
     hass.config_entries.async_update_entry(config_entry, options=new_config.to_dict())
 
 
@@ -68,5 +68,5 @@ async def async_clear_slot_condition(
     if not config.has_slot(slot):
         raise ServiceValidationError(f"Slot {slot} not found in config entry")
 
-    new_config = config.with_slot_field_removed(slot, CONF_ENTITY_ID)
+    new_config = config.with_slot_field_removed(slot, CONF_CONDITION)
     hass.config_entries.async_update_entry(config_entry, options=new_config.to_dict())

@@ -28,6 +28,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
+    CONF_CONDITION,
     CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_PIN,
@@ -255,7 +256,7 @@ def _get_slot_condition_entity_id(
     config_entry: ConfigEntry, slot_num: int
 ) -> str | None:
     """Get condition entity ID from slot config."""
-    return get_entry_config(config_entry).slot(slot_num).get(CONF_ENTITY_ID)
+    return get_entry_config(config_entry).slot(slot_num).get(CONF_CONDITION)
 
 
 def async_get_entry(
@@ -401,7 +402,8 @@ async def get_config_entry_data(
                 for lock_id, lock in entry_locks.items()
             ],
             CONF_SLOTS: {
-                k: v.get(CONF_ENTITY_ID) for k, v in entry_config.slots.items()
+                slot_num: slot.get(CONF_CONDITION)
+                for slot_num, slot in entry_config.slots.items()
             },
         },
     )
