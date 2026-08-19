@@ -126,7 +126,7 @@ variables:
   _event_entity: >
     {{ expand(_all_entities)
        | selectattr('attributes.slot_field', 'defined')
-       | selectattr('attributes.slot_field', 'eq', 'pin_used')
+       | selectattr('attributes.slot_field', 'eq', 'credential_used')
        | selectattr('attributes.code_slot', 'eq', slot_number | int)
        | map(attribute='entity_id') | first | default('') }}
   lock_entity_ids: >

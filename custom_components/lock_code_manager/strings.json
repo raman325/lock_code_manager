@@ -99,11 +99,11 @@
       }
     },
     "event": {
-      "pin_used": {
+      "credential_used": {
         "state_attributes": {
           "event_type": {
             "state": {
-              "pin_used": "PIN used"
+              "credential_used": "PIN used"
             }
           }
         }

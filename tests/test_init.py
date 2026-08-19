@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
 from homeassistant.components.text import (
@@ -15,7 +16,7 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.config_entries import SOURCE_REAUTH
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import (
     ATTR_CODE,
     ATTR_ENTITY_ID,
@@ -52,7 +53,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
-    EVENT_PIN_USED,
+    EVENT_CREDENTIAL_USED,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
@@ -154,7 +155,7 @@ async def test_entry_setup_and_unload(
                 CONF_NAME,
                 CONF_PIN,
                 ATTR_ACTIVE,
-                EVENT_PIN_USED,
+                EVENT_CREDENTIAL_USED,
             )
         }
 
@@ -169,7 +170,7 @@ async def test_entry_setup_and_unload(
             CONF_NAME,
             CONF_PIN,
             ATTR_ACTIVE,
-            EVENT_PIN_USED,
+            EVENT_CREDENTIAL_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
 
@@ -234,7 +235,7 @@ async def test_entry_setup_and_unload(
             CONF_NAME,
             CONF_PIN,
             ATTR_ACTIVE,
-            EVENT_PIN_USED,
+            EVENT_CREDENTIAL_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
 
@@ -281,7 +282,7 @@ async def test_entry_setup_and_unload(
             CONF_NAME,
             CONF_PIN,
             ATTR_ACTIVE,
-            EVENT_PIN_USED,
+            EVENT_CREDENTIAL_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
 
@@ -2632,5 +2633,95 @@ async def test_migration_leaves_an_entity_that_already_has_the_right_id(
         )
         is None
     )
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_migration_rekeys_the_event_entity(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The event is named for what it reports, and it no longer reports a PIN.
+
+    The key is the last part of the unique ID, so leaving the stored one
+    alone would orphan the existing entity and build a fresh one beside it.
+    Updating it keeps the same registry row, and with it the entity ID and
+    everything else hanging off that row.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    before = ent_reg.async_get_or_create(
+        EVENT_DOMAIN,
+        DOMAIN,
+        f"{entry.entry_id}|1|pin_used",
+        config_entry=entry,
+        suggested_object_id="all_locks_code_slot_1",
+    )
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    moved = ent_reg.async_get_entity_id(
+        EVENT_DOMAIN, DOMAIN, f"{entry.entry_id}|1|{EVENT_CREDENTIAL_USED}"
+    )
+    assert moved is not None
+    # Same row, so nothing hanging off it was lost.
+    assert ent_reg.async_get(moved).id == before.id
+    # And the old key is gone rather than left beside it.
+    assert (
+        ent_reg.async_get_entity_id(
+            EVENT_DOMAIN, DOMAIN, f"{entry.entry_id}|1|pin_used"
+        )
+        is None
+    )
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_migration_survives_an_event_entity_that_already_moved(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A duplicate is worth a log line; refusing to start is not.
+
+    Re-keying onto a unique ID the registry already holds raises, and a raise
+    inside the migration leaves the whole entry unloadable -- every lock and
+    every PIN, over one stray registry row.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        EVENT_DOMAIN, DOMAIN, f"{entry.entry_id}|1|pin_used", config_entry=entry
+    )
+    ent_reg.async_get_or_create(
+        EVENT_DOMAIN,
+        DOMAIN,
+        f"{entry.entry_id}|1|{EVENT_CREDENTIAL_USED}",
+        config_entry=entry,
+    )
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
 
     await hass.config_entries.async_unload(entry.entry_id)

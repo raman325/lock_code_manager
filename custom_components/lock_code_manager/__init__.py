@@ -11,6 +11,7 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace.const import (
     CONF_RESOURCE_TYPE_WS,
@@ -69,6 +70,8 @@ from .const import (
     CONF_CALENDAR,
     CONF_SLOTS,
     DOMAIN,
+    EVENT_CREDENTIAL_USED,
+    LEGACY_EVENT_PIN_USED,
     PLATFORM_MAP,
     PLATFORMS,
     SERVICE_CLEAR_SLOT_CONDITION,
@@ -85,6 +88,7 @@ from .const import (
 from .domain.config import (
     EntryConfig,
     build_slot_device_identifier,
+    build_slot_unique_id,
     parse_slot_device_identifier,
     parse_slot_unique_id,
 )
@@ -227,6 +231,7 @@ async def async_migrate_entry(
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=4
         )
+        _async_rename_event_unique_ids(hass, config_entry)
         if re_slugged := _async_rename_slot_entity_ids(hass, config_entry):
             _LOGGER.info(
                 "%s (%s): renamed %d entity id(s) onto their user's name: %s",
@@ -975,6 +980,42 @@ def _async_reclaim_entities_from_foreign_devices(
             device.name,
         )
         dev_reg.async_remove_device(device.id)
+
+
+@callback
+def _async_rename_event_unique_ids(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """
+    Re-key the event entity from ``pin_used`` to ``credential_used``.
+
+    The key is the last part of the unique ID, so leaving it alone would
+    orphan every existing event entity and build a fresh one beside it,
+    losing whatever history and settings the old one carried. Updating the
+    unique ID keeps the same registry row, and with it the entity ID.
+
+    The event now reports which KIND of credential was used, so naming it
+    after one kind was going to read as wrong the moment a second arrived.
+    """
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    for slot_num in EntryConfig.from_entry(config_entry).slot_numbers:
+        legacy = build_slot_unique_id(entry_id, slot_num, LEGACY_EVENT_PIN_USED)
+        if not (entity_id := ent_reg.async_get_entity_id(EVENT_DOMAIN, DOMAIN, legacy)):
+            continue
+        wanted = build_slot_unique_id(entry_id, slot_num, EVENT_CREDENTIAL_USED)
+        if ent_reg.async_get_entity_id(EVENT_DOMAIN, DOMAIN, wanted):
+            # Re-keying onto an existing unique ID raises, and a raise here
+            # fails the whole migration and leaves the entry unloadable. A
+            # duplicate is worth a line in the log; refusing to start is not.
+            _LOGGER.warning(
+                "Left %s on its old unique id: slot %s already has a %s entity",
+                entity_id,
+                slot_num,
+                EVENT_CREDENTIAL_USED,
+            )
+            continue
+        ent_reg.async_update_entity(entity_id, new_unique_id=wanted)
 
 
 @callback

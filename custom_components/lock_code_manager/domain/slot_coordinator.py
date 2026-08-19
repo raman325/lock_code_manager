@@ -41,7 +41,7 @@ from homeassistant.helpers.issue_registry import (
     async_delete_issue,
 )
 
-from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
+from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
 from .config import EntryConfig
 from .names import name_error, normalize_name
 from .queries import get_entry_config
@@ -406,7 +406,7 @@ class SlotEntityCoordinator:
         slot_config = self._slot_config()
         states: dict[str, bool | None] = {}
         for key, value in slot_config.items():
-            if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
+            if key in (EVENT_CREDENTIAL_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
                 continue
             if key == CONF_ENTITY_ID:
                 hass_state = self._hass.states.get(value)
