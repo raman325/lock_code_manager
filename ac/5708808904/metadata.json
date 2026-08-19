@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "ac5708808904",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-device-naming",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "blueprints/automation/lock_code_manager/calendar_pin_setter.yaml",
+    "blueprints/template/lock_code_manager/calendar_condition.yaml",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/entity.py",
+    "custom_components/lock_code_manager/event.py",
+    "tests/test_blueprint_behavior.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ac/5708808904/0/metadata.json",
+      "transcript": "/ac/5708808904/0/full.jsonl",
+      "compact_transcript": "/ac/5708808904/0/transcript.jsonl",
+      "content_hash": "/ac/5708808904/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 321417,
+    "cache_read_tokens": 8238748,
+    "output_tokens": 25622,
+    "api_call_count": 28
+  }
+}
