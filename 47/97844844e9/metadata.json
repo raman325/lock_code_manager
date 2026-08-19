@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "4797844844e9",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-repair-entity-references",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/domain/references.py",
+    "custom_components/lock_code_manager/repairs.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_repairs_references.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/47/97844844e9/0/metadata.json",
+      "transcript": "/47/97844844e9/0/full.jsonl",
+      "compact_transcript": "/47/97844844e9/0/transcript.jsonl",
+      "content_hash": "/47/97844844e9/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 41768,
+    "cache_read_tokens": 9712213,
+    "output_tokens": 29582,
+    "api_call_count": 25
+  }
+}
