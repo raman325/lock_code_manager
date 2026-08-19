@@ -722,7 +722,7 @@ async def test_limiter_derives_slot_and_config_entry(
         (
             "template/lock_code_manager/calendar_condition.yaml",
             "_event_entity",
-            "pin_used",
+            "credential_used",
         ),
         (
             "automation/lock_code_manager/calendar_pin_setter.yaml",

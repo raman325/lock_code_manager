@@ -35,6 +35,7 @@ from ..const import (
     ATTR_ACTION_TEXT,
     ATTR_CODE_SLOT,
     ATTR_CODE_SLOT_NAME,
+    ATTR_CREDENTIAL_TYPE,
     ATTR_EXTRA_DATA,
     ATTR_FROM,
     ATTR_LCM_CONFIG_ENTRY_ID,
@@ -2064,6 +2065,9 @@ class BaseLock:
             ),
             ATTR_ACTION_TEXT: action_text,
             ATTR_CODE_SLOT: code_slot or 0,
+            # Only PIN is exercised today, but a consumer that reads it
+            # now keeps working when another kind arrives.
+            ATTR_CREDENTIAL_TYPE: CredentialType.PIN,
             ATTR_CODE_SLOT_NAME: name_state.state if name_state else "",
             ATTR_FROM: from_state,
             ATTR_TO: to_state,

@@ -20,7 +20,7 @@ blueprint:
     **Requirements**
 
     This blueprint requires at least one lock that supports code slot events
-    (i.e. produces `*_code_slot_*_pin_used` events). If none of your locks
+    (i.e. produces credential-used events). If none of your locks
     support this, the counter will never decrement.
 
 
@@ -39,7 +39,7 @@ blueprint:
       name: PIN used event entity
       description: >
         The Lock Code Manager event entity that fires when the PIN is used
-        (e.g. `event.front_door_code_slot_1_pin_used`).
+        (e.g. `event.raman`, named for the user who holds the slot).
       selector:
         entity:
           domain: event

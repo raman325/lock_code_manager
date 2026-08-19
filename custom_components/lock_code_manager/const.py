@@ -26,6 +26,7 @@ ATTR_TEXT = "text"
 
 
 ATTR_CODE_SLOT = "code_slot"
+ATTR_CREDENTIAL_TYPE = "credential_type"
 # Which property of the slot an entity represents ("pin", "name", "enabled").
 # Published so a template can find an entity without matching on its ID, whose
 # shape depends on the user's name and on the language it was created in.
@@ -80,7 +81,10 @@ ATTR_CODE_SLOT_NAME = "code_slot_name"
 ATTR_NOTIFICATION_SOURCE = "notification_source"
 
 # Event entity event type
-EVENT_PIN_USED = "pin_used"
+# The entity key, and so the last part of its unique ID. Renamed from
+# "pin_used" in version 4; the migration rewrites the stored ones.
+EVENT_CREDENTIAL_USED = "credential_used"
+LEGACY_EVENT_PIN_USED = "pin_used"
 
 # Configuration Properties
 CONF_CONFIG_ENTRY = "config_entry"
@@ -152,5 +156,5 @@ PLATFORM_MAP = {
     CONF_ENABLED: Platform.SWITCH,
     CONF_NAME: Platform.TEXT,
     CONF_PIN: Platform.TEXT,
-    EVENT_PIN_USED: Platform.EVENT,
+    EVENT_CREDENTIAL_USED: Platform.EVENT,
 }

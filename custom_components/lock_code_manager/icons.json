@@ -17,7 +17,7 @@
       }
     },
     "event": {
-      "pin_used": {
+      "credential_used": {
         "default": "mdi:gesture-tap"
       }
     },

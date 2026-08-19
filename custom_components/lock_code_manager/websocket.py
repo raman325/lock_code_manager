@@ -93,7 +93,7 @@ from .const import (
     CONF_NAME,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_PIN_USED,
+    EVENT_CREDENTIAL_USED,
 )
 from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
@@ -511,7 +511,7 @@ def _build_slot_entities(
         pin_entity_id=_id(TEXT_DOMAIN, CONF_PIN),
         enabled_entity_id=_id(SWITCH_DOMAIN, CONF_ENABLED),
         active_entity_id=_id(BINARY_SENSOR_DOMAIN, ATTR_ACTIVE),
-        event_entity_id=_id(EVENT_DOMAIN, EVENT_PIN_USED),
+        event_entity_id=_id(EVENT_DOMAIN, EVENT_CREDENTIAL_USED),
     )
 
 

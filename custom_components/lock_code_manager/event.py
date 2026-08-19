@@ -11,7 +11,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
+from .const import EVENT_CREDENTIAL_USED, EVENT_LOCK_STATE_CHANGED
 from .domain.models import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
 from .providers import BaseLock
@@ -34,7 +34,7 @@ async def async_setup_entry(
         async_add_entities(
             [
                 LockCodeManagerCodeSlotEventEntity(
-                    hass, ent_reg, config_entry, slot_num, EVENT_PIN_USED
+                    hass, ent_reg, config_entry, slot_num, EVENT_CREDENTIAL_USED
                 )
             ],
             True,
@@ -58,7 +58,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
     """
 
     _attr_entity_category = None
-    _attr_translation_key = EVENT_PIN_USED
+    _attr_translation_key = EVENT_CREDENTIAL_USED
 
     def __init__(
         self,

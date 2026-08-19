@@ -19,11 +19,14 @@ from custom_components.lock_code_manager.const import (
     ATTR_ACTION_TEXT,
     ATTR_CODE_SLOT,
     ATTR_CODE_SLOT_NAME,
+    ATTR_CREDENTIAL_TYPE,
     ATTR_FROM,
     ATTR_NOTIFICATION_SOURCE,
     ATTR_TO,
     DOMAIN,
+    EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.domain.credentials import CredentialType
 from custom_components.lock_code_manager.event import ATTR_UNSUPPORTED_LOCKS
 from custom_components.lock_code_manager.providers import BaseLock
 
@@ -237,3 +240,25 @@ async def test_unsupported_locks_attribute_with_mixed_locks(
         assert LOCK_2_ENTITY_ID in unsupported
 
         await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_the_event_says_which_kind_of_credential_was_used(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Only PIN is exercised today, so the point is that it is stated at all.
+
+    A consumer that reads the kind now keeps working when a second kind
+    arrives, rather than having assumed there was only ever one.
+    """
+    events: list[Event] = []
+    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.async_fire_code_slot_event(1, False, "test", Event("test_source"))
+    await hass.async_block_till_done()
+
+    assert events
+    assert events[0].data[ATTR_CREDENTIAL_TYPE] == CredentialType.PIN

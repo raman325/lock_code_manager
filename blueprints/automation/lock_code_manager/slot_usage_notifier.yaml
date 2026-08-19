@@ -31,7 +31,7 @@ blueprint:
     **Requirements**
 
     This blueprint requires at least one lock that supports code slot
-    events (i.e. produces `*_code_slot_*_pin_used` events).
+    events (i.e. produces credential-used events).
 
 
     **Setup**
