@@ -650,10 +650,20 @@ class LockCodeManagerFlowHandler(
                 self.hass, self.data[CONF_LOCKS], [wider]
             )
             if errors:
+                # A different statement from the count being too large: the
+                # count fits the lock, and the numbers it would have to reach
+                # around what is already there do not. Saying "N users will
+                # not fit" of a count the lock could hold reads as a bug, and
+                # sends the user to re-interview a lock whose interview is
+                # fine.
                 return (
                     None,
-                    {"base": "too_many_users"},
-                    {**placeholders, "num_users": str(num_users)},
+                    {"base": "numbers_needed_exceed_capacity"},
+                    {
+                        **placeholders,
+                        "num_users": str(num_users),
+                        "needed": str(wider),
+                    },
                 )
             window = wider
 
@@ -697,7 +707,7 @@ class LockCodeManagerFlowHandler(
                 ),
                 # A refusal comes back to this form, so it comes back holding
                 # what was refused rather than making the user find it again.
-                user_input or {},
+                user_input,
             ),
             errors=errors,
             description_placeholders=description_placeholders,

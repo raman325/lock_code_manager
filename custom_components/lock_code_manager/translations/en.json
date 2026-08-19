@@ -12,6 +12,7 @@
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
       "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
       "name_required": "Every user needs a name. The name identifies them on your locks.",
+      "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
       "slot_name_not_unique": "The name for code slot {slot_num} is already used by another code slot in this entry. Names must be unique.",
       "slot_name_required": "Code slot {slot_num} needs a name. The name identifies this user on your locks.",

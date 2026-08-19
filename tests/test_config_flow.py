@@ -1375,10 +1375,12 @@ async def test_setup_reads_only_as_far_as_it_has_to(
     assert result["type"] == "create_entry"
     # Slots 1-3 are taken, so the two users land on 4 and 5.
     assert result["data"][CONF_SLOT_ASSIGNMENT] == {"alice": 4, "raman": 5}
-    # And never past what was actually read.
-    assert max(result["data"][CONF_SLOT_ASSIGNMENT].values()) <= max(
+    # Every number issued was one that was actually read -- not merely one
+    # below the highest read, which would let a gap through if the read ever
+    # stops being contiguous.
+    assert set(result["data"][CONF_SLOT_ASSIGNMENT].values()) <= {
         slot for window in windows for slot in window
-    )
+    }
     # Asked about 1-2, then only 3-4, then only 5: every index once, and
     # never about the lock's whole capacity.
     assert windows == [[1, 2], [3, 4], [5]]
@@ -1451,7 +1453,7 @@ async def test_a_refused_count_reports_only_what_it_can_stand_behind(
     strings = json.loads(
         Path("custom_components/lock_code_manager/strings.json").read_text()
     )
-    message = strings["config"]["error"]["too_many_users"]
+    message = strings["config"]["error"]["numbers_needed_exceed_capacity"]
 
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
@@ -1465,7 +1467,7 @@ async def test_a_refused_count_reports_only_what_it_can_stand_behind(
             flow_id, {CONF_NUM_USERS: 8}
         )
 
-    assert result["errors"] == {"base": "too_many_users"}
+    assert result["errors"] == {"base": "numbers_needed_exceed_capacity"}
     supplied = result["description_placeholders"]
     assert not {
         name for name in re.findall(r"\{(\w+)\}", message) if name not in supplied
@@ -1902,7 +1904,12 @@ async def test_a_count_that_fits_can_still_need_numbers_that_do_not(
             flow_id, {CONF_NUM_USERS: 3}
         )
 
-    assert result["errors"] == {"base": "too_many_users"}
+    assert result["errors"] == {"base": "numbers_needed_exceed_capacity"}
+    # The count the user chose, and the number their last user would need.
+    # Reporting either in the other's place makes the sentence false.
+    assert result["description_placeholders"]["num_users"] == "3"
+    assert result["description_placeholders"]["needed"] == "5"
+    assert result["description_placeholders"]["num_slots"] == "4"
 
 
 async def test_choosing_the_ui_path_reads_no_lock_on_the_way_in(
@@ -1978,7 +1985,7 @@ async def test_a_nearly_full_lock_is_read_once_through(
             flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
         )
     assert result["type"] == "create_entry"
-    assert max(result["data"][CONF_SLOT_ASSIGNMENT].values()) <= max(asked)
+    assert set(result["data"][CONF_SLOT_ASSIGNMENT].values()) <= set(asked)
 
 
 async def test_numbers_another_entry_manages_are_stepped_over(
