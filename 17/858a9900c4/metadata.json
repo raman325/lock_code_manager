@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "17858a9900c4",
+  "strategy": "manual-commit",
+  "branch": "v3-merge-main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/domain/config.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "custom_components/lock_code_manager/entity.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/common.py",
+    "tests/properties/test_in_sync.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_config.py",
+    "tests/test_init.py",
+    "tests/test_sensor.py",
+    "tests/test_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/858a9900c4/0/metadata.json",
+      "transcript": "/17/858a9900c4/0/full.jsonl",
+      "compact_transcript": "/17/858a9900c4/0/transcript.jsonl",
+      "content_hash": "/17/858a9900c4/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 7574,
+    "cache_read_tokens": 6376749,
+    "output_tokens": 3851,
+    "api_call_count": 10
+  }
+}
