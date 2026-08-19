@@ -61,7 +61,7 @@ entities.
 - `akuvox.py`: Akuvox intercom/lock implementation
 - `zigbee2mqtt.py`: Zigbee2MQTT lock implementation (via MQTT)
 - `virtual.py`: Virtual lock implementation for testing
-- Each provider implements: `async_get_users()`, `async_set_usercode()`, `async_clear_usercode()`,
+- Each provider implements: `async_get_users()`, `async_set_credential()`, `async_delete_credential()`,
   `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
 - `BaseLock` provides `managed_slots` property (aggregates slots across all config entries for the lock)
@@ -106,7 +106,9 @@ entities.
 2. `async_update_listener()` creates coordinator and provider instances for each lock
 3. Lock provider sets up listeners for lock-specific events (e.g., Z-Wave JS notification events)
 4. Coordinator polls provider's `async_get_usercodes()` to keep state in sync (or receives push updates)
-5. When slot config changes (name, PIN, enabled), entities call provider's `async_set_usercode()` or `async_clear_usercode()`
+5. When slot config changes (name, PIN, enabled), sync calls
+   `BaseLock.async_set_usercode()` / `async_clear_usercode()`, which drive the
+   provider's credential primitives
 6. Provider fires `EVENT_LOCK_STATE_CHANGED` events when locks are operated with PINs
 
 ### Sync State Machine (`sync.py`)
@@ -359,10 +361,15 @@ with a comment citing the contract. Never silence one by rerunning.
        otherwise walks the lock's entire advertised capacity, one round trip at
        a time, holding the operation lock throughout.
      - The result may exceed the scope; callers bound it themselves.
-   - `async_set_usercode()`: program a code to a slot
-   - `async_clear_usercode()`: remove code from slot. Returns whether anything
-     actually changed — a clear that found nothing to clear is not evidence
-     the slot is empty.
+   - `async_set_credential()`: write one credential to the lock
+   - `async_delete_credential()`: remove one credential. Returns whether
+     anything actually changed — a delete that found nothing to delete is not
+     evidence the slot is empty.
+
+   `async_set_usercode()` / `async_clear_usercode()` are `BaseLock`
+   orchestration on top of these, not provider methods: they own the
+   create-the-user-first lifecycle and the readable-PIN checks. Do not
+   override them.
 4. Getting `SlotCredential` right is the whole job of a read. Three states, and
    the wrong one is a defect, not an inaccuracy:
    - `known(pin)` — the lock holds this code **and is accepting it**. Sync
@@ -413,31 +420,35 @@ For providers where the underlying integration's value cache updates asynchronou
 push notifications), implement optimistic updates to prevent sync loops:
 
 ```python
-async def async_set_usercode(self, code_slot: int, usercode: str, ...) -> bool:
+async def async_set_credential(self, ref: CredentialRef, value: str, ...) -> WriteResult:
     # ... perform the set operation ...
-    await self._call_service_to_set_code(code_slot, usercode)
+    await self._call_service_to_set_code(ref.slot, value)
 
-    # Optimistic update: command succeeded, update coordinator immediately
-    if self.coordinator:
-        self.coordinator.push_update({code_slot: usercode})
-    return True
+    # Optimistic update: the command succeeded, so tell the coordinator now
+    # rather than waiting for a cache that updates later.
+    self._push_credential_update(
+        ref.slot, SlotCredential.known(value), optimistic=True
+    )
+    return WriteResult(changed=True)
 
-async def async_clear_usercode(self, code_slot: int) -> bool:
+async def async_delete_credential(self, ref: CredentialRef) -> bool:
     # ... perform the clear operation ...
-    await self._call_service_to_clear_code(code_slot)
+    await self._call_service_to_clear_code(ref.slot)
 
-    # Optimistic update
-    if self.coordinator:
-        self.coordinator.push_update({code_slot: ""})
+    self._push_credential_update(ref.slot, SlotCredential.empty(), optimistic=True)
     return True
 ```
+
+Push `SlotCredential` values, never raw strings — every consumer calls
+`.is_present` / `.matches` on them. `_push_credential_update` is the helper that
+wraps `coordinator.push_update` correctly.
 
 **When needed:** The Z-Wave command is acknowledged by the lock (via Supervision CC), but the JS value
 cache updates later via push notification. Without optimistic updates, the coordinator refresh reads
 stale cache data, sees a mismatch, and triggers repeated sync attempts.
 
-**When NOT needed:** Providers with synchronous caches (like Virtual) don't need this - `get_usercodes()`
-returns the updated value immediately after set/clear.
+**When NOT needed:** Providers with synchronous caches (like Virtual) don't need this - their next
+read returns the updated value immediately after set/clear.
 
 ## Important Constraints
 

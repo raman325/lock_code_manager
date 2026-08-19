@@ -372,18 +372,25 @@ class Zigbee2MQTTLock(BaseLock):
                 if not future.done():
                     user_enabled = pin_code_data.get("user_enabled", False)
                     pin_code = pin_code_data.get("pin_code")
-                    if not _mqtt_payload_pin_has_code_value(pin_code):
-                        # No value came back. This reply carries no status to
-                        # tell an empty slot from a withheld code, so the
-                        # answer stays what it has always been.
-                        future.set_result(SlotCredential.empty())
-                    elif user_enabled:
-                        future.set_result(SlotCredential.known(str(pin_code)))
-                    else:
-                        # A code is plainly here; the lock is just not
-                        # accepting it. Discarding the reply as empty would
-                        # hand the index to allocation.
+                    if _mqtt_payload_pin_has_code_value(pin_code):
+                        # A code is plainly here. Whether the lock is
+                        # currently accepting it decides only whether the
+                        # value can be compared, not whether the index is
+                        # taken.
+                        future.set_result(
+                            SlotCredential.known(str(pin_code))
+                            if user_enabled
+                            else SlotCredential.unreadable()
+                        )
+                    elif user_enabled and "pin_code" not in pin_code_data:
+                        # Enabled, and the code withheld rather than reported
+                        # -- ``expose_pin`` off. The same state the users
+                        # object reports, and the same answer it gives.
                         future.set_result(SlotCredential.unreadable())
+                    else:
+                        # Either the lock says nothing is enabled here, or it
+                        # answered the code explicitly with nothing.
+                        future.set_result(SlotCredential.empty())
 
     async def _async_ensure_device_subscription(self) -> None:
         """Subscribe to the Z2M device topic; idempotent and drift-aware."""

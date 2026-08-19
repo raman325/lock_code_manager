@@ -405,3 +405,29 @@ def test_pin_code_boolean_user_does_not_resolve_slot_one() -> None:
     )
     fut.set_result.assert_not_called()
     assert 1 in lock._pending_codes
+
+
+async def test_pin_code_get_enabled_without_a_code_is_withheld_not_empty() -> None:
+    """An enabled slot whose code the broker hides still holds a code.
+
+    ``expose_pin`` off omits the field entirely. Reading that as empty tells
+    sync the slot is confirmed cleared and hands the index to allocation --
+    the answer the users object already refuses to give for this same state.
+    """
+    loop = asyncio.get_running_loop()
+    lock = _minimal_lock()
+
+    withheld = loop.create_future()
+    lock._pending_codes[11] = withheld
+    lock._process_z2m_device_payload({"pin_code": {"user": 11, "user_enabled": True}})
+    assert withheld.done()
+    assert withheld.result() is SlotCredential.unreadable()
+
+    # An explicit "no code" from an enabled user is still an answer.
+    explicit = loop.create_future()
+    lock._pending_codes[12] = explicit
+    lock._process_z2m_device_payload(
+        {"pin_code": {"user": 12, "user_enabled": True, "pin_code": None}}
+    )
+    assert explicit.done()
+    assert explicit.result() is SlotCredential.empty()
