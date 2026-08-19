@@ -22,11 +22,13 @@ from homeassistant.helpers.event import TrackStates, async_track_state_change_fi
 
 from .const import (
     ATTR_CODE_SLOT,
+    ATTR_SLOT_FIELD,
     ATTR_TO,
     DOMAIN,
 )
 from .domain.config import build_slot_device_identifier, build_slot_unique_id
 from .domain.models import LockCodeManagerConfigEntry
+from .domain.names import fallback_name
 from .domain.queries import get_entry_config
 from .domain.slot_coordinator import SlotEntityCoordinator
 from .providers import BaseLock
@@ -38,14 +40,22 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def build_slot_device_info(config_entry: ConfigEntry, slot_num: int) -> DeviceInfo:
-    """Describe the device that carries every entity for one code slot."""
+    """
+    Describe the device that carries every entity for one user.
+
+    The name is looked up here rather than passed in, so no caller can name a
+    device something the configuration disagrees with. A slot with no user is
+    named as the migration would name it: this is reachable while entities are
+    being moved off a foreign device before their slot is swept away.
+    """
     return DeviceInfo(
         identifiers={
             (DOMAIN, build_slot_device_identifier(config_entry.entry_id, slot_num))
         },
-        name=f"{config_entry.title} Code slot {slot_num}",
+        name=get_entry_config(config_entry).name_for(slot_num)
+        or fallback_name(slot_num),
         manufacturer="Lock Code Manager",
-        model="Code Slot",
+        model="User",
         via_device=(DOMAIN, config_entry.entry_id),
     )
 
@@ -79,8 +89,9 @@ class BaseLockCodeManagerEntity(Entity):
         self._attr_device_info = build_slot_device_info(config_entry, slot_num)
 
         self._attr_unique_id = build_slot_unique_id(self.base_unique_id, slot_num, key)
-        self._attr_extra_state_attributes: dict[str, int | list[str]] = {
-            ATTR_CODE_SLOT: int(slot_num)
+        self._attr_extra_state_attributes: dict[str, int | str | list[str]] = {
+            ATTR_CODE_SLOT: int(slot_num),
+            ATTR_SLOT_FIELD: key,
         }
 
         # Resolved in ``async_added_to_hass``; the coordinator instance is

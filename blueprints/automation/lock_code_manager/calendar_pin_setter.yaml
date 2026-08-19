@@ -127,9 +127,11 @@ actions:
         {{ state_attr(calendar_entity, 'all_day') | default(false, true) }}
       slot_number: !input slot_number
       pin_entity: >
-        {{ _all_entities
-           | select('match', 'text\\..*_code_slot_' ~ slot_number ~ '_pin')
-           | first | default('') }}
+        {{ expand(_all_entities)
+           | selectattr('attributes.slot_field', 'defined')
+           | selectattr('attributes.slot_field', 'eq', 'pin')
+           | selectattr('attributes.code_slot', 'eq', slot_number | int)
+           | map(attribute='entity_id') | first | default('') }}
       pin_value: !input pin_template
   - choose:
       - conditions:

@@ -24,7 +24,13 @@ async def async_create_fix_flow(
 ) -> RepairsFlow:
     """Create a fix flow for a repair issue."""
     if issue_id.startswith(
-        ("number_of_uses_removed", "slot_disabled_", "pin_required_", "slot_suspended_")
+        (
+            "number_of_uses_removed",
+            "slot_disabled_",
+            "pin_required_",
+            "slot_suspended_",
+            "entity_ids_renamed_",
+        )
     ):
         return AcknowledgeRepairFlow()
     raise ValueError(f"Unknown issue: {issue_id}")

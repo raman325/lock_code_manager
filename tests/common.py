@@ -99,22 +99,42 @@ def _per_lock_entity_id(
     return entity_id
 
 
+def slot_entity_id(
+    hass: HomeAssistant,
+    platform: str,
+    config_entry: ConfigEntry,
+    slot_num: int,
+    key: str,
+) -> str:
+    """
+    Resolve a slot's entity by unique ID.
+
+    Spelling the entity ID out ties the test to the name of whoever holds the
+    slot, since that is what the device -- and so the slug -- is named after.
+    """
+    entity_id = er.async_get(hass).async_get_entity_id(
+        platform, DOMAIN, build_slot_unique_id(config_entry.entry_id, slot_num, key)
+    )
+    assert entity_id, f"No {key} entity for slot {slot_num}"
+    return entity_id
+
+
 # The integration the mock lock entities belong to.
 LOCK_DEVICE_DOMAIN = "test"
 
-SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
-SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
-SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
-SLOT_1_NAME_ENTITY = "text.mock_title_code_slot_1_name"
-SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
-SLOT_1_IN_SYNC_ENTITY = "binary_sensor.mock_title_code_slot_1_test_1_in_sync"
+SLOT_1_ACTIVE_ENTITY = "binary_sensor.test1_active"
+SLOT_1_ENABLED_ENTITY = "switch.test1_enabled"
+SLOT_1_EVENT_ENTITY = "event.test1"
+SLOT_1_NAME_ENTITY = "text.test1_name"
+SLOT_1_PIN_ENTITY = "text.test1_pin"
+SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test1_test_1_in_sync"
 
-SLOT_2_ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
-SLOT_2_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
-SLOT_2_EVENT_ENTITY = "event.mock_title_code_slot_2"
-SLOT_2_PIN_ENTITY = "text.mock_title_code_slot_2_pin"
-SLOT_2_NAME_ENTITY = "text.mock_title_code_slot_2_name"
-SLOT_2_IN_SYNC_ENTITY = "binary_sensor.mock_title_code_slot_2_test_1_in_sync"
+SLOT_2_ENABLED_ENTITY = "switch.test2_enabled"
+SLOT_2_ACTIVE_ENTITY = "binary_sensor.test2_active"
+SLOT_2_EVENT_ENTITY = "event.test2"
+SLOT_2_PIN_ENTITY = "text.test2_pin"
+SLOT_2_NAME_ENTITY = "text.test2_name"
+SLOT_2_IN_SYNC_ENTITY = "binary_sensor.test2_test_1_in_sync"
 
 
 @dataclass(repr=False, eq=False)
