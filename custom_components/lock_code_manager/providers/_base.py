@@ -1840,10 +1840,15 @@ class BaseLock:
 
     @final
     async def async_internal_get_occupied_indices(
-        self, limit: int
+        self, indices: Collection[int]
     ) -> frozenset[int] | None:
         """
-        Return which slot numbers in 1..limit this lock holds, or None.
+        Return which of ``indices`` this lock holds, or None.
+
+        Takes the numbers to ask about rather than a ceiling, so a caller
+        widening its search can ask only about what it has not asked about
+        yet. On a lock that answers one index per round trip, asking again
+        from one would cost it the whole range every time.
 
         These are slot numbers, not device credential indices. The two
         coincide on every provider where allocation consults this, because
@@ -1867,9 +1872,12 @@ class BaseLock:
         ``None`` means the lock could not be read at all, which callers must
         treat as unknown rather than free.
         """
+        wanted = frozenset(indices)
+        if not wanted:
+            return frozenset()
         try:
             codes = await self._execute_rate_limited(
-                "get", partial(self.async_get_usercodes, range(1, limit + 1))
+                "get", partial(self.async_get_usercodes, wanted)
             )
         except LockCodeManagerError as err:
             _LOGGER.debug(
@@ -1881,7 +1889,7 @@ class BaseLock:
         return frozenset(
             slot
             for slot, credential in codes.items()
-            if credential.is_present and 1 <= slot <= limit
+            if credential.is_present and slot in wanted
         )
 
     @final

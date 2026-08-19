@@ -524,7 +524,7 @@ def _get_slot_entity_ids(
         slot_int: _build_slot_entities(ent_reg, entry.entry_id, slot_int)
         for entry in hass.config_entries.async_entries(DOMAIN)
         if get_entry_config(entry).has_lock(lock_entity_id)
-        for slot_int in get_entry_config(entry).slots
+        for slot_int in get_entry_config(entry).slot_numbers
     }
 
 
