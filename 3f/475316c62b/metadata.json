@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "3f475316c62b",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-provider-slot-range",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3f/475316c62b/0/metadata.json",
+      "transcript": "/3f/475316c62b/0/full.jsonl",
+      "compact_transcript": "/3f/475316c62b/0/transcript.jsonl",
+      "content_hash": "/3f/475316c62b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 5675,
+    "cache_read_tokens": 6796368,
+    "output_tokens": 3742,
+    "api_call_count": 7
+  }
+}
