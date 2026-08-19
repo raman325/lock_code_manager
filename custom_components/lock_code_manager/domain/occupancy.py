@@ -78,6 +78,5 @@ class Occupancy:
                 lock.occupied
                 for lock in self.locks
                 if lock.constrains_allocation and lock.occupied
-            ),
-            frozenset(),
+            )
         )

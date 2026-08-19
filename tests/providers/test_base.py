@@ -232,7 +232,7 @@ async def test_occupied_indices_reads_a_real_provider_end_to_end(
 
     assert not lock.managed_slots
     # 9 is real but outside the window, so it is not an answer to this question.
-    assert await lock.async_internal_get_occupied_indices(5) == frozenset({2})
+    assert await lock.async_internal_get_occupied_indices(range(1, 6)) == frozenset({2})
 
 
 async def test_occupied_indices_counts_everything_the_lock_holds(
@@ -256,7 +256,9 @@ async def test_occupied_indices_counts_everything_the_lock_holds(
     with patch.object(lock, "async_get_usercodes", AsyncMock(return_value=codes)):
         # 0 and 12 are both outside the window the caller asked about. A lock
         # numbering from zero is not one this allocates into.
-        assert await lock.async_internal_get_occupied_indices(10) == frozenset({1, 3})
+        assert await lock.async_internal_get_occupied_indices(
+            range(1, 11)
+        ) == frozenset({1, 3})
 
 
 async def test_occupied_indices_is_unknown_when_the_lock_cannot_be_read(
@@ -276,20 +278,24 @@ async def test_occupied_indices_is_unknown_when_the_lock_cannot_be_read(
         LockOperationFailed("read rejected"),
     ):
         with patch.object(lock, "async_get_usercodes", AsyncMock(side_effect=error)):
-            assert await lock.async_internal_get_occupied_indices(10) is None
+            assert await lock.async_internal_get_occupied_indices(range(1, 11)) is None
 
 
 async def test_occupied_indices_asks_only_about_the_window(
     hass: HomeAssistant,
 ) -> None:
-    """The read is scoped, so a per-index lock is not walked end to end."""
+    """The read is scoped, so a per-index lock is not walked end to end.
+
+    The caller names the indices rather than a ceiling, so one that widens
+    its search can ask only about what it has not asked about yet.
+    """
     lock = _bare_lock(hass, "test_lock_occupancy_window")
 
     read = AsyncMock(return_value={})
     with patch.object(lock, "async_get_usercodes", read):
-        await lock.async_internal_get_occupied_indices(3)
+        await lock.async_internal_get_occupied_indices(range(1, 4))
 
-    assert list(read.await_args.args[0]) == [1, 2, 3]
+    assert sorted(read.await_args.args[0]) == [1, 2, 3]
 
 
 class _PushSetupRaisesLock(MockLCMLock):
@@ -2131,3 +2137,22 @@ async def test_serialize_sequence_allows_rate_limited_inside(
         result = await lock.async_internal_set_usercode(5, "5555", "Test 5")
 
     assert result is None
+
+
+async def test_occupied_indices_asks_nothing_when_there_is_nothing_to_ask(
+    hass: HomeAssistant,
+) -> None:
+    """An empty range costs no round trip.
+
+    A caller widening its search hands over only the indices it has not
+    covered, and on the pass where that set is empty there is nothing to
+    learn -- reaching the lock would be a round trip for an answer already
+    held.
+    """
+    lock = _bare_lock(hass, "test_lock_occupancy_empty_range")
+
+    read = AsyncMock(return_value={})
+    with patch.object(lock, "async_get_usercodes", read):
+        assert await lock.async_internal_get_occupied_indices([]) == frozenset()
+
+    read.assert_not_awaited()

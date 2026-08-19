@@ -761,7 +761,7 @@ async def async_unload_entry(
     # ``_setup_entry_after_start`` migrates the entry's data to options
     # at first setup, so ``config_entry.data`` is empty for any
     # normally-loaded entry.
-    curr_slots = list(get_entry_config(config_entry).slots)
+    curr_slots = sorted(get_entry_config(config_entry).slot_numbers)
     if curr_slots:
         _LOGGER.debug("Unload: removing slots %s", curr_slots)
         await asyncio.gather(
@@ -831,7 +831,7 @@ async def async_remove_entry(
     """
     entry_id = config_entry.entry_id
     config = get_entry_config(config_entry)
-    for slot_num in config.slots:
+    for slot_num in config.slot_numbers:
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
@@ -841,7 +841,7 @@ async def async_remove_entry(
                 async_delete_issue(
                     hass, DOMAIN, per_lock_issue_id(issue_key, lock_entity_id)
                 )
-        for slot_num in config.slots:
+        for slot_num in config.slot_numbers:
             async_delete_issue(
                 hass,
                 DOMAIN,
@@ -958,7 +958,7 @@ def _async_prune_orphaned_slot_devices(
     """
     dev_reg = dr.async_get(hass)
     entry_id = config_entry.entry_id
-    configured = get_entry_config(config_entry).slots
+    configured = get_entry_config(config_entry).slot_numbers
     orphaned = {
         slot_num
         for device in dr.async_entries_for_config_entry(dev_reg, entry_id)
@@ -1002,7 +1002,7 @@ async def async_remove_config_entry_device(
     # outlive every slot -- it is what the slot devices hang off of.
     if not slot_nums:
         return False
-    return slot_nums.isdisjoint(get_entry_config(config_entry).slots)
+    return slot_nums.isdisjoint(get_entry_config(config_entry).slot_numbers)
 
 
 async def _async_setup_new_locks(
@@ -1093,7 +1093,7 @@ async def _async_setup_new_locks(
                 result.lock.entity_id,
             )
 
-        for slot_num in new_config.slots:
+        for slot_num in new_config.slot_numbers:
             _LOGGER.debug(
                 "%s (%s): Adding lock %s slot %s sensor and event entity",
                 entry_id,

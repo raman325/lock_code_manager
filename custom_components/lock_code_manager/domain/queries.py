@@ -35,7 +35,7 @@ def get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
         slot_num
         for entry in hass.config_entries.async_entries(DOMAIN)
         if (config := get_entry_config(entry)).has_lock(lock_entity_id)
-        for slot_num in config.slots
+        for slot_num in config.slot_numbers
     }
 
 

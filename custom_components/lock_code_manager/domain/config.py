@@ -164,11 +164,25 @@ class EntryConfig:
         """
         Return the slot-keyed view.
 
-        TEMPORARY. A projection of the one model, not a second model, kept
-        while the remaining slot-keyed call sites migrate. Delete it with the
-        last of them.
+        A projection of the one model, not a second model. It exists for the
+        consumers that are slot-shaped by nature rather than by habit: the
+        entity lifecycle diff, which decides what to create and remove by
+        slot because entity identifiers key on it; the YAML editor, which
+        edits a slot-keyed document; and diagnostics. Everything that only
+        wanted to know WHICH numbers exist uses :attr:`slot_numbers`.
         """
         return self._by_slot
+
+    @property
+    def slot_numbers(self) -> frozenset[int]:
+        """
+        Return the slot numbers this entry's users occupy.
+
+        The answer most callers of the slot-shaped view actually wanted: the
+        registries key on the number, so plenty of code needs to know which
+        numbers exist without caring who holds them.
+        """
+        return frozenset(self._by_slot)
 
     def has_lock(self, lock_entity_id: str) -> bool:
         """Return True if this entry manages the given lock."""
@@ -297,14 +311,14 @@ class EntryConfig:
     def with_slot_field_set(
         self, slot_num: int | str, key: str, value: Any
     ) -> EntryConfig:
-        """Set a field on whoever occupies ``slot_num``. TEMPORARY, as :attr:`slots`."""
+        """Set a field on whoever occupies ``slot_num``."""
         name = self.name_for(slot_num)
         if name is None:
             return self
         return self.with_user_field_set(name, key, value)
 
     def with_slot_field_removed(self, slot_num: int | str, key: str) -> EntryConfig:
-        """Remove a field from whoever occupies ``slot_num``. TEMPORARY."""
+        """Remove a field from whoever occupies ``slot_num``."""
         name = self.name_for(slot_num)
         if name is None:
             return self

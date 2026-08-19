@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from functools import partial
 import logging
@@ -107,7 +107,9 @@ def _check_common_slots(
             for entry in hass.config_entries.async_entries(DOMAIN)
             if (config := get_entry_config(entry)).has_lock(lock)
             and (
-                common_slots := sorted(set(config.slots) & {int(s) for s in slots_list})
+                common_slots := sorted(
+                    config.slot_numbers & {int(s) for s in slots_list}
+                )
             )
             and not (config_entry and config_entry == entry)
         )
@@ -291,13 +293,13 @@ def _async_build_lock_instance(
 
 @dataclass(frozen=True, slots=True)
 class _LockQuery:
-    """What one lock answered when asked for its credentials."""
+    """What one lock answered when asked what codes it is holding."""
 
     lock_entity_id: str
-    managed: bool
-    credential_index_follows_slot: bool
     # ``None`` means the read FAILED. An empty mapping means the lock answered
-    # and holds nothing.
+    # and holds nothing. Both render as "nothing to confirm" here; the
+    # difference matters to allocation, which reads occupancy itself rather
+    # than from this.
     codes: dict[int, SlotCredential] | None
 
 
@@ -313,10 +315,10 @@ async def _async_query_locks(
     Queried sequentially to avoid flooding a Z-Wave or Matter network with
     simultaneous requests.
 
-    A lock that could not be built is reported as unmanaged rather than
-    dropped, and one whose read failed is reported with ``codes=None`` rather
-    than as empty. Both distinctions matter to allocation, which must not
-    issue a number it could not verify is free.
+    Feeds the confirmation that shows which of the slots a user asked for
+    already hold codes. Allocation does not read this -- it asks the locks
+    itself, over the range it is considering -- so a lock that could not be
+    read simply contributes nothing to show.
     """
     results: list[_LockQuery] = []
     for lock_entity_id in lock_entity_ids:
@@ -324,21 +326,10 @@ async def _async_query_locks(
             lock_instance = _async_build_lock_instance(
                 hass, dev_reg, ent_reg, lock_entity_id
             )
-        except _LockQuerySkipped as skipped:
-            results.append(
-                _LockQuery(
-                    lock_entity_id=lock_entity_id,
-                    managed=skipped.managed,
-                    # Unknowable without a provider. Assuming the lock
-                    # addresses credentials by slot number is the assumption
-                    # that makes allocation refuse rather than guess.
-                    credential_index_follows_slot=skipped.managed,
-                    codes=None,
-                )
-            )
+        except _LockQuerySkipped:
+            results.append(_LockQuery(lock_entity_id=lock_entity_id, codes=None))
             continue
 
-        follows_slot = lock_instance.credential_index_follows_slot
         try:
             codes = await lock_instance.async_internal_get_usercodes()
         except LockCodeManagerError as err:
@@ -351,7 +342,7 @@ async def _async_query_locks(
                 exc_info=True,
             )
             codes = None
-        results.append(_LockQuery(lock_entity_id, True, follows_slot, codes))
+        results.append(_LockQuery(lock_entity_id, codes))
     return results
 
 
@@ -464,7 +455,6 @@ class LockCodeManagerFlowHandler(
         self.ent_reg: er.EntityRegistry = None
         self.dev_reg: dr.DeviceRegistry = None
         self._users_to_configure = 0
-        self._lock_queries: list[_LockQuery] = []
         # The numbers allocation must avoid, settled when the user said how
         # many users they wanted.
         self._unavailable: frozenset[int] = frozenset()
@@ -484,14 +474,6 @@ class LockCodeManagerFlowHandler(
             await self.async_set_unique_id(slugify(self.title))
             self._abort_if_unique_id_configured()
             self.data = user_input
-            # Scan locks for existing codes once upfront
-            # Queried once here and kept: the same answers decide which
-            # numbers allocation may issue and which existing codes the gate
-            # renders, and asking a Z-Wave network twice is not free.
-            self._lock_queries = await _async_query_locks(
-                self.hass, self.dev_reg, self.ent_reg, user_input[CONF_LOCKS]
-            )
-            self._all_codes = _codes_by_lock(self._lock_queries)
             return await self.async_step_choose_path()
 
         return self.async_show_form(
@@ -511,9 +493,9 @@ class LockCodeManagerFlowHandler(
         """Allow user to choose a path for configuration."""
         return self.async_show_menu(step_id="choose_path", menu_options=["ui", "yaml"])
 
-    async def _async_read_occupancy(self, window: int) -> Occupancy:
+    async def _async_read_occupancy(self, indices: Collection[int]) -> Occupancy:
         """
-        Ask every configured lock which of the numbers 1..window it holds.
+        Ask every configured lock which of ``indices`` it holds.
 
         A lock that cannot answer reports ``None``, never an empty set: that
         difference is what makes allocation refuse instead of issuing a
@@ -568,7 +550,7 @@ class LockCodeManagerFlowHandler(
                 # nothing reads.
                 try:
                     occupied = await lock_instance.async_internal_get_occupied_indices(
-                        window
+                        indices
                     )
                 except Exception:
                     _LOGGER.warning(
@@ -601,8 +583,10 @@ class LockCodeManagerFlowHandler(
 
         Locks that answer one index per round trip make the width of this
         read the cost of it, so it starts at the number of users and widens
-        only by what turned out to be in the way. A lock is never walked to
-        its advertised capacity to place a handful of users.
+        only by what turned out to be in the way -- and each pass asks only
+        about the numbers no earlier pass covered. Every index is read at
+        most once, so placing a handful of users never costs more round trips
+        than the highest number they land on.
 
         Widening stops when the numbers it would need are past what a lock
         can hold, which is the same refusal as asking for too many users --
@@ -632,9 +616,16 @@ class LockCodeManagerFlowHandler(
                 {**placeholders, "num_users": str(num_users)},
             )
 
+        unavailable: set[int] = set()
+        read_up_to = 0
         window = num_users
         while True:
-            occupancy = await self._async_read_occupancy(window)
+            # Only the part nobody has asked about yet. Re-reading from one
+            # every pass would cost a nearly-full lock several times its own
+            # capacity to place a couple of users.
+            occupancy = await self._async_read_occupancy(
+                range(read_up_to + 1, window + 1)
+            )
             if not occupancy.is_known:
                 # Unreadable is not free: issuing a number could overwrite a
                 # credential programmed by hand on a lock that did not answer.
@@ -643,8 +634,9 @@ class LockCodeManagerFlowHandler(
                     {"base": "occupancy_unknown"},
                     {"locks": ", ".join(occupancy.unreadable)},
                 )
+            unavailable |= occupancy.unavailable
+            read_up_to = window
 
-            unavailable = occupancy.unavailable
             taken_in_window = sum(1 for slot in unavailable if slot <= window)
             if window - taken_in_window >= num_users:
                 break
@@ -666,7 +658,7 @@ class LockCodeManagerFlowHandler(
         # before it was accepted -- the first as the bare count, each wider
         # one before widening to it -- and allocation only issues numbers
         # inside the window.
-        return unavailable, {}, {}
+        return frozenset(unavailable), {}, {}
 
     async def async_step_ui(
         self, user_input: dict[str, Any] | None = None
@@ -689,11 +681,6 @@ class LockCodeManagerFlowHandler(
                 self._users_to_configure = num_users
                 self._unavailable = unavailable
                 return await self.async_step_code_slot()
-            if "occupancy_unknown" in errors.values():
-                return self.async_abort(
-                    reason="occupancy_unknown",
-                    description_placeholders=description_placeholders,
-                )
 
         return self.async_show_form(
             step_id="ui",
@@ -801,6 +788,15 @@ class LockCodeManagerFlowHandler(
             if not errors:
                 assert slots is not None
                 self.data[CONF_SLOTS] = slots
+                # Read here rather than on the way in: only this path shows
+                # the user what its chosen numbers already hold. The path
+                # that chooses numbers itself reads what it needs, when it
+                # knows how much of the lock that is.
+                self._all_codes = _codes_by_lock(
+                    await _async_query_locks(
+                        self.hass, self.dev_reg, self.ent_reg, self.data[CONF_LOCKS]
+                    )
+                )
                 self._occupied_lock_slots = self._find_occupied_lock_slots(slots.keys())
                 if self._occupied_lock_slots:
                     self._next_step = partial(
@@ -859,7 +855,7 @@ class LockCodeManagerFlowHandler(
             # selector from the entry's current config either way.
             user_input = {CONF_LOCKS: list(get_entry_config(config_entry).locks)}
         else:
-            existing_slots = get_entry_config(config_entry).slots.keys()
+            existing_slots = get_entry_config(config_entry).slot_numbers
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass,
                 user_input[CONF_LOCKS],
