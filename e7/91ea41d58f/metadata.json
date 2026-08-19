@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "e791ea41d58f",
+  "strategy": "manual-commit",
+  "branch": "chore/v3-audit-cleanup",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/domain/config.py",
+    "custom_components/lock_code_manager/domain/names.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_config.py",
+    "tests/test_names.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e7/91ea41d58f/0/metadata.json",
+      "transcript": "/e7/91ea41d58f/0/full.jsonl",
+      "compact_transcript": "/e7/91ea41d58f/0/transcript.jsonl",
+      "content_hash": "/e7/91ea41d58f/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 381473,
+    "cache_read_tokens": 21641542,
+    "output_tokens": 49232,
+    "api_call_count": 64
+  }
+}
