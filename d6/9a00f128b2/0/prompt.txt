@@ -2537,3 +2537,7 @@ for pin_used_entity, make it credential_used_entity which is required, pin_used_
 ---
 
 thinking through this, this transofrmation shouldn't be that hard. Instead of keying by index, users are keying by name, but the underlying shape of the data is the exact same. There's some search logic to identify the key for each new user, but once that's done, what else are you left with? Should we even be upgrading the existing config entry or should we just create a new one and delete the old one? I guess that breaks blueprints even worse, jjust thinking through options to minimize the pain for users
+
+---
+
+Once done you can merge then do the v3 audit
