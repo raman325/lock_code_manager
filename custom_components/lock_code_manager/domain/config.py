@@ -50,11 +50,9 @@ class EntryConfig:
     locks: tuple[str, ...]
     users: Mapping[str, Mapping[str, Any]]
     assignment: SlotAssignment
-    # Every other top-level key in the entry, carried through verbatim.
-    #
-    # No default: to_dict() feeds async_update_entry directly, so a field that
-    # could be omitted at a construction site would erase whatever it holds on
-    # the next write.
+    # Every other top-level key in the entry, carried through verbatim. No
+    # default: to_dict() feeds async_update_entry directly, so a field that
+    # could be omitted at a construction site would erase what it holds.
     extra: Mapping[str, Any]
     # Derived once at construction: the instance is immutable and cached, and
     # the slot view is read per entry per lock on some paths.
@@ -94,10 +92,9 @@ class EntryConfig:
         sides: setup moves it from data into options and the listener moves it
         back, so either side may hold it.
         """
-        # ONE side holds the configuration and is read whole, options first.
-        # Taking the shape keys independently would let an entry carry both
-        # shapes at once, and reading a mix of them silently discards whichever
-        # one loses.
+        # ONE side holds the configuration and is read whole, options first:
+        # taking the shape keys independently would let an entry carry both
+        # shapes and silently discard whichever lost.
         config_side: Mapping[str, Any] = next(
             (
                 side
@@ -111,10 +108,8 @@ class EntryConfig:
             **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
             CONF_LOCKS: entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, [])),
         }
-        # The assignment comes from the SAME side as the users it numbers. A
-        # user-keyed side always carries its own, and a slot-keyed one derives
-        # it from the slot keys; taking it from the other side could pair
-        # users with numbering that predates them.
+        # The assignment comes from the SAME side as the users it numbers, or
+        # it could pair users with numbering that predates them.
         for key in (CONF_USERS, CONF_SLOTS, CONF_SLOT_ASSIGNMENT):
             if key in config_side:
                 merged[key] = config_side[key]
@@ -125,27 +120,28 @@ class EntryConfig:
         """
         Build EntryConfig from a raw config mapping.
 
-        Accepts the pre-version-3 slot-keyed shape as input only, converted
-        by :func:`.slot_assignment.users_from_slots`. Nothing writes that
-        shape any more.
+        Accepts the slot-keyed shape as INPUT, converted on the way in. The
+        YAML and options flows still submit it; nothing stores it. That
+        conversion goes when those flows stop producing it.
         """
         raw_users = mapping.get(CONF_USERS)
         if raw_users is None:
-            # Slot-keyed input, converted by the migration's own function so
-            # the two cannot disagree. One-directional: nothing writes this
-            # shape. Goes when the config flow stops producing it.
+            # Converted by the migration's own function so the two cannot
+            # disagree about what a slot-keyed entry means.
             converted, assignment, _ = users_from_slots(mapping.get(CONF_SLOTS) or {})
             users = dict(converted)
         else:
             # Two keys reducing to one identity keep the FIRST. Both
             # surviving would put them on one slot while the name lookups
-            # disagreed about which of them holds it, so a display would show
-            # one user and a write would land on the other.
+            # disagreed about which holds it, so a display would show one user
+            # and a write would land on the other.
             users = {}
+            seen: set[str] = set()
             for name, user in raw_users.items():
                 normalized = normalize_name(name)
-                if any(identity(seen) == identity(normalized) for seen in users):
+                if (key := identity(normalized)) in seen:
                     continue
+                seen.add(key)
                 users[normalized] = dict(user)
             assignment = SlotAssignment.from_mapping(mapping)
         return cls(
@@ -235,8 +231,7 @@ class EntryConfig:
             return self
         renamed = normalize_name(new)
         # Renaming onto somebody else would collapse two users into one key,
-        # deleting one and freeing their slot. Refused here rather than relying
-        # on the callers that validate it.
+        # deleting one and freeing their slot.
         if any(
             identity(known) == identity(renamed) and known != stored
             for known in self.users
@@ -246,8 +241,7 @@ class EntryConfig:
             (renamed if k == stored else k): dict(v) for k, v in self.users.items()
         }
         # Re-keyed directly rather than through reconcile, which allocates: a
-        # user holding no slot would be issued one here. A rename moves a
-        # number, it never issues one.
+        # rename moves a number, it never issues one.
         moved = {
             (identity(renamed) if name == identity(stored) else name): slot
             for name, slot in self.assignment.slots.items()
