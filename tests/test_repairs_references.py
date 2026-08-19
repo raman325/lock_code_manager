@@ -15,6 +15,7 @@ from homeassistant.setup import async_setup_component
 from homeassistant.util.yaml import load_yaml, save_yaml
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.domain import references
 from custom_components.lock_code_manager.domain.references import _rewrite, _substitute
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
@@ -332,3 +333,140 @@ def test_a_key_rewrite_never_overwrites_an_existing_key() -> None:
     _substitute(config, {OLD_PIN_ENTITY: NEW_PIN_ENTITY})
     assert config["entities"][NEW_PIN_ENTITY] == "from the new"
     assert config["entities"][OLD_PIN_ENTITY] == "from the old one"
+
+
+async def test_an_automation_outside_the_managed_files_is_reported_not_touched(
+    hass: HomeAssistant, mock_lock_config_entry, tmp_path
+) -> None:
+    """
+    The honest half: say what could not be fixed.
+
+    An automation configured in YAML is loaded but is not in
+    automations.yaml, so it cannot be rewritten. Leaving it off the list
+    would tell the user nothing was outstanding when something was.
+    """
+    hass.config.config_dir = str(tmp_path)
+    (tmp_path / "configuration.yaml").write_text("", encoding="utf-8")
+    save_yaml(str(tmp_path / AUTOMATION_CONFIG_PATH), [])
+
+    assert await async_setup_component(
+        hass,
+        automation.DOMAIN,
+        {
+            automation.DOMAIN: [
+                {
+                    "alias": "Configured in YAML",
+                    "trigger": {"platform": "state", "entity_id": OLD_PIN_ENTITY},
+                    "action": {"action": "homeassistant.turn_on"},
+                }
+            ]
+        },
+    )
+    await hass.async_block_till_done()
+
+    entry = await _migrated_entry(hass)
+    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    flow = await async_create_fix_flow(hass, issue_id, issue.data)
+    flow.hass = hass
+    form = await flow.async_step_init()
+
+    assert "Configured in YAML" in form["description_placeholders"]["unfixable"]
+    assert form["description_placeholders"]["fixable"] == "- (none)"
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_id_inside_a_list_is_rewritten(
+    hass: HomeAssistant, mock_lock_config_entry, tmp_path
+) -> None:
+    """``entity_id`` is a list as often as it is a string."""
+    hass.config.config_dir = str(tmp_path)
+    (tmp_path / "configuration.yaml").write_text("", encoding="utf-8")
+    automations = tmp_path / AUTOMATION_CONFIG_PATH
+    save_yaml(
+        str(automations),
+        [
+            {
+                "id": "listed",
+                "alias": "Listed",
+                "triggers": [
+                    {
+                        "trigger": "state",
+                        "entity_id": [OLD_PIN_ENTITY, "light.kitchen"],
+                    }
+                ],
+            }
+        ],
+    )
+
+    entry = await _migrated_entry(hass)
+    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    flow = await async_create_fix_flow(hass, issue_id, issue.data)
+    flow.hass = hass
+    await flow.async_step_init()
+    await flow.async_step_init({})
+    await hass.async_block_till_done()
+
+    assert load_yaml(str(automations))[0]["triggers"][0]["entity_id"] == [
+        NEW_PIN_ENTITY,
+        "light.kitchen",
+    ]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+def test_helpers_ignore_what_they_cannot_contain() -> None:
+    """Guards for shapes that carry no entity ID at all."""
+    assert _rewrite("anything", {}) == "anything"
+    assert not _substitute(42, {"a": "b"})
+    assert not references._mentions(42, {"a": "b"})
+
+
+async def test_a_file_whose_only_reference_cannot_be_changed_is_left_alone(
+    hass: HomeAssistant, mock_lock_config_entry, tmp_path
+) -> None:
+    """
+    Detected, but nothing safe to do.
+
+    The mapping already holds both IDs, so the key rewrite is refused; there
+    is then nothing to write, and the file must be left exactly as it was.
+    """
+    hass.config.config_dir = str(tmp_path)
+    (tmp_path / "configuration.yaml").write_text("", encoding="utf-8")
+    automations = tmp_path / AUTOMATION_CONFIG_PATH
+    save_yaml(
+        str(automations),
+        [
+            {
+                "id": "collides",
+                "alias": "Collides",
+                "actions": [
+                    {
+                        "action": "scene.apply",
+                        "data": {
+                            "entities": {
+                                OLD_PIN_ENTITY: "from the old one",
+                                NEW_PIN_ENTITY: "from the new",
+                            }
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+    before = automations.read_text(encoding="utf-8")
+
+    entry = await _migrated_entry(hass)
+    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    flow = await async_create_fix_flow(hass, issue_id, issue.data)
+    flow.hass = hass
+    await flow.async_step_init()
+    await flow.async_step_init({})
+    await hass.async_block_till_done()
+
+    assert automations.read_text(encoding="utf-8") == before
+
+    await hass.config_entries.async_unload(entry.entry_id)
