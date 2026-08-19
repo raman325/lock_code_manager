@@ -319,6 +319,43 @@ class TestAsyncGetUsers:
         by_slot = {u.user_id: u for u in users}
         assert by_slot[11].pin_credentials[0].state is SlotCredential.unreadable()
 
+    async def test_a_scoped_read_asks_about_only_the_slots_asked_for(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+    ) -> None:
+        """
+        One request per index, so the scope is what makes allocation cheap.
+
+        Reading past the scope is not wrong, only slow, which is exactly why
+        nothing else would catch it. Allocation widens a few numbers at a
+        time so a lock is asked about a handful of indices, not its range.
+        """
+        lock = zigbee2mqtt_lock_connected
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                return_value={1, 2, 3, 11},
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                new_callable=AsyncMock,
+            ) as publish,
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for",
+                new_callable=AsyncMock,
+                side_effect=TimeoutError,
+            ),
+        ):
+            await lock.async_get_users(slots={3})
+
+        asked = "".join(str(call) for call in publish.call_args_list)
+        assert '"user": 3' in asked or "'user': 3" in asked
+        for absent in (1, 2, 11):
+            assert f'"user": {absent}' not in asked
+            assert f"'user': {absent}" not in asked
+
     async def test_publish_failure_maps_slot_to_unreadable(
         self,
         hass: HomeAssistant,
