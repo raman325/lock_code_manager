@@ -25,10 +25,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from homeassistant.const import CONF_ENTITY_ID
+from homeassistant.const import CONF_CONDITION, CONF_ENTITY_ID
 
 from ..const import (
-    CONF_CONDITION,
     CONF_NUM_SLOTS,
     CONF_SLOTS,
     CONF_START_SLOT,

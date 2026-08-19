@@ -20,6 +20,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import (
+    CONF_CONDITION,
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
@@ -40,7 +41,7 @@ from homeassistant.helpers.issue_registry import (
     async_delete_issue,
 )
 
-from ..const import ATTR_IN_SYNC, CONF_CONDITION, DOMAIN, EVENT_CREDENTIAL_USED
+from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
 from .config import EntryConfig
 from .names import name_error, normalize_name
 from .queries import get_entry_config

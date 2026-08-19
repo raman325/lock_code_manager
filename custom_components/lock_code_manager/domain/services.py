@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from homeassistant.const import CONF_CONDITION
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
-from ..const import CONF_CONDITION, EXCLUDED_CONDITION_PLATFORMS
+from ..const import EXCLUDED_CONDITION_PLATFORMS
 from .locks import get_managed_lock
 from .queries import get_entry_config, get_loaded_config_entry
 

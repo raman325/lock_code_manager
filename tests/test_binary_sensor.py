@@ -18,8 +18,8 @@ from homeassistant.components.text import (
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    CONF_CONDITION,
     CONF_ENABLED,
-    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     SERVICE_TURN_OFF,
@@ -180,7 +180,7 @@ async def test_binary_sensor_entity(
     assert service_calls.get("set_usercode", []) == initial_set_calls
 
     new_config = copy.deepcopy(BASE_CONFIG)
-    new_config[CONF_SLOTS][2][CONF_ENTITY_ID] = "calendar.test_2"
+    new_config[CONF_SLOTS][2][CONF_CONDITION] = "calendar.test_2"
 
     hass.config_entries.async_update_entry(
         lock_code_manager_config_entry, options=new_config
@@ -759,7 +759,7 @@ async def test_condition_entity_subscription_updates_on_config_change(
                 CONF_NAME: "test1",
                 CONF_PIN: "1234",
                 CONF_ENABLED: True,
-                CONF_ENTITY_ID: "input_boolean.access_1",
+                CONF_CONDITION: "input_boolean.access_1",
             },
         },
     }
@@ -800,7 +800,7 @@ async def test_condition_entity_subscription_updates_on_config_change(
 
     # Now update the config entry to use a different condition entity
     new_config = copy.deepcopy(config)
-    new_config[CONF_SLOTS][1][CONF_ENTITY_ID] = "input_boolean.access_2"
+    new_config[CONF_SLOTS][1][CONF_CONDITION] = "input_boolean.access_2"
 
     hass.config_entries.async_update_entry(config_entry, data=new_config)
     await hass.async_block_till_done()

@@ -20,6 +20,7 @@ from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import (
     ATTR_CODE,
     ATTR_ENTITY_ID,
+    CONF_CONDITION,
     CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_NAME,
@@ -632,12 +633,12 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
 
     # Slot 2 should have CONF_ENTITY_ID instead of CONF_CALENDAR
     assert CONF_CALENDAR not in migrated.slot(2)
-    assert migrated.slot(2)[CONF_ENTITY_ID] == "calendar.test_1"
+    assert migrated.slot(2)[CONF_CONDITION] == "calendar.test_1"
 
     # Slot 3 already had both fields set -- calendar is dropped and the
     # pre-existing entity_id value is preserved untouched.
     assert CONF_CALENDAR not in migrated.slot(3)
-    assert migrated.slot(3)[CONF_ENTITY_ID] == "calendar.test_2"
+    assert migrated.slot(3)[CONF_CONDITION] == "calendar.test_2"
 
     await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.config_entries.async_remove(config_entry.entry_id)

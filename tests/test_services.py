@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 import voluptuous as vol
 
-from homeassistant.const import CONF_ENTITY_ID, STATE_ON
+from homeassistant.const import CONF_CONDITION, CONF_ENTITY_ID, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
@@ -143,7 +143,7 @@ async def test_set_slot_condition_service(
     # After update, data is written via options then moved to data
     # Check both options and data for the condition entity
     assert (
-        get_entry_config(updated_entry).slot(1)[CONF_ENTITY_ID] == condition_entity_id
+        get_entry_config(updated_entry).slot(1)[CONF_CONDITION] == condition_entity_id
     )
 
 
@@ -232,7 +232,7 @@ async def test_clear_slot_condition_service(
     await hass.async_block_till_done()
 
     updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
-    assert CONF_ENTITY_ID not in get_entry_config(updated_entry).slot(2)
+    assert CONF_CONDITION not in get_entry_config(updated_entry).slot(2)
 
 
 async def test_clear_slot_condition_service_entry_not_found(

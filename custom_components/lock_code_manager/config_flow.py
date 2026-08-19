@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
     config_validation as cv,
@@ -23,7 +23,6 @@ from homeassistant.util import slugify
 
 from .const import (
     CONDITION_ENTITY_DOMAINS,
-    CONF_CONDITION,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_USERS,
@@ -199,6 +198,11 @@ async def _async_validate_users_yaml(
     Returns the parsed users -- or ``None`` when validation failed -- with the
     accumulated errors and description placeholders.
     """
+    # A block still keyed by slot number coerces cleanly into users named
+    # "1", "2", which is a silently wrong reading of what was pasted.
+    if raw_users and all(isinstance(key, int) for key in raw_users):
+        return None, {"base": "users_keyed_by_slot"}, {}
+
     try:
         parsed_users = USERS_SCHEMA(raw_users)
     except vol.Invalid as err:
@@ -896,10 +900,6 @@ class LockCodeManagerFlowHandler(
 
 class LockCodeManagerOptionsFlow(_AllocatesSlotsMixin, config_entries.OptionsFlow):
     """Options flow for Lock Code Manager."""
-
-    def __init__(self) -> None:
-        """Initialize options flow."""
-        self._init_existing_codes_state()
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
