@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "9acce13dfb3a",
+  "strategy": "manual-commit",
+  "branch": "feat/user-services",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/allocation.py",
+    "custom_components/lock_code_manager/domain/models.py",
+    "custom_components/lock_code_manager/domain/services.py",
+    "custom_components/lock_code_manager/icons.json",
+    "custom_components/lock_code_manager/services.yaml",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_config_flow.py",
+    "tests/test_services.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9a/cce13dfb3a/0/metadata.json",
+      "transcript": "/9a/cce13dfb3a/0/full.jsonl",
+      "compact_transcript": "/9a/cce13dfb3a/0/transcript.jsonl",
+      "content_hash": "/9a/cce13dfb3a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 46200,
+    "cache_read_tokens": 12150553,
+    "output_tokens": 24304,
+    "api_call_count": 51
+  }
+}
