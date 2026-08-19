@@ -157,3 +157,33 @@ async def test_the_repair_repoints_a_blueprint_automation(
     assert stored["locks"] == [LOCK_1_ENTITY_ID]
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_broken_automations_file_does_not_break_the_repair(
+    hass: HomeAssistant, mock_lock_config_entry, tmp_path
+) -> None:
+    """
+    A file that will not parse is one this cannot rewrite, nothing worse.
+
+    An install part-way through an upgrade is exactly where a broken
+    automations file turns up, and Home Assistant raises its own error type
+    for a syntax error rather than the ones a file read usually produces.
+    """
+    hass.config.config_dir = str(tmp_path)
+    (tmp_path / "configuration.yaml").write_text("", encoding="utf-8")
+    (tmp_path / AUTOMATION_CONFIG_PATH).write_text(
+        "this: [is: not: valid: yaml\n  - ???\n", encoding="utf-8"
+    )
+
+    entry = await _migrated_entry(hass)
+    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+
+    flow = await async_create_fix_flow(hass, issue_id, issue.data)
+    flow.hass = hass
+    # Reaches a conclusion rather than raising at the user.
+    result = await flow.async_step_init()
+    assert result["type"] in ("form", "create_entry")
+
+    await hass.config_entries.async_unload(entry.entry_id)

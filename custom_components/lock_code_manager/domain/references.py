@@ -19,17 +19,21 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+import logging
 from typing import Any
 
 from homeassistant.components import automation, script
 from homeassistant.config import AUTOMATION_CONFIG_PATH, SCRIPT_CONFIG_PATH
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util.yaml import load_yaml, save_yaml
 
 # ``automations.yaml`` holds a list of automation dicts, each carrying its own
 # ``id``; ``scripts.yaml`` holds a mapping of object id to script dict. Both
 # are rewritten whole, which is what Home Assistant's config API does to them.
+_LOGGER = logging.getLogger(__name__)
+
 AUTOMATION_DOMAIN = "automation"
 SCRIPT_DOMAIN = "script"
 
@@ -150,7 +154,16 @@ def _load(hass: HomeAssistant, domain: str) -> Any:
     empty: Any = [] if domain == AUTOMATION_DOMAIN else {}
     try:
         loaded = load_yaml(hass.config.path(_FILES[domain]))
-    except FileNotFoundError, OSError, ValueError:
+    except FileNotFoundError, OSError, ValueError, HomeAssistantError:
+        # A file that will not parse cannot be rewritten, and must not take
+        # the whole repair down with it: an install part-way through an
+        # upgrade is exactly where a broken automations file turns up, and
+        # the other file may still be fixable.
+        _LOGGER.warning(
+            "Could not read %s, so nothing in it can be repointed",
+            _FILES[domain],
+            exc_info=True,
+        )
         return empty
     return loaded if isinstance(loaded, type(empty)) else empty
 
