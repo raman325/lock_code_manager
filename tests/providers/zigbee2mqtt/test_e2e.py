@@ -122,14 +122,20 @@ class TestPushUpdatesViaMqtt:
         assert z2m_lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
             "2222"
         )
-        assert z2m_lock.coordinator.data.get(pin_address(3)) is SlotCredential.empty()
+        assert (
+            z2m_lock.coordinator.data.get(pin_address(3)) is SlotCredential.unreadable()
+        )
 
-    async def test_disabled_slot_maps_to_empty(
+    async def test_disabled_slot_is_occupied_not_empty(
         self,
         hass: HomeAssistant,
         z2m_lock,
     ) -> None:
-        """A disabled user slot is reported as SlotCredential.empty()."""
+        """A disabled user is one the lock is holding and refusing.
+
+        Reporting it empty tells sync the slot is confirmed cleared and tells
+        allocation the credential index is free to hand out.
+        """
         _fire_device_payload(
             hass,
             {"users": {"5": {"status": "disabled"}}},
@@ -137,7 +143,24 @@ class TestPushUpdatesViaMqtt:
         await hass.async_block_till_done()
         await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(pin_address(5)) is SlotCredential.empty()
+        credential = z2m_lock.coordinator.data.get(pin_address(5))
+        assert credential.is_present
+        assert not credential.is_readable
+
+    async def test_available_slot_is_empty(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+    ) -> None:
+        """``available`` is the one status that does mean nothing is there."""
+        _fire_device_payload(
+            hass,
+            {"users": {"6": {"status": "available"}}},
+        )
+        await hass.async_block_till_done()
+        await hass.async_block_till_done()
+
+        assert z2m_lock.coordinator.data.get(pin_address(6)) is SlotCredential.empty()
 
 
 class TestSetAndClearUsercodes:

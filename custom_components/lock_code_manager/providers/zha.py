@@ -346,13 +346,16 @@ class ZHALock(BaseLock):
         cluster answers a single index per round trip, so ``slots`` bounds
         the work and must be honoured.
 
-        ``empty`` means confirmed cleared, and only the ``AVAILABLE`` status
-        says that. Everything else the lock will not put a readable value to
-        -- a failed read, a response shape this cannot parse, a slot whose
-        code the lock withholds, a slot the ZCL calls ``DISABLED`` (occupied
-        but not currently accepted) -- is ``unreadable``. Confirming a clear
-        wrongly makes sync reprogram a slot that already holds a code, and
-        tells allocation an occupied credential index is free.
+        ``empty`` means confirmed cleared, and ``AVAILABLE`` is the only
+        status that says so. ``known`` means the lock is accepting this code,
+        which only ``ENABLED`` says. Every other answer -- another status, a
+        failed read, a response shape this cannot parse -- is ``unreadable``:
+        something is there and its value cannot be trusted.
+
+        Both directions matter. Reporting a clear that did not happen makes
+        sync reprogram a slot that already holds a code and tells allocation
+        an occupied index is free; reporting a value the lock is not
+        honouring makes a code that will not open the door read as in sync.
         """
         cluster = await self._get_connected_cluster()
         scope = self.managed_slots if slots is None else slots
@@ -392,13 +395,16 @@ class ZHALock(BaseLock):
                 continue
 
             user_status, pin_code = parsed
-            # AVAILABLE is the only status that means the slot holds nothing.
-            # DISABLED is the ZCL's occupied-but-inactive: there is a code
-            # there, the lock just will not accept it right now. NOT_SUPPORTED
-            # is not a free slot either -- a write to it fails.
+            # AVAILABLE is the only status that leaves this index free to
+            # write to, and ENABLED the only one whose code the lock says it
+            # is currently accepting. Everything between them is reported as
+            # holding something whose value cannot be trusted: claiming a
+            # value the lock is not honouring would read as in sync while the
+            # code does not open the door, and claiming the index is empty
+            # would hand it to allocation.
             if user_status == DoorLock.UserStatus.Available:
                 slot_states[slot_num] = SlotCredential.empty()
-            elif pin_code:
+            elif user_status == DoorLock.UserStatus.Enabled and pin_code:
                 slot_states[slot_num] = SlotCredential.known(pin_code)
             else:
                 slot_states[slot_num] = SlotCredential.unreadable()

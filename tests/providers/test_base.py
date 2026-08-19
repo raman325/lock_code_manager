@@ -36,6 +36,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
+    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
@@ -246,28 +247,36 @@ async def test_occupied_indices_counts_everything_the_lock_holds(
     lock = _bare_lock(hass, "test_lock_occupancy_derivation")
 
     codes = {
+        0: SlotCredential.known("0000"),
         1: SlotCredential.known("1234"),
         2: SlotCredential.empty(),
         3: SlotCredential.unreadable(),
         12: SlotCredential.known("9999"),
     }
     with patch.object(lock, "async_get_usercodes", AsyncMock(return_value=codes)):
-        # 12 is outside the window the caller asked about.
+        # 0 and 12 are both outside the window the caller asked about. A lock
+        # numbering from zero is not one this allocates into.
         assert await lock.async_internal_get_occupied_indices(10) == frozenset({1, 3})
 
 
 async def test_occupied_indices_is_unknown_when_the_lock_cannot_be_read(
     hass: HomeAssistant,
 ) -> None:
-    """A lock that cannot be reached reports unknown, never empty."""
+    """A lock that cannot be read reports unknown, never empty.
+
+    Every failure this integration raises has to land here. One that escapes
+    reaches a caller with no answer at all, where the safe reading -- refuse
+    -- is the one it cannot make.
+    """
     lock = _bare_lock(hass, "test_lock_occupancy_error")
 
-    with patch.object(
-        lock,
-        "async_get_usercodes",
-        AsyncMock(side_effect=LockDisconnected("asleep")),
+    for error in (
+        LockDisconnected("asleep"),
+        LockCodeManagerProviderError("malformed response"),
+        LockOperationFailed("read rejected"),
     ):
-        assert await lock.async_internal_get_occupied_indices(10) is None
+        with patch.object(lock, "async_get_usercodes", AsyncMock(side_effect=error)):
+            assert await lock.async_internal_get_occupied_indices(10) is None
 
 
 async def test_occupied_indices_asks_only_about_the_window(

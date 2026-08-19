@@ -1346,7 +1346,7 @@ class BaseLock:
         """
         Project the lock's users to a slot -> ``SlotCredential`` map.
 
-        Every managed slot is present even when empty: the projection
+        Every slot in scope is present even when empty: the projection
         starts from ``slots`` -- or ``managed_slots`` when the caller names
         none -- mapped to ``SlotCredential.empty()``
         and then overlays the credentials of ``credential_type`` read via
@@ -1396,9 +1396,11 @@ class BaseLock:
         the coordinator, sync manager, and slot entities are all
         Personal Identification Number-scoped today.
 
-        ``slots`` widens the read past the slots this integration manages,
-        for callers that need to know what the lock holds rather than what
-        this integration put there. Everything read-repairing happens on
+        ``slots`` replaces the set of slots this integration manages, for
+        callers asking what the lock holds rather than what this integration
+        put there. It can be wider or narrower, so a scoped result is not
+        the coordinator's contract and must not be handed to it: a managed
+        slot missing from a narrow read reads as unavailable, not empty. Everything read-repairing happens on
         this side of the seam, so a caller asking a wider question gets the
         repairs too -- which is why occupancy is derived from here and not
         read separately.

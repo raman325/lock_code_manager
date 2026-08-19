@@ -1021,11 +1021,12 @@ async def test_only_available_means_the_slot_is_free(
     user_status: int,
     code: str,
 ) -> None:
-    """DISABLED holds a code the lock is refusing, not an empty slot.
+    """AVAILABLE is the only status that leaves an index free to write to.
 
-    The ZCL has four statuses and only AVAILABLE means nothing is there.
-    Reading DISABLED as cleared tells sync to reprogram a slot that already
-    holds a code, and tells allocation the index is free to hand out.
+    Reading any of the others as cleared tells sync to reprogram the slot and
+    tells allocation to hand the index out. What each of them means beyond
+    "not free" is something this credential model cannot express, so they are
+    reported alike.
     """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
@@ -1037,6 +1038,10 @@ async def test_only_available_means_the_slot_is_free(
 
     assert codes[1].is_present
     assert codes[2].is_present
+    # And never as a value sync can compare: a code the lock is not
+    # accepting would otherwise read as in sync while the door stays shut.
+    assert not codes[1].is_readable
+    assert not codes[2].is_readable
 
 
 async def test_available_is_an_empty_slot(

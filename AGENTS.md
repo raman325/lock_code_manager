@@ -61,7 +61,7 @@ entities.
 - `akuvox.py`: Akuvox intercom/lock implementation
 - `zigbee2mqtt.py`: Zigbee2MQTT lock implementation (via MQTT)
 - `virtual.py`: Virtual lock implementation for testing
-- Each provider implements: `async_get_usercodes()`, `async_set_usercode()`, `async_clear_usercode()`,
+- Each provider implements: `async_get_users()`, `async_set_usercode()`, `async_clear_usercode()`,
   `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
 - `BaseLock` provides `managed_slots` property (aggregates slots across all config entries for the lock)
@@ -348,17 +348,46 @@ with a comment citing the contract. Never silence one by rerunning.
    - `async_is_integration_connected()`: check if integration is connected. Raises
      `LockCodeManagerError` by default if `lock_config_entry` is None — providers
      without a config entry (e.g., virtual) must override.
-   - `async_get_usercodes()`: return dict of slot→code mappings
+   - `async_get_users(slots=None)`: read the lock's users and their credentials.
+     `BaseLock` projects these to the slot→credential mapping the rest of the
+     integration uses, so most providers implement this rather than
+     `async_get_usercodes()`.
+     - `slots` names which credential indices to answer about; `None` means the
+       slots this integration manages. A provider that reads the whole lock in
+       one call may ignore it. **A provider that must ask the lock about one
+       index at a time MUST honour it** — a caller widening the question
+       otherwise walks the lock's entire advertised capacity, one round trip at
+       a time, holding the operation lock throughout.
+     - The result may exceed the scope; callers bound it themselves.
    - `async_set_usercode()`: program a code to a slot
-   - `async_clear_usercode()`: remove code from slot
-4. Optionally override `async_is_device_available()` to return `False` when the physical
+   - `async_clear_usercode()`: remove code from slot. Returns whether anything
+     actually changed — a clear that found nothing to clear is not evidence
+     the slot is empty.
+4. Getting `SlotCredential` right is the whole job of a read. Three states, and
+   the wrong one is a defect, not an inaccuracy:
+   - `known(pin)` — the lock holds this code **and is accepting it**. Sync
+     compares it against the configured PIN, so a code the lock is refusing
+     must not be reported this way: the slot would read in sync while the door
+     stays shut.
+   - `empty()` — **confirmed cleared**. Only an explicit "nothing here" from
+     the lock earns it. Sync treats it as proof a clear landed, and slot
+     allocation treats the index as free to hand out, so guessing here
+     overwrites a real credential on a real door.
+   - `unreadable()` — something is there and its value cannot be trusted: a
+     write-only code, a failed read, a status this provider cannot interpret,
+     a slot the lock reports as disabled. This is the safe answer whenever the
+     lock has not plainly said "free" or "here is the code I am accepting".
+
+   When in doubt, `unreadable()`. It costs a user one slot number; the other
+   two mistakes cost them the code on their door.
+5. Optionally override `async_is_device_available()` to return `False` when the physical
    device is unresponsive (default returns `True`). Operations are gated on both
    integration connectivity and device availability.
-5. Override `async_setup()` to register event listeners
-6. Call `async_fire_code_slot_event()` when lock events indicate PIN usage
-7. Add tests in `tests/providers/<provider>/test_<provider>.py`
-8. Use `self.managed_slots` (property) to get managed slot numbers
-9. Use `self.async_call_service()` for HA service calls — it wraps `HomeAssistantError`
+6. Override `async_setup()` to register event listeners
+7. Call `async_fire_code_slot_event()` when lock events indicate PIN usage
+8. Add tests in `tests/providers/<provider>/test_<provider>.py`
+9. Use `self.managed_slots` (property) to get managed slot numbers
+10. Use `self.async_call_service()` for HA service calls — it wraps `HomeAssistantError`
    as `LockDisconnected` automatically
 
 ### Optional Provider Properties

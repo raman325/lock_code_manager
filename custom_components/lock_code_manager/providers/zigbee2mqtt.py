@@ -87,8 +87,11 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
     - The one exception: an explicit ``pin_code: null`` on an enabled user
       means the broker exposes the field and the device reports no code,
       so that projects to empty.
-    - Unrecognized statuses (``not_supported_*``) project to unreadable,
-      not empty, for the same reprogramming-storm reason.
+    - ``available`` is the only status that means the slot holds nothing.
+      ``disabled`` is a user the lock is refusing, and unrecognized statuses
+      (``not_supported_*``) say nothing at all, so both project to
+      unreadable for the same reprogramming-storm reason -- and so that
+      allocation does not read either as a free credential index.
     """
     status = user_info.get("status")
     pin_raw = user_info.get("pin_code")
@@ -98,8 +101,11 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
         if "pin_code" in user_info:
             return SlotCredential.empty()
         return SlotCredential.unreadable()
-    if status in ("available", "disabled"):
+    if status == "available":
         return SlotCredential.empty()
+    # ``disabled`` is a user the lock is holding and not accepting, not a
+    # free slot. Reporting it empty tells allocation the index is available
+    # and tells sync the slot is confirmed cleared.
     return SlotCredential.unreadable()
 
 
@@ -366,10 +372,18 @@ class Zigbee2MQTTLock(BaseLock):
                 if not future.done():
                     user_enabled = pin_code_data.get("user_enabled", False)
                     pin_code = pin_code_data.get("pin_code")
-                    if user_enabled and _mqtt_payload_pin_has_code_value(pin_code):
+                    if not _mqtt_payload_pin_has_code_value(pin_code):
+                        # No value came back. This reply carries no status to
+                        # tell an empty slot from a withheld code, so the
+                        # answer stays what it has always been.
+                        future.set_result(SlotCredential.empty())
+                    elif user_enabled:
                         future.set_result(SlotCredential.known(str(pin_code)))
                     else:
-                        future.set_result(SlotCredential.empty())
+                        # A code is plainly here; the lock is just not
+                        # accepting it. Discarding the reply as empty would
+                        # hand the index to allocation.
+                        future.set_result(SlotCredential.unreadable())
 
     async def _async_ensure_device_subscription(self) -> None:
         """Subscribe to the Z2M device topic; idempotent and drift-aware."""

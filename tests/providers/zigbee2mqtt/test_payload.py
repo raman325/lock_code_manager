@@ -140,7 +140,11 @@ async def test_pin_code_get_disabled_or_empty_pin_sets_future_empty() -> None:
     lock._process_z2m_device_payload(
         {"pin_code": {"user": 7, "user_enabled": False, "pin_code": "1234"}}
     )
-    assert fut_disabled.done() and fut_disabled.result() == SlotCredential.empty()
+    # The reply carries the code: the slot is occupied, the lock is simply
+    # not accepting it. Discarding that as empty frees the index for
+    # allocation and tells sync the slot is confirmed cleared.
+    assert fut_disabled.done()
+    assert fut_disabled.result() is SlotCredential.unreadable()
 
     fut_empty = loop.create_future()
     lock._pending_codes[8] = fut_empty

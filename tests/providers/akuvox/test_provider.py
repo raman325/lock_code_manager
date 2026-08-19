@@ -1067,9 +1067,11 @@ async def test_occupied_indices_ignores_users_from_elsewhere(
     assert codes[4].is_empty
 
 
-@pytest.mark.parametrize("users", [None, {"1": "a"}, "nope"])
+@pytest.mark.parametrize(
+    "response", [{}, {"users": None}, {"users": {"1": "a"}}, {"users": "nope"}]
+)
 async def test_list_users_without_a_usable_user_list_is_an_error(
-    akuvox_lock: AkuvoxLock, users: object
+    akuvox_lock: AkuvoxLock, response: dict
 ) -> None:
     """A response carrying no usable user list is a shape we do not understand.
 
@@ -1082,7 +1084,7 @@ async def test_list_users_without_a_usable_user_list_is_an_error(
         patch.object(
             akuvox_lock,
             "async_call_service",
-            AsyncMock(return_value={"users": users}),
+            AsyncMock(return_value=response),
         ),
         pytest.raises(LockCodeManagerError, match="expected a list of users"),
     ):
