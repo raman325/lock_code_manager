@@ -2590,3 +2590,47 @@ async def test_migration_renames_even_after_the_entry_was_retitled(
     )
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_migration_leaves_an_entity_that_already_has_the_right_id(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Nothing to move means no registry write and nothing to report."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    before = ent_reg.async_get_or_create(
+        "text",
+        DOMAIN,
+        f"{entry.entry_id}|1|{CONF_PIN}",
+        config_entry=entry,
+        original_name="PIN",
+        suggested_object_id="raman_pin",
+    )
+    assert before.entity_id == "text.raman_pin"
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert (
+        ent_reg.async_get_entity_id("text", DOMAIN, f"{entry.entry_id}|1|{CONF_PIN}")
+        == "text.raman_pin"
+    )
+    # Nothing moved, so the user is not told anything moved.
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, f"entity_ids_renamed_{entry.entry_id}"
+        )
+        is None
+    )
+
+    await hass.config_entries.async_unload(entry.entry_id)

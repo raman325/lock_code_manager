@@ -12,8 +12,7 @@ from homeassistant.helpers.issue_registry import async_delete_issue
 from .const import DOMAIN
 from .domain.references import (
     async_find_referrers,
-    async_repoint,
-    format_entities,
+    format_labels,
     format_moved,
 )
 
@@ -32,9 +31,11 @@ class AcknowledgeRepairFlow(RepairsFlow):
 
 class EntityIdsRenamedRepairFlow(RepairsFlow):
     """
-    Offer to repoint automations and scripts at the entity IDs that moved.
+    Name the automations and scripts still pointing at an ID that moved.
 
-    The references are looked up now rather than when the issue was raised:
+    Reports rather than repairs. Rewriting somebody's ``automations.yaml``
+    was tried and abandoned -- see :mod:`.domain.references`. Looking the
+    references up here rather than when the issue was raised is deliberate:
     the migration runs while a config entry is setting up, before the
     automation component necessarily has its entities.
     """
@@ -47,31 +48,21 @@ class EntityIdsRenamedRepairFlow(RepairsFlow):
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
     ) -> data_entry_flow.FlowResult:
-        """Show what can and cannot be repointed, then do the former."""
+        """Show what still points at the old IDs, then let the user dismiss."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data={})
+
         referrers = await async_find_referrers(self.hass, self._moved)
         if not referrers.total:
-            # Nothing refers to the old IDs, so there is nothing to confirm.
+            # Nothing points at the old IDs, so there is nothing to tell.
             async_delete_issue(self.hass, DOMAIN, self._issue_id)
             return self.async_create_entry(title="", data={})
 
-        if user_input is not None:
-            repointed = await async_repoint(self.hass, self._moved, referrers)
-            for domain in referrers.fixable:
-                # A file can hold configs for a component that is not loaded,
-                # and it will read the new ids when it does load.
-                if self.hass.services.has_service(domain, "reload"):
-                    await self.hass.services.async_call(domain, "reload", blocking=True)
-            return self.async_create_entry(title="", data={"repointed": repointed})
-
-        fixable = sorted(referrers.labels)
         return self.async_show_form(
             step_id="init",
             description_placeholders={
                 "renames": format_moved(self._moved),
-                "fixable": "\n".join(f"- {label}" for label in fixable) or "- (none)",
-                "unfixable": (
-                    format_entities(self.hass, referrers.unfixable) or "- (none)"
-                ),
+                "referrers": format_labels(referrers.labels),
             },
         )
 
@@ -90,7 +81,6 @@ async def async_create_fix_flow(
             "slot_disabled_",
             "pin_required_",
             "slot_suspended_",
-            "entity_ids_renamed_",
         )
     ):
         return AcknowledgeRepairFlow()
