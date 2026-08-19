@@ -16,7 +16,7 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.config_entries import SOURCE_REAUTH
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import (
     ATTR_CODE,
     ATTR_ENTITY_ID,
@@ -2684,5 +2684,44 @@ async def test_migration_rekeys_the_event_entity(
         )
         is None
     )
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_migration_survives_an_event_entity_that_already_moved(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A duplicate is worth a log line; refusing to start is not.
+
+    Re-keying onto a unique ID the registry already holds raises, and a raise
+    inside the migration leaves the whole entry unloadable -- every lock and
+    every PIN, over one stray registry row.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        EVENT_DOMAIN, DOMAIN, f"{entry.entry_id}|1|pin_used", config_entry=entry
+    )
+    ent_reg.async_get_or_create(
+        EVENT_DOMAIN,
+        DOMAIN,
+        f"{entry.entry_id}|1|{EVENT_CREDENTIAL_USED}",
+        config_entry=entry,
+    )
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
 
     await hass.config_entries.async_unload(entry.entry_id)

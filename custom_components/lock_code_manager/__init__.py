@@ -1003,12 +1003,19 @@ def _async_rename_event_unique_ids(
         legacy = build_slot_unique_id(entry_id, slot_num, LEGACY_EVENT_PIN_USED)
         if not (entity_id := ent_reg.async_get_entity_id(EVENT_DOMAIN, DOMAIN, legacy)):
             continue
-        ent_reg.async_update_entity(
-            entity_id,
-            new_unique_id=build_slot_unique_id(
-                entry_id, slot_num, EVENT_CREDENTIAL_USED
-            ),
-        )
+        wanted = build_slot_unique_id(entry_id, slot_num, EVENT_CREDENTIAL_USED)
+        if ent_reg.async_get_entity_id(EVENT_DOMAIN, DOMAIN, wanted):
+            # Re-keying onto an existing unique ID raises, and a raise here
+            # fails the whole migration and leaves the entry unloadable. A
+            # duplicate is worth a line in the log; refusing to start is not.
+            _LOGGER.warning(
+                "Left %s on its old unique id: slot %s already has a %s entity",
+                entity_id,
+                slot_num,
+                EVENT_CREDENTIAL_USED,
+            )
+            continue
+        ent_reg.async_update_entity(entity_id, new_unique_id=wanted)
 
 
 @callback
