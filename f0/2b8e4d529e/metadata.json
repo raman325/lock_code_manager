@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "f02b8e4d529e",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-user-device-naming",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/repairs.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f0/2b8e4d529e/0/metadata.json",
+      "transcript": "/f0/2b8e4d529e/0/full.jsonl",
+      "compact_transcript": "/f0/2b8e4d529e/0/transcript.jsonl",
+      "content_hash": "/f0/2b8e4d529e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 17656,
+    "cache_read_tokens": 6050959,
+    "output_tokens": 14356,
+    "api_call_count": 17
+  }
+}
