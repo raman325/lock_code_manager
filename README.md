@@ -12,6 +12,8 @@ PINs across an Airbnb fleet on a nightly schedule, LCM has you covered.
 
 Features:
 
+- Give each person a name and a PIN; Lock Code Manager works out which slot
+  on which lock they land in
 - Synchronize PIN codes across multiple locks and providers
 - Automatic sync — codes are set and cleared as needed, with retry and
   drift detection
@@ -105,17 +107,17 @@ input tables, and import buttons.
 
 ### Template blueprints
 
-- **Calendar Condition** — Binary sensor for calendar-based slot access
+- **Calendar Condition** — Binary sensor for calendar-based access
 - **Date Range Condition** — Binary sensor for start/end date access
 
 ### Automation blueprints
 
-- **Slot Usage Limiter** — Disable a slot after a set number of uses
+- **Slot Usage Limiter** — Disable a user after a set number of uses
 - **Calendar PIN Setter** — Extract and set PINs from calendar events
 - **Auto Re-lock** — Re-lock after a delay with day/night support
 - **Lock on Door Close** — Lock when a door sensor detects closure
-- **Slot Usage Notifier** — Notify when a code slot PIN is used
-- **Condition Linker** — Assign a condition entity to a slot via UI
+- **Slot Usage Notifier** — Notify when someone's credential is used
+- **Condition Linker** — Assign a condition entity to a user via UI
 
 ## Learn More
 
