@@ -2024,6 +2024,36 @@ class TestGetUsers:
         cred = users[0].credentials[0]
         assert cred.slot == 5
 
+    async def test_scoped_read_surfaces_a_user_created_on_the_keypad(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A wide scope still reports users this integration never wrote.
+
+        Matter is the one provider where the slot number is not the device's
+        credential index, so what comes back is the Lock Code Manager slot --
+        recovered from the tag, or the credential index itself for an
+        untagged user, which is exactly what a code added on the keypad looks
+        like. Allocation knows not to read a device index into that; it still
+        must not hand the number out twice.
+        """
+        mock_get_lock_users = AsyncMock(
+            return_value={
+                "max_users": 10,
+                "users": [
+                    {
+                        "user_index": 1,
+                        "user_name": "Added at the door",
+                        "credentials": [{"type": "pin", "index": 4}],
+                    },
+                ],
+            }
+        )
+        with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
+            codes = await matter_lock.async_get_usercodes(range(1, 6))
+
+        assert codes[4].is_present
+        assert codes[1].is_empty
+
     async def test_get_users_non_pin_credentials_excluded(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:

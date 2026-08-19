@@ -10,6 +10,7 @@ and occupancy updates (LockUserChange).
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
@@ -453,13 +454,21 @@ class MatterLock(BaseLock):
         )
         return lock_data.get("users", [])
 
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read every user and their Personal Identification Number credentials from the lock.
 
         Matter PINs are write-only: each occupied credential slot is projected to
         SlotCredential.unreadable(). Non-PIN credentials (for example RFID) are
         filtered out because the coordinator and sync manager only manage PIN slots.
+
+        ``slots`` is ignored: this reads every user on the device in one
+        call, so the answer may name slots outside the scope. What comes
+        back is keyed by Lock Code Manager slot, recovered from each user's
+        tag -- not by Matter credential index, which the
+        lock allocates itself. Allocation knows not to read anything into a
+        Matter index for that reason (``credential_index_follows_slot``),
+        but the slots reported here are still real claims on a number.
 
         Credential.slot is the LCM slot, NOT the Matter credential index.
         The LCM slot is recovered from the owning user's ``lcm:<slot>:`` tag;

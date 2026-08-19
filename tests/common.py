@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
@@ -195,13 +196,22 @@ class MockLCMLock(BaseLock):
         self.service_calls["clear_usercode"].append((code_slot,))
         return True
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """Return dictionary of code slots and usercodes."""
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
         codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
         codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
-        return codes
+        if slots is None:
+            return codes
+        # Mirrors the base projection, including the part that matters: a slot
+        # in the scope that holds nothing is empty, and a slot the lock holds
+        # OUTSIDE the scope is still reported. Answering with exactly the
+        # scope would model the one shape where a caller's own bounds check
+        # is a no-op.
+        return {**dict.fromkeys(slots, SlotCredential.empty()), **codes}
 
 
 @dataclass(repr=False, eq=False)

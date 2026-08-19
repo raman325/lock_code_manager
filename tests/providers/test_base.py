@@ -1,6 +1,7 @@
 """Test base class."""
 
 import asyncio
+from collections.abc import Collection
 from datetime import datetime, timedelta
 import logging
 import time
@@ -35,6 +36,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
+    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
@@ -171,6 +173,123 @@ async def test_describe_link_health_defaults_to_none(hass: HomeAssistant) -> Non
     lock = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
 
     assert lock.describe_link_health() is None
+
+
+def _lock_args(hass: HomeAssistant, unique_id: str) -> tuple:
+    """Build the positional arguments every provider is constructed with."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", unique_id, config_entry=config_entry
+    )
+    return (hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+
+def _bare_lock(hass: HomeAssistant, unique_id: str) -> MockLCMLock:
+    """Build a reachable lock whose read can be stubbed."""
+    return MockLCMLock(*_lock_args(hass, unique_id))
+
+
+class _ScopedReadLock(MockLCMLock):
+    """A lock that can only answer about the indices it was asked about.
+
+    The shape of ZHA and Zigbee2MQTT, which cost one device round trip per
+    index. For these the scope is not an optimization -- a read that loses it
+    answers a different question entirely.
+    """
+
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """Answer about exactly the scope, and nothing else."""
+        scope = self.managed_slots if slots is None else slots
+        return {
+            slot: (
+                SlotCredential.known(self.codes[slot])
+                if slot in self.codes
+                else SlotCredential.empty()
+            )
+            for slot in scope
+        }
+
+
+async def test_occupied_indices_reads_a_real_provider_end_to_end(
+    hass: HomeAssistant,
+) -> None:
+    """The derivation runs against a provider read, not a stubbed one.
+
+    Every other test here patches ``async_get_usercodes``, which proves the
+    filtering and nothing about the seam under it. This drives a provider
+    that can only answer about the indices it was given, so a derivation that
+    dropped the scope would ask about the slots this entry manages -- none --
+    and report an empty lock.
+    """
+    lock = _ScopedReadLock(
+        *_lock_args(hass, "test_lock_occupancy_end_to_end"),
+    )
+    lock.codes = {2: "1234", 9: "5678"}
+
+    assert not lock.managed_slots
+    # 9 is real but outside the window, so it is not an answer to this question.
+    assert await lock.async_internal_get_occupied_indices(5) == frozenset({2})
+
+
+async def test_occupied_indices_counts_everything_the_lock_holds(
+    hass: HomeAssistant,
+) -> None:
+    """Occupancy is derived from the read, so every repair the read does counts.
+
+    An index whose value could not be read still holds something. Reserving
+    it costs a user a slot number; handing it out costs them the code on
+    their door.
+    """
+    lock = _bare_lock(hass, "test_lock_occupancy_derivation")
+
+    codes = {
+        0: SlotCredential.known("0000"),
+        1: SlotCredential.known("1234"),
+        2: SlotCredential.empty(),
+        3: SlotCredential.unreadable(),
+        12: SlotCredential.known("9999"),
+    }
+    with patch.object(lock, "async_get_usercodes", AsyncMock(return_value=codes)):
+        # 0 and 12 are both outside the window the caller asked about. A lock
+        # numbering from zero is not one this allocates into.
+        assert await lock.async_internal_get_occupied_indices(10) == frozenset({1, 3})
+
+
+async def test_occupied_indices_is_unknown_when_the_lock_cannot_be_read(
+    hass: HomeAssistant,
+) -> None:
+    """A lock that cannot be read reports unknown, never empty.
+
+    Every failure this integration raises has to land here. One that escapes
+    reaches a caller with no answer at all, where the safe reading -- refuse
+    -- is the one it cannot make.
+    """
+    lock = _bare_lock(hass, "test_lock_occupancy_error")
+
+    for error in (
+        LockDisconnected("asleep"),
+        LockCodeManagerProviderError("malformed response"),
+        LockOperationFailed("read rejected"),
+    ):
+        with patch.object(lock, "async_get_usercodes", AsyncMock(side_effect=error)):
+            assert await lock.async_internal_get_occupied_indices(10) is None
+
+
+async def test_occupied_indices_asks_only_about_the_window(
+    hass: HomeAssistant,
+) -> None:
+    """The read is scoped, so a per-index lock is not walked end to end."""
+    lock = _bare_lock(hass, "test_lock_occupancy_window")
+
+    read = AsyncMock(return_value={})
+    with patch.object(lock, "async_get_usercodes", read):
+        await lock.async_internal_get_occupied_indices(3)
+
+    assert list(read.await_args.args[0]) == [1, 2, 3]
 
 
 class _PushSetupRaisesLock(MockLCMLock):

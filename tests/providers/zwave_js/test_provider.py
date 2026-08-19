@@ -36,6 +36,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     SetUserResult,
     User,
     WriteResult,
+    credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -2143,3 +2144,52 @@ async def test_reconcile_read_unexpected_error_does_not_replace_typed_error(
             name=None,
             source="sync",
         )
+
+
+async def test_scoped_read_covers_users_no_entry_manages(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """The node read spans the whole lock, so a wider scope costs nothing.
+
+    This is the property the per-index providers lack: nothing here filters
+    to the slots Lock Code Manager manages, so a code programmed by hand is
+    already in the answer.
+    """
+    users = [
+        User(
+            user_id=2,
+            credentials=[credential_from_slot(2, SlotCredential.known("1111"))],
+        ),
+        User(
+            user_id=8,
+            credentials=[credential_from_slot(8, SlotCredential.known("2222"))],
+        ),
+    ]
+    with patch.object(zwave_js_lock, "async_get_users", AsyncMock(return_value=users)):
+        codes = await zwave_js_lock.async_get_usercodes(range(1, 6))
+
+    # Slot 8 is outside anything this entry manages, and the read still saw it.
+    assert codes[2].is_present
+    assert codes[8].is_present
+
+
+async def test_scoped_read_keeps_the_user_code_occupancy_repair(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """A wider read still gets the repair that makes the narrow read honest.
+
+    On User Code CC locks the unified read drops a slot the lock reports as
+    occupied but whose code it withholds (issue #1397), which is why
+    ``_overlay_uc_occupancy`` exists. Occupancy is derived from this read, so
+    sourcing it from anywhere the repair does not reach would report an
+    occupied slot as free -- the one mistake that overwrites a real
+    credential.
+    """
+    with patch.object(zwave_js_lock, "async_get_users", AsyncMock(return_value=[])):
+        codes = await zwave_js_lock.async_get_usercodes(range(1, 6))
+
+    occupied = {slot for slot, credential in codes.items() if credential.is_present}
+    # The unified read returned nothing, so anything present here came from
+    # the value database via the repair.
+    assert occupied
+    assert all(codes[slot] is SlotCredential.unreadable() for slot in occupied)

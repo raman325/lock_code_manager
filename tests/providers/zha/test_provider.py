@@ -558,10 +558,12 @@ def test_parse_pin_response_list_bytes() -> None:
 
 
 def test_parse_pin_response_unknown_format() -> None:
-    """Test parsing unknown response format returns Available/empty."""
-    status, pin = ZHALock._parse_pin_response("unexpected")
-    assert status == DoorLock.UserStatus.Available
-    assert pin == ""
+    """An unrecognized response is not an answer.
+
+    Reporting it as ``Available`` would say "this slot is free" on the
+    strength of a reply that was never understood.
+    """
+    assert ZHALock._parse_pin_response("unexpected") is None
 
 
 # ---------------------------------------------------------------------------
@@ -876,3 +878,187 @@ async def test_programming_event_unparseable_with_coordinator_triggers_refresh(
     await hass.async_block_till_done()
 
     zha_lock.coordinator.async_request_refresh.assert_called_once()
+
+
+async def test_occupied_indices_sees_slots_no_entry_manages(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Occupancy reports codes this integration did not put there.
+
+    ``async_get_users`` is scoped to the slots Lock Code Manager manages
+    because it also decides where writes land. Allocation needs the wider
+    view: a code programmed by hand holds its index just as firmly, and
+    issuing that index to a new user would overwrite it.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        # Slot 4 is outside anything this entry manages.
+        if slot_num == 4:
+            return type(
+                "Response",
+                (),
+                {"user_status": DoorLock.UserStatus.Enabled, "code": "9999"},
+            )()
+        return type(
+            "Response",
+            (),
+            {"user_status": DoorLock.UserStatus.Available, "code": ""},
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+
+    codes = await zha_lock.async_get_usercodes(range(1, 6))
+    assert codes[4].is_present
+    # The default scope cannot see it, which is what the scope argument is for.
+    assert 4 not in await zha_lock.async_get_usercodes()
+
+
+async def test_occupied_indices_stops_at_the_limit(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """The bound is what keeps a per-index lock from being walked end to end."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
+        )()
+    )
+
+    codes = await zha_lock.async_get_usercodes(range(1, 4))
+    assert all(credential.is_empty for credential in codes.values())
+    assert cluster.get_pin_code.await_count == 3
+
+
+async def test_a_failed_index_is_unreadable_not_empty(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """An index the lock did not answer about is not an empty index.
+
+    Calling it empty understates what the lock holds, and an understated
+    answer is the one that overwrites a code. Only a read that fails outright
+    makes occupancy unknown; a single index does not.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        if slot_num == 2:
+            raise OSError("radio dropped")
+        return type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+
+    codes = await zha_lock.async_get_usercodes(range(1, 4))
+    # Unreadable, not empty: the index holds something we could not read, and
+    # calling that empty is what lets a real credential be overwritten.
+    assert codes[2] is SlotCredential.unreadable()
+    assert codes[1].is_empty and codes[3].is_empty
+
+
+async def test_occupied_indices_counts_a_write_only_slot(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """An enabled slot is occupied even when the lock will not return its code."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Enabled, "code": ""}
+        )()
+    )
+
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+    assert codes[1] is SlotCredential.unreadable()
+    assert codes[2] is SlotCredential.unreadable()
+
+
+async def test_unparseable_response_is_unreadable_not_empty(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A reply we cannot parse is not an answer that the slot is free.
+
+    Calling it empty would tell sync the slot is confirmed cleared, and tell
+    allocation the index is available -- both from a response nothing
+    understood.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(return_value="unexpected shape")
+
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+
+    assert codes[1] is SlotCredential.unreadable()
+    assert codes[2] is SlotCredential.unreadable()
+
+
+@pytest.mark.parametrize(
+    ("user_status", "code"),
+    [
+        (DoorLock.UserStatus.Disabled, "1234"),
+        (DoorLock.UserStatus.Disabled, ""),
+        (DoorLock.UserStatus.Not_Supported, ""),
+    ],
+)
+async def test_only_available_means_the_slot_is_free(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+    user_status: int,
+    code: str,
+) -> None:
+    """AVAILABLE is the only status that leaves an index free to write to.
+
+    Reading any of the others as cleared tells sync to reprogram the slot and
+    tells allocation to hand the index out. What each of them means beyond
+    "not free" is something this credential model cannot express, so they are
+    reported alike.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type("Response", (), {"user_status": user_status, "code": code})()
+    )
+
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+
+    assert codes[1].is_present
+    assert codes[2].is_present
+    # And never as a value sync can compare: a code the lock is not
+    # accepting would otherwise read as in sync while the door stays shut.
+    assert not codes[1].is_readable
+    assert not codes[2].is_readable
+
+
+async def test_available_is_an_empty_slot(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """The one status that does mean cleared still reads as cleared."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
+        )()
+    )
+
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+
+    assert codes[1].is_empty
+    assert codes[2].is_empty
