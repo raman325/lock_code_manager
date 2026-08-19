@@ -401,8 +401,16 @@ async def get_config_entry_data(
                 }
                 for lock_id, lock in entry_locks.items()
             ],
+            # Still keyed by slot, because that is what entity unique IDs
+            # carry and the card joins the two on it. The NAME travels with
+            # it so the card never has to work out who a slot belongs to:
+            # a dashboard strategy builds configuration, and entity states
+            # are not reliably populated while it runs.
             CONF_SLOTS: {
-                slot_num: slot.get(CONF_CONDITION)
+                slot_num: {
+                    CONF_NAME: entry_config.name_for(slot_num),
+                    CONF_CONDITION: slot.get(CONF_CONDITION),
+                }
                 for slot_num, slot in entry_config.slots.items()
             },
         },

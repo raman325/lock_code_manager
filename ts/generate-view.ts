@@ -201,7 +201,9 @@ export function generateSlotCard(
     return {
         cards: [
             {
-                content: `## Code Slot ${slotMapping.slotNum}`,
+                // Named for whoever holds it. The slot number is internal
+                // bookkeeping and has no business on a dashboard.
+                content: `## ${slotMapping.userName ?? `Slot ${slotMapping.slotNum}`}`,
                 type: 'markdown'
             },
             {
@@ -306,7 +308,8 @@ export function getSlotMapping(
     const pinActiveEntity = lockCodeManagerEntities.find(
         (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     );
-    const calendarEntityId: string | null | undefined = configEntryData.slots[slotNum];
+    const slotInfo = configEntryData.slots[slotNum];
+    const calendarEntityId: string | null | undefined = slotInfo?.condition;
 
     return {
         calendarEntityId,
@@ -316,7 +319,8 @@ export function getSlotMapping(
         inSyncEntities,
         mainEntities,
         pinActiveEntity,
-        slotNum
+        slotNum,
+        userName: slotInfo?.name ?? null
     };
 }
 

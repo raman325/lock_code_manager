@@ -311,7 +311,10 @@ describe('getSlotMapping', () => {
             { entity_id: 'lock.front', name: 'Front Lock' },
             { entity_id: 'lock.back', name: 'Back Lock' }
         ],
-        slots: { 1: 'calendar.slot_1', 2: null }
+        slots: {
+            1: { condition: 'calendar.slot_1', name: 'Raman' },
+            2: { condition: null, name: 'Guest' }
+        }
     };
 
     it('separates entities by category', () => {
@@ -490,7 +493,8 @@ describe('generateSlotCard', () => {
             inSyncEntities: [],
             mainEntities: [createTestEntity(slotNum, 'enabled', `switch.slot_${slotNum}_enabled`)],
             pinActiveEntity: createTestEntity(slotNum, ACTIVE_KEY, `binary_sensor.slot_${slotNum}`),
-            slotNum
+            slotNum,
+            userName: 'Raman'
         };
     }
 
@@ -503,7 +507,7 @@ describe('generateSlotCard', () => {
         expect(result.type).toBe('vertical-stack');
         expect(result.cards).toHaveLength(2);
         expect(result.cards[0]).toEqual({
-            content: '## Code Slot 1',
+            content: '## Raman',
             type: 'markdown'
         });
         expect(result.cards[1].type).toBe('entities');
@@ -604,7 +608,7 @@ describe('generateView', () => {
             config_entry: testConfigEntry,
             entities: [],
             locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
         const lovelaceResources: LovelaceResource[] = [];
 
@@ -739,7 +743,7 @@ describe('generateView', () => {
             config_entry: testConfigEntry,
             entities: [],
             locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -781,7 +785,7 @@ describe('generateView', () => {
                 { entity_id: 'lock.z_back', name: 'Back Lock' },
                 { entity_id: 'lock.a_front', name: 'Front Lock' }
             ],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -912,7 +916,7 @@ describe('generateView', () => {
             config_entry: testConfigEntry,
             entities: [],
             locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -963,7 +967,7 @@ describe('generateView lock codes cards', () => {
                 { entity_id: 'lock.front', name: 'Front Lock' },
                 { entity_id: 'lock.back', name: 'Back Lock' }
             ],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -1014,7 +1018,7 @@ describe('generateView lock codes cards', () => {
                 { entity_id: 'lock.a_front', name: 'Front Door' },
                 { entity_id: 'lock.m_back', name: 'Back Door' }
             ],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -1061,7 +1065,7 @@ describe('generateView lock codes cards', () => {
             config_entry: testConfigEntry,
             entities: [],
             locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -1102,7 +1106,7 @@ describe('generateView lock codes cards', () => {
                 { entity_id: 'lock.front', name: 'Front Lock' },
                 { entity_id: 'lock.back', name: 'Back Lock' }
             ],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({

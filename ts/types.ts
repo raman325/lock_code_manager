@@ -59,6 +59,11 @@ export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerS
     type: 'custom:lock-code-manager';
 }
 
+export interface SlotInfo {
+    condition: string | null;
+    name: string | null;
+}
+
 export interface SlotMapping {
     calendarEntityId: string | null | undefined;
     codeEventEntity: LockCodeManagerEntityEntry;
@@ -68,6 +73,8 @@ export interface SlotMapping {
     mainEntities: LockCodeManagerEntityEntry[];
     pinActiveEntity: LockCodeManagerEntityEntry;
     slotNum: number;
+    /** Who holds this slot. What the section is titled. */
+    userName: string | null;
 }
 
 export interface LockCodeManagerViewStrategyConfig extends LockCodeManagerStrategyConfig {
@@ -125,7 +132,12 @@ export interface LockCodeManagerConfigEntryDataResponse {
     config_entry: ConfigEntryJSONFragment;
     entities: EntityRegistryEntry[];
     locks: LockInfo[];
-    slots: { [key: number]: string | null };
+    /**
+     * Keyed by slot number, which is what entity unique IDs carry, so the
+     * strategy can join the two. The name is what a person reads; the
+     * number is bookkeeping and never shown.
+     */
+    slots: { [key: number]: SlotInfo };
 }
 
 export interface LockCoordinatorSlotData {

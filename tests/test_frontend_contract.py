@@ -5,7 +5,7 @@ from __future__ import annotations
 import pathlib
 import re
 
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
@@ -137,3 +137,21 @@ def test_the_frontend_orders_keys_the_backend_actually_produces() -> None:
         f"the card orders keys the backend never emits: "
         f"{sorted(set(ordered) - _BACKEND_KEYS)}"
     )
+
+
+def test_the_frontend_and_backend_agree_on_the_slot_payload() -> None:
+    """
+    The strategy reads two named fields out of each slot the backend sends.
+
+    Renaming one on either side leaves the other reading ``undefined``: the
+    section loses its heading, or every condition entity silently vanishes
+    from the dashboard. Neither fails anywhere.
+    """
+    source = (_CONST_TS.parent / "types.ts").read_text(encoding="utf-8")
+    declared = re.search(r"interface SlotInfo \{(.*?)\}", source, re.DOTALL)
+    assert declared, "ts/types.ts no longer declares SlotInfo"
+
+    assert set(re.findall(r"^\s*(\w+)\??:", declared.group(1), re.MULTILINE)) == {
+        CONF_NAME,
+        CONF_CONDITION,
+    }
