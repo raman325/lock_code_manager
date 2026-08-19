@@ -21,6 +21,7 @@ from hypothesis import assume, given, strategies as st
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
+from custom_components.lock_code_manager.domain.config import EntryConfig
 from custom_components.lock_code_manager.domain.names import (
     identity,
     normalize_slot_names,
@@ -191,74 +192,6 @@ NEWCOMERS = st.lists(st.sampled_from(["Zoe", "Yan", "Xavier"]), max_size=2).map(
 
 @given(
     names=NAME_SETS,
-    renames=st.dictionaries(NAMES, st.sampled_from(["Wren", "Vic"]), max_size=2),
-    newcomers=NEWCOMERS,
-    start=START,
-    data=st.data(),
-)
-def test_renaming_keeps_the_users_slot(
-    names: list[str],
-    renames: dict[str, str],
-    newcomers: list[str],
-    start: int,
-    data: st.DataObject,
-) -> None:
-    """A rename changes who holds a slot, never which slot they hold.
-
-    Filters on the IDENTITY form, since the stored keys are casefolded.
-
-    Adds users in a SHUFFLED order alongside the rename, because without a
-    competing addition a rename is indistinguishable from delete-plus-add: the
-    newcomer is handed the very slot the departed user freed. They diverge only
-    when somebody else is in line for that slot, which is the case that
-    reorders two users' credential indices on a real lock.
-    """
-    before = _reconcile(SlotAssignment.empty(), names, start=start)
-    moves = {old: new for old, new in renames.items() if identity(old) in before.slots}
-    assume(len({identity(v) for v in moves.values()}) == len(moves))
-
-    after_names = data.draw(
-        st.permutations([moves.get(n, n) for n in names] + newcomers)
-    )
-
-    after = _reconcile(before, after_names, renames=moves, start=start)
-
-    for old, new in moves.items():
-        assert after.slot(new) == before.slot(old)
-    for name in names:
-        if name not in moves:
-            assert after.slot(name) == before.slot(name)
-
-
-@given(names=NAME_SETS, renames=st.dictionaries(NAMES, NAMES, max_size=3), start=START)
-def test_renaming_does_not_depend_on_insertion_order(
-    names: list[str], renames: dict[str, str], start: int
-) -> None:
-    """The same edit gives the same answer whatever order the mapping holds."""
-    before = _reconcile(SlotAssignment.empty(), names, start=start)
-    moves = {old: new for old, new in renames.items() if identity(old) in before.slots}
-    assume(len({identity(v) for v in moves.values()}) == len(moves))
-    after_names = [moves.get(n, n) for n in names]
-
-    flipped = SlotAssignment(slots=dict(reversed(list(before.slots.items()))))
-
-    assert dict(
-        _reconcile(before, after_names, renames=moves, start=start).slots
-    ) == dict(_reconcile(flipped, after_names, renames=moves, start=start).slots)
-
-
-@given(names=NAME_SETS, start=START)
-def test_reconciling_the_same_users_twice_changes_nothing(
-    names: list[str], start: int
-) -> None:
-    """No renames and the same names is a no-op, so callers do not write."""
-    once = _reconcile(SlotAssignment.empty(), names, start=start)
-
-    assert once.reconcile(names, start=start) is once
-
-
-@given(
-    names=NAME_SETS,
     start=START,
     unavailable=st.sets(st.integers(min_value=1, max_value=12), max_size=4),
 )
@@ -409,34 +342,6 @@ def test_allocation_does_not_depend_on_how_names_are_ordered(
 
 
 @given(
-    names=NAME_SETS,
-    start=START,
-    renames=st.dictionaries(NAMES, st.sampled_from(["Wren", "Vic"]), max_size=2),
-)
-def test_a_rename_to_somebody_absent_leaves_the_source_alone(
-    names: list[str], start: int, renames: dict[str, str]
-) -> None:
-    """A rename target missing from the new names must be inert, not destructive.
-
-    The input contradicts itself -- the user is being renamed to somebody the
-    configuration does not contain -- and the harmless reading is to ignore
-    it. Honouring it halfway dropped the source from the survivors and
-    reallocated them from ``start``, moving the credential of a user who was
-    never part of the edit.
-    """
-    before = SlotAssignment.empty().reconcile(names, start=start)
-    absent = {
-        old: new
-        for old, new in renames.items()
-        if identity(new) not in {identity(n) for n in names}
-    }
-
-    after = before.reconcile(names, start=start, renames=absent)
-
-    assert dict(after.slots) == dict(before.slots)
-
-
-@given(
     slots=st.dictionaries(NAMES, st.integers(min_value=1, max_value=6), max_size=4),
     start=START,
 )
@@ -488,69 +393,6 @@ def test_a_non_string_name_key_is_coerced_not_fatal() -> None:
     assert assignment.slot("1") == 4
 
 
-def test_two_renames_onto_one_target_resolve_the_same_way_every_time() -> None:
-    """Contradictory input still has to be deterministic.
-
-    ``validate_slot_names`` keeps two users from ending on one name, so this
-    is unreachable from the configuration flow -- but nothing in this type
-    enforces it, and the previous implementation let whichever entry the
-    stored mapping iterated first decide, so the same input produced
-    different credential indices on different runs. Resolved by sorted order
-    instead.
-
-    The property tests assume this case away, which is correct for them and
-    is why it needs an example here.
-    """
-    renames = {"alice": "Wren", "bob": "Wren"}
-
-    forward = SlotAssignment(slots={"alice": 1, "bob": 2})
-    backward = SlotAssignment(slots={"bob": 2, "alice": 1})
-
-    assert dict(forward.reconcile(["Wren"], start=1, renames=renames).slots) == dict(
-        backward.reconcile(["Wren"], start=1, renames=renames).slots
-    )
-
-
-@given(
-    names=NAME_SETS,
-    start=START,
-    renames=st.dictionaries(NAMES, st.sampled_from(["Wren", "Vic"]), max_size=2),
-)
-def test_renames_are_read_case_insensitively_too(
-    names: list[str], start: int, renames: dict[str, str]
-) -> None:
-    """The rename map is reduced to identity form, like the stored names are.
-
-    ``__post_init__`` canonicalizes the assignment's keys; the rename map
-    arrives from a caller and needs the same treatment, or two keys meaning one
-    user each take a turn.
-    """
-    before = SlotAssignment.empty().reconcile(names, start=start)
-    shouted = {old.upper(): new for old, new in renames.items()}
-    after_names = [renames.get(n, n) for n in names]
-
-    assert dict(
-        before.reconcile(after_names, start=start, renames=renames).slots
-    ) == dict(before.reconcile(after_names, start=start, renames=shouted).slots)
-
-
-@given(
-    renames=st.dictionaries(NAMES, st.sampled_from(["Wren", "Vic"]), max_size=3),
-    start=START,
-)
-def test_the_rename_mapping_order_does_not_change_the_answer(
-    renames: dict[str, str], start: int
-) -> None:
-    """Rebuilding the same rename map in another order gives the same result."""
-    before = SlotAssignment.empty().reconcile(["Alice", "Bob", "Carl"], start=start)
-    flipped = dict(reversed(list(renames.items())))
-    after_names = [renames.get(n, n) for n in ["Alice", "Bob", "Carl"]]
-
-    assert dict(
-        before.reconcile(after_names, start=start, renames=renames).slots
-    ) == dict(before.reconcile(after_names, start=start, renames=flipped).slots)
-
-
 def test_a_migration_cannot_persist_two_users_on_one_number() -> None:
     """Slot keys that coerce to the same number must not double-book.
 
@@ -580,22 +422,41 @@ def test_corrupt_stored_bookkeeping_degrades_instead_of_aborting_setup() -> None
     assert dict(SlotAssignment(slots={"a": "zzz", "b": 2}).slots) == {"b": 2}
 
 
-def test_two_rename_keys_meaning_one_user_resolve_deterministically() -> None:
-    """``Alice`` and ``alice `` are one user, so they get one turn, not two.
+@given(names=NAME_SETS, start=START)
+def test_reconciling_the_same_users_twice_changes_nothing(
+    names: list[str], start: int
+) -> None:
+    """The same names is a no-op, so callers can skip writing."""
+    once = _reconcile(SlotAssignment.empty(), names, start=start)
 
-    Whichever of the two wins must not depend on the mapping's insertion
-    order, and the loser's target must not stay claimed against a third user
-    renaming onto it.
+    assert once.reconcile(names, start=start) is once
 
-    Needs an example rather than a property: the strategies generate distinct
-    names, so they cannot produce two keys with one identity.
+
+@given(names=NAME_SETS, new=NAMES, start=START)
+def test_a_rename_keeps_the_users_number(
+    names: list[str], new: str, start: int
+) -> None:
     """
-    before = SlotAssignment(slots={"Alice": 1, "Bob": 5, "Carl": 2})
-    forward = {"Alice": "Wren", "alice ": "Vic", "Bob": "Wren"}
-    backward = {"Bob": "Wren", "alice ": "Vic", "Alice": "Wren"}
+    A rename changes who holds a number, never which number they hold.
 
-    assert dict(
-        before.reconcile(["Wren", "Vic", "Carl"], start=1, renames=forward).slots
-    ) == dict(
-        before.reconcile(["Wren", "Vic", "Carl"], start=1, renames=backward).slots
+    Renaming does not go through ``reconcile``. There it arrives as one name
+    present and one gone, which is indistinguishable from a deletion plus an
+    addition, so it would renumber somebody. ``with_user_renamed`` is told
+    both names, which is why this property can hold at all.
+    """
+    assume(names)
+    assume(identity(new) not in {identity(name) for name in names})
+    assignment = SlotAssignment.empty().reconcile(names, start=start)
+    config = EntryConfig(
+        locks=(),
+        users={name: {} for name in names},
+        assignment=assignment,
+        extra={},
     )
+    old = names[0]
+
+    after = config.with_user_renamed(old, new)
+
+    assert after.assignment.slot(new) == assignment.slot(old)
+    for name in names[1:]:
+        assert after.assignment.slot(name) == assignment.slot(name)
