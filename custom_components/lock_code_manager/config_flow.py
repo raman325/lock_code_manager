@@ -132,17 +132,16 @@ async def _async_check_slot_capacity(
     """
     Reject slot numbers no lock in the set could ever hold.
 
-    Only locks whose credential index IS the slot number are checked (see
-    ``BaseLock.credential_index_follows_slot``) -- Matter allocates its own
-    index, so a slot number above its credential count is perfectly legal
-    there. Catching this at configuration time is what issue #1398 asked
-    for: the write would otherwise fail forever on the device with nothing
-    but a connectivity warning to show for it.
+    Only locks whose credential index IS the slot number are checked
+    (``BaseLock.credential_index_follows_slot``) -- Matter allocates its own
+    index, so a slot number above its credential count is legal there.
+    Catching it here spares the user a write that fails forever on the device
+    with nothing but a connectivity warning to show for it.
 
-    A lock that cannot be queried is skipped rather than blocking the flow.
-    Capabilities need the lock awake, and a battery lock that happens to be
-    asleep must not make the config flow unusable; the same check runs again
-    at write time, where it can suspend the affected slot precisely.
+    A lock that cannot be queried is skipped rather than blocking the flow:
+    capabilities need the lock awake, and a sleeping battery lock must not
+    make the config flow unusable. The same check runs at write time, where
+    it can suspend the affected slot precisely.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
@@ -202,28 +201,21 @@ async def _async_validate_slots_yaml(
         parsed_slots = CODE_SLOTS_SCHEMA(raw_slots)
     except vol.Invalid as err:
         _LOGGER.error("Invalid YAML: %s", err)
-        # A missing name is now the most likely reason a previously-valid
-        # slots block fails, so name it rather than sending the user to the
-        # logs for the one error we can predict.
-        #
-        # Match on the error PATH, not the rendered text. CONF_NAME is
-        # "name", which is a substring of any key containing it
-        # ("friendly_name", "username"), so a text match reports an
-        # unrelated schema failure as a missing name -- sending the user to
-        # exactly the logs this branch exists to avoid.
+        # Match on the error PATH, not the rendered text: CONF_NAME is
+        # "name", a substring of any key containing it ("friendly_name",
+        # "username"), so a text match would report an unrelated schema
+        # failure as a missing name.
         if CONF_NAME in getattr(err, "path", []):
             return None, {"base": "name_required"}, {}
         return None, {"base": "invalid_config"}, {}
 
-    # The single-slot flow checks one name at a time; these paths submit the
-    # whole set, so the set has to be checked together.
+    # These paths submit the whole set at once, so names are checked together
+    # rather than one at a time as the single-slot flow does.
     if problem := validate_slot_names(parsed_slots):
         slot_num, error = problem
-        # This is the one path that knows which slot failed, so it uses the
-        # messages that name one. Everywhere else the user is looking at a
-        # single user and there is no slot number to give -- the shared
-        # messages must not ask for one, or they render as a translation
-        # error instead of an explanation.
+        # The only path that knows WHICH slot failed, so it uses the messages
+        # that name one. The shared messages must not ask for a slot number
+        # they cannot be given, or they render as a translation error.
         return None, {"base": _SLOT_NAME_ERRORS[error]}, {"slot_num": slot_num}
 
     errors, placeholders = _check_common_slots(hass, locks, parsed_slots, config_entry)
@@ -516,13 +508,11 @@ class LockCodeManagerFlowHandler(
                 locks.append(
                     LockOccupancy(
                         lock_entity_id=lock_entity_id,
-                        # A lock this integration writes to constrains the
-                        # numbering, and without a provider there is no way
-                        # to ask whether it addresses credentials by slot
-                        # number -- so assume it does, which is the
-                        # assumption that refuses rather than guesses. A lock
-                        # on an unsupported platform is written to by nobody
-                        # and constrains nothing.
+                        # With no provider there is no way to ask whether this
+                        # lock addresses credentials by slot number, so assume
+                        # it does -- the assumption that refuses rather than
+                        # guesses. An unmanaged lock constrains nothing either
+                        # way.
                         credential_index_follows_slot=skipped.managed,
                         managed=skipped.managed,
                         occupied=None,
@@ -643,9 +633,7 @@ class LockCodeManagerFlowHandler(
                     continue
                 # None is a lock with no opinion, not a lock with no slots.
                 # Only a real answer earns a name, because the name is what
-                # the refusal blames -- and blaming a lock for a limit it
-                # never reported sends the user to re-interview it over a
-                # number it never said.
+                # the refusal blames.
                 if (bound := await lock_instance.async_get_max_slot()) is not None:
                     limits[lock_entity_id] = bound
             except Exception:
@@ -669,29 +657,19 @@ class LockCodeManagerFlowHandler(
         Find numbers for ``num_users``, reading only as far as it has to.
 
         Locks that answer one index per round trip make the width of this
-        read the cost of it, so it starts at the number of users and widens
-        only by what turned out to be in the way -- and each pass asks only
-        about the numbers no earlier pass covered. Every index is read at
-        most once, so placing a handful of users never costs more round trips
-        than the highest number they land on.
+        read its cost, so the window starts at the number of users and widens
+        only by what turned out to be in the way, each pass asking only about
+        numbers no earlier pass covered. Every index is read at most once.
 
-        Widening stops when the numbers it would need are past what a lock
-        can hold, which is the same refusal as asking for too many users --
-        because on a full lock that is what it is.
-
-        It also stops on its own. Each pass either finds enough free numbers
-        or discovers strictly more occupied ones than the pass before -- a
-        pass that discovered no more would have found the window big enough,
-        since the window is exactly the count plus what was in the way -- and
-        the locks hold finitely many credentials.
-
-        The count itself is checked before the first read: one no lock could
-        ever hold is refused without asking a lock about it, rather than
-        after a round trip per user.
+        Terminating is not an accident: each pass either finds enough free
+        numbers or discovers strictly MORE occupied ones than the pass
+        before -- a pass discovering no more would have found the window big
+        enough, the window being exactly the count plus what was in the way --
+        and the locks hold finitely many credentials.
 
         Returns the numbers allocation must avoid, verified across a window
-        wide enough to hold everyone. The users themselves are numbered from
-        it later, once they have names.
+        wide enough to hold everyone. The users are numbered from it later,
+        once they have names.
         """
         errors, placeholders = await _async_check_slot_capacity(
             self.hass, self.data[CONF_LOCKS], [num_users]
@@ -705,18 +683,17 @@ class LockCodeManagerFlowHandler(
 
         max_slot, limiting_lock = await self._async_max_slot()
         if num_users > max_slot:
-            # Checked before the first read, not only before each widening:
-            # a count that already exceeds the range walks past the end of
-            # the lock on the way in, and on a lock that reads past-end as
-            # free it would be handed every one of those numbers.
+            # Before the first read, not just before each widening: a count
+            # past the range walks off the end of the lock on the way in, and
+            # a lock reading past-end as free would hand back all of it.
             return None, *self._too_far(num_users, max_slot, limiting_lock)
 
         unavailable: set[int] = set()
         read_up_to = 0
         window = num_users
         while True:
-            # Only the part nobody has asked about yet. Re-reading from one
-            # every pass would cost a nearly-full lock several times its own
+            # Only the part nobody has asked about yet; re-reading from one
+            # each pass would cost a nearly-full lock several times its own
             # capacity to place a couple of users.
             occupancy = await self._async_read_occupancy(
                 range(read_up_to + 1, window + 1)
@@ -742,12 +719,9 @@ class LockCodeManagerFlowHandler(
                 self.hass, self.data[CONF_LOCKS], [wider]
             )
             if errors:
-                # A different statement from the count being too large: the
-                # count fits the lock, and the numbers it would have to reach
-                # around what is already there do not. Saying "N users will
-                # not fit" of a count the lock could hold reads as a bug, and
-                # sends the user to re-interview a lock whose interview is
-                # fine.
+                # Distinct from the count being too large: the count fits,
+                # and the numbers needed to reach around what is already
+                # there do not.
                 return (
                     None,
                     {"base": "numbers_needed_exceed_capacity"},
