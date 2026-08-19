@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "58d89009b7bb",
+  "strategy": "manual-commit",
+  "branch": "audit/v3-pass2",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "tests/providers/zha/test_provider.py",
+    "tests/providers/zigbee2mqtt/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/58/d89009b7bb/0/metadata.json",
+      "transcript": "/58/d89009b7bb/0/full.jsonl",
+      "compact_transcript": "/58/d89009b7bb/0/transcript.jsonl",
+      "content_hash": "/58/d89009b7bb/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 52501,
+    "cache_read_tokens": 30226878,
+    "output_tokens": 31810,
+    "api_call_count": 42
+  }
+}
