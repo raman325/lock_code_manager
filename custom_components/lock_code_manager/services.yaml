@@ -76,6 +76,50 @@ clear_slot_condition:
           max: 9999
           mode: box
 
+add_user:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    name:
+      required: true
+      selector:
+        text:
+    pin:
+      selector:
+        text:
+    enabled:
+      default: true
+      selector:
+        boolean:
+    condition:
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - calendar
+            - input_boolean
+            - schedule
+            - switch
+
+delete_user:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    name:
+      required: true
+      selector:
+        text:
+    clear_credentials:
+      default: true
+      selector:
+        boolean:
+
 generate_pin:
   fields:
     length:

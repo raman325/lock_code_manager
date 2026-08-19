@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
 
-from homeassistant.const import CONF_CONDITION, CONF_ENTITY_ID, STATE_ON
+from homeassistant.const import (
+    CONF_CONDITION,
+    CONF_ENABLED,
+    CONF_ENTITY_ID,
+    CONF_NAME,
+    CONF_PIN,
+    STATE_ON,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CLEAR_CREDENTIALS,
     ATTR_CODE_SLOT,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
@@ -19,13 +28,16 @@ from custom_components.lock_code_manager.const import (
     ATTR_TEXT,
     ATTR_USERCODE,
     DOMAIN,
+    SERVICE_ADD_USER,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
+    SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_GENERATE_PIN,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
 )
+from custom_components.lock_code_manager.domain.allocation import SlotAllocationError
 from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
@@ -432,3 +444,288 @@ async def test_deobfuscate_log_service_round_trips_configured_pins(
         "matched": 2,
         "unmatched_tokens": ["pin#deadbeef"],
     }
+
+
+async def test_add_user_service(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """add_user names a person and allocates them a slot number."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "Newcomer",
+            CONF_PIN: "9876",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["Newcomer"][CONF_PIN] == "9876"
+    assert config.users["Newcomer"][CONF_ENABLED] is True
+    # Nobody who was already here moved: their credential is written at their
+    # number, so renumbering them would rewrite it on every lock.
+    assert config.assignment.slot("test1") == 1
+    assert config.assignment.slot("test2") == 2
+    assert config.assignment.slot("Newcomer") not in (1, 2)
+
+
+async def test_add_user_service_rejects_a_duplicate_name(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Two names meaning one person would collapse into a single key."""
+    with pytest.raises(ServiceValidationError, match="already exists"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: " TEST1 ",
+                CONF_PIN: "9876",
+            },
+            blocking=True,
+        )
+
+
+async def test_add_user_service_rejects_enabled_without_a_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A slot cannot be programmed without something to program."""
+    with pytest.raises(ServiceValidationError, match="without a PIN"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Newcomer",
+            },
+            blocking=True,
+        )
+
+
+async def test_add_user_service_allows_a_disabled_user_with_no_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Someone can be set up now and given a PIN later."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "Later",
+            CONF_ENABLED: False,
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["Later"][CONF_ENABLED] is False
+    assert CONF_PIN not in config.users["Later"]
+
+
+async def test_delete_user_service(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """delete_user removes the person and releases their slot on the locks."""
+    entry = lock_code_manager_config_entry
+    released: list[int] = []
+    for lock in entry.runtime_data.locks.values():
+        lock.async_release_managed_slot = AsyncMock(side_effect=released.append)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {"config_entry_id": entry.entry_id, CONF_NAME: "test2"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert "test2" not in config.users
+    assert config.assignment.slot("test1") == 1
+    assert released == [2, 2]
+
+
+async def test_delete_user_service_can_hand_the_credential_over(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """clear_credentials=False stops managing the slot without clearing it."""
+    entry = lock_code_manager_config_entry
+    for lock in entry.runtime_data.locks.values():
+        lock.async_release_managed_slot = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "test2",
+            ATTR_CLEAR_CREDENTIALS: False,
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert "test2" not in config.users
+    for lock in entry.runtime_data.locks.values():
+        lock.async_release_managed_slot.assert_not_called()
+    # Drained, so the next occupant of that number still gets its cleanup.
+    assert not entry.runtime_data.retained_pairs
+
+
+async def test_delete_user_service_unknown_name(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Deleting somebody who is not there says so rather than doing nothing."""
+    with pytest.raises(ServiceValidationError, match="No user named"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_DELETE_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "nobody",
+            },
+            blocking=True,
+        )
+
+
+async def test_add_user_service_with_a_condition(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A condition entity can be attached as the user is created."""
+    entry = lock_code_manager_config_entry
+    condition_entity_id = "binary_sensor.newcomer_home"
+    hass.states.async_set(condition_entity_id, STATE_ON)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "Newcomer",
+            CONF_PIN: "9876",
+            CONF_CONDITION: condition_entity_id,
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["Newcomer"][CONF_CONDITION] == condition_entity_id
+
+
+async def test_add_user_service_rejects_a_missing_condition(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A condition entity that does not exist would never turn the PIN on."""
+    with pytest.raises(ServiceValidationError, match="not found"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Newcomer",
+                CONF_PIN: "9876",
+                CONF_CONDITION: "binary_sensor.nonexistent",
+            },
+            blocking=True,
+        )
+
+
+async def test_add_user_service_rejects_an_excluded_condition_platform(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """The refusal the editor gives, on the route that goes around the editor."""
+    excluded = entity_registry.async_get_or_create(
+        "binary_sensor", "scheduler", "excluded_condition"
+    )
+    hass.states.async_set(excluded.entity_id, STATE_ON)
+
+    with pytest.raises(ServiceValidationError, match="scheduler"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Newcomer",
+                CONF_PIN: "9876",
+                CONF_CONDITION: excluded.entity_id,
+            },
+            blocking=True,
+        )
+
+
+async def test_add_user_service_rejects_a_blank_name(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A user with no name has no identity to be stored under."""
+    with pytest.raises(ServiceValidationError, match="name_required"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "   ",
+                CONF_PIN: "9876",
+            },
+            blocking=True,
+        )
+
+
+async def test_add_user_service_reports_an_allocation_refusal(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Allocation's refusal reaches the caller as a translated action error."""
+    with patch(
+        "custom_components.lock_code_manager.domain.services.async_allocate_for",
+        side_effect=SlotAllocationError(
+            "occupancy_unknown", {"locks": LOCK_1_ENTITY_ID}
+        ),
+    ):
+        with pytest.raises(ServiceValidationError) as raised:
+            await hass.services.async_call(
+                DOMAIN,
+                SERVICE_ADD_USER,
+                {
+                    "config_entry_id": lock_code_manager_config_entry.entry_id,
+                    CONF_NAME: "Newcomer",
+                    CONF_PIN: "9876",
+                },
+                blocking=True,
+            )
+
+    # Carried as a key, not a rendered string: the same refusal is worded once
+    # and reaches the config flow and the action picker alike.
+    assert raised.value.translation_key == "occupancy_unknown"
+    assert raised.value.translation_placeholders == {"locks": LOCK_1_ENTITY_ID}

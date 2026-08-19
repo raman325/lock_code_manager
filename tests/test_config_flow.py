@@ -13,11 +13,7 @@ from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PI
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.config_flow import (
-    _async_build_lock_instance,
-    _check_common_slots,
-    _LockQuerySkipped,
-)
+from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -25,6 +21,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
     MAX_SEARCHED_SLOT,
+)
+from custom_components.lock_code_manager.domain.allocation import (
+    LockQuerySkipped,
+    build_lock_instance,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -649,13 +649,13 @@ def _capacity_probe(**capabilities_mock_kwargs):
     Make the config flow able to probe the test lock's capacity.
 
     The autouse ``auto_setup_mock_lock`` fixture only registers MockLCMLock in
-    the ``domain.locks`` provider map; the config flow builds its throwaway
-    provider instance from its own map, so the test platform has to be
-    registered there too or every capacity check silently skips.
+    the ``domain.locks`` provider map; allocation builds its throwaway provider
+    instance from its own map, so the test platform has to be registered there
+    too or every capacity check silently skips.
     """
     return (
         patch.dict(
-            "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
+            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
             {"test": MockLCMLock},
         ),
         patch.object(
@@ -739,8 +739,8 @@ async def test_setup_refuses_when_a_lock_has_no_provider(
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
     with patch(
-        "custom_components.lock_code_manager.config_flow._async_build_lock_instance",
-        side_effect=_LockQuerySkipped(LOCK_1_ENTITY_ID, managed=True),
+        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        side_effect=LockQuerySkipped(LOCK_1_ENTITY_ID, managed=True),
     ):
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 2}
@@ -761,8 +761,8 @@ async def test_setup_ignores_a_lock_on_an_unsupported_platform(
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
     with patch(
-        "custom_components.lock_code_manager.config_flow._async_build_lock_instance",
-        side_effect=_LockQuerySkipped(LOCK_1_ENTITY_ID, managed=False),
+        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        side_effect=LockQuerySkipped(LOCK_1_ENTITY_ID, managed=False),
     ):
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 2}
@@ -966,7 +966,7 @@ async def test_config_flow_capacity_check_skipped_when_lock_allocates_index(
     capabilities = AsyncMock(return_value=_capabilities_with_slots(30))
     with (
         patch.dict(
-            "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
+            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
             {"test": MockLCMLock},
         ),
         patch.object(
@@ -1223,7 +1223,7 @@ async def test_claims_above_the_window_do_not_widen_the_read(
 
     with (
         patch(
-            "custom_components.lock_code_manager.config_flow.get_managed_slots",
+            "custom_components.lock_code_manager.domain.allocation.get_managed_slots",
             return_value=set(range(90, 100)),
         ),
         patch.object(MockLCMLock, "async_get_usercodes", _read),
@@ -1275,7 +1275,7 @@ async def test_a_lock_that_allocates_its_own_index_is_not_asked(
 @pytest.mark.parametrize(
     ("target", "boom"),
     [
-        ("_async_build_lock_instance", RuntimeError("provider blew up")),
+        ("build_lock_instance", RuntimeError("provider blew up")),
         ("async_get_usercodes", TimeoutError("node asleep")),
     ],
 )
@@ -1291,10 +1291,9 @@ async def test_a_lock_that_fails_unexpectedly_is_unknown_not_empty(
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    if target == "_async_build_lock_instance":
+    if target == "build_lock_instance":
         patcher = patch(
-            "custom_components.lock_code_manager.config_flow"
-            "._async_build_lock_instance",
+            "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
             side_effect=boom,
         )
     else:
@@ -1765,8 +1764,8 @@ async def test_a_lock_that_cannot_be_built_says_whether_it_is_ours(
             "lock", "some_other_integration", "unique"
         ).entity_id
 
-    with pytest.raises(_LockQuerySkipped) as raised:
-        _async_build_lock_instance(hass, dr.async_get(hass), ent_reg, entity_id)
+    with pytest.raises(LockQuerySkipped) as raised:
+        build_lock_instance(hass, dr.async_get(hass), ent_reg, entity_id)
 
     assert raised.value.managed is managed
 
@@ -1832,12 +1831,12 @@ async def test_a_lock_whose_config_entry_is_gone_is_skipped(
 
     with (
         patch.dict(
-            "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
+            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
             {"test": MockLCMLock},
         ),
-        pytest.raises(_LockQuerySkipped) as raised,
+        pytest.raises(LockQuerySkipped) as raised,
     ):
-        _async_build_lock_instance(hass, dr.async_get(hass), ent_reg, orphan.entity_id)
+        build_lock_instance(hass, dr.async_get(hass), ent_reg, orphan.entity_id)
 
     # Ours, so it still bounds the numbers even unread.
     assert raised.value.managed is True
@@ -1989,3 +1988,32 @@ async def test_the_editor_refuses_a_condition_entity_the_guided_path_would(
     assert result["type"] == "form"
     assert result["errors"] == {"base": "excluded_platform"}
     assert result["description_placeholders"]["name"] == "Raman"
+
+
+async def test_reauth_reports_a_lock_too_small_for_the_existing_slots(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    Swapping in a smaller lock is refused, naming it and its capacity.
+
+    Reauth is the one place an already-valid slot set can stop fitting: the
+    numbers were checked against the lock they were issued for, and reauth
+    moves them onto a different one. Accepting it would leave every slot past
+    the new lock's range writing forever against an index it does not have.
+    """
+    entry = lock_code_manager_config_entry
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    probe_registered, probe_capabilities = _capacity_probe(
+        return_value=_capabilities_with_slots(1)
+    )
+    with probe_registered, probe_capabilities:
+        result = await hass.config_entries.flow.async_configure(
+            flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    assert result["errors"] == {"base": "slot_out_of_range"}
+    assert result["description_placeholders"]["num_slots"] == "1"
+    assert result["description_placeholders"]["out_of_range_slots"] == "2"

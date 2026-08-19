@@ -26,8 +26,12 @@ from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
+    CONF_CONDITION,
+    CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_ID,
+    CONF_NAME,
+    CONF_PIN,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
     EVENT_LOVELACE_UPDATED,
@@ -60,6 +64,7 @@ from homeassistant.helpers.issue_registry import (
 from homeassistant.util import slugify
 
 from .const import (
+    ATTR_CLEAR_CREDENTIALS,
     ATTR_CODE_SLOT,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
@@ -74,8 +79,10 @@ from .const import (
     LEGACY_EVENT_PIN_USED,
     PLATFORM_MAP,
     PLATFORMS,
+    SERVICE_ADD_USER,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
+    SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_GENERATE_PIN,
     SERVICE_HARD_REFRESH_USERCODES,
@@ -107,8 +114,10 @@ from .domain.pin_generator import (
 from .domain.queries import get_entry_config
 from .domain.references import format_moved
 from .domain.services import (
+    async_add_user,
     async_clear_slot_condition,
     async_clear_usercode,
+    async_delete_user,
     async_set_slot_condition,
     async_set_usercode,
 )
@@ -526,6 +535,56 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 vol.Required(ATTR_SLOT): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=9999)
                 ),
+            }
+        ),
+    )
+
+    async def _add_user(service: ServiceCall) -> None:
+        """Add a user to an entry."""
+        await async_add_user(
+            hass,
+            service.data["config_entry_id"],
+            service.data[CONF_NAME],
+            pin=service.data.get(CONF_PIN),
+            enabled=service.data[CONF_ENABLED],
+            condition=service.data.get(CONF_CONDITION),
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        _add_user,
+        schema=vol.Schema(
+            {
+                vol.Required("config_entry_id"): cv.string,
+                vol.Required(CONF_NAME): cv.string,
+                vol.Optional(CONF_PIN): cv.string,
+                vol.Optional(CONF_ENABLED, default=True): cv.boolean,
+                vol.Optional(CONF_CONDITION): cv.entity_domain(
+                    CONDITION_ENTITY_DOMAINS
+                ),
+            }
+        ),
+    )
+
+    async def _delete_user(service: ServiceCall) -> None:
+        """Remove a user from an entry."""
+        await async_delete_user(
+            hass,
+            service.data["config_entry_id"],
+            service.data[CONF_NAME],
+            clear_credentials=service.data[ATTR_CLEAR_CREDENTIALS],
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        _delete_user,
+        schema=vol.Schema(
+            {
+                vol.Required("config_entry_id"): cv.string,
+                vol.Required(CONF_NAME): cv.string,
+                vol.Optional(ATTR_CLEAR_CREDENTIALS, default=True): cv.boolean,
             }
         ),
     )
@@ -1369,9 +1428,24 @@ async def async_update_listener(
     # anchored the slot; slot-only providers leave the default no-op in
     # place. This runs before ``locks_to_remove`` processing so providers
     # in ``runtime_data.locks`` are still usable.
+    # Drained, not read: a hand-off applies to the write that requested it,
+    # and leaving the pair behind would spare the next occupant of that slot
+    # number the cleanup it does need.
+    retained_pairs = runtime_data.retained_pairs
+    runtime_data.retained_pairs = set()
     for lock_entity_id, slot_num in diff.pairs_removed:
         release_lock = runtime_data.locks.get(lock_entity_id)
         if release_lock is None:
+            continue
+        if (lock_entity_id, slot_num) in retained_pairs:
+            _LOGGER.info(
+                "%s (%s): leaving slot %s on lock %s programmed; it is no longer "
+                "managed here",
+                entry_id,
+                entry_title,
+                slot_num,
+                lock_entity_id,
+            )
             continue
         try:
             await release_lock.async_release_managed_slot(slot_num)
