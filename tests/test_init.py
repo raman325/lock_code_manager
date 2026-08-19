@@ -57,6 +57,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,
@@ -2223,3 +2224,39 @@ async def test_reclaim_moves_an_entity_off_the_lock_integrations_device(
     assert dev_reg.async_get(lock_device.id) is not None
 
     await hass.config_entries.async_unload(entry_id)
+
+
+async def test_removing_a_slot_clears_its_code_off_the_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A slot leaving the configuration takes its credential with it.
+
+    Two things go wrong when it does not. The obvious one: a PIN nobody
+    manages any more still opens the door. The quieter one: allocation
+    refuses to issue a number it can still read a code at, so the slot is
+    burned -- every add-then-remove cycle costs a slot the lock never gets
+    back.
+    """
+    entry = lock_code_manager_config_entry
+    locks = list(entry.runtime_data.locks.values())
+    for lock in locks:
+        assert (await lock.async_get_usercodes())[2].pin
+
+    config = dict(entry.data)
+    remaining = {k: v for k, v in config[CONF_SLOTS].items() if int(k) != 2}
+    hass.config_entries.async_update_entry(
+        entry, options={**config, CONF_SLOTS: remaining}
+    )
+    await hass.async_block_till_done()
+
+    assert not get_entry_config(entry).has_slot(2)
+    # Every lock in the entry, not just the first: the slot was written to
+    # all of them.
+    for lock in locks:
+        # A cleared slot may drop out of the lock's view entirely or come
+        # back empty; both mean nothing is programmed there.
+        credential = (await lock.async_get_usercodes()).get(2)
+        assert not (credential and credential.pin)
