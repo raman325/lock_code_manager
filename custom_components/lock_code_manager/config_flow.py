@@ -515,10 +515,13 @@ class LockCodeManagerFlowHandler(
                 locks.append(
                     LockOccupancy(
                         lock_entity_id=lock_entity_id,
-                        # Unknowable without a provider. Assuming the lock
-                        # addresses credentials by slot number is the
-                        # assumption that makes allocation refuse rather than
-                        # guess.
+                        # A lock this integration writes to constrains the
+                        # numbering, and without a provider there is no way
+                        # to ask whether it addresses credentials by slot
+                        # number -- so assume it does, which is the
+                        # assumption that refuses rather than guesses. A lock
+                        # on an unsupported platform is written to by nobody
+                        # and constrains nothing.
                         credential_index_follows_slot=skipped.managed,
                         managed=skipped.managed,
                         occupied=None,
@@ -684,12 +687,17 @@ class LockCodeManagerFlowHandler(
 
         return self.async_show_form(
             step_id="ui",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_NUM_USERS, default=DEFAULT_NUM_USERS
-                    ): POSITIVE_INT,
-                }
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Required(
+                            CONF_NUM_USERS, default=DEFAULT_NUM_USERS
+                        ): POSITIVE_INT,
+                    }
+                ),
+                # A refusal comes back to this form, so it comes back holding
+                # what was refused rather than making the user find it again.
+                user_input or {},
             ),
             errors=errors,
             description_placeholders=description_placeholders,

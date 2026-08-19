@@ -1375,6 +1375,10 @@ async def test_setup_reads_only_as_far_as_it_has_to(
     assert result["type"] == "create_entry"
     # Slots 1-3 are taken, so the two users land on 4 and 5.
     assert result["data"][CONF_SLOT_ASSIGNMENT] == {"alice": 4, "raman": 5}
+    # And never past what was actually read.
+    assert max(result["data"][CONF_SLOT_ASSIGNMENT].values()) <= max(
+        slot for window in windows for slot in window
+    )
     # Asked about 1-2, then only 3-4, then only 5: every index once, and
     # never about the lock's whole capacity.
     assert windows == [[1, 2], [3, 4], [5]]
@@ -1969,6 +1973,13 @@ async def test_a_nearly_full_lock_is_read_once_through(
     assert sorted(asked) == list(range(1, 32))
     assert len(asked) == len(set(asked)), "an index was read more than once"
 
+    for name in ("Raman", "Alice"):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
+        )
+    assert result["type"] == "create_entry"
+    assert max(result["data"][CONF_SLOT_ASSIGNMENT].values()) <= max(asked)
+
 
 async def test_numbers_another_entry_manages_are_stepped_over(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
@@ -2018,3 +2029,55 @@ async def test_a_blank_yaml_name_names_the_slot_it_came_from(
         for name in re.findall(r"\{(\w+)\}", message)
         if name not in result["description_placeholders"]
     }
+
+
+async def test_an_empty_lock_numbers_users_from_one(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """With nothing in the way, the users take the lowest numbers there are.
+
+    Every other assignment test has codes or a neighbouring entry holding the
+    low numbers, so none of them would notice allocation starting from
+    somewhere other than 1 -- and starting higher hands out numbers no lock
+    was ever read for.
+    """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with _holding():
+        await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 3})
+        for name in ("Raman", "Alice", "Wren"):
+            result = await hass.config_entries.flow.async_configure(
+                flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
+            )
+
+    assert result["type"] == "create_entry"
+    assert sorted(result["data"][CONF_SLOT_ASSIGNMENT].values()) == [1, 2, 3]
+
+
+async def test_a_refused_count_comes_back_in_the_box(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The form returns holding what was refused, not its default.
+
+    Otherwise the user who asked for eight is handed the default back and has
+    to work out what they typed before they can adjust it.
+    """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    probe_registered, probe_capabilities = _capacity_probe(
+        return_value=_capabilities_with_slots(2)
+    )
+    with probe_registered, probe_capabilities, _holding():
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 8}
+        )
+
+    assert result["errors"] == {"base": "too_many_users"}
+    suggested = [
+        key.description["suggested_value"]
+        for key in result["data_schema"].schema
+        if key == CONF_NUM_USERS and key.description
+    ]
+    assert suggested == [8]

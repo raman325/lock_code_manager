@@ -17,7 +17,7 @@
       "slot_name_required": "Code slot {slot_num} needs a name. The name identifies this user on your locks.",
       "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
-      "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit alongside the codes already on it. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity."
+      "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity."
     },
     "step": {
       "choose_path": {
