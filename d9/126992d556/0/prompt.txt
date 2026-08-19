@@ -2593,3 +2593,7 @@ yes
 ---
 
 lets do B6 but just stage the wiki changes, no actual changes committed or pushed. We can get the blueprints, README, updates, basically everything in this repo ready
+
+---
+
+it should accept config entry title. Basically iit should match the logic we have for the cards for consistency sake
