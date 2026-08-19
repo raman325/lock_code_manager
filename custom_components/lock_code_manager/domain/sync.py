@@ -484,7 +484,18 @@ class SlotSyncManager:
             return snapshot.credential_state == snapshot.code_state
         # active_state == STATE_OFF: slot should be cleared
         if credential is not None:
-            return credential.is_empty
+            if credential.is_empty:
+                return True
+            if not credential.is_readable:
+                # The lock says the slot holds something but will not say
+                # what, so it can neither confirm nor deny the clear. The
+                # clear already issued is the only evidence there is -- the
+                # same trade the set path above makes with ``_last_set_pin``.
+                # Without it the slot is never in sync, and every tick issues
+                # another clear at a lock that has already done as it was
+                # asked.
+                return self._lock.last_write_was_clear(self._slot_num)
+            return False
         # Code sensor entity returns "" for empty credential.
         return snapshot.code_state == ""
 
