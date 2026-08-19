@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "6b527eac5cad",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-card-by-name",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "tests/test_frontend_contract.py",
+    "tests/test_websocket.py",
+    "ts/generate-view.test.ts",
+    "ts/generate-view.ts",
+    "ts/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6b/527eac5cad/0/metadata.json",
+      "transcript": "/6b/527eac5cad/0/full.jsonl",
+      "compact_transcript": "/6b/527eac5cad/0/transcript.jsonl",
+      "content_hash": "/6b/527eac5cad/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 18859,
+    "cache_read_tokens": 21972036,
+    "output_tokens": 11275,
+    "api_call_count": 23
+  }
+}
