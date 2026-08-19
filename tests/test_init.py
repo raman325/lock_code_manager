@@ -2546,3 +2546,47 @@ async def test_migration_leaves_an_unrecognized_entity_id_alone(
     )
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_migration_renames_even_after_the_entry_was_retitled(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The entry's title is not a way back to an existing entity ID.
+
+    An entity is slugged from the title in force when it was created, so
+    rebuilding the old ID from today's title matches nothing once the entry
+    has been renamed -- and silently renamed nothing at all. The registry's
+    own ``original_name`` is what a released version left behind, and it does
+    not depend on the title.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Renamed Since",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "text",
+        DOMAIN,
+        f"{entry.entry_id}|1|{CONF_PIN}",
+        config_entry=entry,
+        original_name="PIN",
+        suggested_object_id="the_original_title_code_slot_1_pin",
+    )
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert (
+        ent_reg.async_get_entity_id("text", DOMAIN, f"{entry.entry_id}|1|{CONF_PIN}")
+        == "text.raman_pin"
+    )
+
+    await hass.config_entries.async_unload(entry.entry_id)

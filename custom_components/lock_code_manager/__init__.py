@@ -990,12 +990,11 @@ def _async_rename_slot_entity_ids(
     long-term statistics follow the rename: the registry emits
     ``old_entity_id`` and ``recorder.entity_registry`` repoints them.
 
-    The device-slug PREFIX is swapped rather than the whole ID rebuilt,
-    because the rest of the ID comes from the entity's own name, which is
-    translated -- an install created in another language does not spell its
-    suffixes the way this code would. An entity whose ID does not start with
-    the prefix this integration would have generated is left alone, since
-    there is no way to tell which part of it was the prefix.
+    The target is rebuilt from what the REGISTRY holds rather than derived
+    from the current ID. Deriving it meant reconstructing the old device slug
+    from the entry's title, and the title in force now is not necessarily the
+    one the entity was created under -- renaming the entry at any point left
+    every ID unmatched, so nothing was renamed at all.
     """
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
@@ -1005,13 +1004,25 @@ def _async_rename_slot_entity_ids(
         slot_num = parse_slot_unique_id(entry_id, entity.unique_id)
         if slot_num is None or not (name := config.name_for(slot_num)):
             continue
-        old_prefix = slugify(f"{config_entry.title} Code slot {slot_num}")
         domain, object_id = entity.entity_id.split(".", 1)
-        if object_id != old_prefix and not object_id.startswith(f"{old_prefix}_"):
-            continue
-        suffix = object_id.removeprefix(old_prefix)
+        if entity.original_name:
+            # What Home Assistant would generate today: the device's name
+            # followed by the entity's own. ``original_name`` is that name as
+            # translated for THIS installation, so a system set up in another
+            # language re-slugs into its own words -- and none of it depends
+            # on the entry's title, which may have changed since.
+            suggested = f"{name} {entity.original_name}"
+        else:
+            # The event entity has no name of its own, and a registry written
+            # by an older Home Assistant may not have kept one. Swap the
+            # device slug instead, which needs the ID to still look like one
+            # this integration generated.
+            old_prefix = slugify(f"{config_entry.title} Code slot {slot_num}")
+            if object_id != old_prefix and not object_id.startswith(f"{old_prefix}_"):
+                continue
+            suggested = f"{slugify(name)}{object_id.removeprefix(old_prefix)}"
         new_entity_id = ent_reg.async_generate_entity_id(
-            domain, f"{slugify(name)}{suffix}", current_entity_id=entity.entity_id
+            domain, suggested, current_entity_id=entity.entity_id
         )
         if new_entity_id == entity.entity_id:
             continue
