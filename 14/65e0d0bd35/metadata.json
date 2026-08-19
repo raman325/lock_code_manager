@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "1465e0d0bd35",
+  "strategy": "manual-commit",
+  "branch": "feat/v3-websocket-users",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/domain/queries.py",
+    "custom_components/lock_code_manager/domain/user_migration.py",
+    "tests/test_config_flow.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/14/65e0d0bd35/0/metadata.json",
+      "transcript": "/14/65e0d0bd35/0/full.jsonl",
+      "compact_transcript": "/14/65e0d0bd35/0/transcript.jsonl",
+      "content_hash": "/14/65e0d0bd35/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 14091,
+    "cache_read_tokens": 11943362,
+    "output_tokens": 10559,
+    "api_call_count": 13
+  }
+}
