@@ -47,7 +47,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.util import dt as dt_util, slugify
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_ACTIVE,
@@ -99,7 +99,11 @@ from .const import (
 from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
-from .domain.queries import get_entry_config, get_managed_slots
+from .domain.queries import (
+    find_config_entry_by_title,
+    get_entry_config,
+    get_managed_slots,
+)
 from .domain.services import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -240,18 +244,6 @@ def _get_last_changed(
     return None
 
 
-def _find_config_entry_by_title(hass: HomeAssistant, title: str) -> ConfigEntry | None:
-    """Find a config entry by title (slugified comparison)."""
-    return next(
-        (
-            entry
-            for entry in hass.config_entries.async_entries(DOMAIN)
-            if slugify(entry.title) == slugify(title)
-        ),
-        None,
-    )
-
-
 def _get_slot_condition_entity_id(
     config_entry: ConfigEntry, slot_num: int
 ) -> str | None:
@@ -278,7 +270,7 @@ def async_get_entry(
     ) -> None:
         """Provide user specific data and store to function."""
         if config_entry_title := msg.get("config_entry_title"):
-            config_entry = _find_config_entry_by_title(hass, config_entry_title)
+            config_entry = find_config_entry_by_title(hass, config_entry_title)
         elif config_entry_id := msg.get("config_entry_id"):
             config_entry = hass.config_entries.async_get_entry(config_entry_id)
         else:
@@ -1226,7 +1218,10 @@ async def ws_set_slot_condition(
     """
     try:
         await async_set_slot_condition(
-            hass, config_entry.entry_id, msg[ATTR_SLOT], msg[CONF_ENTITY_ID]
+            hass,
+            msg[ATTR_SLOT],
+            msg[CONF_ENTITY_ID],
+            config_entry_id=config_entry.entry_id,
         )
         connection.send_result(msg["id"], {"success": True})
     except ServiceValidationError as err:
@@ -1262,5 +1257,7 @@ async def ws_clear_slot_condition(
     config_entry: ConfigEntry,
 ) -> None:
     """Clear the condition entity from a slot."""
-    await async_clear_slot_condition(hass, config_entry.entry_id, msg[ATTR_SLOT])
+    await async_clear_slot_condition(
+        hass, msg[ATTR_SLOT], config_entry_id=config_entry.entry_id
+    )
     connection.send_result(msg["id"], {"success": True})

@@ -156,6 +156,12 @@ class LockCodeManagerConfigEntryRuntimeData:
     # entry. Guards against stacking when _setup_entry_after_start runs more
     # than once (for example, a reload racing with EVENT_HOMEASSISTANT_STARTED).
     update_listener_registered: bool = False
+    # (lock, slot) pairs whose credential is to be left on the lock when the
+    # slot leaves the configuration, set by the delete-user service and drained
+    # by the update listener. A hand-off cannot be expressed in the new
+    # configuration, because what it concerns is exactly what that
+    # configuration no longer has.
+    retained_pairs: set[tuple[str, int]] = field(default_factory=set)
 
 
 type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryRuntimeData]

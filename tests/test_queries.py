@@ -151,3 +151,17 @@ async def test_get_loaded_config_entry_raises_when_not_loaded(
 
     with pytest.raises(ServiceValidationError, match="not loaded"):
         get_loaded_config_entry(hass, entry.entry_id)
+
+
+async def test_get_loaded_config_entry_requires_an_identifier(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Naming no entry is refused, rather than reported as a missing one.
+
+    The service schemas make this unreachable from an action, but the
+    function is the shared entry point the websocket uses too, and "no entry
+    with ID `None`" would send a caller looking for an entry they never named.
+    """
+    with pytest.raises(ServiceValidationError, match="Neither"):
+        get_loaded_config_entry(hass)
