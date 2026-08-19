@@ -954,3 +954,15 @@ class TestOccupiedIndices:
             pytest.raises(LockDisconnected),
         ):
             await lock.async_get_usercodes(range(1, 4))
+
+
+async def test_max_slot_is_the_integrations_limit(
+    zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+) -> None:
+    """Nothing here asks the bridge, so this lock has no opinion.
+
+    This is the provider where the limit costs the most -- one round trip
+    per index -- so it is the one most worth teaching to read the bridge's
+    device definition later.
+    """
+    assert await zigbee2mqtt_lock_connected.async_get_max_slot() is None

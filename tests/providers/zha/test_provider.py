@@ -13,6 +13,7 @@ from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from custom_components.lock_code_manager.const import MAX_SEARCHED_SLOT
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
@@ -1062,3 +1063,92 @@ async def test_available_is_an_empty_slot(
 
     assert codes[1].is_empty
     assert codes[2].is_empty
+
+
+async def test_max_slot_comes_from_the_zcl_attribute(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """The Zigbee Cluster Library defines this, so the lock is asked."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    attr_id = DoorLock.AttributeDefs.num_of_pin_users_supported.id
+    cluster.read_attributes = AsyncMock(return_value=({attr_id: 30}, {}))
+
+    assert await zha_lock.async_get_max_slot() == 30
+    # The stub answers whatever it is asked, so the request itself is what
+    # says this reads the PIN user count rather than some neighbouring
+    # attribute that happens to be a number.
+    assert cluster.read_attributes.await_args.args[0] == [attr_id]
+    assert cluster.read_attributes.await_args.kwargs["allow_cache"] is True
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        ({}, {}),
+        ({DoorLock.AttributeDefs.num_of_pin_users_supported.id: 0}, {}),
+    ],
+)
+async def test_max_slot_falls_back_when_the_lock_will_not_say(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+    response: tuple,
+) -> None:
+    """A missing or zero count means the lock declined, not that it has none.
+
+    Treating zero as "no slots" would stop the search before it began, and
+    treating it as a real range would blame the lock for a limit it never
+    reported. It has no opinion.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.read_attributes = AsyncMock(return_value=response)
+
+    assert await zha_lock.async_get_max_slot() is None
+
+
+async def test_max_slot_falls_back_when_the_lock_cannot_be_reached(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """An unreachable lock still has to yield a place for the search to stop."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.read_attributes = AsyncMock(side_effect=OSError("radio dropped"))
+
+    assert await zha_lock.async_get_max_slot() is None
+
+
+async def test_max_slot_does_not_believe_an_implausible_range(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A 16-bit attribute can claim a range no search should walk.
+
+    This provider spends a round trip per index, so taking 65535 at its word
+    would mean tens of thousands of them before the flow could refuse.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    attr_id = DoorLock.AttributeDefs.num_of_pin_users_supported.id
+    cluster.read_attributes = AsyncMock(return_value=({attr_id: 65535}, {}))
+
+    assert await zha_lock.async_get_max_slot() == MAX_SEARCHED_SLOT
+
+
+async def test_max_slot_survives_a_reply_it_cannot_unpack(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """This always answers, including for a reply of the wrong shape."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.read_attributes = AsyncMock(return_value=None)
+
+    assert await zha_lock.async_get_max_slot() is None

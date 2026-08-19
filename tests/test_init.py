@@ -2321,3 +2321,74 @@ async def test_reclaim_moves_an_entity_off_the_lock_integrations_device(
     assert dev_reg.async_get(lock_device.id) is not None
 
     await hass.config_entries.async_unload(entry_id)
+
+
+async def test_migration_of_a_real_world_entry_shape(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A shape taken from a production entry, not invented for the test.
+
+    Real configurations carry things a hand-written case tends not to: slots
+    whose name is the empty string, slots with no name key at all, and
+    disabled slots still holding a PIN. All three have to survive naming and
+    keep their number, because the number is what their entities are keyed
+    on.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+            "slots": {
+                1: {"enabled": True, "name": "Raman and Sherene", "pin": "1111"},
+                2: {"enabled": True, "name": "Housekeeper", "pin": "2222"},
+                3: {"enabled": False, "name": "", "pin": "3333"},
+                4: {"enabled": False},
+                5: {"enabled": False},
+                6: {"enabled": False, "name": "", "pin": "6666"},
+            },
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+
+    # The registry as a released version leaves it, keyed on the slot number.
+    seeded = {
+        slot: ent_reg.async_get_or_create(
+            "text",
+            DOMAIN,
+            f"{entry.entry_id}|{slot}|{CONF_PIN}",
+            config_entry=entry,
+            suggested_object_id=f"chosen_by_the_user_{slot}",
+        ).entity_id
+        for slot in range(1, 7)
+    }
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    config = get_entry_config(entry)
+    assert entry.version == 4
+    # Nobody lost, and nobody renumbered: the number is the entities' key.
+    assert sorted(config.assignment.slots.values()) == [1, 2, 3, 4, 5, 6]
+    assert config.name_for(1) == "Raman and Sherene"
+    assert config.name_for(2) == "Housekeeper"
+    # Named, rather than left without an identity the new model needs.
+    assert config.name_for(3) == "User 3"
+    assert config.name_for(4) == "User 4"
+    # A disabled slot's PIN is still its PIN.
+    assert config.slot(3)[CONF_PIN] == "3333"
+    assert config.slot(6)[CONF_PIN] == "6666"
+
+    # And every entity the user already had is the same entity.
+    for slot, entity_id in seeded.items():
+        assert (
+            ent_reg.async_get_entity_id(
+                "text", DOMAIN, f"{entry.entry_id}|{slot}|{CONF_PIN}"
+            )
+            == entity_id
+        )
+
+    await hass.config_entries.async_unload(entry.entry_id)

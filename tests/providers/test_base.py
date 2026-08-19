@@ -2156,3 +2156,77 @@ async def test_occupied_indices_asks_nothing_when_there_is_nothing_to_ask(
         assert await lock.async_internal_get_occupied_indices([]) == frozenset()
 
     read.assert_not_awaited()
+
+
+async def test_max_slot_prefers_what_the_lock_advertises(hass: HomeAssistant) -> None:
+    """A lock that says how many slots it has is believed."""
+    lock = _bare_lock(hass, "test_lock_max_slot_advertised")
+
+    with patch.object(
+        lock,
+        "async_get_capabilities",
+        AsyncMock(
+            return_value=LockCapabilities(
+                supports_user_management=False,
+                max_users=30,
+                credential_types={
+                    CredentialType.PIN: CredentialTypeCapability(
+                        num_slots=30,
+                        min_length=4,
+                        max_length=8,
+                        supports_learn=False,
+                    )
+                },
+            )
+        ),
+    ):
+        assert await lock.async_get_max_slot() == 30
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        LockCapabilities(
+            supports_user_management=False, max_users=0, credential_types={}
+        ),
+        LockCapabilities(
+            supports_user_management=False,
+            max_users=0,
+            credential_types={
+                CredentialType.PIN: CredentialTypeCapability(
+                    num_slots=0, min_length=4, max_length=8, supports_learn=False
+                )
+            },
+        ),
+    ],
+)
+async def test_max_slot_falls_back_when_the_lock_will_not_say(
+    hass: HomeAssistant, capabilities: LockCapabilities
+) -> None:
+    """A capacity of zero means "I will not say", not "nowhere to write".
+
+    ``bounded_slot_count`` answers None there so a write is never refused
+    over an unreadable capability. A search needs to know the difference
+    between that and a real range, so this reports having no opinion and
+    lets the caller decide how far to look.
+    """
+    lock = _bare_lock(hass, f"test_lock_max_slot_{id(capabilities)}")
+
+    with patch.object(
+        lock, "async_get_capabilities", AsyncMock(return_value=capabilities)
+    ):
+        assert await lock.async_get_max_slot() is None
+
+
+async def test_max_slot_falls_back_when_capabilities_cannot_be_read(
+    hass: HomeAssistant,
+) -> None:
+    """A lock that cannot be asked has no opinion, and must not raise."""
+    lock = _bare_lock(hass, "test_lock_max_slot_unreadable")
+
+    with patch.object(
+        lock,
+        "async_get_capabilities",
+        AsyncMock(side_effect=LockDisconnected("asleep")),
+    ):
+        assert await lock.async_get_max_slot() is None

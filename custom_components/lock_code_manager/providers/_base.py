@@ -79,6 +79,7 @@ _LOGGER = logging.getLogger(__name__)
 
 MIN_OPERATION_DELAY = 2.0
 
+
 # How long an optimistic write waits for confirmation (push event or hard-refresh
 # presence) before the sync layer gives up waiting and re-syncs. See the Phase 2
 # push-as-commit spec.
@@ -1820,6 +1821,50 @@ class BaseLock:
             "async_get_users",
             "Override to read users and credentials from the lock.",
         )
+
+    async def async_get_max_slot(self) -> int | None:
+        """
+        Return the highest slot number worth asking this lock about.
+
+        A search for free slot numbers has to stop somewhere, and only the
+        lock knows where. Past the end of its range a lock cannot report a
+        slot it does not have, so every index beyond it comes back as
+        occupied -- a searcher that does not know where to stop walks upward
+        forever finding nothing free.
+
+        ``None`` means this lock has no opinion, not that it has no slots.
+        The caller supplies the limit then, and knows the number came from
+        nowhere -- which matters, because telling a user their lock reported
+        a capacity it never reported sends them to re-interview it over a
+        number it never said.
+
+        Distinct from ``bounded_slot_count``, whose ``None`` means "I could
+        not read a capacity, so do not refuse a write over it". That answer
+        is deliberately permissive about WRITING; this one is about how far
+        to SEARCH, and a caller must not read one as the other.
+
+        Where the answer comes from differs by provider: an advertised
+        capacity, a protocol attribute, or nothing at all -- where the slot
+        number is this integration's own bookkeeping rather than an index on
+        the lock, there is no device range to report.
+
+        Note this is about the END OF THE RANGE, not about which numbers
+        inside it are usable. A slot the lock reports as unsupported or
+        disabled is a fact about that slot, and is still worth asking about.
+        """
+        try:
+            capabilities = await self._get_cached_capabilities()
+        except Exception:
+            # Including whatever a provider raises that is not one of this
+            # integration's own errors. Having no opinion is an answer; an
+            # exception escaping here is not.
+            _LOGGER.debug(
+                "Could not ask %s how far its slot numbers go",
+                self.lock.entity_id,
+                exc_info=True,
+            )
+            return None
+        return capabilities.bounded_slot_count(CredentialType.PIN)
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """

@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
+    MAX_SEARCHED_SLOT,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -2088,3 +2089,219 @@ async def test_a_refused_count_comes_back_in_the_box(
         if key == CONF_NUM_USERS and key.description
     ]
     assert suggested == [8]
+
+
+async def test_the_search_stops_at_the_end_of_the_lock(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A lock cannot hand back a slot it does not have.
+
+    Past its last slot every index answers "occupied" -- there is nothing
+    there to report as free -- so a search with no end walks upward forever
+    finding nothing. It stops where the lock says its numbers stop.
+    """
+    highest_asked: list[int] = []
+
+    async def _read(self, slots=None):
+        scope = sorted(self.managed_slots if slots is None else slots)
+        highest_asked.extend(scope)
+        # Ten real slots, all taken; anything beyond simply is not there.
+        return {
+            slot: (
+                SlotCredential.known("0000")
+                if slot <= 10
+                else SlotCredential.unreadable()
+            )
+            for slot in scope
+        }
+
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with (
+        patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=10)),
+        patch.object(MockLCMLock, "async_get_usercodes", _read),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+
+    assert result["errors"] == {"base": "numbers_needed_exceed_capacity"}
+    # Two users on a lock whose ten slots are all taken: the second would
+    # need number 12, and the lock stops at 10.
+    assert result["description_placeholders"]["needed"] == "12"
+    assert result["description_placeholders"]["num_slots"] == "10"
+    assert max(highest_asked) <= 10, "the search read past the end of the lock"
+
+
+async def test_the_smallest_lock_bounds_the_search(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """Every lock in an entry gets the same numbers, so the smallest wins."""
+    flow_id = await _init_flow_to_user_step(hass)
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers({})):
+        await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]},
+        )
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    limits = {LOCK_1_ENTITY_ID: 30, LOCK_2_ENTITY_ID: 4}
+
+    async def _max_slot(self):
+        # Keyed by lock rather than call order, so a reordering or an extra
+        # call cannot quietly hand back a different bound than the one this
+        # test is about.
+        return limits[self.lock.entity_id]
+
+    with (
+        patch.object(MockLCMLock, "async_get_max_slot", _max_slot),
+        _holding(1, 2, 3),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+
+    # Three taken means the pair would need numbers 4 and 5, and the smaller
+    # lock stops at 4.
+    assert result["errors"] == {"base": "numbers_needed_exceed_capacity"}
+    assert result["description_placeholders"]["num_slots"] == "4"
+    assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
+
+
+async def test_a_count_past_the_range_is_refused_before_reading(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The count itself is bounded, not only each widening after it.
+
+    A count that already runs past the lock's last slot walks off the end on
+    the way in, and on a lock that reads past-end as free it would be handed
+    every one of those numbers.
+    """
+    reads: list[int] = []
+
+    async def _read(self, slots=None):
+        scope = sorted(self.managed_slots if slots is None else slots)
+        reads.extend(scope)
+        return dict.fromkeys(scope, SlotCredential.empty())
+
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with (
+        patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=5)),
+        patch.object(MockLCMLock, "async_get_usercodes", _read),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 20}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "too_many_users"}
+    assert result["description_placeholders"]["num_slots"] == "5"
+    assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+    assert reads == [], "the lock was read past its own range"
+
+
+async def test_the_last_number_a_lock_holds_is_usable(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The bound is the highest usable number, not one past it."""
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    # Four of five slots taken: the one user must land on 5, the last one.
+    with (
+        patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=5)),
+        _holding(1, 2, 3, 4),
+    ):
+        await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "Raman", CONF_ENABLED: True, CONF_PIN: "1111"}
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_SLOT_ASSIGNMENT] == {"raman": 5}
+
+
+async def test_a_lock_that_allocates_its_own_index_does_not_bound_the_search(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """What a self-indexing lock holds cannot cap another lock's numbering.
+
+    Without the skip, a Matter lock advertising a handful of credentials
+    would silently cap every slot number in the entry.
+    """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with (
+        patch.object(
+            MockLCMLock,
+            "credential_index_follows_slot",
+            new_callable=PropertyMock,
+            return_value=False,
+        ),
+        patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=2)),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 8}
+        )
+
+    # Its answer of 2 is not consulted, so eight users are fine.
+    assert result["type"] == "form"
+    assert result["step_id"] == "code_slot"
+
+
+async def test_no_lock_that_can_answer_leaves_our_own_limit(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """With nothing able to say, the refusal is ours and says so.
+
+    Naming it as a lock's capacity would tell the user to re-interview a lock
+    over a number the lock never reported.
+    """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    # An ordinary lock that simply does not report a range -- the common
+    # case, not an exotic one. It must not be named as the source of a limit
+    # it never gave, or the user is sent to re-interview it over a number it
+    # never reported.
+    with patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=None)):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: MAX_SEARCHED_SLOT + 1}
+        )
+
+    assert result["errors"] == {"base": "search_limit_reached"}
+    assert result["description_placeholders"]["max_slot"] == str(MAX_SEARCHED_SLOT)
+    assert "lock" not in result["description_placeholders"]
+
+
+async def test_a_lock_that_reports_its_range_is_the_one_named(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """Only a lock that answered is blamed, and only the smallest one.
+
+    Ties are ordinary -- two locks of a kind answer alike -- so the same lock
+    has to be named every time rather than whichever came first.
+    """
+    flow_id = await _init_flow_to_user_step(hass)
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers({})):
+        await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_NAME: "test", CONF_LOCKS: [LOCK_2_ENTITY_ID, LOCK_1_ENTITY_ID]},
+        )
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    # Both answer the same, so the name cannot come from iteration order.
+    with patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=4)):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 9}
+        )
+
+    assert result["errors"] == {"base": "too_many_users"}
+    assert result["description_placeholders"]["num_slots"] == "4"
+    assert result["description_placeholders"]["lock"] == min(
+        [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+    )

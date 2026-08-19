@@ -32,6 +32,7 @@ from .const import (
     DEFAULT_NUM_USERS,
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
+    MAX_SEARCHED_SLOT,
 )
 from .domain.config import EntryConfig
 from .domain.credentials import CredentialType
@@ -578,6 +579,89 @@ class LockCodeManagerFlowHandler(
             ),
         )
 
+    def _too_far(
+        self,
+        num_users: int,
+        max_slot: int,
+        limiting_lock: str | None,
+        needed: int | None = None,
+    ) -> tuple[dict[str, str], dict[str, Any]]:
+        """
+        Explain that the numbers needed run past where the search may go.
+
+        Two things decide the wording. Whose limit it is: a lock that
+        reported its own range can be named and described as the lock's
+        capacity, while a limit nothing reported must not be, or the user is
+        sent to re-interview a lock over a number it never gave.
+
+        And whether the count itself is too large, or only the numbers it
+        would have to reach. ``needed`` names the number the last user would
+        land on when existing codes have pushed them past the range -- a
+        count that fits the lock told "N users will not fit" reads as a bug.
+        """
+        if limiting_lock is None:
+            return {"base": "search_limit_reached"}, {
+                "num_users": str(num_users),
+                "max_slot": str(max_slot),
+            }
+        if needed is not None:
+            return {"base": "numbers_needed_exceed_capacity"}, {
+                "num_users": str(num_users),
+                "num_slots": str(max_slot),
+                "needed": str(needed),
+                "lock": limiting_lock,
+            }
+        return {"base": "too_many_users"}, {
+            "num_users": str(num_users),
+            "num_slots": str(max_slot),
+            "lock": limiting_lock,
+        }
+
+    async def _async_max_slot(self) -> tuple[int, str | None]:
+        """
+        Return how far a search for free numbers may go across these locks.
+
+        The smallest answer wins, and comes back with the lock that gave it
+        so a refusal can name the right one: a number past any single lock's
+        range is a number that lock cannot hold, and every lock in an entry
+        gets the same numbers. Locks that allocate their own credential index
+        are not asked, because their contents never constrain the numbering.
+
+        A lock of ``None`` means nothing here could say and the limit is this
+        integration's own -- which a message must not describe as a capacity
+        some lock reported.
+        """
+        dev_reg = dr.async_get(self.hass)
+        ent_reg = er.async_get(self.hass)
+        limits: dict[str, int] = {}
+        for lock_entity_id in self.data[CONF_LOCKS]:
+            try:
+                lock_instance = _async_build_lock_instance(
+                    self.hass, dev_reg, ent_reg, lock_entity_id
+                )
+                if not lock_instance.credential_index_follows_slot:
+                    continue
+                # None is a lock with no opinion, not a lock with no slots.
+                # Only a real answer earns a name, because the name is what
+                # the refusal blames -- and blaming a lock for a limit it
+                # never reported sends the user to re-interview it over a
+                # number it never said.
+                if (bound := await lock_instance.async_get_max_slot()) is not None:
+                    limits[lock_entity_id] = bound
+            except Exception:
+                _LOGGER.warning(
+                    "Could not ask %s how far its slot numbers go; "
+                    "searching only as far as this integration does",
+                    lock_entity_id,
+                    exc_info=True,
+                )
+        if not limits:
+            return MAX_SEARCHED_SLOT, None
+        # Ties are ordinary -- two locks of a kind answer alike -- so the
+        # entity id breaks them, and the same lock is named every time.
+        limiting = min(limits, key=lambda lock: (limits[lock], lock))
+        return limits[limiting], limiting
+
     async def _async_allocate_for(
         self, num_users: int
     ) -> tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]:
@@ -618,6 +702,14 @@ class LockCodeManagerFlowHandler(
                 {"base": "too_many_users"},
                 {**placeholders, "num_users": str(num_users)},
             )
+
+        max_slot, limiting_lock = await self._async_max_slot()
+        if num_users > max_slot:
+            # Checked before the first read, not only before each widening:
+            # a count that already exceeds the range walks past the end of
+            # the lock on the way in, and on a lock that reads past-end as
+            # free it would be handed every one of those numbers.
+            return None, *self._too_far(num_users, max_slot, limiting_lock)
 
         unavailable: set[int] = set()
         read_up_to = 0
@@ -664,6 +756,14 @@ class LockCodeManagerFlowHandler(
                         "num_users": str(num_users),
                         "needed": str(wider),
                     },
+                )
+            if wider > max_slot:
+                # Past the last number any of these locks holds. Searching on
+                # would only read indices no lock has, and a lock cannot hand
+                # back a slot it does not have -- every one of them would
+                # come back occupied, forever.
+                return None, *self._too_far(
+                    num_users, max_slot, limiting_lock, needed=wider
                 )
             window = wider
 

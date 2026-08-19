@@ -26,6 +26,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.util import dt as dt_util
 
+from ..const import MAX_SEARCHED_SLOT
 from ..domain.credentials import (
     Credential,
     CredentialRef,
@@ -409,6 +410,42 @@ class ZHALock(BaseLock):
             else:
                 slot_states[slot_num] = SlotCredential.unreadable()
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
+
+    async def async_get_max_slot(self) -> int | None:
+        """
+        Read how many Personal Identification Number users the lock supports.
+
+        The Zigbee Cluster Library defines this
+        (``num_of_pin_users_supported``), so the answer comes from the lock
+        rather than from a guess. A lock that will not report it has no
+        opinion, and the caller decides how far to look instead.
+        """
+        try:
+            cluster = await self._get_connected_cluster()
+            result = await cluster.read_attributes(
+                [DoorLock.AttributeDefs.num_of_pin_users_supported.id],
+                allow_cache=True,
+                only_cache=False,
+            )
+            supported = (result[0] or {}).get(
+                DoorLock.AttributeDefs.num_of_pin_users_supported.id
+            )
+        except Exception:
+            _LOGGER.debug(
+                "Lock %s: could not read the supported user count",
+                self.lock.entity_id,
+                exc_info=True,
+            )
+            return None
+
+        # Zero is what a lock reports when it will not say, not a lock with
+        # nowhere to write. The attribute is 16-bit, so a lock can also claim
+        # a range far past anything addressable through this cluster -- and
+        # this provider spends a round trip per index, so believing 65535
+        # would mean tens of thousands of them before a refusal.
+        if not supported:
+            return None
+        return min(int(supported), MAX_SEARCHED_SLOT)
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read all codes from the lock (no cache to invalidate)."""
