@@ -101,8 +101,13 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
 
         Includes unsupported_locks list for locks that can't fire code slot events.
         Computed dynamically to reflect any changes in lock capabilities.
+
+        Starts from what the base class publishes: a property shadows
+        ``_attr_extra_state_attributes`` outright, so building a fresh dict
+        here dropped this entity's slot identity and left it the one entity a
+        template could not find by slot.
         """
-        attrs: dict[str, Any] = {}
+        attrs: dict[str, Any] = dict(self._attr_extra_state_attributes)
         unsupported = [
             lock.lock.entity_id
             for lock in self.locks

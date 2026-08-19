@@ -22,6 +22,7 @@ from homeassistant.helpers.event import TrackStates, async_track_state_change_fi
 
 from .const import (
     ATTR_CODE_SLOT,
+    ATTR_SLOT_FIELD,
     ATTR_TO,
     DOMAIN,
 )
@@ -88,8 +89,9 @@ class BaseLockCodeManagerEntity(Entity):
         self._attr_device_info = build_slot_device_info(config_entry, slot_num)
 
         self._attr_unique_id = build_slot_unique_id(self.base_unique_id, slot_num, key)
-        self._attr_extra_state_attributes: dict[str, int | list[str]] = {
-            ATTR_CODE_SLOT: int(slot_num)
+        self._attr_extra_state_attributes: dict[str, int | str | list[str]] = {
+            ATTR_CODE_SLOT: int(slot_num),
+            ATTR_SLOT_FIELD: key,
         }
 
         # Resolved in ``async_added_to_hass``; the coordinator instance is

@@ -26,6 +26,10 @@ ATTR_TEXT = "text"
 
 
 ATTR_CODE_SLOT = "code_slot"
+# Which property of the slot an entity represents ("pin", "name", "enabled").
+# Published so a template can find an entity without matching on its ID, whose
+# shape depends on the user's name and on the language it was created in.
+ATTR_SLOT_FIELD = "slot_field"
 ATTR_USERCODE = "usercode"
 ATTR_FROM = "from"
 ATTR_TO = "to"
