@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
+    MAX_SEARCHED_SLOT,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -39,7 +40,6 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
-from custom_components.lock_code_manager.providers._base import MAX_MANAGED_SLOT
 
 from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, MockLCMLock
 
@@ -2258,14 +2258,44 @@ async def test_no_lock_that_can_answer_leaves_our_own_limit(
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    with patch(
-        "custom_components.lock_code_manager.config_flow._async_build_lock_instance",
-        side_effect=RuntimeError("no provider"),
-    ):
+    # An ordinary lock that simply does not report a range -- the common
+    # case, not an exotic one. It must not be named as the source of a limit
+    # it never gave, or the user is sent to re-interview it over a number it
+    # never reported.
+    with patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=None)):
         result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NUM_USERS: MAX_MANAGED_SLOT + 1}
+            flow_id, {CONF_NUM_USERS: MAX_SEARCHED_SLOT + 1}
         )
 
     assert result["errors"] == {"base": "search_limit_reached"}
-    assert result["description_placeholders"]["max_slot"] == str(MAX_MANAGED_SLOT)
+    assert result["description_placeholders"]["max_slot"] == str(MAX_SEARCHED_SLOT)
     assert "lock" not in result["description_placeholders"]
+
+
+async def test_a_lock_that_reports_its_range_is_the_one_named(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """Only a lock that answered is blamed, and only the smallest one.
+
+    Ties are ordinary -- two locks of a kind answer alike -- so the same lock
+    has to be named every time rather than whichever came first.
+    """
+    flow_id = await _init_flow_to_user_step(hass)
+    with patch(GET_ALL_CODES_PATCH, side_effect=_answers({})):
+        await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_NAME: "test", CONF_LOCKS: [LOCK_2_ENTITY_ID, LOCK_1_ENTITY_ID]},
+        )
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    # Both answer the same, so the name cannot come from iteration order.
+    with patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=4)):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 9}
+        )
+
+    assert result["errors"] == {"base": "too_many_users"}
+    assert result["description_placeholders"]["num_slots"] == "4"
+    assert result["description_placeholders"]["lock"] == min(
+        [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+    )

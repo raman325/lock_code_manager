@@ -26,6 +26,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.util import dt as dt_util
 
+from ..const import MAX_SEARCHED_SLOT
 from ..domain.credentials import (
     Credential,
     CredentialRef,
@@ -35,7 +36,7 @@ from ..domain.credentials import (
 )
 from ..domain.exceptions import CodeRejectedError, LockDisconnected
 from ..domain.models import SlotCredential
-from ._base import MAX_MANAGED_SLOT, BaseLock
+from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -410,16 +411,14 @@ class ZHALock(BaseLock):
                 slot_states[slot_num] = SlotCredential.unreadable()
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
-    async def async_get_max_slot(self) -> int:
+    async def async_get_max_slot(self) -> int | None:
         """
         Read how many Personal Identification Number users the lock supports.
 
         The Zigbee Cluster Library defines this
         (``num_of_pin_users_supported``), so the answer comes from the lock
-        rather than from a guess. A lock that will not report it falls back
-        to the integration's own limit -- the alternative, searching upward
-        with no end, walks past the lock's last slot and reads every index
-        beyond it as occupied.
+        rather than from a guess. A lock that will not report it has no
+        opinion, and the caller decides how far to look instead.
         """
         try:
             cluster = await self._get_connected_cluster()
@@ -437,7 +436,7 @@ class ZHALock(BaseLock):
                 self.lock.entity_id,
                 exc_info=True,
             )
-            return MAX_MANAGED_SLOT
+            return None
 
         # Zero is what a lock reports when it will not say, not a lock with
         # nowhere to write. The attribute is 16-bit, so a lock can also claim
@@ -445,8 +444,8 @@ class ZHALock(BaseLock):
         # this provider spends a round trip per index, so believing 65535
         # would mean tens of thousands of them before a refusal.
         if not supported:
-            return MAX_MANAGED_SLOT
-        return min(int(supported), MAX_MANAGED_SLOT)
+            return None
+        return min(int(supported), MAX_SEARCHED_SLOT)
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read all codes from the lock (no cache to invalidate)."""

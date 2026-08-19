@@ -13,6 +13,7 @@ from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from custom_components.lock_code_manager.const import MAX_SEARCHED_SLOT
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
@@ -24,7 +25,6 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.providers._base import MAX_MANAGED_SLOT
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
@@ -1099,14 +1099,15 @@ async def test_max_slot_falls_back_when_the_lock_will_not_say(
 ) -> None:
     """A missing or zero count means the lock declined, not that it has none.
 
-    Treating zero as "no slots" would stop the search before it began; the
-    integration's own limit is the honest stand-in.
+    Treating zero as "no slots" would stop the search before it began, and
+    treating it as a real range would blame the lock for a limit it never
+    reported. It has no opinion.
     """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.read_attributes = AsyncMock(return_value=response)
 
-    assert await zha_lock.async_get_max_slot() == MAX_MANAGED_SLOT
+    assert await zha_lock.async_get_max_slot() is None
 
 
 async def test_max_slot_falls_back_when_the_lock_cannot_be_reached(
@@ -1119,7 +1120,7 @@ async def test_max_slot_falls_back_when_the_lock_cannot_be_reached(
     assert cluster is not None
     cluster.read_attributes = AsyncMock(side_effect=OSError("radio dropped"))
 
-    assert await zha_lock.async_get_max_slot() == MAX_MANAGED_SLOT
+    assert await zha_lock.async_get_max_slot() is None
 
 
 async def test_max_slot_does_not_believe_an_implausible_range(
@@ -1137,7 +1138,7 @@ async def test_max_slot_does_not_believe_an_implausible_range(
     attr_id = DoorLock.AttributeDefs.num_of_pin_users_supported.id
     cluster.read_attributes = AsyncMock(return_value=({attr_id: 65535}, {}))
 
-    assert await zha_lock.async_get_max_slot() == MAX_MANAGED_SLOT
+    assert await zha_lock.async_get_max_slot() == MAX_SEARCHED_SLOT
 
 
 async def test_max_slot_survives_a_reply_it_cannot_unpack(
@@ -1150,4 +1151,4 @@ async def test_max_slot_survives_a_reply_it_cannot_unpack(
     assert cluster is not None
     cluster.read_attributes = AsyncMock(return_value=None)
 
-    assert await zha_lock.async_get_max_slot() == MAX_MANAGED_SLOT
+    assert await zha_lock.async_get_max_slot() is None

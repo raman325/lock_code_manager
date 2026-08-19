@@ -42,10 +42,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.providers._base import (
-    MAX_MANAGED_SLOT,
-    BaseLock,
-)
+from custom_components.lock_code_manager.providers._base import BaseLock
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, MockLCMLock
 
 TEST_OPERATION_DELAY = 0.01
@@ -2209,21 +2206,22 @@ async def test_max_slot_falls_back_when_the_lock_will_not_say(
     """A capacity of zero means "I will not say", not "nowhere to write".
 
     ``bounded_slot_count`` answers None there so a write is never refused
-    over an unreadable capability. A search cannot use that answer -- it has
-    to stop somewhere -- so it falls back to the limit this integration sets.
+    over an unreadable capability. A search needs to know the difference
+    between that and a real range, so this reports having no opinion and
+    lets the caller decide how far to look.
     """
     lock = _bare_lock(hass, f"test_lock_max_slot_{id(capabilities)}")
 
     with patch.object(
         lock, "async_get_capabilities", AsyncMock(return_value=capabilities)
     ):
-        assert await lock.async_get_max_slot() == MAX_MANAGED_SLOT
+        assert await lock.async_get_max_slot() is None
 
 
 async def test_max_slot_falls_back_when_capabilities_cannot_be_read(
     hass: HomeAssistant,
 ) -> None:
-    """A lock that cannot be asked still has to yield an answer."""
+    """A lock that cannot be asked has no opinion, and must not raise."""
     lock = _bare_lock(hass, "test_lock_max_slot_unreadable")
 
     with patch.object(
@@ -2231,4 +2229,4 @@ async def test_max_slot_falls_back_when_capabilities_cannot_be_read(
         "async_get_capabilities",
         AsyncMock(side_effect=LockDisconnected("asleep")),
     ):
-        assert await lock.async_get_max_slot() == MAX_MANAGED_SLOT
+        assert await lock.async_get_max_slot() is None

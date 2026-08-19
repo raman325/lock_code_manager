@@ -32,6 +32,7 @@ from .const import (
     DEFAULT_NUM_USERS,
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
+    MAX_SEARCHED_SLOT,
 )
 from .domain.config import EntryConfig
 from .domain.credentials import CredentialType
@@ -42,7 +43,6 @@ from .domain.occupancy import LockOccupancy, Occupancy
 from .domain.queries import get_entry_config, get_managed_slots
 from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import INTEGRATIONS_CLASS_MAP
-from .providers._base import MAX_MANAGED_SLOT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -626,15 +626,24 @@ class LockCodeManagerFlowHandler(
                 )
                 if not lock_instance.credential_index_follows_slot:
                     continue
-                limits[lock_entity_id] = await lock_instance.async_get_max_slot()
+                # None is a lock with no opinion, not a lock with no slots.
+                # Only a real answer earns a name, because the name is what
+                # the refusal blames -- and blaming a lock for a limit it
+                # never reported sends the user to re-interview it over a
+                # number it never said.
+                if (bound := await lock_instance.async_get_max_slot()) is not None:
+                    limits[lock_entity_id] = bound
             except Exception:
-                _LOGGER.debug(
-                    "Could not ask %s how far its slot numbers go",
+                _LOGGER.warning(
+                    "Could not ask %s how far its slot numbers go; "
+                    "searching only as far as this integration does",
                     lock_entity_id,
                     exc_info=True,
                 )
         if not limits:
-            return MAX_MANAGED_SLOT, None
+            return MAX_SEARCHED_SLOT, None
+        # Ties are ordinary -- two locks of a kind answer alike -- so the
+        # entity id breaks them, and the same lock is named every time.
         limiting = min(limits, key=lambda lock: (limits[lock], lock))
         return limits[limiting], limiting
 

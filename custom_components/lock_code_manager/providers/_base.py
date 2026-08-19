@@ -79,19 +79,6 @@ _LOGGER = logging.getLogger(__name__)
 
 MIN_OPERATION_DELAY = 2.0
 
-# How far a search for free slot numbers goes on a lock that does not say
-# where its own range ends.
-#
-# 255 because that is the largest value a one-byte user identifier can
-# carry, and the older credential command classes address users with one --
-# so no lock reached through them has a slot number above it to find. Where
-# the slot number is this integration's own tag rather than a device index
-# (Schlage, Akuvox, virtual) there is no device range at all, and this
-# stands in as the point past which nobody is configuring more users.
-#
-# It bounds only the SEARCH. A number a user already holds above it keeps
-# working, and a lock that reports a larger range is believed.
-MAX_MANAGED_SLOT = 255
 
 # How long an optimistic write waits for confirmation (push event or hard-refresh
 # presence) before the sync layer gives up waiting and re-syncs. See the Phase 2
@@ -1835,7 +1822,7 @@ class BaseLock:
             "Override to read users and credentials from the lock.",
         )
 
-    async def async_get_max_slot(self) -> int:
+    async def async_get_max_slot(self) -> int | None:
         """
         Return the highest slot number worth asking this lock about.
 
@@ -1845,16 +1832,21 @@ class BaseLock:
         occupied -- a searcher that does not know where to stop walks upward
         forever finding nothing free.
 
+        ``None`` means this lock has no opinion, not that it has no slots.
+        The caller supplies the limit then, and knows the number came from
+        nowhere -- which matters, because telling a user their lock reported
+        a capacity it never reported sends them to re-interview it over a
+        number it never said.
+
         Distinct from ``bounded_slot_count``, whose ``None`` means "I could
         not read a capacity, so do not refuse a write over it". That answer
-        is deliberately permissive and must not be read as permission to
-        search past the end of a lock. This one always answers.
+        is deliberately permissive about WRITING; this one is about how far
+        to SEARCH, and a caller must not read one as the other.
 
         Where the answer comes from differs by provider: an advertised
-        capacity, a protocol attribute, or -- where the slot number is this
-        integration's own bookkeeping rather than a device index -- a limit
-        this integration chooses. The base takes the advertised capacity when
-        there is one and falls back to that chosen limit.
+        capacity, a protocol attribute, or nothing at all -- where the slot
+        number is this integration's own bookkeeping rather than an index on
+        the lock, there is no device range to report.
 
         Note this is about the END OF THE RANGE, not about which numbers
         inside it are usable. A slot the lock reports as unsupported or
@@ -1862,10 +1854,17 @@ class BaseLock:
         """
         try:
             capabilities = await self._get_cached_capabilities()
-        except LockCodeManagerError:
-            return MAX_MANAGED_SLOT
-        advertised = capabilities.bounded_slot_count(CredentialType.PIN)
-        return advertised if advertised is not None else MAX_MANAGED_SLOT
+        except Exception:
+            # Including whatever a provider raises that is not one of this
+            # integration's own errors. Having no opinion is an answer; an
+            # exception escaping here is not.
+            _LOGGER.debug(
+                "Could not ask %s how far its slot numbers go",
+                self.lock.entity_id,
+                exc_info=True,
+            )
+            return None
+        return capabilities.bounded_slot_count(CredentialType.PIN)
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """
