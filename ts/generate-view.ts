@@ -190,6 +190,19 @@ export function getEntityDisplayName(
 }
 
 /** @internal - exported for testing via generate-view.internal.ts */
+/**
+ * The one-line heading for a slot's section.
+ *
+ * A name goes straight into markdown, so a line break in it would close the
+ * heading and turn the rest into headings of its own. Names are free-form —
+ * nothing stops one containing a newline — and the result reads as a broken
+ * dashboard rather than a strange name.
+ */
+function headingFor(slotMapping: SlotMapping): string {
+    const name = slotMapping.userName?.replace(/\s+/g, ' ').replace(/^#+/, '').trim();
+    return name || `Slot ${slotMapping.slotNum}`;
+}
+
 export function generateSlotCard(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
@@ -203,7 +216,7 @@ export function generateSlotCard(
             {
                 // Named for whoever holds it. The slot number is internal
                 // bookkeeping and has no business on a dashboard.
-                content: `## ${slotMapping.userName ?? `Slot ${slotMapping.slotNum}`}`,
+                content: `## ${headingFor(slotMapping)}`,
                 type: 'markdown'
             },
             {

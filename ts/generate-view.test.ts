@@ -498,6 +498,17 @@ describe('generateSlotCard', () => {
         };
     }
 
+    it('keeps the heading on one line whatever the name contains', () => {
+        // Names are free-form, and a line break would close the heading and
+        // turn the rest of the name into headings of its own.
+        const card = generateSlotCard(createMockHass({}) as never, {} as never, {
+            ...createMinimalSlotMapping(1),
+            userName: '# Big\n\n## Fake'
+        });
+
+        expect((card.cards as { content: string }[])[0].content).toBe('## Big ## Fake');
+    });
+
     it('generates vertical-stack card with markdown header and entities', () => {
         const hass = createMockHass();
         const slotMapping = createMinimalSlotMapping(1);
