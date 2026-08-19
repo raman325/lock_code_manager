@@ -15,6 +15,8 @@ from homeassistant.components.calendar import (
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    CONF_CONDITION,
+    CONF_NAME,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
@@ -62,7 +64,6 @@ from custom_components.lock_code_manager.const import (
     CONF_ENABLED,
     CONF_ENTITIES,
     CONF_LOCKS,
-    CONF_NAME,
     CONF_PIN,
     CONF_SLOTS,
 )
@@ -149,7 +150,12 @@ async def test_get_config_entry_data(
     assert CONF_NAME in lock_1
 
     # Verify slots
-    assert result[CONF_SLOTS] == {"1": None, "2": "calendar.test_1"}
+    assert result[CONF_SLOTS] == {
+        # The name travels with the slot so the card never has to work out
+        # who holds it.
+        "1": {CONF_NAME: "test1", CONF_CONDITION: None},
+        "2": {CONF_NAME: "test2", CONF_CONDITION: "calendar.test_1"},
+    }
 
     # Try API call with entry title
     await ws_client.send_json(
@@ -161,7 +167,12 @@ async def test_get_config_entry_data(
     )
     msg = await ws_client.receive_json()
     assert msg["success"]
-    assert result[CONF_SLOTS] == {"1": None, "2": "calendar.test_1"}
+    assert result[CONF_SLOTS] == {
+        # The name travels with the slot so the card never has to work out
+        # who holds it.
+        "1": {CONF_NAME: "test1", CONF_CONDITION: None},
+        "2": {CONF_NAME: "test2", CONF_CONDITION: "calendar.test_1"},
+    }
 
     # Try API call with invalid entry ID
     await ws_client.send_json(
