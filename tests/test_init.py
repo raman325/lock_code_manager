@@ -2495,6 +2495,15 @@ async def test_migration_reslugs_entity_ids_onto_the_user_name(
     assert ent_reg.async_get(after).id == before.id
     assert ent_reg.async_get(after).area_id == "kitchen"
 
+    # Nothing rewrites an entity id stored inside an automation, so the user
+    # is handed the mapping rather than left to discover it.
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"entity_ids_renamed_{entry.entry_id}"
+    )
+    assert issue is not None
+    assert before.entity_id in issue.translation_placeholders["renames"]
+    assert after in issue.translation_placeholders["renames"]
+
     await hass.config_entries.async_unload(entry.entry_id)
 
 

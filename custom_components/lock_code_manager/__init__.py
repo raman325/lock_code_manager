@@ -231,7 +231,28 @@ async def async_migrate_entry(
                 config_entry.entry_id,
                 config_entry.title,
                 len(re_slugged),
-                ", ".join(sorted(re_slugged)),
+                ", ".join(f"{was} -> {now}" for was, now in sorted(re_slugged)),
+            )
+            # Home Assistant repoints recorder history on a rename, but nothing
+            # rewrites an entity id stored inside an automation or script --
+            # only the frontend's own rename dialog offers that, and this did
+            # not go through it. Automations built from the Slot Usage Limiter
+            # and Slot Usage Notifier blueprints hold these ids directly, so
+            # the user is given the mapping rather than left to find it.
+            async_create_issue(
+                hass,
+                DOMAIN,
+                f"entity_ids_renamed_{config_entry.entry_id}",
+                is_fixable=True,
+                is_persistent=True,
+                severity=IssueSeverity.WARNING,
+                translation_key="entity_ids_renamed",
+                translation_placeholders={
+                    "entry_title": config_entry.title,
+                    "renames": "\n".join(
+                        f"- `{was}` is now `{now}`" for was, now in sorted(re_slugged)
+                    ),
+                },
             )
         if renamed:
             _LOGGER.info(
@@ -956,7 +977,7 @@ def _async_reclaim_entities_from_foreign_devices(
 @callback
 def _async_rename_slot_entity_ids(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
-) -> list[str]:
+) -> list[tuple[str, str]]:
     """
     Re-slug every entity ID onto the name of whoever holds the slot.
 
@@ -976,7 +997,7 @@ def _async_rename_slot_entity_ids(
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
     config = EntryConfig.from_entry(config_entry)
-    renamed: list[str] = []
+    renamed: list[tuple[str, str]] = []
     for entity in er.async_entries_for_config_entry(ent_reg, entry_id):
         slot_num = parse_slot_unique_id(entry_id, entity.unique_id)
         if slot_num is None or not (name := config.name_for(slot_num)):
@@ -992,7 +1013,7 @@ def _async_rename_slot_entity_ids(
         if new_entity_id == entity.entity_id:
             continue
         ent_reg.async_update_entity(entity.entity_id, new_entity_id=new_entity_id)
-        renamed.append(f"{entity.entity_id} -> {new_entity_id}")
+        renamed.append((entity.entity_id, new_entity_id))
     return renamed
 
 
