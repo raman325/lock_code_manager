@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "4fb7f95cc6ef",
+  "strategy": "manual-commit",
+  "branch": "audit/v3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_frontend_contract.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4f/b7f95cc6ef/0/metadata.json",
+      "transcript": "/4f/b7f95cc6ef/0/full.jsonl",
+      "compact_transcript": "/4f/b7f95cc6ef/0/transcript.jsonl",
+      "content_hash": "/4f/b7f95cc6ef/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 10783,
+    "cache_read_tokens": 5391479,
+    "output_tokens": 7659,
+    "api_call_count": 8
+  }
+}
