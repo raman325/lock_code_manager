@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "ebd2d89c5960",
+  "strategy": "manual-commit",
+  "branch": "fix/clear-code-on-slot-removal",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/eb/d2d89c5960/0/metadata.json",
+      "transcript": "/eb/d2d89c5960/0/full.jsonl",
+      "compact_transcript": "/eb/d2d89c5960/0/transcript.jsonl",
+      "content_hash": "/eb/d2d89c5960/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 31375,
+    "cache_read_tokens": 12180986,
+    "output_tokens": 24327,
+    "api_call_count": 30
+  }
+}
