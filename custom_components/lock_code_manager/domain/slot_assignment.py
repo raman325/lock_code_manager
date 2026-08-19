@@ -122,23 +122,15 @@ class SlotAssignment:
         names: Iterable[str],
         *,
         start: int,
-        renames: Mapping[str, str] | None = None,
         unavailable: Collection[int] = (),
     ) -> SlotAssignment:
         """
-        Return the assignment covering exactly ``names``, applying ``renames``.
+        Return the assignment covering exactly ``names``.
 
-        Renaming and allocating are ONE operation because their order is the
-        whole difficulty: a rename is indistinguishable from a deletion plus
-        an addition unless you already know who survives. ``names`` -- the
-        full set of users in the NEW configuration -- is what resolves it. A
-        rename target absent from ``names`` is departing; one present names
-        the renamed user.
-
-        Users keep their number through a rename and through anyone else's
-        arrival or departure. New users take the lowest free number at or
-        above ``start``, skipping ``unavailable``. ``start`` is required so a
-        caller decides where issuing begins rather than inheriting a default.
+        Users keep their number through anyone else's arrival or departure.
+        New users take the lowest free number at or above ``start``, skipping
+        ``unavailable``. ``start`` is required so a caller decides where
+        issuing begins rather than inheriting a default.
 
         Tenure outranks both constraints: a user already holding a number
         keeps it even when ``start`` rises above it or ``unavailable`` grows
@@ -150,45 +142,19 @@ class SlotAssignment:
         because it cannot see the other entry. ``config_flow`` prevents the
         overlap arising; surfacing it instead belongs at that seam.
 
+        A rename is NOT handled here. It arrives as a name that is present
+        and one that is gone, which is indistinguishable from a deletion plus
+        an addition, so this would renumber somebody. Renaming re-keys the
+        assignment directly, in ``EntryConfig.with_user_renamed``, where the
+        old name and the new one are both known.
+
         Returns ``self`` when nothing differs, so callers can use identity to
         decide whether a write is needed.
         """
         wanted = list(dict.fromkeys(identity(name) for name in names))
         surviving = set(wanted)
 
-        # Reduce to identity form BEFORE resolving, or two keys meaning the
-        # same user (``Alice`` and ``alice ``) each take a turn: the later
-        # overwrites the earlier while the earlier's target stays claimed,
-        # refusing a third user's legitimate rename onto it.
-        #
-        # Sorted throughout so the answer never depends on mapping order.
-        wanted_moves: dict[str, str] = {}
-        for old in sorted(renames or {}, key=lambda key: (identity(key), str(key))):
-            wanted_moves.setdefault(identity(old), identity((renames or {})[old]))
-
-        honoured: dict[str, str] = {}
-        claimed: set[str] = set()
-        for source in sorted(wanted_moves):
-            target = wanted_moves[source]
-            if source not in self.slots or target not in surviving:
-                continue
-            if target in claimed:
-                continue
-            honoured[source] = target
-            claimed.add(target)
-
-        renamed = {
-            honoured[name]: slot
-            for name, slot in self.slots.items()
-            if name in honoured
-        }
-        kept = {
-            name: slot
-            for name, slot in self.slots.items()
-            if name not in honoured and name in surviving and name not in renamed
-        }
-
-        carried = {**kept, **renamed}
+        carried = {name: slot for name, slot in self.slots.items() if name in surviving}
         taken = set(carried.values()) | set(unavailable)
         candidate = start
         # Sorted because the signature accepts any iterable: an unordered one
