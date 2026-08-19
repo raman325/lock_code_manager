@@ -5,10 +5,15 @@ from __future__ import annotations
 import pathlib
 import re
 
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
+    ATTR_CALENDAR,
     ATTR_CODE,
+    ATTR_CONDITION_ENTITY,
     ATTR_IN_SYNC,
+    CONDITION_ENTITY_DOMAINS,
     EVENT_CREDENTIAL_USED,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
@@ -19,6 +24,20 @@ _CONST_TS = pathlib.Path(__file__).resolve().parent.parent / "ts" / "const.ts"
 # entity.key against these. A key that changes on one side and not the other
 # does not fail anywhere -- the strategy just stops finding that entity and
 # silently renders the dashboard wrong.
+# Every key the backend puts in a unique ID, so the card cannot order one
+# that will never arrive.
+_BACKEND_KEYS = {
+    CONF_NAME,
+    CONF_ENABLED,
+    CONF_PIN,
+    ATTR_ACTIVE,
+    ATTR_CALENDAR,
+    ATTR_CONDITION_ENTITY,
+    ATTR_IN_SYNC,
+    ATTR_CODE,
+    EVENT_CREDENTIAL_USED,
+}
+
 _SHARED_KEYS = {
     "CODE_SENSOR_KEY": ATTR_CODE,
     "CODE_EVENT_KEY": EVENT_CREDENTIAL_USED,
@@ -74,4 +93,47 @@ def test_the_frontend_and_backend_agree_on_the_unique_id_shape() -> None:
     assert (
         len(build_slot_unique_id("ENTRY", 7, ATTR_IN_SYNC).split(separator.group(1)))
         == positions["lockEntityId"]
+    )
+
+
+def test_the_frontend_and_backend_agree_on_the_condition_domains() -> None:
+    """
+    The picker offers what the backend will accept, or it lies to the user.
+
+    The list is written out on both sides. Add a domain to one and the
+    frontend either hides a domain that works or offers one that does not,
+    and nothing fails on either side.
+    """
+    source = _CONST_TS.read_text(encoding="utf-8")
+    listed = re.search(r"CONDITION_ENTITY_DOMAINS = \[(.*?)\]", source, re.DOTALL)
+    assert listed, "ts/const.ts no longer declares CONDITION_ENTITY_DOMAINS"
+
+    assert re.findall(r"'([^']+)'", listed.group(1)) == list(CONDITION_ENTITY_DOMAINS)
+
+
+def test_the_frontend_orders_keys_the_backend_actually_produces() -> None:
+    """
+    KEY_ORDER decides what the card shows and in what order.
+
+    A key in it that the backend never emits renders nothing; a key the
+    backend emits that is missing from it falls to the end of the card
+    silently. Either way no test fails, which is how a renamed key shipped a
+    broken dashboard earlier today.
+    """
+    source = _CONST_TS.read_text(encoding="utf-8")
+    listed = re.search(r"KEY_ORDER = \[(.*?)\];", source, re.DOTALL)
+    assert listed, "ts/const.ts no longer declares KEY_ORDER"
+
+    declared = dict(
+        re.findall(r"^export const ([A-Z_]+) = '([^']+)';", source, re.MULTILINE)
+    )
+    ordered = [
+        declared.get(token.strip(), token.strip().strip("'"))
+        for token in listed.group(1).split(",")
+        if token.strip() and not token.strip().startswith("...")
+    ]
+
+    assert set(ordered) <= _BACKEND_KEYS, (
+        f"the card orders keys the backend never emits: "
+        f"{sorted(set(ordered) - _BACKEND_KEYS)}"
     )
