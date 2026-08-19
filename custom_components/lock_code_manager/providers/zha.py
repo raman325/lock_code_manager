@@ -396,13 +396,11 @@ class ZHALock(BaseLock):
                 continue
 
             user_status, pin_code = parsed
-            # AVAILABLE is the only status that leaves this index free to
-            # write to, and ENABLED the only one whose code the lock says it
-            # is currently accepting. Everything between them is reported as
-            # holding something whose value cannot be trusted: claiming a
-            # value the lock is not honouring would read as in sync while the
-            # code does not open the door, and claiming the index is empty
-            # would hand it to allocation.
+            # Available is the only status leaving this index free to write
+            # to, Enabled the only one whose code the lock says it accepts.
+            # Everything else holds something untrustworthy: claiming its
+            # value would read as in sync while the code does not open the
+            # door, and claiming it empty would hand it to allocation.
             if user_status == DoorLock.UserStatus.Available:
                 slot_states[slot_num] = SlotCredential.empty()
             elif user_status == DoorLock.UserStatus.Enabled and pin_code:
