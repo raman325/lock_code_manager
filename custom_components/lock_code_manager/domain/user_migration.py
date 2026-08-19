@@ -25,7 +25,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..const import CONF_NUM_SLOTS, CONF_SLOTS, CONF_START_SLOT, CONF_USERS
+from homeassistant.const import CONF_ENTITY_ID
+
+from ..const import (
+    CONF_CONDITION,
+    CONF_NUM_SLOTS,
+    CONF_SLOTS,
+    CONF_START_SLOT,
+    CONF_USERS,
+)
 from .slot_assignment import CONF_SLOT_ASSIGNMENT, users_from_slots
 
 # Keys this migration consumes. Everything else is carried through verbatim.
@@ -46,9 +54,13 @@ def migrate_to_users(
     rather than relying on the version stamp for that.
     """
     if CONF_SLOTS not in config:
-        return {k: v for k, v in config.items() if k not in _CONSUMED}, []
+        carried = {k: v for k, v in config.items() if k not in _CONSUMED}
+        if CONF_USERS in carried:
+            carried[CONF_USERS] = _condition_renamed(carried[CONF_USERS])
+        return carried, []
 
     users, assignment, renamed = users_from_slots(config[CONF_SLOTS])
+    users = _condition_renamed(users)
     return {
         **{k: v for k, v in config.items() if k not in _CONSUMED},
         # Keyed by the name as displayed. The configuration is hand-editable,
@@ -58,3 +70,26 @@ def migrate_to_users(
         CONF_USERS: users,
         CONF_SLOT_ASSIGNMENT: dict(assignment.slots),
     }, renamed
+
+
+def _condition_renamed(users: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """
+    Rename each user's ``entity_id`` field to ``condition``.
+
+    The field names the entity whose state gates the user's credential, which
+    ``entity_id`` said nothing about while colliding with every other entity
+    id in the configuration. Applied to already-converted users too, so an
+    entry part-way through this release's changes lands in the same shape as
+    one coming straight from version 3.
+    """
+    return {
+        name: (
+            {
+                **{k: v for k, v in fields.items() if k != CONF_ENTITY_ID},
+                CONF_CONDITION: fields[CONF_ENTITY_ID],
+            }
+            if CONF_ENTITY_ID in fields
+            else dict(fields)
+        )
+        for name, fields in users.items()
+    }

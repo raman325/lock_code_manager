@@ -109,7 +109,12 @@ ATTR_SYNC_STATUS = "sync_status"
 # Code slot properties
 CONF_CALENDAR = "calendar"
 
-# Supported domains for condition entities (CONF_ENTITY_ID option)
+# The user field naming the entity whose state gates their credential.
+# Called "entity_id" until version 4, which said nothing about what it was
+# for and collided with every other entity id in the configuration.
+CONF_CONDITION = "condition"
+
+# Supported domains for condition entities (CONF_CONDITION option)
 CONDITION_ENTITY_DOMAINS = [
     "calendar",
     "binary_sensor",
