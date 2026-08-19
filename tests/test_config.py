@@ -56,7 +56,6 @@ def test_diff_empty_inputs() -> None:
     assert dict(diff.slots_removed) == {}
     assert diff.locks_added == ()
     assert diff.locks_removed == ()
-    assert diff.pairs_added == frozenset()
     assert diff.pairs_removed == frozenset()
     assert not diff.has_changes
     # Source configs are accessible after construction (default to empty)
@@ -72,7 +71,6 @@ def test_diff_added_slots_and_locks() -> None:
 
     assert dict(diff.slots_added) == {1: _named(1), 2: _named(2)}
     assert diff.locks_added == ("lock.a",)
-    assert diff.pairs_added == frozenset({("lock.a", 1), ("lock.a", 2)})
     assert diff.has_changes
 
 
@@ -95,7 +93,6 @@ def test_diff_no_changes() -> None:
     diff = EntryConfigDiff(old=config, new=config)
 
     assert not diff.has_changes
-    assert diff.pairs_added == frozenset()
     assert diff.pairs_removed == frozenset()
 
 
@@ -116,7 +113,6 @@ def test_diff_str_keys_match_int_keys() -> None:
 
     assert dict(diff.slots_added) == {}
     assert dict(diff.slots_removed) == {}
-    assert diff.pairs_added == frozenset()
     assert diff.pairs_removed == frozenset()
     assert not diff.has_changes
 
@@ -150,7 +146,6 @@ def test_diff_pair_added_for_new_lock_with_existing_slot() -> None:
     assert diff.locks_added == ("lock.b",)
     assert dict(diff.slots_added) == {}
     # (lock.b, 1) is new even though slot 1 isn't
-    assert diff.pairs_added == frozenset({("lock.b", 1)})
 
 
 def test_diff_pair_added_for_new_slot_on_existing_lock() -> None:
@@ -161,7 +156,6 @@ def test_diff_pair_added_for_new_slot_on_existing_lock() -> None:
     diff = EntryConfigDiff(old=old, new=new)
 
     assert dict(diff.slots_added) == {2: _named(2)}
-    assert diff.pairs_added == frozenset({("lock.a", 2), ("lock.b", 2)})
 
 
 def test_subtraction_operator_is_diff_sugar() -> None:
@@ -175,7 +169,6 @@ def test_subtraction_operator_is_diff_sugar() -> None:
     # Same diff content (the dataclasses are equal field-for-field;
     # the source configs are also equal so __eq__ matches)
     assert dict(via_operator.slots_added) == dict(via_constructor.slots_added)
-    assert via_operator.pairs_added == via_constructor.pairs_added
     assert via_operator.has_changes is via_constructor.has_changes
 
 
@@ -234,7 +227,6 @@ def test_diff_is_deeply_immutable() -> None:
         diff.slots_removed[1]["pin"] = "9999"  # type: ignore[index]
 
     # Contained sets cannot grow
-    assert not hasattr(diff.pairs_added, "add")
 
     # Contained lists are tuples (no mutation methods)
     assert not hasattr(diff.locks_added, "append")

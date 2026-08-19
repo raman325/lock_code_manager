@@ -2,7 +2,6 @@
   "config": {
     "abort": {
       "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
-      "existing_codes_cancelled": "Setup cancelled. Existing codes were not modified.",
       "locks_updated": "The locks for your config entry have been updated.",
       "unknown": "An unexpected error occurred during setup."
     },
@@ -38,14 +37,6 @@
         },
         "description": "A user is active when their condition entity (if configured) is 'on'. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
         "title": "User {user_num} of {num_users}"
-      },
-      "existing_codes_confirm": {
-        "title": "Existing Codes Detected",
-        "description": "Existing codes were found on the following lock slots:\n\n{details}\n\nThese codes will be overwritten when the sync manager reconciles the configured state. Continue to proceed or cancel to back out.",
-        "menu_options": {
-          "existing_codes_continue": "Continue",
-          "existing_codes_cancel": "Cancel"
-        }
       },
       "ui": {
         "data": {
@@ -129,7 +120,6 @@
   },
   "options": {
     "abort": {
-      "existing_codes_cancelled": "Update cancelled. Existing codes were not modified.",
       "unknown": "An unexpected error occurred while updating options."
     },
     "error": {
@@ -154,14 +144,6 @@
         },
         "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
         "title": "Lock Code Manager"
-      },
-      "existing_codes_confirm": {
-        "title": "Existing Codes Detected",
-        "description": "Existing codes were found on newly-added lock slots:\n\n{details}\n\nThese codes will be overwritten when the sync manager reconciles the configured state. Continue to proceed or cancel to back out without saving.",
-        "menu_options": {
-          "existing_codes_continue": "Continue",
-          "existing_codes_cancel": "Cancel"
-        }
       }
     }
   },

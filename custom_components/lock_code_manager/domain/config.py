@@ -356,10 +356,10 @@ class EntryConfigDiff:
     - **By axis** (slot dict + lock list): used by the update listener,
       which adds/removes slot entities and lock providers along independent
       axes.
-    - **By cartesian pair**: ``pairs_added`` / ``pairs_removed`` give
-      ``(lock, slot)`` tuples that are new or gone, which the options flow
-      uses to detect existing-codes hazards on newly-added pairs (catches
-      both "new slot on existing lock" and "new lock with existing slot").
+    - **By cartesian pair**: ``pairs_removed`` gives the ``(lock, slot)``
+      tuples that are gone, which the update listener uses to release the
+      lock-side state a slot owned (catches both "slot dropped from an
+      existing lock" and "lock dropped while its slots remain").
 
     All slot keys are ``int``, inherited from :class:`EntryConfig`.
     """
@@ -372,7 +372,6 @@ class EntryConfigDiff:
     slots_removed: Mapping[int, Mapping[str, Any]] = field(init=False)
     locks_added: tuple[str, ...] = field(init=False)
     locks_removed: tuple[str, ...] = field(init=False)
-    pairs_added: frozenset[tuple[str, int]] = field(init=False)
     pairs_removed: frozenset[tuple[str, int]] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -425,7 +424,6 @@ class EntryConfigDiff:
             "locks_removed",
             tuple(lock for lock in self.old.locks if lock not in new_lock_set),
         )
-        set_field(self, "pairs_added", frozenset(new_pairs - old_pairs))
         set_field(self, "pairs_removed", frozenset(old_pairs - new_pairs))
 
     @property
