@@ -55,6 +55,7 @@ from homeassistant.helpers.issue_registry import (
     async_create_issue,
     async_delete_issue,
 )
+from homeassistant.util import slugify
 
 from .const import (
     ATTR_CODE_SLOT,
@@ -215,14 +216,23 @@ async def async_migrate_entry(
         # configuration by that name and demote the slot number to internal
         # bookkeeping.
         #
-        # No registry writes happen here. Entity and device identifiers keep
-        # the slot number, so there is nothing to move.
+        # IDENTIFIERS do not move -- unique IDs keep the slot number, so no
+        # entity loses its registry entry, its settings or its history. Only
+        # the entity IDs are re-slugged, below, once the names are known.
         new_data, renamed_in_data = migrate_to_users(config_entry.data)
         new_options, renamed_in_options = migrate_to_users(config_entry.options)
         renamed = set(renamed_in_data) | set(renamed_in_options)
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=4
         )
+        if re_slugged := _async_rename_slot_entity_ids(hass, config_entry):
+            _LOGGER.info(
+                "%s (%s): renamed %d entity id(s) onto their user's name: %s",
+                config_entry.entry_id,
+                config_entry.title,
+                len(re_slugged),
+                ", ".join(sorted(re_slugged)),
+            )
         if renamed:
             _LOGGER.info(
                 "%s (%s): named %d previously-unnamed or conflicting slot(s): %s. "
@@ -941,6 +951,49 @@ def _async_reclaim_entities_from_foreign_devices(
             device.name,
         )
         dev_reg.async_remove_device(device.id)
+
+
+@callback
+def _async_rename_slot_entity_ids(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> list[str]:
+    """
+    Re-slug every entity ID onto the name of whoever holds the slot.
+
+    Home Assistant only derives an entity ID when the entity is first
+    registered, so without this an upgraded install would keep slot-shaped
+    IDs forever while a fresh one got name-shaped ones. Recorder history and
+    long-term statistics follow the rename: the registry emits
+    ``old_entity_id`` and ``recorder.entity_registry`` repoints them.
+
+    The device-slug PREFIX is swapped rather than the whole ID rebuilt,
+    because the rest of the ID comes from the entity's own name, which is
+    translated -- an install created in another language does not spell its
+    suffixes the way this code would. An entity whose ID does not start with
+    the prefix this integration would have generated is left alone, since
+    there is no way to tell which part of it was the prefix.
+    """
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    config = EntryConfig.from_entry(config_entry)
+    renamed: list[str] = []
+    for entity in er.async_entries_for_config_entry(ent_reg, entry_id):
+        slot_num = parse_slot_unique_id(entry_id, entity.unique_id)
+        if slot_num is None or not (name := config.name_for(slot_num)):
+            continue
+        old_prefix = slugify(f"{config_entry.title} Code slot {slot_num}")
+        domain, object_id = entity.entity_id.split(".", 1)
+        if object_id != old_prefix and not object_id.startswith(f"{old_prefix}_"):
+            continue
+        suffix = object_id.removeprefix(old_prefix)
+        new_entity_id = ent_reg.async_generate_entity_id(
+            domain, f"{slugify(name)}{suffix}", current_entity_id=entity.entity_id
+        )
+        if new_entity_id == entity.entity_id:
+            continue
+        ent_reg.async_update_entity(entity.entity_id, new_entity_id=new_entity_id)
+        renamed.append(f"{entity.entity_id} -> {new_entity_id}")
+    return renamed
 
 
 @callback

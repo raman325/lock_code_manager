@@ -34,6 +34,7 @@ from homeassistant.helpers import (
     entity_registry as er,
     issue_registry as ir,
 )
+from homeassistant.util import slugify
 
 from custom_components.lock_code_manager import (
     _setup_entry_after_start,
@@ -2360,15 +2361,16 @@ async def test_migration_of_a_real_world_entry_shape(
     entry.add_to_hass(hass)
     ent_reg = er.async_get(hass)
 
-    # The registry as a released version leaves it, keyed on the slot number.
+    # The registry as a released version leaves it: entity IDs slugged from
+    # the entry title and the slot number, keyed on the slot number.
     seeded = {
         slot: ent_reg.async_get_or_create(
             "text",
             DOMAIN,
             f"{entry.entry_id}|{slot}|{CONF_PIN}",
             config_entry=entry,
-            suggested_object_id=f"chosen_by_the_user_{slot}",
-        ).entity_id
+            suggested_object_id=f"all_locks_code_slot_{slot}_pin",
+        )
         for slot in range(1, 7)
     }
 
@@ -2388,14 +2390,15 @@ async def test_migration_of_a_real_world_entry_shape(
     assert config.slot(3)[CONF_PIN] == "3333"
     assert config.slot(6)[CONF_PIN] == "6666"
 
-    # And every entity the user already had is the same entity.
-    for slot, entity_id in seeded.items():
-        assert (
-            ent_reg.async_get_entity_id(
-                "text", DOMAIN, f"{entry.entry_id}|{slot}|{CONF_PIN}"
-            )
-            == entity_id
+    # The entity IDs move onto the users, but the registry ENTRIES are the
+    # same rows: everything hanging off them -- settings, area, and the
+    # recorder history the registry repoints -- follows the entity.
+    for slot, entry_before in seeded.items():
+        moved = ent_reg.async_get_entity_id(
+            "text", DOMAIN, f"{entry.entry_id}|{slot}|{CONF_PIN}"
         )
+        assert moved == f"text.{slugify(config.name_for(slot))}_pin"
+        assert ent_reg.async_get(moved).id == entry_before.id
 
     await hass.config_entries.async_unload(entry.entry_id)
 
@@ -2445,3 +2448,92 @@ async def test_renaming_a_user_renames_their_device(
 
     assert get_entry_config(lock_code_manager_config_entry).name_for(1) == "Sherene"
     assert dev_reg.async_get_device(identifiers).name == "Sherene"
+
+
+async def test_migration_reslugs_entity_ids_onto_the_user_name(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    An upgraded install must end up shaped like a fresh one.
+
+    The registry entry itself is kept, not rebuilt: the unique ID still
+    carries the slot number, so settings, area and recorder history follow
+    the entity rather than being stranded under the old ID.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+
+    # The registry as the released version leaves it.
+    before = ent_reg.async_get_or_create(
+        "text",
+        DOMAIN,
+        f"{entry.entry_id}|1|{CONF_PIN}",
+        config_entry=entry,
+        suggested_object_id="all_locks_code_slot_1_pin",
+    )
+    ent_reg.async_update_entity(before.entity_id, area_id="kitchen")
+    assert before.entity_id == "text.all_locks_code_slot_1_pin"
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    after = ent_reg.async_get_entity_id(
+        "text", DOMAIN, f"{entry.entry_id}|1|{CONF_PIN}"
+    )
+    assert after == "text.raman_pin"
+    # Same registry entry, so everything hanging off it came along.
+    assert ent_reg.async_get(after).id == before.id
+    assert ent_reg.async_get(after).area_id == "kitchen"
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_migration_leaves_an_unrecognized_entity_id_alone(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Only the prefix this integration generated can be swapped.
+
+    The rest of an entity ID comes from the entity's own translated name, so
+    an ID that does not start with the expected prefix cannot be taken apart
+    into a prefix and a suffix, and is left as it is.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    before = ent_reg.async_get_or_create(
+        "text",
+        DOMAIN,
+        f"{entry.entry_id}|1|{CONF_PIN}",
+        config_entry=entry,
+        suggested_object_id="something_else_entirely",
+    )
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert (
+        ent_reg.async_get_entity_id("text", DOMAIN, f"{entry.entry_id}|1|{CONF_PIN}")
+        == before.entity_id
+    )
+
+    await hass.config_entries.async_unload(entry.entry_id)
