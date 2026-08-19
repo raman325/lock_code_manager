@@ -137,6 +137,24 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
+# Either identifier names the same entry, so an action can be pointed at one
+# the way a card is. Mirrors the websocket API's vol.Exclusive pair rather
+# than inventing a second convention.
+_ENTRY_SELECTOR = {
+    vol.Exclusive("config_entry_id", "entry"): cv.string,
+    vol.Exclusive("config_entry_title", "entry"): cv.string,
+}
+
+
+def _entry_schema(fields: dict[Any, Any]) -> vol.Schema:
+    """Build a service schema that takes an entry by id or by title."""
+    return vol.Schema(
+        vol.All(
+            {**_ENTRY_SELECTOR, **fields},
+            cv.has_at_least_one_key("config_entry_id", "config_entry_title"),
+        )
+    )
+
 
 async def async_migrate_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
@@ -495,18 +513,18 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         """Set a condition entity for a slot."""
         await async_set_slot_condition(
             hass,
-            service.data["config_entry_id"],
             service.data[ATTR_SLOT],
             service.data[CONF_ENTITY_ID],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
         )
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_SLOT_CONDITION,
         _set_slot_condition,
-        schema=vol.Schema(
+        schema=_entry_schema(
             {
-                vol.Required("config_entry_id"): cv.string,
                 vol.Required(ATTR_SLOT): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=9999)
                 ),
@@ -521,17 +539,17 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         """Clear the condition entity from a slot."""
         await async_clear_slot_condition(
             hass,
-            service.data["config_entry_id"],
             service.data[ATTR_SLOT],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
         )
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_CLEAR_SLOT_CONDITION,
         _clear_slot_condition,
-        schema=vol.Schema(
+        schema=_entry_schema(
             {
-                vol.Required("config_entry_id"): cv.string,
                 vol.Required(ATTR_SLOT): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=9999)
                 ),
@@ -543,8 +561,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         """Add a user to an entry."""
         await async_add_user(
             hass,
-            service.data["config_entry_id"],
             service.data[CONF_NAME],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
             pin=service.data.get(CONF_PIN),
             enabled=service.data[CONF_ENABLED],
             condition=service.data.get(CONF_CONDITION),
@@ -554,9 +573,8 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         DOMAIN,
         SERVICE_ADD_USER,
         _add_user,
-        schema=vol.Schema(
+        schema=_entry_schema(
             {
-                vol.Required("config_entry_id"): cv.string,
                 vol.Required(CONF_NAME): cv.string,
                 vol.Optional(CONF_PIN): cv.string,
                 vol.Optional(CONF_ENABLED, default=True): cv.boolean,
@@ -571,8 +589,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         """Remove a user from an entry."""
         await async_delete_user(
             hass,
-            service.data["config_entry_id"],
             service.data[CONF_NAME],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
             clear_credentials=service.data[ATTR_CLEAR_CREDENTIALS],
         )
 
@@ -580,9 +599,8 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         DOMAIN,
         SERVICE_DELETE_USER,
         _delete_user,
-        schema=vol.Schema(
+        schema=_entry_schema(
             {
-                vol.Required("config_entry_id"): cv.string,
                 vol.Required(CONF_NAME): cv.string,
                 vol.Optional(ATTR_CLEAR_CREDENTIALS, default=True): cv.boolean,
             }

@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import slugify
 
 from ..const import DOMAIN
 from .config import EntryConfig
@@ -91,12 +92,54 @@ def iter_loaded_lcm_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:
     )
 
 
-def get_loaded_config_entry(hass: HomeAssistant, config_entry_id: str) -> ConfigEntry:
-    """Get a loaded config entry by ID, raising if not found or not loaded."""
-    config_entry = hass.config_entries.async_get_entry(config_entry_id)
-    if not config_entry or config_entry.domain != DOMAIN:
+def find_config_entry_by_title(hass: HomeAssistant, title: str) -> ConfigEntry | None:
+    """
+    Find an LCM config entry by title, comparing slugified.
+
+    Normally exactly one entry can match: setup reserves ``slugify(title)``
+    as the entry's unique ID and aborts on a second one. Renaming an entry
+    afterwards does not update its unique ID, so that is the one way two
+    entries can come to share a slugified title -- whereupon this returns
+    the first, as it always has.
+    """
+    return next(
+        (
+            entry
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if slugify(entry.title) == slugify(title)
+        ),
+        None,
+    )
+
+
+def get_loaded_config_entry(
+    hass: HomeAssistant,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> ConfigEntry:
+    """
+    Get a loaded LCM config entry by ID or by title.
+
+    Either identifier resolves the same entry, so an action and a card can
+    be pointed at one the same way. Title wins when both arrive, matching
+    the websocket API the cards call.
+    """
+    if config_entry_title:
+        config_entry = find_config_entry_by_title(hass, config_entry_title)
+        if not config_entry:
+            raise ServiceValidationError(
+                f"No lock code manager config entry with title "
+                f"`{config_entry_title}` found"
+            )
+    elif config_entry_id:
+        config_entry = hass.config_entries.async_get_entry(config_entry_id)
+        if not config_entry or config_entry.domain != DOMAIN:
+            raise ServiceValidationError(
+                f"No lock code manager config entry with ID `{config_entry_id}` found"
+            )
+    else:
         raise ServiceValidationError(
-            f"No lock code manager config entry with ID `{config_entry_id}` found"
+            "Neither config_entry_title nor config_entry_id provided"
         )
     if config_entry.state is not ConfigEntryState.LOADED:
         raise ServiceValidationError(f"Config entry {config_entry.entry_id} not loaded")

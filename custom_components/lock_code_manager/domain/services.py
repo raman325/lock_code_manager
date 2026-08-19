@@ -55,10 +55,15 @@ def _async_validate_condition(hass: HomeAssistant, condition: str) -> None:
 
 
 async def async_set_slot_condition(
-    hass: HomeAssistant, config_entry_id: str, slot: int, entity_id: str
+    hass: HomeAssistant,
+    slot: int,
+    entity_id: str,
+    *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
 ) -> None:
     """Set a condition entity for a slot."""
-    config_entry = get_loaded_config_entry(hass, config_entry_id)
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
     if not config.has_slot(slot):
         raise ServiceValidationError(f"Slot {slot} not found in config entry")
@@ -70,10 +75,14 @@ async def async_set_slot_condition(
 
 
 async def async_clear_slot_condition(
-    hass: HomeAssistant, config_entry_id: str, slot: int
+    hass: HomeAssistant,
+    slot: int,
+    *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
 ) -> None:
     """Clear the condition entity from a slot."""
-    config_entry = get_loaded_config_entry(hass, config_entry_id)
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
     if not config.has_slot(slot):
         raise ServiceValidationError(f"Slot {slot} not found in config entry")
@@ -84,9 +93,10 @@ async def async_clear_slot_condition(
 
 async def async_add_user(
     hass: HomeAssistant,
-    config_entry_id: str,
     name: str,
     *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
     pin: str | None = None,
     enabled: bool = True,
     condition: str | None = None,
@@ -99,7 +109,7 @@ async def async_add_user(
     user added by service and one added in the editor cannot land on
     different numbers or disagree about which are free.
     """
-    config_entry = get_loaded_config_entry(hass, config_entry_id)
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
 
     if error := name_error(name):
@@ -156,9 +166,10 @@ async def async_add_user(
 
 async def async_delete_user(
     hass: HomeAssistant,
-    config_entry_id: str,
     name: str,
     *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
     clear_credentials: bool = True,
 ) -> None:
     """
@@ -171,7 +182,7 @@ async def async_delete_user(
     configuration no longer has, so it is left for the update listener to
     pick up as it processes this write.
     """
-    config_entry = get_loaded_config_entry(hass, config_entry_id)
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
 
     stored = next(

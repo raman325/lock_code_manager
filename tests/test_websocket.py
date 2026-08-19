@@ -74,7 +74,6 @@ from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
     _build_slot_entities,
-    _find_config_entry_by_title,
     _get_bool_state,
     _get_condition_entity_data,
     _get_last_changed,
@@ -84,6 +83,7 @@ from custom_components.lock_code_manager.websocket import (
     _get_text_state,
     _serialize_slot,
     _slot_code_payload,
+    find_config_entry_by_title,
 )
 
 from .common import (
@@ -1731,7 +1731,7 @@ class TestGetLastChanged:
 
 
 class TestFindConfigEntryByTitle:
-    """Tests for _find_config_entry_by_title helper."""
+    """Tests for find_config_entry_by_title helper."""
 
     async def test_finds_entry_by_exact_title(
         self,
@@ -1740,7 +1740,7 @@ class TestFindConfigEntryByTitle:
         lock_code_manager_config_entry,
     ) -> None:
         """Test finds config entry by exact title."""
-        entry = _find_config_entry_by_title(hass, "Mock Title")
+        entry = find_config_entry_by_title(hass, "Mock Title")
         assert entry is not None
         assert entry.entry_id == lock_code_manager_config_entry.entry_id
 
@@ -1752,7 +1752,7 @@ class TestFindConfigEntryByTitle:
     ) -> None:
         """Test finds config entry by slugified title match."""
         # "mock-title" should match "Mock Title" after slugification
-        entry = _find_config_entry_by_title(hass, "mock-title")
+        entry = find_config_entry_by_title(hass, "mock-title")
         assert entry is not None
         assert entry.entry_id == lock_code_manager_config_entry.entry_id
 
@@ -1763,7 +1763,7 @@ class TestFindConfigEntryByTitle:
         lock_code_manager_config_entry,
     ) -> None:
         """Test returns None for nonexistent title."""
-        entry = _find_config_entry_by_title(hass, "nonexistent-title")
+        entry = find_config_entry_by_title(hass, "nonexistent-title")
         assert entry is None
 
 

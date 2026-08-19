@@ -39,10 +39,12 @@ clear_usercode:
 set_slot_condition:
   fields:
     config_entry_id:
-      required: true
       selector:
         config_entry:
           integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
     slot:
       required: true
       selector:
@@ -64,10 +66,12 @@ set_slot_condition:
 clear_slot_condition:
   fields:
     config_entry_id:
-      required: true
       selector:
         config_entry:
           integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
     slot:
       required: true
       selector:
@@ -79,10 +83,12 @@ clear_slot_condition:
 add_user:
   fields:
     config_entry_id:
-      required: true
       selector:
         config_entry:
           integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
     name:
       required: true
       selector:
@@ -107,10 +113,12 @@ add_user:
 delete_user:
   fields:
     config_entry_id:
-      required: true
       selector:
         config_entry:
           integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
     name:
       required: true
       selector:

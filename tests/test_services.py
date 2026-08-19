@@ -729,3 +729,146 @@ async def test_add_user_service_reports_an_allocation_refusal(
     # and reaches the config flow and the action picker alike.
     assert raised.value.translation_key == "occupancy_unknown"
     assert raised.value.translation_placeholders == {"locks": LOCK_1_ENTITY_ID}
+
+
+async def test_services_accept_a_config_entry_title(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """An action can name its entry the way a card does, by title."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "config_entry_title": entry.title,
+            CONF_NAME: "Newcomer",
+            CONF_PIN: "9876",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert (
+        "Newcomer"
+        in get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).users
+    )
+
+
+async def test_services_match_a_title_slugified(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """The websocket API matches titles slugified, so an action does too."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {"config_entry_title": "mock-title", CONF_NAME: "test2"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert (
+        "test2"
+        not in get_entry_config(
+            hass.config_entries.async_get_entry(entry.entry_id)
+        ).users
+    )
+
+
+async def test_services_reject_an_unknown_title(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A title naming no entry says so, rather than falling back to an ID."""
+    with pytest.raises(ServiceValidationError, match="with title"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_title": "no such entry",
+                CONF_NAME: "Newcomer",
+                CONF_PIN: "9876",
+            },
+            blocking=True,
+        )
+
+
+async def test_services_reject_both_identifiers(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Supplying both is refused rather than one silently winning."""
+    entry = lock_code_manager_config_entry
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": entry.entry_id,
+                "config_entry_title": entry.title,
+                CONF_NAME: "Newcomer",
+                CONF_PIN: "9876",
+            },
+            blocking=True,
+        )
+
+
+async def test_services_require_one_identifier(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Naming no entry at all is refused by the schema, before any work."""
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {CONF_NAME: "Newcomer", CONF_PIN: "9876"},
+            blocking=True,
+        )
+
+
+async def test_slot_condition_services_accept_a_title(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """The pre-existing entry-taking services take a title too."""
+    entry = lock_code_manager_config_entry
+    condition_entity_id = "binary_sensor.by_title"
+    hass.states.async_set(condition_entity_id, STATE_ON)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SLOT_CONDITION,
+        {
+            "config_entry_title": entry.title,
+            ATTR_SLOT: 1,
+            CONF_ENTITY_ID: condition_entity_id,
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert (
+        get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).slot(1)[
+            CONF_CONDITION
+        ]
+        == condition_entity_id
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CLEAR_SLOT_CONDITION,
+        {"config_entry_title": entry.title, ATTR_SLOT: 1},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert CONF_CONDITION not in get_entry_config(
+        hass.config_entries.async_get_entry(entry.entry_id)
+    ).slot(1)
