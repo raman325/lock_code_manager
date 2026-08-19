@@ -23,6 +23,7 @@ from custom_components.lock_code_manager.const import (
     CONF_NUM_USERS,
     CONF_USERS,
     DOMAIN,
+    EXCLUDED_CONDITION_PLATFORMS,
     MAX_SEARCHED_SLOT,
 )
 from custom_components.lock_code_manager.domain.credentials import (
@@ -1952,3 +1953,39 @@ async def test_editing_keeps_what_the_form_never_asked_about(
         )
 
     assert result["data"]["written_by_something_else"] == {"kept": True}
+
+
+async def test_the_editor_refuses_a_condition_entity_the_guided_path_would(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    One field, one rule, whichever route writes it.
+
+    Some integrations' switches and binary sensors do not describe access at
+    all, so the guided path refuses them. An editor that accepted them would
+    be a way around that, and the entity would gate a credential on a state
+    that means something else entirely.
+    """
+    ent_reg = er.async_get(hass)
+    excluded = ent_reg.async_get_or_create(
+        "switch", next(iter(EXCLUDED_CONDITION_PLATFORMS)), "unique"
+    )
+
+    flow_id = await _start_yaml_config_flow(hass)
+    with _holding():
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {
+                CONF_USERS: {
+                    "Raman": {
+                        CONF_ENABLED: True,
+                        CONF_PIN: "1234",
+                        CONF_CONDITION: excluded.entity_id,
+                    }
+                }
+            },
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "excluded_platform"}
+    assert result["description_placeholders"]["name"] == "Raman"

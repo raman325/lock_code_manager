@@ -214,6 +214,28 @@ async def _async_validate_users_yaml(
         name, error = problem
         return None, {"base": error}, {"name": name}
 
+    # The same refusal the guided path gives. Both write the one field, so a
+    # condition entity this integration cannot read must fail on both routes
+    # or the editor becomes a way around the check.
+    ent_reg = er.async_get(hass)
+    for name, fields in parsed_users.items():
+        if not (condition := fields.get(CONF_CONDITION)):
+            continue
+        entity_entry = ent_reg.async_get(condition)
+        if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
+            return (
+                None,
+                {"base": "excluded_platform"},
+                {
+                    "name": name,
+                    "integration": entity_entry.platform,
+                    "docs_url": (
+                        "https://github.com/raman325/lock_code_manager/wiki/"
+                        "Unsupported-Condition-Entity-Integrations"
+                    ),
+                },
+            )
+
     # The count is what a lock has to hold, now that nobody picks a number.
     errors, placeholders = await _async_check_slot_capacity(
         hass, locks, [len(parsed_users)]
