@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from homeassistant import data_entry_flow
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.issue_registry import async_delete_issue
 
 from .const import DOMAIN
@@ -16,6 +18,8 @@ from .domain.references import (
     format_entities,
     format_moved,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class AcknowledgeRepairFlow(RepairsFlow):
@@ -55,7 +59,13 @@ class EntityIdsRenamedRepairFlow(RepairsFlow):
             return self.async_create_entry(title="", data={})
 
         if user_input is not None:
-            repointed = await async_repoint(self.hass, self._moved, referrers)
+            try:
+                repointed = await async_repoint(self.hass, self._moved, referrers)
+            except OSError, HomeAssistantError:
+                # Saying nothing here would leave the user believing their
+                # automations had been updated when they had not.
+                _LOGGER.exception("Could not repoint references")
+                return self.async_abort(reason="write_failed")
             for domain in referrers.fixable:
                 # A file can hold configs for a component that is not loaded,
                 # and it will read the new ids when it does load.

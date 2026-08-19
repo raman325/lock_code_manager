@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import stat
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -13,6 +15,7 @@ from homeassistant.setup import async_setup_component
 from homeassistant.util.yaml import load_yaml, save_yaml
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.domain.references import _rewrite
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
 from .common import LOCK_1_ENTITY_ID
@@ -261,5 +264,56 @@ async def test_a_reference_inside_a_template_is_found_and_rewritten(
     assert NEW_PIN_ENTITY in stored[1]["actions"][0]["data"]["entities"]
     # A longer ID that starts with a moved one is somebody else.
     assert stored[2]["triggers"][0]["entity_id"] == f"{OLD_PIN_ENTITY}_backup"
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+def test_one_rename_is_not_applied_on_top_of_another() -> None:
+    """
+    Renames are one pass over the string, not one pass per rename.
+
+    Applying them in turn lets a value an earlier rule rewrote be rewritten
+    again by a later one, carrying an ``a`` all the way past ``b`` to ``c``.
+    The exact-match path never had this problem; a template body did.
+    """
+    moved = {"text.a": "text.b", "text.b": "text.c"}
+    assert _rewrite("text.a", moved) == "text.b"
+    assert _rewrite("{{ states('text.a') }}", moved) == "{{ states('text.b') }}"
+    assert _rewrite("{{ states('text.b') }}", moved) == "{{ states('text.c') }}"
+
+
+async def test_a_file_that_cannot_be_written_is_not_reported_as_updated(
+    hass: HomeAssistant, mock_lock_config_entry, tmp_path
+) -> None:
+    """Telling the user their automations were updated has to be true."""
+    hass.config.config_dir = str(tmp_path)
+    (tmp_path / "configuration.yaml").write_text("", encoding="utf-8")
+    automations = tmp_path / AUTOMATION_CONFIG_PATH
+    save_yaml(
+        str(automations),
+        [
+            {
+                "id": "read_only",
+                "alias": "Read only",
+                "triggers": [{"trigger": "state", "entity_id": OLD_PIN_ENTITY}],
+            }
+        ],
+    )
+
+    entry = await _migrated_entry(hass)
+    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    flow = await async_create_fix_flow(hass, issue_id, issue.data)
+    flow.hass = hass
+    await flow.async_step_init()
+
+    automations.chmod(stat.S_IRUSR)
+    try:
+        result = await flow.async_step_init({})
+    finally:
+        automations.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "write_failed"
 
     await hass.config_entries.async_unload(entry.entry_id)
