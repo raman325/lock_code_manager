@@ -15,7 +15,7 @@ from homeassistant.setup import async_setup_component
 from homeassistant.util.yaml import load_yaml, save_yaml
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.domain.references import _rewrite
+from custom_components.lock_code_manager.domain.references import _rewrite, _substitute
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
 from .common import LOCK_1_ENTITY_ID
@@ -317,3 +317,18 @@ async def test_a_file_that_cannot_be_written_is_not_reported_as_updated(
     assert result["reason"] == "write_failed"
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+def test_a_key_rewrite_never_overwrites_an_existing_key() -> None:
+    """
+    Both IDs can already be keys in the same mapping.
+
+    Moving the old one on top would throw away whatever the new one holds,
+    and this is the user's own configuration, not ours to lose.
+    """
+    config = {
+        "entities": {OLD_PIN_ENTITY: "from the old one", NEW_PIN_ENTITY: "from the new"}
+    }
+    _substitute(config, {OLD_PIN_ENTITY: NEW_PIN_ENTITY})
+    assert config["entities"][NEW_PIN_ENTITY] == "from the new"
+    assert config["entities"][OLD_PIN_ENTITY] == "from the old one"

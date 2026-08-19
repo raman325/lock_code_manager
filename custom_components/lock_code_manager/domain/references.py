@@ -208,6 +208,16 @@ def _substitute(config: Any, moved: Mapping[str, str]) -> bool:
         elif _substitute(value, moved):
             replaced = True
         if isinstance(key, str) and (new_key := _rewrite(key, moved)) != key:
+            if new_key in config:
+                # Both the old and the new ID are already keys here. Moving
+                # the old one on top would throw away whatever the new one
+                # holds, and this is the user's own configuration.
+                _LOGGER.warning(
+                    "Left %s alone: %s is already set alongside it",
+                    key,
+                    new_key,
+                )
+                continue
             config[new_key] = config.pop(key)
             replaced = True
     return replaced
