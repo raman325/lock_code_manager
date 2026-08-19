@@ -1917,3 +1917,38 @@ async def test_another_entry_still_holds_its_numbers(
 
     taken = get_entry_config(lock_code_manager_config_entry).slot_numbers
     assert not set(result["data"][CONF_SLOT_ASSIGNMENT].values()) & set(taken)
+
+
+async def test_editing_keeps_what_the_form_never_asked_about(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    An entry carries more than this form knows about.
+
+    Building the saved data by hand drops every key the form does not ask
+    for, silently, on the first edit.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        unique_id="carries-extra",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+            "written_by_something_else": {"kept": True},
+        },
+    )
+    entry.add_to_hass(hass)
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            started["flow_id"],
+            {
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            },
+        )
+
+    assert result["data"]["written_by_something_else"] == {"kept": True}

@@ -31,6 +31,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
     MAX_SEARCHED_SLOT,
 )
+from .domain.config import EntryConfig
 from .domain.credentials import CredentialType
 from .domain.exceptions import LockCodeManagerError
 from .domain.names import name_error, normalize_name, validate_user_names
@@ -949,13 +950,17 @@ class LockCodeManagerOptionsFlow(_AllocatesSlotsMixin, config_entries.OptionsFlo
                     assignment = config.assignment.reconcile(
                         users, start=1, unavailable=unavailable
                     )
+                    # Written through EntryConfig so whatever else the entry
+                    # carries survives the edit. Building the dict by hand
+                    # drops every key this form does not ask about.
                     return self.async_create_entry(
                         title="",
-                        data={
-                            CONF_LOCKS: user_input[CONF_LOCKS],
-                            CONF_USERS: users,
-                            CONF_SLOT_ASSIGNMENT: dict(assignment.slots),
-                        },
+                        data=EntryConfig(
+                            locks=tuple(user_input[CONF_LOCKS]),
+                            users=users,
+                            assignment=assignment,
+                            extra=config.extra,
+                        ).to_dict(),
                     )
 
         config = get_entry_config(self.config_entry)
