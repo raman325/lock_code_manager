@@ -7,18 +7,25 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CODE,
+    ATTR_IN_SYNC,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
@@ -41,19 +48,72 @@ BASE_CONFIG = {
     },
 }
 
+
+def code_entity_id(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    slot_num: int,
+    lock_entity_id: str = LOCK_1_ENTITY_ID,
+) -> str:
+    """Return the code sensor for one slot on one lock."""
+    return _per_lock_entity_id(
+        hass, SENSOR_DOMAIN, config_entry, slot_num, ATTR_CODE, lock_entity_id
+    )
+
+
+def in_sync_entity_id(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    slot_num: int,
+    lock_entity_id: str = LOCK_1_ENTITY_ID,
+) -> str:
+    """
+    Return the in-sync entity for one slot on one lock.
+
+    Looked up by unique ID rather than spelled out. The entity ID is derived
+    from the config entry's title and the lock's name, so writing it into a
+    test ties that test to both -- and a test that renames either then looks
+    for an entity that was never going to exist.
+    """
+    return _per_lock_entity_id(
+        hass, BINARY_SENSOR_DOMAIN, config_entry, slot_num, ATTR_IN_SYNC, lock_entity_id
+    )
+
+
+def _per_lock_entity_id(
+    hass: HomeAssistant,
+    platform: str,
+    config_entry: ConfigEntry,
+    slot_num: int,
+    key: str,
+    lock_entity_id: str,
+) -> str:
+    """Resolve a per-lock entity by unique ID."""
+    entity_id = er.async_get(hass).async_get_entity_id(
+        platform,
+        DOMAIN,
+        build_slot_unique_id(config_entry.entry_id, slot_num, key, lock_entity_id),
+    )
+    assert entity_id, f"No {key} entity for slot {slot_num} on {lock_entity_id}"
+    return entity_id
+
+
+# The integration the mock lock entities belong to.
+LOCK_DEVICE_DOMAIN = "test"
+
 SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
 SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
 SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
 SLOT_1_NAME_ENTITY = "text.mock_title_code_slot_1_name"
 SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
-SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_1_in_sync"
+SLOT_1_IN_SYNC_ENTITY = "binary_sensor.mock_title_code_slot_1_test_1_in_sync"
 
 SLOT_2_ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
 SLOT_2_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
 SLOT_2_EVENT_ENTITY = "event.mock_title_code_slot_2"
 SLOT_2_PIN_ENTITY = "text.mock_title_code_slot_2_pin"
 SLOT_2_NAME_ENTITY = "text.mock_title_code_slot_2_name"
-SLOT_2_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_2_in_sync"
+SLOT_2_IN_SYNC_ENTITY = "binary_sensor.mock_title_code_slot_2_test_1_in_sync"
 
 
 @dataclass(repr=False, eq=False)
@@ -67,6 +127,11 @@ class MockLCMLock(BaseLock):
         self._device_available = True
         self._hard_refresh_interval: timedelta | None = None
         self.codes: dict[int, str] = {1: "1234", 2: "5678"}
+        # Slots this lock reports as occupied without giving up the value,
+        # the way a lock with masked Personal Identification Numbers does.
+        # Reported regardless of ``codes``, so a slot keeps reading occupied
+        # after a clear -- which is the state a clear can never confirm.
+        self.write_only: set[int] = set()
         self.service_calls: defaultdict[str, list] = defaultdict(list)
 
     @property
@@ -134,7 +199,9 @@ class MockLCMLock(BaseLock):
         """Return dictionary of code slots and usercodes."""
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
-        return {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
+        codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
+        codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
+        return codes
 
 
 @dataclass(repr=False, eq=False)
@@ -173,8 +240,13 @@ class MockLockEntity(LockEntity):
         self._attr_unique_id = slugify(name)
         self._attr_is_locked = False
         self._attr_has_entity_name = False
+        # The mock lock's device belongs to the mock lock's integration, not
+        # to Lock Code Manager. Using Lock Code Manager's domain here would
+        # make the device read as one of ours, and the sweep that moves
+        # entities off other integrations' devices would never be exercised
+        # against the shape it exists for.
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"lock.{slugify(name)}")}, name=name
+            identifiers={(LOCK_DEVICE_DOMAIN, f"lock.{slugify(name)}")}, name=name
         )
         super().__init__()
 

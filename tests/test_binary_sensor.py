@@ -33,10 +33,14 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CODE_SLOT,
+    ATTR_LOCK_ENTITY_ID,
+    ATTR_USERCODE,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    SERVICE_SET_USERCODE,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
@@ -47,6 +51,7 @@ from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
+    LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
@@ -61,8 +66,10 @@ from .common import (
     SLOT_1_PIN_ENTITY,
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_ENABLED_ENTITY,
+    SLOT_2_IN_SYNC_ENTITY,
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
+    in_sync_entity_id,
 )
 from .conftest import (
     async_advance_time,
@@ -199,7 +206,7 @@ async def test_startup_no_code_flapping_when_synced(
     await hass.async_block_till_done()
 
     # Get the in-sync binary sensor for lock 1, slot 2
-    in_sync_entity = "binary_sensor.test_1_code_slot_2_in_sync"
+    in_sync_entity = SLOT_2_IN_SYNC_ENTITY
 
     # Verify the entity exists
     state = hass.states.get(in_sync_entity)
@@ -257,7 +264,7 @@ async def test_startup_detects_out_of_sync_code(
     await hass.async_block_till_done()
 
     # Get the in-sync binary sensor
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
 
     # Verify the entity exists
     state = hass.states.get(in_sync_entity)
@@ -324,8 +331,8 @@ async def test_startup_out_of_sync_slots_sync_once(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
-    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+    in_sync_slot_1 = in_sync_entity_id(hass, config_entry, 1)
+    in_sync_slot_2 = in_sync_entity_id(hass, config_entry, 2)
 
     assert hass.states.get(in_sync_slot_1)
     assert hass.states.get(in_sync_slot_2)
@@ -386,7 +393,7 @@ async def test_startup_waits_for_valid_active_state(
 
     # Get the entity IDs
     active_entity_id = "binary_sensor.test_lcm_code_slot_1_active"
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
 
     # Verify entities exist
     assert hass.states.get(active_entity_id), (
@@ -688,7 +695,7 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     # Verify initial state - should be in sync
@@ -1178,7 +1185,7 @@ async def test_coordinator_poll_detects_external_change_and_syncs(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     # Verify initial state is in sync
@@ -1241,7 +1248,7 @@ async def test_push_update_triggers_sync_state_change_on_binary_sensor(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     state = hass.states.get(in_sync_entity)
@@ -1311,8 +1318,8 @@ async def test_slot_suspension_isolated_from_other_slots(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
-    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+    in_sync_slot_1 = in_sync_entity_id(hass, config_entry, 1)
+    in_sync_slot_2 = in_sync_entity_id(hass, config_entry, 2)
     await async_initial_tick(hass, in_sync_slot_1)
     await async_initial_tick(hass, in_sync_slot_2)
 
@@ -1364,7 +1371,7 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     state = hass.states.get(in_sync_entity)
@@ -1455,7 +1462,7 @@ async def test_async_advance_time_drains_background_tick_chain(
     ):
         await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
-        in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+        in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
         await async_initial_tick(hass, in_sync_entity)
 
         lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
@@ -1508,7 +1515,7 @@ async def test_sync_manager_handles_code_sensor_unknown_state_on_startup(
         await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     entity_obj = get_in_sync_entity_obj(hass, in_sync_entity)
     mgr = entity_obj._sync_manager
 
@@ -1640,7 +1647,7 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     await async_initial_tick(hass, in_sync_entity)
 
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
@@ -1869,8 +1876,8 @@ async def test_multiple_slots_sync_sequentially_not_concurrently(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
-    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+    in_sync_slot_1 = in_sync_entity_id(hass, config_entry, 1)
+    in_sync_slot_2 = in_sync_entity_id(hass, config_entry, 2)
     await async_initial_tick(hass, in_sync_slot_1)
     await async_initial_tick(hass, in_sync_slot_2)
 
@@ -2225,3 +2232,202 @@ async def test_add_standard_entity_for_slot_without_coordinator_logs_warning(
         if "|99|" in entry.unique_id
     ]
     assert slot_99_entities
+
+
+async def test_a_lock_that_withholds_its_contents_is_cleared_once(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A disabled slot the lock will not report on must not be cleared forever.
+
+    Some locks answer "occupied" without returning the code -- masked PINs on
+    Z-Wave, an enabled status with no value on Zigbee. The clear lands, but
+    the read can never confirm it, so the slot reads out of sync on every
+    tick and each tick issues another clear at a lock that has already done
+    as it was asked.
+
+    Counted at the provider boundary, not on the mock's own bookkeeping: the
+    mock records nothing for a clear that finds no code, which is exactly
+    what every clear after the first one looks like.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+
+    # From here the lock reports slot 1 occupied and will not say what it
+    # holds -- including after the clear lands.
+    lock_provider.write_only = {1}
+
+    with patch.object(
+        lock_provider,
+        "async_internal_clear_usercode",
+        wraps=lock_provider.async_internal_clear_usercode,
+    ) as clears:
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+        for _ in range(4):
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+            await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    assert clears.await_count == 1, (
+        f"The clear was reissued on every tick ({clears.await_count} times)"
+    )
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
+
+
+async def test_a_set_that_lands_but_raises_still_invalidates_the_clear(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A failed set may have landed, so it must not leave a clear standing.
+
+    Issue #1397's mode is exactly this: the write reaches the lock and the
+    verification read times out. If the memory of an earlier clear survived
+    that, disabling the slot again would report it cleared while a working
+    code sits on the door -- and no clear would ever be issued.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+    # The real initial value, not one a test handed it.
+    assert lock_provider.last_write_was_clear(1) is False
+
+    lock_provider.write_only = {1}
+
+    async def _turn(service: str) -> None:
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            service,
+            target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    await _turn(SERVICE_TURN_OFF)
+    assert lock_provider.last_write_was_clear(1) is True
+
+    # The provider primitive fails, so the write funnel still runs -- which is
+    # where the memory of the clear has to be discarded. Patching the funnel
+    # itself would skip the very line under test.
+    with patch.object(
+        lock_provider,
+        "async_set_usercode",
+        AsyncMock(side_effect=LockOperationFailed("verification read timed out")),
+    ):
+        await _turn(SERVICE_TURN_ON)
+
+    # The set may have landed, so the earlier clear is no longer evidence.
+    assert lock_provider.last_write_was_clear(1) is False
+
+    with patch.object(
+        lock_provider,
+        "async_internal_clear_usercode",
+        wraps=lock_provider.async_internal_clear_usercode,
+    ) as clears:
+        await _turn(SERVICE_TURN_OFF)
+
+    assert clears.await_count == 1, "The slot was reported cleared without a clear"
+
+
+async def test_a_clear_that_changed_nothing_is_not_evidence(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Only a clear that actually changed something may settle the slot.
+
+    A provider that found nothing to clear -- no user owns the credential,
+    say -- has said nothing about what the slot holds. Treating the call as
+    proof would report a slot cleared that this integration was never able
+    to touch. Staying out of sync is the honest answer: the clear keeps being
+    attempted and the user can see it never lands.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+
+    # The lock reports the slot occupied, but there is nothing here to clear.
+    lock_provider.codes.pop(1, None)
+    lock_provider.write_only = {1}
+
+    with patch.object(
+        lock_provider,
+        "async_internal_clear_usercode",
+        wraps=lock_provider.async_internal_clear_usercode,
+    ) as clears:
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+        for _ in range(2):
+            await coordinator.async_refresh()
+            await hass.async_block_till_done()
+            await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    assert clears.await_count > 1, "A no-op clear was taken as proof the slot is clear"
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_OFF
+
+
+async def test_a_code_written_by_service_invalidates_the_clear(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A write from anywhere invalidates the clear, not just one sync issued.
+
+    The set_usercode service goes straight to the provider, so a memory kept
+    by the sync manager could never see it. On a lock that masks its codes
+    the slot would keep reporting cleared while the service's code sat there.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+    lock_provider.write_only = {1}
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    assert lock_provider.last_write_was_clear(1) is True
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_USERCODE,
+        {
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            ATTR_CODE_SLOT: 1,
+            ATTR_USERCODE: "9999",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert lock_provider.last_write_was_clear(1) is False

@@ -71,11 +71,17 @@ def _slot(
 
 
 def _manager(
-    last_set_pin: str | None = None, *, verified: bool = True, slot_num: int = 1
+    last_set_pin: str | None = None,
+    *,
+    verified: bool = True,
+    slot_num: int = 1,
+    cleared_slot: bool = False,
 ) -> SlotSyncManager:
     """Build a mock SlotSyncManager with _last_set_pin and a verified coordinator."""
     mgr = MagicMock(spec=SlotSyncManager)
     mgr._last_set_pin = last_set_pin
+    mgr._lock = MagicMock()
+    mgr._lock.last_write_was_clear.return_value = cleared_slot
     mgr._slot_num = slot_num
     mgr._address = pin_address(slot_num)
     mgr._coordinator = MagicMock()
@@ -199,7 +205,7 @@ class TestCalculateInSync:
                     "coordinator_credential": SlotCredential.unreadable(),
                 },
                 False,
-                id="inactive-unknown-code",
+                id="inactive-unknown-code-never-cleared",
             ),
             pytest.param(
                 None,
@@ -232,6 +238,22 @@ class TestCalculateInSync:
             _manager(last_set_pin=last_set_pin).calculate_in_sync(_slot(**slot_kwargs))
             is expected
         )
+
+    def test_inactive_unknown_code_is_in_sync_once_cleared(self) -> None:
+        """A lock that withholds its contents cannot confirm or deny a clear.
+
+        Without this the slot is never in sync, so every tick issues another
+        clear at a lock that already did as it was asked -- forever.
+        """
+        slot = _slot(
+            active=STATE_OFF, coordinator_credential=SlotCredential.unreadable()
+        )
+        assert _manager(cleared_slot=True).calculate_in_sync(slot) is True
+
+    def test_a_readable_code_still_needs_clearing_after_a_clear(self) -> None:
+        """Remembering the clear must not excuse a code the lock still reports."""
+        slot = _slot(active=STATE_OFF, coordinator_credential="1234")
+        assert _manager(cleared_slot=True).calculate_in_sync(slot) is False
 
     def test_unverified_slot_is_never_in_sync(self) -> None:
         """An unverified slot is not in sync even when the value would match.

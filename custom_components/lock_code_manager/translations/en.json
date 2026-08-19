@@ -80,7 +80,7 @@
         "name": "Active"
       },
       "in_sync": {
-        "name": "Code slot {slot_num} in sync",
+        "name": "{lock_name} in sync",
         "state_attributes": {
           "sync_status": {
             "state": {
@@ -106,7 +106,7 @@
     },
     "sensor": {
       "code": {
-        "name": "Code slot {slot_num}"
+        "name": "{lock_name} code"
       }
     },
     "switch": {

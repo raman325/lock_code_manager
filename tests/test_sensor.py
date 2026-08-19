@@ -10,7 +10,7 @@ from custom_components.lock_code_manager.domain.locks import async_create_lock_i
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 
-from .common import LOCK_1_ENTITY_ID
+from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, code_entity_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,10 +22,16 @@ async def test_sensor_entity(
 ):
     """Test sensor entity shows lock code values."""
     for code_slot, pin in ((1, "1234"), (2, "5678")):
-        state = hass.states.get(f"sensor.test_1_code_slot_{code_slot}")
+        state = hass.states.get(
+            code_entity_id(hass, lock_code_manager_config_entry, code_slot)
+        )
         assert state
         assert state.state == pin
-        state = hass.states.get(f"sensor.test_2_code_slot_{code_slot}")
+        state = hass.states.get(
+            code_entity_id(
+                hass, lock_code_manager_config_entry, code_slot, LOCK_2_ENTITY_ID
+            )
+        )
         assert state
         assert state.state == pin
 
@@ -43,21 +49,21 @@ async def test_sensor_native_value_with_slot_code(
     # Empty credential -> sensor shows empty string
     coordinator.async_set_updated_data({pin_address(1): SlotCredential.empty()})
     await hass.async_block_till_done()
-    state = hass.states.get("sensor.test_1_code_slot_1")
+    state = hass.states.get(code_entity_id(hass, lock_code_manager_config_entry, 1))
     assert state is not None
     assert state.state == ""
 
     # Unreadable credential -> sensor resolves to expected PIN from config
     coordinator.async_set_updated_data({pin_address(1): SlotCredential.unreadable()})
     await hass.async_block_till_done()
-    state = hass.states.get("sensor.test_1_code_slot_1")
+    state = hass.states.get(code_entity_id(hass, lock_code_manager_config_entry, 1))
     assert state is not None
     assert state.state == "1234"
 
     # Known credential -> sensor shows the code
     coordinator.async_set_updated_data({pin_address(1): SlotCredential.known("5678")})
     await hass.async_block_till_done()
-    state = hass.states.get("sensor.test_1_code_slot_1")
+    state = hass.states.get(code_entity_id(hass, lock_code_manager_config_entry, 1))
     assert state is not None
     assert state.state == "5678"
 

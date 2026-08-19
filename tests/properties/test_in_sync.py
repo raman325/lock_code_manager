@@ -33,7 +33,9 @@ SLOT_STATES = st.builds(
 )
 
 
-def _manager(*, verified: bool, last_set_pin: str | None) -> SlotSyncManager:
+def _manager(
+    *, verified: bool, last_set_pin: str | None, cleared_slot: bool = False
+) -> SlotSyncManager:
     # __new__ skips the heavyweight __init__ (hass, registries, entities);
     # calculate_in_sync only touches these four attributes.
     manager = SlotSyncManager.__new__(SlotSyncManager)
@@ -41,6 +43,7 @@ def _manager(*, verified: bool, last_set_pin: str | None) -> SlotSyncManager:
     manager._address = pin_address(1)
     manager._coordinator = SimpleNamespace(is_verified=lambda address: verified)
     manager._last_set_pin = last_set_pin
+    manager._lock = SimpleNamespace(last_write_was_clear=lambda slot: cleared_slot)
     return manager
 
 
@@ -97,12 +100,20 @@ def test_active_without_coordinator_data_falls_back_to_code_sensor(
     assert manager.calculate_in_sync(state) is (pin == code)
 
 
-@given(snapshot=SLOT_STATES, last_set_pin=LAST_SET)
-def test_inactive_slot_syncs_iff_lock_side_empty(
-    snapshot: CredentialSyncState, last_set_pin: str | None
+@given(snapshot=SLOT_STATES, last_set_pin=LAST_SET, cleared_slot=st.booleans())
+def test_inactive_slot_syncs_iff_the_lock_shows_no_code_it_can_report(
+    snapshot: CredentialSyncState, last_set_pin: str | None, cleared_slot: bool
 ) -> None:
-    """Inactive slot: in sync exactly when the lock side shows no code."""
-    manager = _manager(verified=True, last_set_pin=last_set_pin)
+    """Inactive slot: in sync exactly when no code the lock can report remains.
+
+    A lock that reports the slot occupied but withholds its contents can
+    neither confirm nor deny a clear, so the clear already issued is the only
+    evidence there is. Everything else is unchanged: a readable code means
+    work to do whatever was cleared before, and an empty slot is done.
+    """
+    manager = _manager(
+        verified=True, last_set_pin=last_set_pin, cleared_slot=cleared_slot
+    )
     state = CredentialSyncState(
         STATE_OFF,
         snapshot.credential_state,
@@ -111,5 +122,12 @@ def test_inactive_slot_syncs_iff_lock_side_empty(
         snapshot.coordinator_credential,
     )
     credential = state.coordinator_credential
-    expected = credential.is_empty if credential is not None else state.code_state == ""
+    if credential is None:
+        expected = state.code_state == ""
+    elif credential.is_empty:
+        expected = True
+    elif credential.is_readable:
+        expected = False
+    else:
+        expected = cleared_slot
     assert manager.calculate_in_sync(state) is expected

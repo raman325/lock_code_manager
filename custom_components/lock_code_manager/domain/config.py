@@ -486,3 +486,27 @@ def parse_slot_device_identifier(entry_id: str, identifier: str) -> int | None:
     except ValueError:
         return None
     return slot_num if str(slot_num) == suffix else None
+
+
+def parse_slot_unique_id(entry_id: str, unique_id: str) -> int | None:
+    """
+    Recover the slot number from a slot entity's unique ID, else ``None``.
+
+    Reads what :func:`build_slot_unique_id` writes, in both its shapes: the
+    key and any trailing lock entity ID are ignored, so a per-lock entity
+    resolves to the same slot as the shared entities beside it.
+
+    Applies the same round-trip check as
+    :func:`parse_slot_device_identifier`, for the same reason -- a looser
+    parse claims slot numbers the builder would never emit, and this decides
+    which device an entity is moved to.
+    """
+    prefix = f"{entry_id}|"
+    if not unique_id.startswith(prefix):
+        return None
+    suffix = unique_id.removeprefix(prefix).split("|", 1)[0]
+    try:
+        slot_num = int(suffix)
+    except ValueError:
+        return None
+    return slot_num if str(slot_num) == suffix else None
