@@ -1152,3 +1152,34 @@ async def test_max_slot_survives_a_reply_it_cannot_unpack(
     cluster.read_attributes = AsyncMock(return_value=None)
 
     assert await zha_lock.async_get_max_slot() is None
+
+
+async def test_a_scoped_read_touches_only_the_slots_asked_for(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """
+    The scope is the whole reason allocation is affordable.
+
+    This cluster answers one index per round trip, so reading past the scope
+    is not wrong, only slow -- which is exactly why nothing would catch it.
+    Allocation widens its search a few numbers at a time precisely so a lock
+    is asked about a handful of indices rather than its whole range.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        return type(
+            "Response",
+            (),
+            {"user_status": DoorLock.UserStatus.Available, "code": ""},
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+
+    await zha_lock.async_get_users(slots={2})
+
+    asked = {call.args[0] for call in cluster.get_pin_code.call_args_list}
+    assert asked == {2}
