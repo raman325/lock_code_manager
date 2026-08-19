@@ -2126,7 +2126,11 @@ async def test_the_search_stops_at_the_end_of_the_lock(
             flow_id, {CONF_NUM_USERS: 2}
         )
 
-    assert result["errors"] == {"base": "too_many_users"}
+    assert result["errors"] == {"base": "numbers_needed_exceed_capacity"}
+    # Two users on a lock whose ten slots are all taken: the second would
+    # need number 12, and the lock stops at 10.
+    assert result["description_placeholders"]["needed"] == "12"
+    assert result["description_placeholders"]["num_slots"] == "10"
     assert max(highest_asked) <= 10, "the search read past the end of the lock"
 
 
@@ -2160,7 +2164,9 @@ async def test_the_smallest_lock_bounds_the_search(
 
     # Three taken means the pair would need numbers 4 and 5, and the smaller
     # lock stops at 4.
-    assert result["errors"] == {"base": "too_many_users"}
+    assert result["errors"] == {"base": "numbers_needed_exceed_capacity"}
+    assert result["description_placeholders"]["num_slots"] == "4"
+    assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
 
 
 async def test_a_count_past_the_range_is_refused_before_reading(

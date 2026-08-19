@@ -580,21 +580,36 @@ class LockCodeManagerFlowHandler(
         )
 
     def _too_far(
-        self, num_users: int, max_slot: int, limiting_lock: str | None
+        self,
+        num_users: int,
+        max_slot: int,
+        limiting_lock: str | None,
+        needed: int | None = None,
     ) -> tuple[dict[str, str], dict[str, Any]]:
         """
         Explain that the numbers needed run past where the search may go.
 
-        Which refusal depends on whose limit it is. A lock that reported its
-        own range can be named, and told to the user as the lock's capacity.
-        When nothing could say, the limit is this integration's -- calling
-        that a capacity would invite the user to re-interview a lock over a
-        number it never reported.
+        Two things decide the wording. Whose limit it is: a lock that
+        reported its own range can be named and described as the lock's
+        capacity, while a limit nothing reported must not be, or the user is
+        sent to re-interview a lock over a number it never gave.
+
+        And whether the count itself is too large, or only the numbers it
+        would have to reach. ``needed`` names the number the last user would
+        land on when existing codes have pushed them past the range -- a
+        count that fits the lock told "N users will not fit" reads as a bug.
         """
         if limiting_lock is None:
             return {"base": "search_limit_reached"}, {
                 "num_users": str(num_users),
                 "max_slot": str(max_slot),
+            }
+        if needed is not None:
+            return {"base": "numbers_needed_exceed_capacity"}, {
+                "num_users": str(num_users),
+                "num_slots": str(max_slot),
+                "needed": str(needed),
+                "lock": limiting_lock,
             }
         return {"base": "too_many_users"}, {
             "num_users": str(num_users),
@@ -747,7 +762,9 @@ class LockCodeManagerFlowHandler(
                 # would only read indices no lock has, and a lock cannot hand
                 # back a slot it does not have -- every one of them would
                 # come back occupied, forever.
-                return None, *self._too_far(num_users, max_slot, limiting_lock)
+                return None, *self._too_far(
+                    num_users, max_slot, limiting_lock, needed=wider
+                )
             window = wider
 
         # No capacity check here: every window this loop accepted was checked
