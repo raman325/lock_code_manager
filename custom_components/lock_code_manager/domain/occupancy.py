@@ -50,9 +50,7 @@ class Occupancy:
     @property
     def is_known(self) -> bool:
         """Return whether every lock that constrains allocation could be read."""
-        return not any(
-            lock.occupied is None and lock.constrains_allocation for lock in self.locks
-        )
+        return not self.unreadable
 
     @property
     def unreadable(self) -> tuple[str, ...]:

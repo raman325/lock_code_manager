@@ -1,10 +1,8 @@
 """
 User-name rules for Lock Code Manager slots.
 
-A slot's name is on its way to becoming the identity Lock Code Manager keys
-on -- the config entry will store a mapping of named users rather than one of
-slot numbers, and lock users will be tagged ``lcm:{name}``. That only works if
-every name is present and unique within its entry.
+The name is the identity the configuration is keyed on, so it has to be
+present and unique within its entry.
 
 This module is the single place those rules live, so the config flow
 (validating new input) and the migration (repairing existing data) cannot
@@ -29,6 +27,18 @@ def normalize_name(name: str | None) -> str:
     Code Manager would treat them as distinct users.
     """
     return (name or "").strip()
+
+
+def identity(name: str | None) -> str:
+    """
+    Return the form a user is recognized by.
+
+    Whitespace normalized and casefolded, so ``Bob`` and ``BOB `` are one
+    person everywhere. Comparing any other way lets the same user hold two
+    credential indices, and makes a case-only rename read as a deletion plus
+    an addition.
+    """
+    return normalize_name(name).casefold()
 
 
 def name_error(name: str | None) -> str | None:
@@ -56,11 +66,11 @@ def deduplicate(name: str, taken: Iterable[str]) -> str:
     because two users differing only in case would be indistinguishable in
     the frontend and would collide once slugified into an entity identifier.
     """
-    lowered = {existing.casefold() for existing in taken}
-    if name.casefold() not in lowered:
+    lowered = {identity(existing) for existing in taken}
+    if identity(name) not in lowered:
         return name
     suffix = 2
-    while f"{name} {suffix}".casefold() in lowered:
+    while identity(f"{name} {suffix}") in lowered:
         suffix += 1
     return f"{name} {suffix}"
 
@@ -99,8 +109,8 @@ def normalize_slot_names(
     needs_repair: set[Any] = set()
     for slot_num in ordered:
         name = slots[slot_num].get(CONF_NAME)
-        if name_error(name) is None and normalize_name(name).casefold() not in {
-            existing.casefold() for existing in reserved
+        if name_error(name) is None and identity(name) not in {
+            identity(existing) for existing in reserved
         }:
             reserved.append(normalize_name(name))
         else:
@@ -150,7 +160,7 @@ def validate_slot_names(
         name = slots[slot_num].get(CONF_NAME)
         if error := name_error(name):
             return str(slot_num), error
-        key = normalize_name(name).casefold()
+        key = identity(name)
         if key in seen:
             return str(slot_num), "name_not_unique"
         seen[key] = str(slot_num)

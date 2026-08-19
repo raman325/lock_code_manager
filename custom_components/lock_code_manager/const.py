@@ -134,19 +134,13 @@ DEFAULT_NUM_USERS = 3
 # How far a search for free slot numbers goes when no lock will say where its
 # own range ends.
 #
-# 255 because that is the largest value a one-byte user identifier can carry,
-# and the older credential command classes address users with one -- so no
-# lock reached through them has a slot number above it to find. Where the slot
-# number is this integration's own tag rather than an index on the lock
-# (Schlage, Akuvox, virtual) there is no device range at all, and this stands
-# in as the point past which nobody is configuring more users.
+# 255 is the largest value a one-byte user identifier can carry, and the older
+# credential command classes address users with one. Where the slot number is
+# this integration's own tag rather than an index on the lock (Schlage,
+# Akuvox, virtual) there is no device range at all and this stands in.
 #
-# A search policy, not a property of any lock, which is why it lives here and
-# not on the provider: a provider that cannot say answers None, and the caller
-# decides what to do about it.
-#
-# It bounds only the SEARCH. A number a user already holds above it keeps
-# working, and a lock that reports a larger range is believed up to it.
+# Bounds only the SEARCH: a number a user already holds above it keeps
+# working, and a lock reporting a larger range is believed up to it.
 MAX_SEARCHED_SLOT = 255
 
 PLATFORM_MAP = {

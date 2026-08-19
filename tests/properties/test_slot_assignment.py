@@ -21,11 +21,13 @@ from hypothesis import assume, given, strategies as st
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
-from custom_components.lock_code_manager.domain.names import normalize_slot_names
+from custom_components.lock_code_manager.domain.names import (
+    identity,
+    normalize_slot_names,
+)
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
     SlotAssignment,
-    _identity,
     users_from_slots,
 )
 
@@ -156,7 +158,7 @@ def test_a_surviving_user_is_never_renumbered(
     assignment = SlotAssignment.empty()
     for configured in history:
         after = _reconcile(assignment, configured, start=start)
-        for name in set(assignment.slots) & {_identity(n) for n in configured}:
+        for name in set(assignment.slots) & {identity(n) for n in configured}:
             assert after.slot(name) == assignment.slot(name)
         assignment = after
 
@@ -179,7 +181,7 @@ def test_every_configured_user_holds_a_slot(
     assignment = SlotAssignment.empty()
     for configured in history:
         assignment = _reconcile(assignment, configured, start=start)
-        assert {_identity(n) for n in configured} == set(assignment.slots)
+        assert {identity(n) for n in configured} == set(assignment.slots)
 
 
 NEWCOMERS = st.lists(st.sampled_from(["Zoe", "Yan", "Xavier"]), max_size=2).map(
@@ -212,8 +214,8 @@ def test_renaming_keeps_the_users_slot(
     reorders two users' credential indices on a real lock.
     """
     before = _reconcile(SlotAssignment.empty(), names, start=start)
-    moves = {old: new for old, new in renames.items() if _identity(old) in before.slots}
-    assume(len({_identity(v) for v in moves.values()}) == len(moves))
+    moves = {old: new for old, new in renames.items() if identity(old) in before.slots}
+    assume(len({identity(v) for v in moves.values()}) == len(moves))
 
     after_names = data.draw(
         st.permutations([moves.get(n, n) for n in names] + newcomers)
@@ -234,8 +236,8 @@ def test_renaming_does_not_depend_on_insertion_order(
 ) -> None:
     """The same edit gives the same answer whatever order the mapping holds."""
     before = _reconcile(SlotAssignment.empty(), names, start=start)
-    moves = {old: new for old, new in renames.items() if _identity(old) in before.slots}
-    assume(len({_identity(v) for v in moves.values()}) == len(moves))
+    moves = {old: new for old, new in renames.items() if identity(old) in before.slots}
+    assume(len({identity(v) for v in moves.values()}) == len(moves))
     after_names = [moves.get(n, n) for n in names]
 
     flipped = SlotAssignment(slots=dict(reversed(list(before.slots.items()))))
@@ -426,7 +428,7 @@ def test_a_rename_to_somebody_absent_leaves_the_source_alone(
     absent = {
         old: new
         for old, new in renames.items()
-        if _identity(new) not in {_identity(n) for n in names}
+        if identity(new) not in {identity(n) for n in names}
     }
 
     after = before.reconcile(names, start=start, renames=absent)
@@ -448,7 +450,7 @@ def test_a_double_booked_slot_is_repaired(slots: dict[str, int], start: int) -> 
 
     numbers = list(reconciled.slots.values())
     assert len(numbers) == len(set(numbers))
-    assert set(reconciled.slots) == {_identity(n) for n in slots}
+    assert set(reconciled.slots) == {identity(n) for n in slots}
 
 
 def test_a_collapsed_identity_keeps_the_lower_slot() -> None:
