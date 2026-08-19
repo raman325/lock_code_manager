@@ -2529,3 +2529,7 @@ run review again
 ---
 
 fix the live test checklist. I've merged 1443 lets finish out B3
+
+---
+
+for pin_used_entity, make it credential_used_entity which is required, pin_used_entity is optional and is a fallback?
