@@ -2481,3 +2481,7 @@ there's no need to split the two right? we can use the bounded device index as t
 ---
 
 its fine, lets just merge in the order we need and keep moving. We will have to do a final review before we merge to main anyway and I suspef5 we are going to find a lot of extra complexity beceause of the way we'ge been iterating on dfesign as we to
+
+---
+
+Go to b3 after PRing this unless you pushed directly to v3
