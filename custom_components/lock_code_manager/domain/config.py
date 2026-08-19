@@ -15,7 +15,7 @@ from .names import normalize_name
 from .slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
     SlotAssignment,
-    _identity,
+    identity,
     users_from_slots,
 )
 
@@ -144,7 +144,7 @@ class EntryConfig:
             users = {}
             for name, user in raw_users.items():
                 normalized = normalize_name(name)
-                if any(_identity(seen) == _identity(normalized) for seen in users):
+                if any(identity(seen) == identity(normalized) for seen in users):
                     continue
                 users[normalized] = dict(user)
             assignment = SlotAssignment.from_mapping(mapping)
@@ -229,7 +229,7 @@ class EntryConfig:
         slot number.
         """
         stored = next(
-            (known for known in self.users if _identity(known) == _identity(old)), None
+            (known for known in self.users if identity(known) == identity(old)), None
         )
         if stored is None:
             return self
@@ -238,7 +238,7 @@ class EntryConfig:
         # deleting one and freeing their slot. Refused here rather than relying
         # on the callers that validate it.
         if any(
-            _identity(known) == _identity(renamed) and known != stored
+            identity(known) == identity(renamed) and known != stored
             for known in self.users
         ):
             return self
@@ -249,7 +249,7 @@ class EntryConfig:
         # user holding no slot would be issued one here. A rename moves a
         # number, it never issues one.
         moved = {
-            (_identity(renamed) if name == _identity(stored) else name): slot
+            (identity(renamed) if name == identity(stored) else name): slot
             for name, slot in self.assignment.slots.items()
         }
         return EntryConfig(
@@ -275,7 +275,7 @@ class EntryConfig:
         if key == CONF_NAME:
             return self.with_user_renamed(name, value)
         stored = next(
-            (known for known in self.users if _identity(known) == _identity(name)), None
+            (known for known in self.users if identity(known) == identity(name)), None
         )
         if stored is None:
             return self
@@ -293,7 +293,7 @@ class EntryConfig:
     def with_user_field_removed(self, name: str, key: str) -> EntryConfig:
         """Return a copy with one user's field removed; a no-op if absent."""
         stored = next(
-            (known for known in self.users if _identity(known) == _identity(name)), None
+            (known for known in self.users if identity(known) == identity(name)), None
         )
         if stored is None or key not in self.users[stored]:
             return self

@@ -1,24 +1,22 @@
 """
 Which slot number each user occupies.
 
-The slot number stops being configuration in version 3 and becomes internal
-bookkeeping. It still exists, because on most providers it IS the lock's
-credential index -- ``credential_index_follows_slot`` -- so it is bounded by
-the lock's advertised capacity and must be reusable when a user is deleted.
+The number is internal bookkeeping, not configuration, but on most providers
+it IS the lock's credential index (``credential_index_follows_slot``). That
+bounds it by the lock's advertised capacity, which is why numbers are reused
+on deletion rather than issued monotonically -- monotonic ones would
+eventually exceed every lock.
 
-That boundedness is why numbers are reused rather than issued monotonically:
-one that is never reused would eventually exceed every lock's capacity.
-Deleting a user and creating another does hand the newcomer the departed
-user's slot, entity identifiers, and history, which matches what the physical
-credential slot is doing.
+Reuse hands a newcomer the departed user's number, entity identifiers and
+history, matching what the physical credential slot does.
 
-Entity and device identifiers keep keying on this number, so a rename moves
-nothing in either registry.
+Entity and device identifiers key on this number, so a rename moves nothing
+in either registry.
 
-Users are identified the way :mod:`.names` identifies them: whitespace
-normalized, compared case-insensitively. Storing a name in any other form
-would let it match on one path and miss on another, and missing means looking
-like a different user and being renumbered onto a different credential index.
+Users are identified as :mod:`.names` identifies them: whitespace normalized,
+compared case-insensitively. Any other stored form can match on one path and
+miss on another, and a miss reads as a different user and renumbers them onto
+a different credential index.
 """
 
 from __future__ import annotations
@@ -30,24 +28,9 @@ from typing import Any
 
 from homeassistant.const import CONF_NAME
 
-from .names import normalize_name, normalize_slot_names
+from .names import identity, normalize_slot_names
 
 CONF_SLOT_ASSIGNMENT = "slot_assignment"
-
-_EMPTY_ASSIGNMENT: Mapping[str, int] = MappingProxyType({})
-
-
-def _identity(name: str) -> str:
-    """
-    Return the form a user is recognized by.
-
-    Matches ``names.deduplicate`` and ``names.validate_slot_names``, which
-    both casefold. Comparing case-sensitively here would let ``Bob`` and
-    ``BOB`` hold two credential indices for someone the rest of the system
-    treats as one person, and would make a case-only rename read as a
-    deletion plus an addition.
-    """
-    return normalize_name(name).casefold()
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,40 +43,32 @@ class SlotAssignment:
         """
         Put the mapping into its canonical form, then freeze it.
 
-        Names are reduced to their identity form and slot numbers coerced to
-        ``int``. Doing it here makes both invariants of the TYPE rather than of
-        whichever factory built it, so a caller constructing directly from
-        stored data cannot introduce a string key that compares unequal to an
-        int one.
+        Canonicalizing here makes identity-form names and ``int`` numbers
+        invariants of the type rather than of whichever factory built it, so
+        constructing directly from stored data cannot introduce a string key
+        that compares unequal to an int one.
 
-        Two keys reducing to one identity keeps the LOWER slot. That case
-        means the stored bookkeeping was already inconsistent; raising would
-        make the entry unloadable, which is worse than picking
-        deterministically, and the lower number is the one likelier to
-        predate the corruption.
+        Two keys reducing to one identity keep the LOWER number: the stored
+        bookkeeping was already inconsistent, and picking deterministically
+        beats making the entry unloadable.
         """
         canonical: dict[str, int] = {}
         for name, slot in self.slots.items():
             try:
                 number = int(slot)
             except TypeError, ValueError:
-                # Unusable stored value. Dropping costs this user their slot,
-                # which reconcile then reissues; raising would take the whole
-                # entry down, and corrupt bookkeeping is exactly what the
-                # coercion above exists to survive.
+                # Dropping costs this user their number, which reconcile
+                # reissues; raising would take the whole entry down.
                 continue
-            key = _identity(str(name))
+            key = identity(str(name))
             canonical[key] = min(canonical.get(key, number), number)
 
-        # No two users on one number, as an invariant of the TYPE. Reachable
-        # only from bookkeeping that was already inconsistent, but both users
-        # would otherwise write over each other on the lock every sync, and
-        # nothing else in the system repairs it.
+        # No two users on one number: they would otherwise overwrite each
+        # other on the lock every sync, and nothing else repairs it.
         #
-        # The loser is DROPPED rather than renumbered here, because this has
-        # no idea what the entry's start slot is -- reissuing from 1 could put
-        # them below it, on a code programmed by hand. reconcile knows, and
-        # gives them a number that respects it.
+        # The loser is dropped rather than renumbered because this type cannot
+        # see the entry's start slot, so reissuing from 1 could land on a code
+        # programmed by hand. reconcile knows the start and respects it.
         deduped: dict[str, int] = {}
         held: set[int] = set()
         for key in sorted(canonical):
@@ -117,25 +92,21 @@ class SlotAssignment:
     @classmethod
     def empty(cls) -> SlotAssignment:
         """Return the assignment for an entry with no users."""
-        return cls(slots=_EMPTY_ASSIGNMENT)
+        return cls(slots={})
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> SlotAssignment:
         """
         Read the assignment out of an entry's stored bookkeeping.
 
-        Takes ONE mapping deliberately. Configuration is read options-first
-        and falls back to data (``EntryConfig.from_entry``), but the
-        assignment must be read from the same side the users came from, or a
-        stale copy renumbers everyone on the next start. Consumers pass the
-        already-merged mapping rather than an entry, so there is no second
-        precedence rule here to get out of step with the first.
+        Takes the already-merged mapping rather than an entry so there is no
+        second options-before-data precedence rule to drift from the one in
+        ``EntryConfig.from_entry``. The assignment has to come from the same
+        side the users did, or a stale copy renumbers everyone on next start.
         """
         stored = mapping.get(CONF_SLOT_ASSIGNMENT)
-        # Anything that is not a mapping carries nothing worth keeping, and
-        # reconcile rebuilds the assignment from the configured users anyway.
-        # Raising here would abort entry setup over hand-edited storage, which
-        # is the same threat model the coercions below exist for.
+        # Non-mapping storage carries nothing worth keeping and reconcile
+        # rebuilds from the configured users; raising would abort setup.
         return cls(slots=stored if isinstance(stored, Mapping) else {})
 
     def to_dict(self) -> dict[str, Any]:
@@ -144,7 +115,7 @@ class SlotAssignment:
 
     def slot(self, name: str) -> int | None:
         """Return the slot ``name`` occupies, or None if they hold none."""
-        return self.slots.get(_identity(name))
+        return self.slots.get(identity(name))
 
     def reconcile(
         self,
@@ -157,65 +128,43 @@ class SlotAssignment:
         """
         Return the assignment covering exactly ``names``, applying ``renames``.
 
-        ONE operation rather than a rename step followed by an allocation
-        step. Splitting them put the order in the caller's hands, and the
-        order is the whole difficulty: a rename is indistinguishable from a
-        deletion plus an addition unless you already know who survives.
-        Getting that sequence wrong produced a high-severity defect in three
-        consecutive review rounds -- users deleted, users renumbered onto
-        another user's credential index -- so the sequence is gone rather
-        than documented.
+        Renaming and allocating are ONE operation because their order is the
+        whole difficulty: a rename is indistinguishable from a deletion plus
+        an addition unless you already know who survives. ``names`` -- the
+        full set of users in the NEW configuration -- is what resolves it. A
+        rename target absent from ``names`` is departing; one present names
+        the renamed user.
 
-        ``names`` is the full set of users in the NEW configuration, which is
-        what resolves the ambiguity: a rename target that is not in ``names``
-        is departing, and one that is names the renamed user.
-
-        Users keep their slot through a rename and through anyone else's
+        Users keep their number through a rename and through anyone else's
         arrival or departure. New users take the lowest free number at or
-        above ``start``, skipping ``unavailable``.
+        above ``start``, skipping ``unavailable``. ``start`` is required so a
+        caller decides where issuing begins rather than inheriting a default.
 
-        ``start`` is required, not defaulted, so a caller has to decide where
-        issuing begins rather than inheriting a default that happens to be
-        safe today.
+        Tenure outranks both constraints: a user already holding a number
+        keeps it even when ``start`` rises above it or ``unavailable`` grows
+        to include it, because moving somebody rewrites their credential on
+        every lock and orphans their entities.
 
-        A user already holding a slot keeps it even when ``start`` rises
-        above it or ``unavailable`` comes to include it: both constrain
-        ALLOCATION, not tenure. Moving somebody rewrites their credential on
-        every lock and orphans their entities, which is worse than the entry
-        holding a number it would not choose today.
-
-        That trade is clean for ``start`` and NOT clean for ``unavailable``.
-        A tenured user on a number another entry owns means two entries
-        writing one credential index, which nothing here can repair -- this
-        type cannot see the other entry. It is left standing because the
-        alternative is renumbering somebody without being asked, and because
-        ``config_flow._check_common_slots`` is what prevents the overlap
-        arising in the first place. If a consumer ever needs the conflict
-        surfaced rather than absorbed, that belongs at the seam that knows
-        about other entries, not here.
+        For ``unavailable`` that leaves a real conflict standing -- two
+        entries writing one credential index -- which this type cannot repair
+        because it cannot see the other entry. ``config_flow`` prevents the
+        overlap arising; surfacing it instead belongs at that seam.
 
         Returns ``self`` when nothing differs, so callers can use identity to
         decide whether a write is needed.
         """
-        wanted = list(dict.fromkeys(_identity(name) for name in names))
+        wanted = list(dict.fromkeys(identity(name) for name in names))
         surviving = set(wanted)
 
-        # A move is honoured only when the source holds a slot AND the target
-        # is among the survivors; a rename whose target is absent contradicts
-        # the name set and is ignored.
+        # Reduce to identity form BEFORE resolving, or two keys meaning the
+        # same user (``Alice`` and ``alice ``) each take a turn: the later
+        # overwrites the earlier while the earlier's target stays claimed,
+        # refusing a third user's legitimate rename onto it.
         #
-        # Two sources renaming onto one target is likewise contradictory.
-        # Resolved in sorted order so the same input always gives the same
-        # answer regardless of mapping iteration order.
-        # Reduce to identity form FIRST. Iterating the raw mapping let two
-        # keys that mean the same user (``Alice`` and ``alice ``) each take a
-        # turn: the later overwrote the earlier while the earlier's target
-        # stayed claimed, so a third user's legitimate rename onto that target
-        # was refused and they were renumbered. It also made the answer depend
-        # on the mapping's insertion order.
+        # Sorted throughout so the answer never depends on mapping order.
         wanted_moves: dict[str, str] = {}
-        for old in sorted(renames or {}, key=lambda key: (_identity(key), str(key))):
-            wanted_moves.setdefault(_identity(old), _identity((renames or {})[old]))
+        for old in sorted(renames or {}, key=lambda key: (identity(key), str(key))):
+            wanted_moves.setdefault(identity(old), identity((renames or {})[old]))
 
         honoured: dict[str, str] = {}
         claimed: set[str] = set()
@@ -242,10 +191,9 @@ class SlotAssignment:
         carried = {**kept, **renamed}
         taken = set(carried.values()) | set(unavailable)
         candidate = start
-        # Sorted so the answer does not depend on how the caller ordered
-        # ``names``. The signature accepts any iterable, and a set or
-        # ``dict.keys()`` from an unordered source would otherwise give the
-        # same configuration different credential indices from run to run.
+        # Sorted because the signature accepts any iterable: an unordered one
+        # would give the same configuration different credential indices from
+        # run to run.
         for name in sorted(name for name in wanted if name not in carried):
             while candidate in taken:
                 candidate += 1
@@ -263,22 +211,20 @@ def users_from_slots(
     """
     Convert slot-keyed configuration into name-keyed users plus an assignment.
 
-    The version 3 migration in one function, kept pure so the properties that
-    matter -- nothing lost, nobody renumbered -- can be stated over it
-    directly rather than through a config entry. Also returns the slots whose
-    name the repair changed, so the migration can report them.
+    Pure, so the properties that matter -- nothing lost, nobody renumbered --
+    can be stated over it directly rather than through a config entry. Also
+    returns the slots whose name the repair changed, for the migration to
+    report.
 
-    Repairs the names ITSELF rather than documenting that callers must. The
-    name becomes the mapping key here, so two slots sharing one would collapse
-    into a single user -- losing a user and their code, and renumbering the
-    survivor -- and a slot with no name at all would raise mid-migration. Both
-    are reachable from a version 2 entry, where the name is optional. A
-    precondition is not good enough on a migration with no rollback.
+    Repairs names itself rather than requiring callers to. The name becomes
+    the mapping key here, so a duplicate would collapse two slots into one
+    user and a missing one would raise mid-migration -- both reachable from
+    stored data, and a migration with no rollback cannot rely on a
+    precondition.
 
-    Slot keys are coerced to ``int``. The on-disk JSON form is ``str``, so a
-    migration reading stored data hands strings straight in; a string here
-    survives into the assignment, where ``candidate in taken`` compares an int
-    against it, misses, and issues a slot that is already occupied.
+    Slot keys are coerced to ``int`` because the on-disk JSON form is ``str``,
+    and a string surviving into the assignment misses ``candidate in taken``
+    and issues an already-occupied number.
     """
     repaired, renamed = normalize_slot_names(slots)
     users: dict[str, dict[str, Any]] = {}
