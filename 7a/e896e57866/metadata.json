@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "7ae896e57866",
+  "strategy": "manual-commit",
+  "branch": "fix/service-strings",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_service_catalog.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7a/e896e57866/0/metadata.json",
+      "transcript": "/7a/e896e57866/0/full.jsonl",
+      "compact_transcript": "/7a/e896e57866/0/transcript.jsonl",
+      "content_hash": "/7a/e896e57866/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 78422,
+    "cache_read_tokens": 8844224,
+    "output_tokens": 37653,
+    "api_call_count": 50
+  }
+}
