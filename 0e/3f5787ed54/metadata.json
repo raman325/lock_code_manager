@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "0e3f5787ed54",
+  "strategy": "manual-commit",
+  "branch": "fix/v3-reference-scan-misses",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/references.py",
+    "custom_components/lock_code_manager/repairs.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_repairs_references.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0e/3f5787ed54/0/metadata.json",
+      "transcript": "/0e/3f5787ed54/0/full.jsonl",
+      "compact_transcript": "/0e/3f5787ed54/0/transcript.jsonl",
+      "content_hash": "/0e/3f5787ed54/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 39789,
+    "cache_read_tokens": 10045548,
+    "output_tokens": 25451,
+    "api_call_count": 19
+  }
+}
