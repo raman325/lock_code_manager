@@ -118,6 +118,12 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     @state() private _showConditionDialog = false;
     @state() private _dialogEntityId: string | null = null;
     @state() private _dialogSaving = false;
+    @state() private _showRemoveDialog = false;
+    // Defaults to clearing, matching the service. Unticking it hands the
+    // credential over rather than revoking it: the code goes on working and
+    // this integration stops managing it.
+    @state() private _removeClearsCredentials = true;
+    @state() private _removing = false;
 
     _hass?: HomeAssistant;
     private _entityRowCache = new Map<string, HTMLElement>();
@@ -374,6 +380,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                 </div>
                 ${this._renderEventRow()}
                 ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
+                ${this._showRemoveDialog ? this._renderRemoveDialog() : nothing}
             </ha-card>
         `;
     }
@@ -581,6 +588,16 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                     </div>
                     <h2 class="hero-title">${this._renderHeroName()}</h2>
                     ${this._renderStateChip()}
+                    <button
+                        class="hero-remove"
+                        aria-label="Remove user"
+                        title="Remove user"
+                        @click=${() => {
+                            this._showRemoveDialog = true;
+                        }}
+                    >
+                        <ha-svg-icon .path=${mdiDelete}></ha-svg-icon>
+                    </button>
                 </div>
                 <div class="hero-row">
                     <div class="hero-field hero-pin">
@@ -1213,6 +1230,86 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
             msg.config_entry_title = this._config.config_entry_title;
         }
         await this._hass.callWS(msg);
+    }
+
+    private _renderRemoveDialog(): TemplateResult {
+        const name = this._data?.name || 'this user';
+        return html`
+            <ha-dialog
+                open
+                @closed=${() => {
+                    this._showRemoveDialog = false;
+                }}
+                .heading=${`Remove ${name}?`}
+            >
+                <div class="dialog-content">
+                    <p class="dialog-description">
+                        ${name} will be removed from this Lock Code Manager configuration. Their
+                        entities go with them.
+                    </p>
+                    <label class="dialog-check">
+                        <ha-checkbox
+                            .checked=${this._removeClearsCredentials}
+                            @change=${(e: Event) => {
+                                this._removeClearsCredentials = (
+                                    e.target as HTMLInputElement
+                                ).checked;
+                            }}
+                        ></ha-checkbox>
+                        <span>
+                            Also clear their code from the locks. Leave this unticked to keep the
+                            code working and simply stop managing it here.
+                        </span>
+                    </label>
+                    ${
+                        this._removing
+                            ? html`<div class="dialog-saving" aria-live="polite">Removing…</div>`
+                            : nothing
+                    }
+                </div>
+                <ha-button
+                    slot="secondaryAction"
+                    @click=${() => {
+                        this._showRemoveDialog = false;
+                    }}
+                >
+                    Cancel
+                </ha-button>
+                <ha-button
+                    slot="primaryAction"
+                    class="destructive"
+                    .disabled=${this._removing}
+                    @click=${this._commitRemove}
+                >
+                    Remove
+                </ha-button>
+            </ha-dialog>
+        `;
+    }
+
+    private async _commitRemove(): Promise<void> {
+        const name = this._data?.name;
+        const entryId = this._data?.config_entry_id ?? this._config?.config_entry_id;
+        if (!this._hass || !name || !entryId) {
+            this._setActionError('Card not initialized');
+            return;
+        }
+        if (this._removing) return;
+        this._removing = true;
+        try {
+            await this._hass.callService('lock_code_manager', 'delete_user', {
+                clear_credentials: this._removeClearsCredentials,
+                config_entry_id: entryId,
+                name
+            });
+            this._showRemoveDialog = false;
+        } catch (err) {
+            this._setActionError(
+                `Could not remove ${name}: ${err instanceof Error ? err.message : String(err)}`
+            );
+        } finally {
+            this._removing = false;
+        }
     }
 
     private _renderConditionDialog(): TemplateResult {

@@ -83,6 +83,46 @@ const slotCardComponentStyles = css`
         white-space: nowrap;
     }
 
+    .hero-remove {
+        align-items: center;
+        background: none;
+        border: none;
+        border-radius: 50%;
+        color: var(--secondary-text-color);
+        cursor: pointer;
+        display: flex;
+        flex-shrink: 0;
+        height: 36px;
+        justify-content: center;
+        padding: 0;
+        width: 36px;
+    }
+
+    .hero-remove:hover {
+        background: var(--lcm-hover-bg, rgba(0, 0, 0, 0.06));
+        color: var(--error-color, #db4437);
+    }
+
+    .hero-remove ha-svg-icon {
+        --mdc-icon-size: 20px;
+    }
+
+    .dialog-check {
+        align-items: flex-start;
+        display: flex;
+        gap: 10px;
+        margin-top: 12px;
+    }
+
+    .dialog-check span {
+        color: var(--secondary-text-color);
+        font-size: 14px;
+    }
+
+    ha-button.destructive {
+        --mdc-theme-primary: var(--error-color, #db4437);
+    }
+
     .hero-icon {
         align-items: center;
         background: var(--lcm-active-bg);

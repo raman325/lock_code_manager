@@ -250,7 +250,13 @@ describe('LockCodeManagerSlotCard integration', () => {
 
         beforeEach(async () => {
             card = document.createElement('lcm-user') as SlotCardElement & Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', name: 'Raman', type: 'custom:lcm-user' });
+            // Addressed by title, so the card itself never learns the entry id —
+            // only the resolved data carries it.
+            card.setConfig({
+                config_entry_title: 'Test Config',
+                name: 'Raman',
+                type: 'custom:lcm-user'
+            });
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
@@ -4501,6 +4507,150 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(msg.user_entity_id).toBe('text.all_locks_raman_name');
             expect(msg.name).toBeUndefined();
             expect(msg.slot).toBeUndefined();
+        });
+    });
+
+    describe('removing a user', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+        let calls: Array<Record<string, unknown>>;
+
+        beforeEach(async () => {
+            calls = [];
+            card = document.createElement('lcm-user') as SlotCardElement & Record<string, unknown>;
+            // Addressed by title, so the card itself never learns the entry id —
+            // only the resolved data carries it.
+            card.setConfig({
+                config_entry_title: 'Test Config',
+                name: 'Raman',
+                type: 'custom:lcm-user'
+            });
+            const hass = createMockHassWithConnection();
+            hass.callService = (domain: string, service: string, data: Record<string, unknown>) => {
+                calls.push({ data, domain, service });
+                return Promise.resolve();
+            };
+            card.hass = hass;
+            container.appendChild(card);
+            card._data = makeSlotCardData({ name: 'Raman' });
+            await flush();
+        });
+
+        it('asks before removing anybody', () => {
+            const json = JSON.stringify(card.render());
+            expect(json).toContain('hero-remove');
+            // The dialog is not open until asked for.
+            expect(card._showRemoveDialog).toBe(false);
+        });
+
+        it('offers to clear the code, ticked', () => {
+            // Unticking hands the credential over instead of revoking it, so
+            // the default has to be the one that revokes.
+            card._showRemoveDialog = true;
+            expect(card._removeClearsCredentials).toBe(true);
+            expect(JSON.stringify(card.render())).toContain('ha-checkbox');
+        });
+
+        it('removes the user, clearing by default', async () => {
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0].domain).toBe('lock_code_manager');
+            expect(calls[0].service).toBe('delete_user');
+            expect(calls[0].data).toMatchObject({
+                clear_credentials: true,
+                // Resolved by the backend, not configured on the card.
+                config_entry_id: 'test-entry',
+                name: 'Raman'
+            });
+            expect(card._showRemoveDialog).toBe(false);
+        });
+
+        it('passes the choice to keep the code through', async () => {
+            card._showRemoveDialog = true;
+            card._removeClearsCredentials = false;
+            await card._commitRemove();
+
+            expect(calls[0].data).toMatchObject({ clear_credentials: false });
+        });
+
+        it('opens the dialog from the button in the hero row', async () => {
+            const button = card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!;
+            expect(button).toBeTruthy();
+            expect(button.getAttribute('aria-label')).toBe('Remove user');
+
+            button.click();
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(true);
+            expect(card.shadowRoot!.querySelector('ha-dialog')).toBeTruthy();
+        });
+
+        it('carries an untick through to the service call', async () => {
+            card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!.click();
+            await flush();
+
+            const checkbox = card.shadowRoot!.querySelector<HTMLInputElement>('ha-checkbox')!;
+            checkbox.checked = false;
+            checkbox.dispatchEvent(new Event('change'));
+            await flush();
+
+            expect(card._removeClearsCredentials).toBe(false);
+        });
+
+        it('closes without removing anybody on cancel', async () => {
+            card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!.click();
+            await flush();
+
+            const cancel = [...card.shadowRoot!.querySelectorAll('ha-button')].find(
+                (b) => b.getAttribute('slot') === 'secondaryAction'
+            )!;
+            (cancel as HTMLElement).click();
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(false);
+            expect(calls).toHaveLength(0);
+        });
+
+        it('removes once when the button is hit twice', async () => {
+            card._showRemoveDialog = true;
+            // Deliberately not awaited: the second call lands while the first
+            // is still in flight, which is what an impatient double-click does.
+            const first = card._commitRemove();
+            const second = card._commitRemove();
+            await Promise.all([first, second]);
+
+            expect(calls).toHaveLength(1);
+        });
+
+        it('closes when dismissed with escape or the scrim', async () => {
+            card._showRemoveDialog = true;
+            await flush();
+
+            card.shadowRoot!.querySelector('ha-dialog')!.dispatchEvent(new Event('closed'));
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(false);
+            expect(calls).toHaveLength(0);
+        });
+
+        it('refuses to guess which user to remove before data arrives', async () => {
+            card._data = undefined;
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(calls).toHaveLength(0);
+            expect(card._actionError).toContain('not initialized');
+        });
+
+        it('names the user in the error when the service refuses', async () => {
+            card.hass.callService = () => Promise.reject(new Error('lock is asleep'));
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            // Left open, because the user is still there.
+            expect(card._actionError).toContain('Raman');
+            expect(card._actionError).toContain('lock is asleep');
         });
     });
 });
