@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "748d93f1c2dd",
+  "strategy": "manual-commit",
+  "branch": "feat/manage-users-from-the-dashboard",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/add-user-card.test.ts",
+    "ts/add-user-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/74/8d93f1c2dd/0/metadata.json",
+      "transcript": "/74/8d93f1c2dd/0/full.jsonl",
+      "compact_transcript": "/74/8d93f1c2dd/0/transcript.jsonl",
+      "content_hash": "/74/8d93f1c2dd/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 7437,
+    "cache_read_tokens": 2398218,
+    "output_tokens": 5650,
+    "api_call_count": 7
+  }
+}
