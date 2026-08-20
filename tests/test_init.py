@@ -60,6 +60,7 @@ from custom_components.lock_code_manager.const import (
     STRATEGY_PATH,
 )
 from custom_components.lock_code_manager.domain.config import (
+    EntryConfig,
     build_slot_device_identifier,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
@@ -2750,3 +2751,50 @@ def test_migration_keeps_the_condition_already_set() -> None:
     )
 
     assert migrated[CONF_USERS]["Raman"] == {CONF_CONDITION: "binary_sensor.current"}
+
+
+async def test_removing_a_slot_clears_its_code_off_the_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A slot leaving the configuration takes its credential with it.
+
+    Two things go wrong when it does not. The obvious one: a PIN nobody
+    manages any more still opens the door. The quieter one: allocation
+    refuses to issue a number it can still read a code at, so the slot is
+    burned -- every add-then-remove cycle costs a slot the lock never gets
+    back.
+    """
+    entry = lock_code_manager_config_entry
+    locks = list(entry.runtime_data.locks.values())
+    for lock in locks:
+        assert (await lock.async_get_usercodes())[2].pin
+
+    # Written the way the editor writes it, name-keyed: the user goes and
+    # takes their slot number with them.
+    config = get_entry_config(entry)
+    departing = config.name_for(2)
+    remaining = {
+        name: dict(user) for name, user in config.users.items() if name != departing
+    }
+    hass.config_entries.async_update_entry(
+        entry,
+        options=EntryConfig(
+            locks=config.locks,
+            users=remaining,
+            assignment=config.assignment.reconcile(remaining, start=1),
+            extra=config.extra,
+        ).to_dict(),
+    )
+    await hass.async_block_till_done()
+
+    assert not get_entry_config(entry).has_slot(2)
+    # Every lock in the entry, not just the first: the slot was written to
+    # all of them.
+    for lock in locks:
+        # A cleared slot may drop out of the lock's view entirely or come
+        # back empty; both mean nothing is programmed there.
+        credential = (await lock.async_get_usercodes()).get(2)
+        assert not (credential and credential.pin)

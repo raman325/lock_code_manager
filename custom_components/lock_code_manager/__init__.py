@@ -122,6 +122,7 @@ from .domain.services import (
     async_set_usercode,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
+from .domain.unmanaged import async_sweep_unmanaged_codes
 from .domain.user_migration import migrate_to_users
 from .domain.util import (
     PER_LOCK_ISSUE_KEYS,
@@ -217,6 +218,7 @@ async def async_migrate_entry(
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=3
         )
+
         if entry_impacted:
             impacted_slots = sorted(entry_impacted, key=int)
             async_create_issue(
@@ -298,6 +300,11 @@ async def async_migrate_entry(
                 len(renamed),
                 ", ".join(sorted(renamed, key=int)),
             )
+        # Last, and part of the same version bump: from here on a slot
+        # leaving the configuration takes its credential with it, so the
+        # codes earlier versions left behind are offered up once, measured
+        # against the configuration users will actually have.
+        await async_sweep_unmanaged_codes(hass, config_entry)
 
     return True
 

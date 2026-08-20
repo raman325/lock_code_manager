@@ -1689,15 +1689,18 @@ class BaseLock:
         survives PIN clear/rewrite cycles, so it can only be torn down
         when the slot itself is removed from LCM management).
 
-        Default is a no-op: slot-only providers have no user record to
-        tear down, and native-user providers that have not yet migrated
-        to the tag scheme don't carry a recoverable slot binding either.
-        Providers that DO carry the binding (Matter, eventually Z-Wave
-        User Credential CC) override this to find the user tagged for
-        ``slot`` and delete it -- the cascade defined by the lock's
-        protocol then removes the user's credentials.
+        Clears the credential. A slot-only provider has no user record,
+        but the credential IS lock-side state this integration owns, and
+        leaving it programmed means a deleted user's PIN still opens the
+        door -- and that the slot number can never be reissued, because
+        allocation refuses to write over a code it can still read.
+
+        Providers that anchor a slot to a lock-side user (Matter,
+        eventually Z-Wave User Credential CC) override this to delete
+        that user instead; the cascade defined by the lock's protocol
+        removes its credentials, so they must not also clear here.
         """
-        return
+        await self.async_internal_clear_usercode(slot)
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """

@@ -360,6 +360,25 @@
           }
         }
       }
+    },
+    "unmanaged_code": {
+      "title": "Unmanaged code on {lock} in slot {slot}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Unmanaged code on {lock} in slot {slot}",
+            "description": "Lock {lock} has a code programmed in slot {slot}, and no Lock Code Manager configuration accounts for it.\n\nThere are two ways this happens, and Lock Code Manager cannot tell them apart:\n\n- Somebody programmed the code directly on the lock's keypad or in another app.\n- Lock Code Manager left it behind. Before version 4.4.7, deleting a user removed them from the configuration without clearing their code from the lock, so codes stranded that way are still there and still work.\n\nUntil this is settled, slot {slot} stays out of use: Lock Code Manager will not assign a new user to a slot it can still read a code in, because overwriting somebody's own code is the worse mistake.\n\n**Clear the code** removes it from the lock. It stops working immediately and cannot be recovered — choose this only if you know nobody relies on it.\n\n**Keep the code** leaves it exactly as it is and stops asking about this slot.",
+            "menu_options": {
+              "clear": "Clear the code from slot {slot}",
+              "keep": "Keep the code and stop asking"
+            }
+          }
+        },
+        "abort": {
+          "unmanaged_code_kept": "The code in slot {slot} on {lock} was left alone. Lock Code Manager will not ask about this slot again, and will not assign a user to it.",
+          "unmanaged_code_clear_failed": "The code in slot {slot} on {lock} could not be cleared: {error}\n\nIt is still on the lock, so this repair stays open."
+        }
+      }
     }
   },
   "exceptions": {
