@@ -26,9 +26,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
-from homeassistant.const import CONF_NAME
+from homeassistant.const import CONF_NAME, CONF_PIN
 
-from .names import identity, normalize_slot_names
+from .names import identity, normalize_name, normalize_slot_names
 
 CONF_SLOT_ASSIGNMENT = "slot_assignment"
 
@@ -173,14 +173,14 @@ class SlotAssignment:
 
 def users_from_slots(
     slots: Mapping[Any, Mapping[str, Any]],
-) -> tuple[dict[str, dict[str, Any]], SlotAssignment, list[str]]:
+) -> tuple[dict[str, dict[str, Any]], SlotAssignment, list[str], list[str]]:
     """
     Convert slot-keyed configuration into name-keyed users plus an assignment.
 
-    Pure, so the properties that matter -- nothing lost, nobody renumbered --
-    can be stated over it directly rather than through a config entry. Also
-    returns the slots whose name the repair changed, for the migration to
-    report.
+    Pure, so the properties that matter -- nothing lost that was ever a
+    user, nobody renumbered -- can be stated over it directly rather than
+    through a config entry. Also returns the slots whose name the repair
+    changed, and the empty ones dropped, for the migration to report.
 
     Repairs names itself rather than requiring callers to. The name becomes
     the mapping key here, so a duplicate would collapse two slots into one
@@ -192,11 +192,26 @@ def users_from_slots(
     and a string surviving into the assignment misses ``candidate in taken``
     and issues an already-occupied number.
     """
-    repaired, renamed = normalize_slot_names(slots)
+    # A slot with neither a name nor a PIN is not a person: it is an empty
+    # position left over from choosing how many slots to set up. Naming it
+    # would invent a user who never existed and hold a slot number against
+    # them, so it is dropped instead. Anything with a PIN survives, named
+    # after its number if it has to be -- there is a credential on the lock
+    # and somebody must own it.
+    populated = {
+        slot_num: slot
+        for slot_num, slot in slots.items()
+        if (slot or {}).get(CONF_PIN) or normalize_name((slot or {}).get(CONF_NAME))
+    }
+    dropped = [
+        str(slot_num) for slot_num in sorted(set(slots) - set(populated), key=int)
+    ]
+
+    repaired, renamed = normalize_slot_names(populated)
     users: dict[str, dict[str, Any]] = {}
     assignment: dict[str, int] = {}
     for raw_slot_num, slot in sorted(repaired.items(), key=lambda kv: int(kv[0])):
         name = slot[CONF_NAME]
         users[name] = {k: v for k, v in slot.items() if k != CONF_NAME}
         assignment[name] = int(raw_slot_num)
-    return users, SlotAssignment(slots=assignment), renamed
+    return users, SlotAssignment(slots=assignment), renamed, dropped

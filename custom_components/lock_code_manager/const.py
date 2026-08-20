@@ -40,6 +40,11 @@ ATTR_LCM_CONFIG_ENTRY_ID = "lock_code_manager_config_entry_id"
 ATTR_LOCK_CONFIG_ENTRY_ID = "lock_config_entry_id"
 ATTR_EXTRA_DATA = "extra_data"
 ATTR_MANAGED = "managed"
+# One repair for the whole entity-ID rename, however many entries moved.
+ENTITY_IDS_RENAMED_ISSUE = "entity_ids_renamed"
+# Where the migration accumulates those renames while entries migrate.
+RENAMES_KEY = "migration_renames"
+
 ATTR_CLEAR_CREDENTIALS = "clear_credentials"
 ATTR_SLOT = "slot"
 ATTR_SLOT_NUM = "slot_num"

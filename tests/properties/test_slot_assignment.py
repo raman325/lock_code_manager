@@ -82,7 +82,7 @@ def stored_slot_mappings(draw: st.DrawFn) -> dict:
 @given(slots=slot_mappings())
 def test_conversion_loses_no_user(slots: dict[int, dict]) -> None:
     """Every configured slot becomes exactly one user."""
-    users, assignment, _ = users_from_slots(slots)
+    users, assignment, _, _dropped = users_from_slots(slots)
 
     assert len(users) == len(slots)
     assert set(users) == {slot[CONF_NAME] for slot in slots.values()}
@@ -101,7 +101,7 @@ def test_conversion_loses_no_field(slots: dict[int, dict]) -> None:
     going missing is silent data loss -- the result still validates, the user
     just quietly has no code.
     """
-    users, _, _ = users_from_slots(slots)
+    users, _, _, _dropped = users_from_slots(slots)
 
     for slot in slots.values():
         user = users[slot[CONF_NAME]]
@@ -117,7 +117,7 @@ def test_conversion_renumbers_nobody(slots: dict[int, dict]) -> None:
     changed would have their entities orphaned AND their code written to a
     different index.
     """
-    _, assignment, _ = users_from_slots(slots)
+    _, assignment, _, _dropped = users_from_slots(slots)
 
     for slot_num, slot in slots.items():
         assert assignment.slot(slot[CONF_NAME]) == slot_num
@@ -131,7 +131,7 @@ def test_conversion_round_trips(slots: dict[int, dict]) -> None:
     reshaping that happens to preserve counts and fields separately while
     still pairing them up wrongly.
     """
-    users, assignment, _ = users_from_slots(slots)
+    users, assignment, _, _dropped = users_from_slots(slots)
 
     rebuilt = {
         assignment.slot(name): {CONF_NAME: name, **user} for name, user in users.items()
@@ -250,7 +250,7 @@ def test_editing_after_a_migration_never_double_books_a_slot(
     storage, never from ``empty()``. That gap hid a string-key collision that
     issued one credential index to two users.
     """
-    _, assignment, _ = users_from_slots(stored)
+    _, assignment, _, _dropped = users_from_slots(stored)
     after = _reconcile(assignment, [*assignment.slots, *later], start=start)
 
     numbers = list(after.slots.values())
@@ -261,7 +261,7 @@ def test_editing_after_a_migration_never_double_books_a_slot(
 @given(stored=stored_slot_mappings())
 def test_migration_always_produces_one_user_per_slot(stored: dict) -> None:
     """No slot is lost to a missing or duplicated name."""
-    users, assignment, _ = users_from_slots(stored)
+    users, assignment, _, _dropped = users_from_slots(stored)
 
     assert len(users) == len(stored)
     assert len(assignment.slots) == len(stored)
@@ -271,7 +271,7 @@ def test_migration_always_produces_one_user_per_slot(stored: dict) -> None:
 @given(stored=stored_slot_mappings())
 def test_repair_pairs_each_user_with_their_own_fields_and_slot(stored: dict) -> None:
     """Repaired names stay attached to the right fields and the right slot."""
-    users, assignment, _ = users_from_slots(stored)
+    users, assignment, _, _dropped = users_from_slots(stored)
     repaired, _ = normalize_slot_names(stored)
 
     for raw_key, slot in repaired.items():
@@ -401,7 +401,7 @@ def test_a_migration_cannot_persist_two_users_on_one_number() -> None:
     persisted straight out of a migration that has no rollback, and both users
     would overwrite each other on the lock every sync.
     """
-    _, assignment, _ = users_from_slots(
+    _, assignment, _, _dropped = users_from_slots(
         {"01": {CONF_NAME: "A", CONF_PIN: "1"}, "1": {CONF_NAME: "B", CONF_PIN: "2"}}
     )
 

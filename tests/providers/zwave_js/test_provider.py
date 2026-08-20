@@ -19,6 +19,7 @@ from zwave_js_server.model.node import Node
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
@@ -341,7 +342,7 @@ async def test_hard_refresh_codes_calls_access_control(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -409,7 +410,7 @@ async def test_async_get_usercodes_returns_projection_with_managed_slots(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"3": {}, "4": {}},
+            CONF_SLOTS: {"3": {CONF_NAME: "User 3"}, "4": {CONF_NAME: "User 4"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -443,7 +444,7 @@ async def test_async_get_usercodes_overlays_pin_credentials(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "3": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "3": {CONF_NAME: "User 3"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -496,7 +497,7 @@ async def test_async_get_usercodes_reports_occupied_uc_slot_as_unreadable(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}, "3": {}},
+            CONF_SLOTS: {"2": {CONF_NAME: "User 2"}, "3": {CONF_NAME: "User 3"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -536,7 +537,7 @@ async def test_async_get_usercodes_reports_occupied_slot_with_no_user_as_unreada
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "3": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "3": {CONF_NAME: "User 3"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -568,7 +569,7 @@ async def test_async_get_usercodes_readable_credential_outranks_uc_occupancy(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -626,7 +627,7 @@ async def test_async_get_usercodes_skips_uc_occupancy_without_user_code_cc(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -658,7 +659,7 @@ async def test_async_internal_set_usercode_calls_primitives(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -701,7 +702,7 @@ async def test_async_internal_clear_usercode_calls_delete_primitives(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -1696,7 +1697,7 @@ async def test_set_usercode_user_code_cc_skips_set_user_and_writes_credential_on
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"5": {}},
+            CONF_SLOTS: {"5": {CONF_NAME: "User 5"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -1772,7 +1773,7 @@ async def test_async_set_usercode_builds_tagged_name_within_lock_limit(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}},
         },
     )
     lcm_entry.add_to_hass(hass)

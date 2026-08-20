@@ -79,7 +79,7 @@ def v2_entries(draw: st.DrawFn) -> dict:
 @given(entry=v2_entries())
 def test_every_slot_becomes_exactly_one_user(entry: dict) -> None:
     """Nobody is lost, however badly the names were configured."""
-    migrated, _ = migrate_to_users(entry)
+    migrated, _, _dropped = migrate_to_users(entry)
 
     assert len(migrated[CONF_USERS]) == len(entry[CONF_SLOTS])
 
@@ -92,7 +92,7 @@ def test_nobody_is_renumbered(entry: dict) -> None:
     the lock, so a changed number orphans that user's entities and writes
     their code to a different index.
     """
-    migrated, _ = migrate_to_users(entry)
+    migrated, _, _dropped = migrate_to_users(entry)
     assignment = SlotAssignment(slots=migrated[CONF_SLOT_ASSIGNMENT])
 
     assert sorted(assignment.slots.values()) == sorted(
@@ -109,7 +109,7 @@ def test_no_field_is_lost_except_the_name(entry: dict) -> None:
     Anything else going missing is silent: the result still validates, the
     user simply has no code any more.
     """
-    migrated, _ = migrate_to_users(entry)
+    migrated, _, _dropped = migrate_to_users(entry)
     assignment = SlotAssignment(slots=migrated[CONF_SLOT_ASSIGNMENT])
     by_slot = {
         assignment.slot(name): user for name, user in migrated[CONF_USERS].items()
@@ -127,7 +127,7 @@ def test_the_retired_keys_are_gone(entry: dict) -> None:
     Allocation takes the lowest unoccupied slot, so a start slot configures
     nothing; a stale key would eventually be read by something.
     """
-    migrated, _ = migrate_to_users(entry)
+    migrated, _, _dropped = migrate_to_users(entry)
 
     assert CONF_SLOTS not in migrated
     assert CONF_START_SLOT not in migrated
@@ -137,7 +137,7 @@ def test_the_retired_keys_are_gone(entry: dict) -> None:
 @given(entry=v2_entries())
 def test_everything_else_is_carried_through(entry: dict) -> None:
     """Locks and any key this migration does not know about survive verbatim."""
-    migrated, _ = migrate_to_users(entry)
+    migrated, _, _dropped = migrate_to_users(entry)
 
     assert migrated[CONF_LOCKS] == entry[CONF_LOCKS]
     if "some_future_key" in entry:
@@ -155,7 +155,7 @@ def test_user_keys_keep_the_name_as_displayed(entry: dict) -> None:
     Uniqueness stays case-insensitive: storage keeps the display form,
     comparison folds the case.
     """
-    migrated, _ = migrate_to_users(entry)
+    migrated, _, _dropped = migrate_to_users(entry)
 
     for name in migrated[CONF_USERS]:
         assert name == name.strip()
@@ -170,8 +170,8 @@ def test_migrating_twice_changes_nothing(entry: dict) -> None:
     The version stamp should prevent a second run, but a migration with no
     rollback should not depend on that.
     """
-    once, _ = migrate_to_users(entry)
-    twice, renamed = migrate_to_users(once)
+    once, _, _dropped = migrate_to_users(entry)
+    twice, renamed, _dropped = migrate_to_users(once)
 
     assert twice == once
     assert renamed == []

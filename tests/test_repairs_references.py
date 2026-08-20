@@ -12,7 +12,10 @@ from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.setup import async_setup_component
 from homeassistant.util.yaml import save_yaml
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import (
+    DOMAIN,
+    ENTITY_IDS_RENAMED_ISSUE,
+)
 from custom_components.lock_code_manager.domain import references
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
@@ -56,7 +59,7 @@ async def _migrated_entry(hass: HomeAssistant) -> MockConfigEntry:
 
 async def _open_repair(hass: HomeAssistant, entry: MockConfigEntry):
     """Open the repair the migration raised, and hand back its flow."""
-    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    issue_id = ENTITY_IDS_RENAMED_ISSUE
     issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
     assert issue is not None
     flow = await async_create_fix_flow(hass, issue_id, issue.data)
@@ -166,7 +169,7 @@ async def test_a_lookalike_id_is_not_reported(
     )
 
     entry = await _migrated_entry(hass)
-    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    issue_id = ENTITY_IDS_RENAMED_ISSUE
     issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
     flow = await async_create_fix_flow(hass, issue_id, issue.data)
     flow.hass = hass
@@ -286,8 +289,8 @@ async def test_nothing_is_written_to_the_config_files(
     (config_dir / "secrets.yaml").write_text("my_token: shhh\n", encoding="utf-8")
     before = automations.read_text(encoding="utf-8")
 
-    entry = await _migrated_entry(hass)
-    issue_id = f"entity_ids_renamed_{entry.entry_id}"
+    await _migrated_entry(hass)
+    issue_id = ENTITY_IDS_RENAMED_ISSUE
     issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
     flow = await async_create_fix_flow(hass, issue_id, issue.data)
     flow.hass = hass
