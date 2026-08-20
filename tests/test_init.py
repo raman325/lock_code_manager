@@ -2545,6 +2545,51 @@ async def test_migration_reslugs_entity_ids_onto_the_user_name(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_migration_names_an_entity_the_old_version_left_nameless(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The credential-used event arrives at migration with no name to reuse.
+
+    The released version set ``_attr_name = None`` on it, so Home Assistant
+    stored no ``original_name`` and its entity id was the device slug and
+    nothing else -- no clue what the entity was. There is no name to append,
+    so the key inside the unique ID stands in for one.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+
+    before = ent_reg.async_get_or_create(
+        "event",
+        DOMAIN,
+        f"{entry.entry_id}|1|{EVENT_CREDENTIAL_USED}",
+        config_entry=entry,
+        suggested_object_id="all_locks_code_slot_1",
+    )
+    assert before.entity_id == "event.all_locks_code_slot_1"
+    assert before.original_name is None
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    after = ent_reg.async_get_entity_id(
+        "event", DOMAIN, f"{entry.entry_id}|1|{EVENT_CREDENTIAL_USED}"
+    )
+    assert after == "event.all_locks_raman_credential_used"
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_migration_leaves_an_unrecognized_entity_id_alone(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:

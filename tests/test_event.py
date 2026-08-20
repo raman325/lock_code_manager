@@ -262,3 +262,29 @@ async def test_the_event_says_which_kind_of_credential_was_used(
 
     assert events
     assert events[0].data[ATTR_CREDENTIAL_TYPE] == CredentialType.PIN
+
+
+async def test_event_entity_is_named(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """
+    The event says what it is, not just whose it is.
+
+    It used to set ``_attr_name = None``, which with ``has_entity_name``
+    means "this entity IS the device" -- so it was called "Mock Title
+    test1" and nothing more, indistinguishable from the device it sits on.
+    That made sense when the device was a slot and the event was the only
+    thing on it; the device is a user now, and the event is one of several
+    things about them.
+
+    Named for the credential rather than the PIN because the entity id is
+    derived from the name, and a PIN is one credential among the several
+    this is growing to cover. Renaming it later would move the id.
+    """
+    entity = entity_registry.async_get(SLOT_1_EVENT_ENTITY)
+
+    assert entity is not None
+    assert entity.original_name == "Credential used"

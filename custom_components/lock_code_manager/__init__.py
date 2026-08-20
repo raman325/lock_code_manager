@@ -1200,17 +1200,20 @@ def _async_rename_slot_entity_ids(
             # on the entry's title, which may have changed since.
             suggested = f"{config_entry.title} {name} {entity.original_name}"
         else:
-            # The event entity has no name of its own, and a registry written
-            # by an older Home Assistant may not have kept one. Swap the
-            # device slug instead, which needs the ID to still look like one
-            # this integration generated.
+            # A registry row written by an older Home Assistant may have kept
+            # no name at all, so there is nothing to append the way the branch
+            # above does. The key inside the unique ID says what the entity is
+            # -- it is what the translated name is looked up by -- and unlike
+            # the old object id it is there even when the entity was created
+            # without a name, which is how the credential-used event was.
+            #
+            # Guarded on the ID still looking like one this integration
+            # generated, so a hand-renamed entity is left alone.
             old_prefix = slugify(f"{config_entry.title} Code slot {slot_num}")
             if object_id != old_prefix and not object_id.startswith(f"{old_prefix}_"):
                 continue
-            suggested = (
-                f"{slugify(f'{config_entry.title} {name}')}"
-                f"{object_id.removeprefix(old_prefix)}"
-            )
+            key = entity.unique_id.split("|")[2]
+            suggested = f"{config_entry.title} {name} {key.replace('_', ' ')}"
         new_entity_id = ent_reg.async_get_available_entity_id(
             domain, suggested, current_entity_id=entity.entity_id
         )
