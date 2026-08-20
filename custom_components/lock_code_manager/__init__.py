@@ -129,6 +129,7 @@ from .domain.util import (
     PER_LOCK_ISSUE_KEYS,
     build_pin_deobfuscation_map,
     deobfuscate_pins,
+    lock_display_name,
     per_lock_issue_id,
 )
 from .entity import build_slot_device_info
@@ -759,7 +760,6 @@ async def async_setup_entry(
         identifiers={(DOMAIN, entry_id)},
         manufacturer="Lock Code Manager",
         name=config_entry.title,
-        serial_number=entry_id,
     )
     _async_reclaim_entities_from_foreign_devices(hass, config_entry)
     _async_prune_orphaned_slot_devices(hass, config_entry)
@@ -1123,16 +1123,6 @@ def _lock_of(entry_id: str, unique_id: str) -> str | None:
     return parts[3] if unique_id.startswith(f"{entry_id}|") and len(parts) > 3 else None
 
 
-def _lock_display_name(ent_reg: er.EntityRegistry, lock_entity_id: str) -> str:
-    """Name a lock the way its own integration does."""
-    entity = ent_reg.async_get(lock_entity_id)
-    if entity and (display := entity.name or entity.original_name):
-        return display
-    # No registry row to ask, so fall back to the object id, which is what
-    # the lock's own entity id was slugged from in the first place.
-    return lock_entity_id.split(".", 1)[-1].replace("_", " ")
-
-
 @callback
 def _async_purge_dropped_slots(
     hass: HomeAssistant,
@@ -1199,7 +1189,7 @@ def _async_rename_slot_entity_ids(
             # was created, which on an upgraded install predates this shape.
             suggested = (
                 f"{config_entry.title} {name} "
-                f"{_lock_display_name(ent_reg, lock_entity_id)} "
+                f"{lock_display_name(hass, lock_entity_id)} "
                 f"{PER_LOCK_ENTITY_SUFFIX[entity.unique_id.split('|')[2]]}"
             )
         elif entity.original_name:

@@ -186,3 +186,58 @@ def test_per_lock_suffixes_match_the_entity_names() -> None:
             if entity_key == key
         )
         assert declared == f"{{lock_name}} {suffix}"
+
+
+# Keys that name no entity, so no entity name is owed for them. The
+# condition entity is somebody else's; the calendar key predates the
+# condition rename and is carried for old configurations.
+_KEYS_WITHOUT_AN_ENTITY = {ATTR_CONDITION_ENTITY, ATTR_CALENDAR}
+
+
+def test_every_entity_key_has_a_name() -> None:
+    """
+    An entity whose translation key has no name is named after its device.
+
+    Home Assistant does not complain: ``has_entity_name`` with nothing to
+    append leaves the friendly name as the device's own, so the entity is
+    called "All Locks Raman and Sherene" and gives no clue what it is. That
+    is what happened to the credential-used event, which had
+    ``state_attributes`` and no ``name``.
+    """
+    strings = json.loads(
+        (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "custom_components"
+            / "lock_code_manager"
+            / "strings.json"
+        ).read_text(encoding="utf-8")
+    )
+    named = {
+        key
+        for platform in strings["entity"].values()
+        for key, fields in platform.items()
+        if fields.get("name")
+    }
+
+    assert not (_BACKEND_KEYS - _KEYS_WITHOUT_AN_ENTITY) - named
+
+
+def test_every_translation_matches_the_strings_it_translates() -> None:
+    """
+    A name added to one file and not the other ships untranslated.
+
+    ``strings.json`` is what Home Assistant uploads for translation and
+    ``translations/en.json`` is what it actually renders for an English
+    install, so a name that reaches only the first is a name nobody sees.
+    """
+    root = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "custom_components"
+        / "lock_code_manager"
+    )
+    strings = json.loads((root / "strings.json").read_text(encoding="utf-8"))
+    english = json.loads(
+        (root / "translations" / "en.json").read_text(encoding="utf-8")
+    )
+
+    assert strings["entity"] == english["entity"]
