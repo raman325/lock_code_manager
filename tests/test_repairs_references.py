@@ -22,7 +22,7 @@ from custom_components.lock_code_manager.repairs import async_create_fix_flow
 from .common import LOCK_1_ENTITY_ID
 
 OLD_PIN_ENTITY = "text.all_locks_code_slot_1_pin"
-NEW_PIN_ENTITY = "text.raman_pin"
+NEW_PIN_ENTITY = "text.all_locks_raman_pin"
 
 
 async def _migrated_entry(hass: HomeAssistant) -> MockConfigEntry:

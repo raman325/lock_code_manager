@@ -1202,7 +1202,8 @@ def _async_rename_slot_entity_ids(
             # read back: ``original_name`` is the text stored when the entity
             # was created, which on an upgraded install predates this shape.
             suggested = (
-                f"{name} {_lock_display_name(ent_reg, lock_entity_id)} "
+                f"{config_entry.title} {name} "
+                f"{_lock_display_name(ent_reg, lock_entity_id)} "
                 f"{PER_LOCK_ENTITY_SUFFIX[entity.unique_id.split('|')[2]]}"
             )
         elif entity.original_name:
@@ -1211,7 +1212,7 @@ def _async_rename_slot_entity_ids(
             # translated for THIS installation, so a system set up in another
             # language re-slugs into its own words -- and none of it depends
             # on the entry's title, which may have changed since.
-            suggested = f"{name} {entity.original_name}"
+            suggested = f"{config_entry.title} {name} {entity.original_name}"
         else:
             # The event entity has no name of its own, and a registry written
             # by an older Home Assistant may not have kept one. Swap the
@@ -1220,7 +1221,10 @@ def _async_rename_slot_entity_ids(
             old_prefix = slugify(f"{config_entry.title} Code slot {slot_num}")
             if object_id != old_prefix and not object_id.startswith(f"{old_prefix}_"):
                 continue
-            suggested = f"{slugify(name)}{object_id.removeprefix(old_prefix)}"
+            suggested = (
+                f"{slugify(f'{config_entry.title} {name}')}"
+                f"{object_id.removeprefix(old_prefix)}"
+            )
         new_entity_id = ent_reg.async_get_available_entity_id(
             domain, suggested, current_entity_id=entity.entity_id
         )
@@ -1253,8 +1257,12 @@ def _async_rename_slot_devices(
     for slot_num, name in ((num, config.name_for(num)) for num in config.slot_numbers):
         identifier = build_slot_device_identifier(entry_id, slot_num)
         device = dev_reg.async_get_device(identifiers={(DOMAIN, identifier)})
-        if device is not None and name and device.name != name:
-            dev_reg.async_update_device(device.id, name=name)
+        # Same shape build_slot_device_info uses, entry title included: a
+        # rename that dropped the prefix would leave the device disagreeing
+        # with the entity IDs derived from it.
+        titled = f"{config_entry.title} {name}" if name else None
+        if device is not None and titled and device.name != titled:
+            dev_reg.async_update_device(device.id, name=titled)
 
 
 @callback
