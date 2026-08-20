@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "93cba11e26e1",
+  "strategy": "manual-commit",
+  "branch": "fix/v3-live-test-findings",
+  "checkpoints_count": 9,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/93/cba11e26e1/0/metadata.json",
+      "transcript": "/93/cba11e26e1/0/full.jsonl",
+      "compact_transcript": "/93/cba11e26e1/0/transcript.jsonl",
+      "content_hash": "/93/cba11e26e1/0/content_hash.txt",
+      "prompt": "/93/cba11e26e1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 246,
+    "cache_creation_tokens": 1199616,
+    "cache_read_tokens": 73048555,
+    "output_tokens": 91746,
+    "api_call_count": 123
+  }
+}
