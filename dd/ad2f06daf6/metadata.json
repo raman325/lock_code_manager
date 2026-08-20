@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "ddad2f06daf6",
+  "strategy": "manual-commit",
+  "branch": "chore/v3-entry-version-5",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/dd/ad2f06daf6/0/metadata.json",
+      "transcript": "/dd/ad2f06daf6/0/full.jsonl",
+      "compact_transcript": "/dd/ad2f06daf6/0/transcript.jsonl",
+      "content_hash": "/dd/ad2f06daf6/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 8723,
+    "cache_read_tokens": 6288567,
+    "output_tokens": 5504,
+    "api_call_count": 12
+  }
+}
