@@ -900,7 +900,7 @@ describe('LcmSlotCardEditor integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_slotChanged', () => {
+    describe('_nameChanged', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         beforeEach(async () => {
             el = createEditor();
@@ -909,27 +909,38 @@ describe('LcmSlotCardEditor integration', () => {
             await flush();
         });
 
-        it('updates slot number and dispatches', () => {
+        it('updates the user and dispatches', () => {
             const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
-            (el as any)._config = { config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' };
-            (el as any)._slotChanged({ target: { value: '5' } });
-            expect((el as any)._config.slot).toBe(5);
+            (el as any)._config = {
+                config_entry_id: 'abc',
+                name: 'Raman',
+                type: 'custom:lcm-user'
+            };
+            (el as any)._nameChanged({ target: { value: 'Sherene' } });
+            expect((el as any)._config.name).toBe('Sherene');
             expect(dispatchSpy).toHaveBeenCalled();
             dispatchSpy.mockRestore();
         });
 
-        it('returns early for NaN value', () => {
+        it('drops a slot number the card was carrying', () => {
+            // A card holding both would keep showing whoever holds that
+            // number, whatever the name said.
             const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
             (el as any)._config = { config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' };
-            (el as any)._slotChanged({ target: { value: 'abc' } });
-            expect(dispatchSpy).not.toHaveBeenCalled();
+            (el as any)._nameChanged({ target: { value: 'Raman' } });
+            expect((el as any)._config.name).toBe('Raman');
+            expect((el as any)._config.slot).toBeUndefined();
             dispatchSpy.mockRestore();
         });
 
-        it('returns early when slot unchanged', () => {
+        it('returns early when the user is unchanged', () => {
             const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
-            (el as any)._config = { config_entry_id: 'abc', slot: 3, type: 'custom:lcm-slot' };
-            (el as any)._slotChanged({ target: { value: '3' } });
+            (el as any)._config = {
+                config_entry_id: 'abc',
+                name: 'Raman',
+                type: 'custom:lcm-user'
+            };
+            (el as any)._nameChanged({ target: { value: 'Raman' } });
             expect(dispatchSpy).not.toHaveBeenCalled();
             dispatchSpy.mockRestore();
         });

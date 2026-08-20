@@ -35,6 +35,7 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
             config_entry_id,
             show_code_sensors = DEFAULT_SHOW_CODE_SENSORS,
             show_conditions = DEFAULT_SHOW_CONDITIONS,
+            name,
             show_lock_count = DEFAULT_SHOW_LOCK_COUNT,
             show_lock_status = DEFAULT_SHOW_LOCK_STATUS,
             show_lock_sync = DEFAULT_SHOW_LOCK_SYNC,
@@ -52,8 +53,8 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
                 show_lock_count,
                 show_lock_status,
                 show_lock_sync,
-                slot,
-                type: 'custom:lcm-slot'
+                ...(name ? { name } : { slot }),
+                type: 'custom:lcm-user'
             };
 
             if (collapsed_sections && collapsed_sections.length > 0) {

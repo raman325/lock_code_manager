@@ -1168,31 +1168,40 @@ describe('generateNewSlotCard', () => {
         title: 'Test Config'
     };
 
-    it('generates slot card with correct type and slot number', () => {
-        const result = generateNewSlotCard(testConfigEntry, 3, false, false);
+    it('names the user it shows, not the slot they happen to hold', () => {
+        const result = generateNewSlotCard(testConfigEntry, 3, 'Raman', false, false);
 
-        expect(result.type).toBe('custom:lcm-slot');
-        expect(result.slot).toBe(3);
+        expect(result.type).toBe('custom:lcm-user');
+        expect(result.name).toBe('Raman');
+        expect(result.slot).toBeUndefined();
         expect(result.config_entry_id).toBe('entry456');
     });
 
+    it('falls back to the slot number for a user with no name', () => {
+        const result = generateNewSlotCard(testConfigEntry, 3, null, false, false);
+
+        expect(result.type).toBe('custom:lcm-user');
+        expect(result.slot).toBe(3);
+        expect(result.name).toBeUndefined();
+    });
+
     it('passes show_code_sensors option', () => {
-        const result = generateNewSlotCard(testConfigEntry, 1, true, false);
+        const result = generateNewSlotCard(testConfigEntry, 1, 'Raman', true, false);
 
         expect(result.show_code_sensors).toBe(true);
     });
 
     it('passes show_lock_sync option', () => {
-        const result = generateNewSlotCard(testConfigEntry, 1, false, true);
+        const result = generateNewSlotCard(testConfigEntry, 1, 'Raman', false, true);
 
         expect(result.show_lock_sync).toBe(true);
     });
 
     it('passes both options when enabled', () => {
-        const result = generateNewSlotCard(testConfigEntry, 5, true, true);
+        const result = generateNewSlotCard(testConfigEntry, 5, 'Raman', true, true);
 
-        expect(result.type).toBe('custom:lcm-slot');
-        expect(result.slot).toBe(5);
+        expect(result.type).toBe('custom:lcm-user');
+        expect(result.name).toBe('Raman');
         expect(result.show_code_sensors).toBe(true);
         expect(result.show_lock_sync).toBe(true);
     });

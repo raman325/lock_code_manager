@@ -77,6 +77,9 @@ export async function generateView(
                     condition_helpers: conditionHelpers[slotNum]
                 }),
                 config_entry_id: configEntry.entry_id,
+                // The slot number rides along so a section can still be
+                // addressed by it; the name is what the card prefers.
+                name: configEntryData.slots[slotNum]?.name ?? undefined,
                 show_code_sensors,
                 show_conditions,
                 show_lock_count: false,
@@ -270,6 +273,7 @@ export function generateSlotCard(
 export function generateNewSlotCard(
     configEntry: ConfigEntryJSONFragment,
     slotNum: number,
+    userName: string | null,
     show_code_sensors: boolean,
     show_lock_sync: boolean,
     show_conditions = true,
@@ -283,8 +287,9 @@ export function generateNewSlotCard(
         show_conditions,
         show_lock_status,
         show_lock_sync,
-        slot: slotNum,
-        type: 'custom:lcm-slot'
+        // Named where the user has one; the number only where they do not.
+        ...(userName ? { name: userName } : { slot: slotNum }),
+        type: 'custom:lcm-user'
     };
     if (collapsed_sections && collapsed_sections.length > 0) {
         card.collapsed_sections = collapsed_sections;

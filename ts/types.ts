@@ -94,6 +94,8 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     condition_helpers?: string[];
     /** Config entry ID for the LCM instance */
     config_entry_id: string;
+    /** The user this section shows, preferred over the slot number */
+    name?: string;
     /**
      * @deprecated No longer used by the slot card; kept so existing dashboard
      * configurations continue to validate. The slot card's Lock Status section
@@ -203,6 +205,11 @@ export interface LockCodeManagerSlotCardConfig {
     config_entry_id?: string;
     /** Config entry title for the LCM instance (use this OR config_entry_id) */
     config_entry_title?: string;
+    /**
+     * The user to display. Preferred over `slot`, and matched the way a
+     * config entry title is: ignoring case and punctuation.
+     */
+    name?: string;
     /** Show code sensors (actual code on lock) in lock status section (default: true) */
     show_code_sensors?: boolean;
     /** Show conditions section (default: true) */
@@ -213,9 +220,12 @@ export interface LockCodeManagerSlotCardConfig {
     show_lock_status?: boolean;
     /** Show sync status per lock in lock status (default: true) */
     show_lock_sync?: boolean;
-    /** Slot number to display */
-    slot: number;
-    type: 'custom:lcm-slot';
+    /**
+     * Slot number to display. Superseded by `name` and kept only so cards
+     * written before the rename keep working; it will be removed.
+     */
+    slot?: number;
+    type: 'custom:lcm-user' | 'custom:lcm-slot';
 }
 
 export interface SlotCardLockStatus {
