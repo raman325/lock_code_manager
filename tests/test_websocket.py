@@ -16,6 +16,7 @@ from homeassistant.components.calendar import (
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CONDITION,
+    CONF_ENTITY_ID,
     CONF_NAME,
     STATE_OFF,
     STATE_ON,
@@ -57,6 +58,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_SLOT,
     ATTR_SLOT_NUM,
     ATTR_SYNC_STATUS,
+    ATTR_USER_ENTITY_ID,
     ATTR_USERCODE,
     BACKOFF_FAILURE_THRESHOLD,
     CONF_CONDITIONS,
@@ -66,10 +68,16 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_PIN,
     CONF_SLOTS,
+    CONF_USERS,
+    DOMAIN,
 )
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.domain.slot_assignment import (
+    CONF_SLOT_ASSIGNMENT,
+)
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
@@ -83,6 +91,7 @@ from custom_components.lock_code_manager.websocket import (
     _get_text_state,
     _serialize_slot,
     _slot_code_payload,
+    _slot_from,
     find_config_entry_by_title,
 )
 
@@ -3234,3 +3243,275 @@ async def test_subscribe_code_slot_receives_coordinator_updates(
     )
     assert lock_1_data is not None
     assert lock_1_data[ATTR_CODE] == "new_code"
+
+
+class TestAddressingASlotByUser:
+    """The commands a card sends name a user, not a slot number."""
+
+    async def test_subscribe_accepts_a_name(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A card that knows only who it is showing can still subscribe."""
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "test1",
+            }
+        )
+        assert (await client.receive_json())["success"]
+
+    async def test_a_name_is_matched_slugified(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        Matched the way a config entry title is.
+
+        The slug is what a caller holding only an entity id has to work
+        from, so it has to be enough to name the user.
+        """
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "TEST1",
+            }
+        )
+        assert (await client.receive_json())["success"]
+
+    async def test_an_unknown_name_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Naming nobody says so, rather than falling through to a slot."""
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "nobody",
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert "nobody" in result["error"]["message"]
+
+    async def test_naming_neither_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A message that names no user and no slot addresses nothing."""
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+            }
+        )
+        assert not (await client.receive_json())["success"]
+
+    async def test_setting_a_condition_by_name(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """The write path takes a name too, not just the read path."""
+        hass.states.async_set("binary_sensor.by_name", STATE_ON)
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/set_slot_condition",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "test1",
+                CONF_ENTITY_ID: "binary_sensor.by_name",
+            }
+        )
+        assert (await client.receive_json())["success"]
+        assert (
+            get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_CONDITION]
+            == "binary_sensor.by_name"
+        )
+
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/clear_slot_condition",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "test1",
+            }
+        )
+        assert (await client.receive_json())["success"]
+        assert CONF_CONDITION not in get_entry_config(
+            lock_code_manager_config_entry
+        ).slot(1)
+
+    def test_an_ambiguous_slug_is_refused(self, hass: HomeAssistant) -> None:
+        """
+        Two users, one slug: refuse rather than write somebody else's code.
+
+        The name rules keep "Ada-Lovelace" and "Ada Lovelace" apart, but
+        slugifying collapses them together. Picking either would put a PIN
+        on the wrong person.
+        """
+
+        class _Entry:
+            runtime_data = None
+            data = {
+                CONF_USERS: {
+                    "Ada-Lovelace": {CONF_ENABLED: True},
+                    "Ada Lovelace": {CONF_ENABLED: True},
+                },
+                CONF_SLOT_ASSIGNMENT: {"ada-lovelace": 1, "ada lovelace": 2},
+            }
+            options: dict = {}
+
+        with pytest.raises(ServiceValidationError, match="more than one user"):
+            _slot_from(hass, _Entry(), {CONF_NAME: "ada lovelace"})
+
+    async def test_clearing_a_condition_for_an_unknown_user_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Naming nobody must not fall through to clearing something else."""
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/clear_slot_condition",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "nobody",
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert result["error"]["code"] == "not_found"
+
+    def test_a_user_with_no_slot_yet_is_refused(self, hass: HomeAssistant) -> None:
+        """A user allocation has not numbered has nothing to address."""
+
+        class _Entry:
+            runtime_data = None
+            data = {CONF_USERS: {"Pending": {CONF_ENABLED: False}}}
+            options: dict = {}
+
+        with pytest.raises(ServiceValidationError, match="not been given a slot"):
+            _slot_from(hass, _Entry(), {CONF_NAME: "pending"})
+
+    async def test_setting_a_condition_for_an_unknown_user_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        Reported as not-found, the same as its sibling command.
+
+        The two used to disagree: this one sniffed the message text for
+        "not found", which none of the resolver's wordings contain, so the
+        identical input came back as an unknown error here and a not-found
+        there.
+        """
+        hass.states.async_set("binary_sensor.somewhere", STATE_ON)
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/set_slot_condition",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "nobody",
+                CONF_ENTITY_ID: "binary_sensor.somewhere",
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert result["error"]["code"] == "not_found"
+
+    async def test_an_entity_names_its_user(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        """
+        The steadiest handle: an entity id survives its user being renamed.
+
+        Unique IDs keep the slot number, which is why a rename moves nothing
+        in the registry -- so a stored card holding one of these goes on
+        working where a card holding the name would not.
+        """
+        entity_id = entity_registry.async_get_entity_id(
+            "text",
+            DOMAIN,
+            build_slot_unique_id(lock_code_manager_config_entry.entry_id, 1, CONF_NAME),
+        )
+        assert entity_id
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_USER_ENTITY_ID: entity_id,
+            }
+        )
+        assert (await client.receive_json())["success"]
+
+    async def test_an_entity_from_another_entry_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """An entity this entry does not own addresses nobody in it."""
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_USER_ENTITY_ID: LOCK_1_ENTITY_ID,
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert "does not belong" in result["error"]["message"]
+
+    async def test_an_entity_that_does_not_exist_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A card pointed at a deleted entity says so, rather than guessing."""
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_USER_ENTITY_ID: "text.gone",
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert "No entity" in result["error"]["message"]

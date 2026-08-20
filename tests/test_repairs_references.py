@@ -8,16 +8,14 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.components import automation
 from homeassistant.config import AUTOMATION_CONFIG_PATH, SCRIPT_CONFIG_PATH
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er, issue_registry as ir
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util.yaml import save_yaml
 
 from custom_components.lock_code_manager.const import (
     DOMAIN,
-    ENTITY_IDS_RENAMED_ISSUE,
 )
 from custom_components.lock_code_manager.domain import references
-from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
 from .common import LOCK_1_ENTITY_ID
 
@@ -57,14 +55,13 @@ async def _migrated_entry(hass: HomeAssistant) -> MockConfigEntry:
     return entry
 
 
-async def _open_repair(hass: HomeAssistant, entry: MockConfigEntry):
-    """Open the repair the migration raised, and hand back its flow."""
-    issue_id = ENTITY_IDS_RENAMED_ISSUE
-    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
-    assert issue is not None
-    flow = await async_create_fix_flow(hass, issue_id, issue.data)
-    flow.hass = hass
-    return await flow.async_step_init(), flow
+async def _notice(hass: HomeAssistant) -> str:
+    """Return the message the rename notification was raised with."""
+    await hass.async_block_till_done()
+    notifications = hass.data.get("persistent_notification", {})
+    notice = notifications.get(f"{DOMAIN}_entity_ids_renamed")
+    assert notice is not None, "no rename notification was raised"
+    return notice["message"]
 
 
 @pytest.fixture(name="config_dir")
@@ -139,14 +136,10 @@ async def test_every_shape_a_reference_takes_is_reported(
     )
 
     entry = await _migrated_entry(hass)
-    result, flow = await _open_repair(hass, entry)
+    message = await _notice(hass)
 
-    assert result["type"] == "form"
-    assert alias in result["description_placeholders"]["referrers"]
-    assert OLD_PIN_ENTITY in result["description_placeholders"]["renames"]
-
-    # Reading it is the whole job, so dismissing is all there is to do.
-    assert (await flow.async_step_init({}))["type"] == "create_entry"
+    assert alias in message
+    assert OLD_PIN_ENTITY in message
 
     await hass.config_entries.async_unload(entry.entry_id)
 
@@ -169,15 +162,12 @@ async def test_a_lookalike_id_is_not_reported(
     )
 
     entry = await _migrated_entry(hass)
-    issue_id = ENTITY_IDS_RENAMED_ISSUE
-    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
-    flow = await async_create_fix_flow(hass, issue_id, issue.data)
-    flow.hass = hass
-    result = await flow.async_step_init()
+    message = await _notice(hass)
 
-    # Nothing refers to the old ID, so the repair closes itself.
-    assert result["type"] == "create_entry"
-    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+    # A lookalike is not a reference, so the notice says nothing points at
+    # the old IDs rather than naming this automation.
+    assert "Nothing else in your configuration refers to the old IDs" in message
+    assert "Lookalike" not in message
 
     await hass.config_entries.async_unload(entry.entry_id)
 
@@ -202,9 +192,9 @@ async def test_a_script_is_reported_too(
     )
 
     entry = await _migrated_entry(hass)
-    result, flow = await _open_repair(hass, entry)
+    message = await _notice(hass)
 
-    assert "My script" in result["description_placeholders"]["referrers"]
+    assert "My script" in message
 
     await hass.config_entries.async_unload(entry.entry_id)
 
@@ -235,9 +225,9 @@ async def test_an_automation_defined_outside_the_managed_files_is_reported(
     await hass.async_block_till_done()
 
     entry = await _migrated_entry(hass)
-    result, flow = await _open_repair(hass, entry)
+    message = await _notice(hass)
 
-    assert "Configured in YAML" in result["description_placeholders"]["referrers"]
+    assert "Configured in YAML" in message
 
     await hass.config_entries.async_unload(entry.entry_id)
 
@@ -258,9 +248,10 @@ async def test_an_unreadable_file_does_not_break_the_repair(
     (config_dir / AUTOMATION_CONFIG_PATH).write_text(contents, encoding="utf-8")
 
     entry = await _migrated_entry(hass)
-    result, flow = await _open_repair(hass, entry)
+    message = await _notice(hass)
 
-    assert result["type"] in ("form", "create_entry")
+    # The unreadable file is skipped rather than taking the notice with it.
+    assert OLD_PIN_ENTITY in message
 
     await hass.config_entries.async_unload(entry.entry_id)
 
@@ -290,14 +281,7 @@ async def test_nothing_is_written_to_the_config_files(
     before = automations.read_text(encoding="utf-8")
 
     await _migrated_entry(hass)
-    issue_id = ENTITY_IDS_RENAMED_ISSUE
-    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
-    flow = await async_create_fix_flow(hass, issue_id, issue.data)
-    flow.hass = hass
-    result = await flow.async_step_init()
-    if result["type"] == "form":
-        await flow.async_step_init({})
-        await hass.async_block_till_done()
+    await _notice(hass)
 
     assert automations.read_text(encoding="utf-8") == before
 

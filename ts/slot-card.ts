@@ -102,7 +102,7 @@ const LcmSlotCardBase = LcmSubscriptionMixin(LitElement);
  *
  * Phase 3: Uses websocket subscription for real-time updates.
  */
-class LockCodeManagerSlotCard extends LcmSlotCardBase {
+class LockCodeManagerUserCard extends LcmSlotCardBase {
     static styles = slotCardStyles;
 
     // Note: _revealed, _unsub, _subscribing provided by LcmSubscriptionMixin
@@ -135,11 +135,12 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     static getConfigElement(): HTMLElement {
-        return document.createElement('lcm-slot-editor');
+        return document.createElement('lcm-user-editor');
     }
 
     static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
-        const stub = { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
+        const stub = { config_entry_id: 'stub', name: '', type: 'custom:lcm-user' };
+        // Marked so the preview never subscribes: it has no user to ask about.
         try {
             return await Promise.race([
                 (async () => {
@@ -150,8 +151,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     if (entries.length > 0) {
                         return {
                             config_entry_id: entries[0].entry_id,
-                            slot: 1,
-                            type: 'custom:lcm-slot'
+                            name: '',
+                            type: 'custom:lcm-user'
                         };
                     }
                     return stub;
@@ -164,7 +165,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             // Log but don't surface to the user — this runs in the card
             // picker, where there's no dashboard banner to display errors.
             // eslint-disable-next-line no-console
-            console.warn('lcm-slot: failed to fetch config entries for stub config', err);
+            console.warn('lcm-user: failed to fetch config entries for stub config', err);
             return stub;
         }
     }
@@ -173,14 +174,22 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         if (!config.config_entry_id && !config.config_entry_title) {
             throw new Error('config_entry_id or config_entry_title is required');
         }
-        if (typeof config.slot !== 'number' || config.slot < 1 || config.slot > 9999) {
+        if (config.name !== undefined && typeof config.name !== 'string') {
+            throw new Error('name must be a string');
+        }
+        if (
+            config.slot !== undefined &&
+            (typeof config.slot !== 'number' || config.slot < 1 || config.slot > 9999)
+        ) {
             throw new Error('slot must be a number between 1 and 9999');
         }
         // If config changed, unsubscribe and resubscribe
         if (
             this._config?.config_entry_id !== config.config_entry_id ||
             this._config?.config_entry_title !== config.config_entry_title ||
-            this._config?.slot !== config.slot
+            this._config?.name !== config.name ||
+            this._config?.slot !== config.slot ||
+            this._config?.user_entity_id !== config.user_entity_id
         ) {
             this._unsubscribe();
             this._data = undefined;
@@ -198,7 +207,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             collapsed.includes('condition') || collapsed.includes('conditions')
         );
         this._lockStatusExpanded = !collapsed.includes('lock_status');
-        this._isStub = config.config_entry_id === 'stub';
+        // A card naming nobody yet is a stub too: that is exactly what the
+        // picker hands over when the card is added, and subscribing for an
+        // empty name only produces an error where a preview belongs.
+        this._isStub = config.config_entry_id === 'stub' || !this._hasAddressee();
         if (!this._isStub) {
             void this._subscribe();
         }
@@ -234,12 +246,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const msg: MessageBase & {
             config_entry_id?: string;
             config_entry_title?: string;
+            name?: string;
             reveal: boolean;
-            slot: number;
+            slot?: number;
+            user_entity_id?: string;
         } = {
             reveal: this._shouldReveal(),
-            slot: this._config.slot,
-            type: 'lock_code_manager/subscribe_code_slot'
+            type: 'lock_code_manager/subscribe_code_slot',
+            ...this._addressee()
         };
         if (this._config.config_entry_id) {
             msg.config_entry_id = this._config.config_entry_id;
@@ -280,7 +294,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Show static preview for card picker (stub config)
         if (this._isStub) {
             return html`<ha-card>
-                <div class="message">Lock Code Manager Slot Card</div>
+                <div class="message">Lock Code Manager User Card</div>
             </ha-card>`;
         }
 
@@ -1174,12 +1188,36 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
     }
 
+    /**
+     * How this card names the user it shows.
+     *
+     * A name where the config gives one, the slot number otherwise. Kept in
+     * one place so the three commands cannot disagree about who they mean.
+     */
+    private _hasAddressee(): boolean {
+        return (
+            Boolean(this._config?.user_entity_id) ||
+            Boolean(this._config?.name) ||
+            this._config?.slot !== undefined
+        );
+    }
+
+    private _addressee(): { user_entity_id: string } | { name: string } | { slot: number } {
+        // The entity first: this integration's entity IDs do not move when a
+        // user is renamed, so a stored card holding one survives a rename
+        // that would strand a card holding the name.
+        if (this._config?.user_entity_id) {
+            return { user_entity_id: this._config.user_entity_id };
+        }
+        return this._config?.name ? { name: this._config.name } : { slot: this._config!.slot! };
+    }
+
     private async _setSlotCondition(entity_id: string): Promise<void> {
         if (!this._hass || !this._config) return;
         const msg: MessageBase & Record<string, unknown> = {
             entity_id,
-            slot: this._config.slot,
-            type: 'lock_code_manager/set_slot_condition'
+            type: 'lock_code_manager/set_slot_condition',
+            ...this._addressee()
         };
         if (this._config.config_entry_id) {
             msg.config_entry_id = this._config.config_entry_id;
@@ -1192,8 +1230,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private async _clearSlotCondition(): Promise<void> {
         if (!this._hass || !this._config) return;
         const msg: MessageBase & Record<string, unknown> = {
-            slot: this._config.slot,
-            type: 'lock_code_manager/clear_slot_condition'
+            type: 'lock_code_manager/clear_slot_condition',
+            ...this._addressee()
         };
         if (this._config.config_entry_id) {
             msg.config_entry_id = this._config.config_entry_id;
@@ -1427,6 +1465,28 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     // _unsubscribe, _shouldReveal, _subscribe inherited from mixin
 }
 
+customElements.define('lcm-user', LockCodeManagerUserCard);
+
+/**
+ * The name this card had when it was addressed by slot number.
+ *
+ * Registered as its own element rather than aliased, because a custom
+ * element can only be defined once per name and Home Assistant looks cards
+ * up by the string in the dashboard. Same implementation; the only
+ * difference is that it says it is on the way out.
+ */
+class LockCodeManagerSlotCard extends LockCodeManagerUserCard {
+    setConfig(config: LockCodeManagerSlotCardConfig): void {
+        // eslint-disable-next-line no-console
+        console.warn(
+            'custom:lcm-slot is deprecated and will be removed in a future ' +
+                'release. Use custom:lcm-user, which takes `name` instead of ' +
+                '`slot`.'
+        );
+        super.setConfig(config);
+    }
+}
+
 customElements.define('lcm-slot', LockCodeManagerSlotCard);
 
 declare global {
@@ -1443,8 +1503,8 @@ declare global {
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-    description: 'Displays and controls a Lock Code Manager code slot',
-    name: 'LCM Slot Card',
+    description: 'Displays and controls one Lock Code Manager user',
+    name: 'LCM User Card',
     preview: true,
-    type: 'lcm-slot'
+    type: 'lcm-user'
 });
