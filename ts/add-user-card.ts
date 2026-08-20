@@ -3,7 +3,7 @@ import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
 import { HomeAssistant } from './ha_type_stubs';
-import { lcmCssVars } from './shared-styles';
+import { lcmCssVars, lcmDialogActionStyles } from './shared-styles';
 import { LockCodeManagerAddUserCardConfig } from './types';
 
 /**
@@ -18,6 +18,7 @@ import { LockCodeManagerAddUserCardConfig } from './types';
 export class LockCodeManagerAddUserCard extends LitElement {
     static styles = [
         lcmCssVars,
+        lcmDialogActionStyles,
         css`
             ha-card {
                 align-items: center;
@@ -63,7 +64,46 @@ export class LockCodeManagerAddUserCard extends LitElement {
             .dialog-check {
                 align-items: center;
                 display: flex;
-                gap: 8px;
+                gap: 10px;
+            }
+
+            .dialog-check input[type='checkbox'] {
+                accent-color: var(--primary-color);
+                height: 18px;
+                margin: 0;
+                width: 18px;
+            }
+
+            .field {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+
+            .field-label {
+                color: var(--secondary-text-color);
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+            }
+
+            .field-input {
+                background: var(--card-background-color, #fff);
+                border: 1px solid var(--lcm-border-color-strong);
+                border-radius: 4px;
+                box-sizing: border-box;
+                color: var(--primary-text-color);
+                font-family: inherit;
+                font-size: 15px;
+                padding: 10px 12px;
+                width: 100%;
+            }
+
+            .field-input:focus {
+                border-color: var(--primary-color);
+                box-shadow: 0 0 0 1px var(--primary-color);
+                outline: none;
             }
 
             .dialog-error {
@@ -155,29 +195,38 @@ export class LockCodeManagerAddUserCard extends LitElement {
                         A slot is picked for you on every lock in this entry. Leave the PIN blank to
                         set one later.
                     </p>
-                    <ha-textfield
-                        label="Name"
-                        required
-                        .value=${this._name}
-                        @input=${(e: Event) => {
-                            this._name = (e.target as HTMLInputElement).value;
-                        }}
-                    ></ha-textfield>
-                    <ha-textfield
-                        label="PIN"
-                        type="password"
-                        .value=${this._pin}
-                        @input=${(e: Event) => {
-                            this._pin = (e.target as HTMLInputElement).value;
-                        }}
-                    ></ha-textfield>
+                    <label class="field">
+                        <span class="field-label">Name</span>
+                        <input
+                            class="field-input"
+                            type="text"
+                            required
+                            .value=${this._name}
+                            @input=${(e: Event) => {
+                                this._name = (e.target as HTMLInputElement).value;
+                            }}
+                        />
+                    </label>
+                    <label class="field">
+                        <span class="field-label">PIN</span>
+                        <input
+                            class="field-input"
+                            type="password"
+                            inputmode="numeric"
+                            .value=${this._pin}
+                            @input=${(e: Event) => {
+                                this._pin = (e.target as HTMLInputElement).value;
+                            }}
+                        />
+                    </label>
                     <label class="dialog-check">
-                        <ha-checkbox
+                        <input
+                            type="checkbox"
                             .checked=${this._enabled}
                             @change=${(e: Event) => {
                                 this._enabled = (e.target as HTMLInputElement).checked;
                             }}
-                        ></ha-checkbox>
+                        />
                         <span>Enabled</span>
                     </label>
                     ${
@@ -193,10 +242,17 @@ export class LockCodeManagerAddUserCard extends LitElement {
                             : nothing
                     }
                 </div>
-                <ha-button slot="secondaryAction" @click=${this._close}>Cancel</ha-button>
-                <ha-button slot="primaryAction" .disabled=${this._saving} @click=${this._commit}>
+                <button class="dialog-action" slot="secondaryAction" @click=${this._close}>
+                    Cancel
+                </button>
+                <button
+                    class="dialog-action"
+                    slot="primaryAction"
+                    .disabled=${this._saving}
+                    @click=${this._commit}
+                >
                     Add
-                </ha-button>
+                </button>
             </ha-dialog>
         `;
     }

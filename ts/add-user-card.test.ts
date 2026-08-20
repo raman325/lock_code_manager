@@ -163,10 +163,12 @@ describe('lcm-add-user', () => {
             await flush();
         });
 
-        const fields = () => [...card.shadowRoot!.querySelectorAll('ha-textfield')];
+        const fields = () => [
+            ...card.shadowRoot!.querySelectorAll<HTMLInputElement>('.field-input')
+        ];
 
         it('takes the name and the PIN from what is typed', async () => {
-            const [name, pin] = fields() as HTMLInputElement[];
+            const [name, pin] = fields();
             name.value = 'Raman';
             name.dispatchEvent(new Event('input'));
             pin.value = '4321';
@@ -183,7 +185,8 @@ describe('lcm-add-user', () => {
         });
 
         it('takes Enabled from the checkbox', async () => {
-            const checkbox = card.shadowRoot!.querySelector<HTMLInputElement>('ha-checkbox')!;
+            const checkbox =
+                card.shadowRoot!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
             checkbox.checked = false;
             checkbox.dispatchEvent(new Event('change'));
             await flush();
@@ -192,10 +195,9 @@ describe('lcm-add-user', () => {
         });
 
         it('closes on cancel without adding anybody', async () => {
-            const cancel = [...card.shadowRoot!.querySelectorAll('ha-button')].find(
-                (button) => button.getAttribute('slot') === 'secondaryAction'
-            )!;
-            (cancel as HTMLElement).click();
+            card.shadowRoot!.querySelector<HTMLButtonElement>(
+                'button.dialog-action[slot="secondaryAction"]'
+            )!.click();
             await flush();
 
             expect(card._showDialog).toBe(false);
@@ -212,10 +214,9 @@ describe('lcm-add-user', () => {
 
         it('adds from the Add button', async () => {
             card._name = 'Raman';
-            const add = [...card.shadowRoot!.querySelectorAll('ha-button')].find(
-                (button) => button.getAttribute('slot') === 'primaryAction'
-            )!;
-            (add as HTMLElement).click();
+            card.shadowRoot!.querySelector<HTMLButtonElement>(
+                'button.dialog-action[slot="primaryAction"]'
+            )!.click();
             await flush();
 
             expect(calls).toHaveLength(1);

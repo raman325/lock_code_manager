@@ -1248,14 +1248,15 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                         entities go with them.
                     </p>
                     <label class="dialog-check">
-                        <ha-checkbox
+                        <input
+                            type="checkbox"
                             .checked=${this._removeClearsCredentials}
                             @change=${(e: Event) => {
                                 this._removeClearsCredentials = (
                                     e.target as HTMLInputElement
                                 ).checked;
                             }}
-                        ></ha-checkbox>
+                        />
                         <span>
                             Also clear their code from the locks. Leave this unticked to keep the
                             code working and simply stop managing it here.
@@ -1267,22 +1268,23 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                             : nothing
                     }
                 </div>
-                <ha-button
+                <button
+                    class="dialog-action"
                     slot="secondaryAction"
                     @click=${() => {
                         this._showRemoveDialog = false;
                     }}
                 >
                     Cancel
-                </ha-button>
-                <ha-button
+                </button>
+                <button
+                    class="dialog-action destructive"
                     slot="primaryAction"
-                    class="destructive"
                     .disabled=${this._removing}
                     @click=${this._commitRemove}
                 >
                     Remove
-                </ha-button>
+                </button>
             </ha-dialog>
         `;
     }

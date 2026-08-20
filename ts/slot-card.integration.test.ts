@@ -4547,7 +4547,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             // the default has to be the one that revokes.
             card._showRemoveDialog = true;
             expect(card._removeClearsCredentials).toBe(true);
-            expect(JSON.stringify(card.render())).toContain('ha-checkbox');
+            expect(JSON.stringify(card.render())).toContain('checkbox');
         });
 
         it('removes the user, clearing by default', async () => {
@@ -4590,7 +4590,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!.click();
             await flush();
 
-            const checkbox = card.shadowRoot!.querySelector<HTMLInputElement>('ha-checkbox')!;
+            const checkbox =
+                card.shadowRoot!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
             checkbox.checked = false;
             checkbox.dispatchEvent(new Event('change'));
             await flush();
@@ -4602,10 +4603,9 @@ describe('LockCodeManagerSlotCard integration', () => {
             card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!.click();
             await flush();
 
-            const cancel = [...card.shadowRoot!.querySelectorAll('ha-button')].find(
-                (b) => b.getAttribute('slot') === 'secondaryAction'
-            )!;
-            (cancel as HTMLElement).click();
+            card.shadowRoot!.querySelector<HTMLButtonElement>(
+                'button.dialog-action[slot="secondaryAction"]'
+            )!.click();
             await flush();
 
             expect(card._showRemoveDialog).toBe(false);

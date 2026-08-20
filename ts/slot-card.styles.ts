@@ -9,6 +9,7 @@ import { css } from 'lit';
 import {
     lcmCollapsibleStyles,
     lcmCssVars,
+    lcmDialogActionStyles,
     lcmEditableStyles,
     lcmReducedMotionStyles,
     lcmRevealButtonStyles,
@@ -119,8 +120,11 @@ const slotCardComponentStyles = css`
         font-size: 14px;
     }
 
-    ha-button.destructive {
-        --mdc-theme-primary: var(--error-color, #db4437);
+    .dialog-check input[type='checkbox'] {
+        accent-color: var(--primary-color);
+        height: 18px;
+        margin: 0;
+        width: 18px;
     }
 
     .hero-icon {
@@ -730,6 +734,7 @@ const slotCardComponentStyles = css`
 
 export const slotCardStyles = [
     lcmCssVars,
+    lcmDialogActionStyles,
     lcmSectionStyles,
     lcmStatusIndicatorStyles,
     lcmRevealButtonStyles,
