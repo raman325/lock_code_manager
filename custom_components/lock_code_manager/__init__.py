@@ -106,6 +106,7 @@ from .domain.services import (
     async_set_usercode,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
+from .domain.unmanaged import async_sweep_unmanaged_codes
 from .domain.util import (
     PER_LOCK_ISSUE_KEYS,
     build_pin_deobfuscation_map,
@@ -182,6 +183,7 @@ async def async_migrate_entry(
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=3
         )
+
         if entry_impacted:
             impacted_slots = sorted(entry_impacted, key=int)
             async_create_issue(
@@ -208,6 +210,19 @@ async def async_migrate_entry(
                 config_entry.title,
                 ", ".join(impacted_slots),
             )
+
+    if config_entry.version == 3:
+        # Settle the codes already on these locks that nothing accounts for,
+        # once. The version bump is the record that it happened: an entry at
+        # version 4 has been swept, so there is no separate marker to keep in
+        # step with the entry.
+        await async_sweep_unmanaged_codes(hass, config_entry)
+        hass.config_entries.async_update_entry(config_entry, version=4)
+        _LOGGER.info(
+            "%s (%s): Migration to version 4 complete",
+            config_entry.entry_id,
+            config_entry.title,
+        )
 
     return True
 

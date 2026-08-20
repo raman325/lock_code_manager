@@ -414,7 +414,7 @@ async def test_drift_check_calls_hard_refresh(
     """Test that _async_drift_check calls async_internal_hard_refresh_codes."""
     # Mock the hard refresh method. Return a real dict so the coordinator's
     # int-key normalization (applied to drift-check results) can iterate it.
-    mock_hard_refresh = AsyncMock(return_value={1: "1234"})
+    mock_hard_refresh = AsyncMock(return_value={1: SlotCredential.known("1234")})
 
     with patch.object(
         push_lock, "async_internal_hard_refresh_codes", mock_hard_refresh
@@ -634,11 +634,11 @@ async def test_backoff_resets_on_success(
     assert poll_coordinator.update_interval != original_interval
 
     # Now succeed
-    mock_get_success = AsyncMock(return_value={1: "1234"})
+    mock_get_success = AsyncMock(return_value={1: SlotCredential.known("1234")})
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_success):
         result = await poll_coordinator.async_get_usercodes()
 
-    assert result == {pin_address(1): "1234"}
+    assert result == {pin_address(1): SlotCredential.known("1234")}
     assert poll_coordinator._lock_breaker.failure_count == 0
     assert poll_coordinator.update_interval == original_interval
 
@@ -650,11 +650,11 @@ async def test_backoff_no_reset_when_no_prior_failures(
     """Test that success with no prior failures does not modify interval."""
     original_interval = poll_coordinator.update_interval
 
-    mock_get = AsyncMock(return_value={1: "1234"})
+    mock_get = AsyncMock(return_value={1: SlotCredential.known("1234")})
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
         result = await poll_coordinator.async_get_usercodes()
 
-    assert result == {pin_address(1): "1234"}
+    assert result == {pin_address(1): SlotCredential.known("1234")}
     assert poll_coordinator._lock_breaker.failure_count == 0
     assert poll_coordinator.update_interval == original_interval
 
@@ -687,7 +687,7 @@ async def test_drift_check_runs_below_backoff_threshold(
     for _ in range(BACKOFF_FAILURE_THRESHOLD - 1):
         push_coordinator._lock_breaker.record_failure()
 
-    mock_hard_refresh = AsyncMock(return_value={1: "1234"})
+    mock_hard_refresh = AsyncMock(return_value={1: SlotCredential.known("1234")})
     with patch.object(
         push_lock, "async_internal_hard_refresh_codes", mock_hard_refresh
     ):
@@ -721,7 +721,7 @@ async def test_backoff_push_provider_polls_to_probe_recovery(
     assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 2
 
     # A successful poll clears the breaker and stops the probe polling.
-    mock_get_ok = AsyncMock(return_value={1: "1234"})
+    mock_get_ok = AsyncMock(return_value={1: SlotCredential.known("1234")})
     with patch.object(push_lock, "async_internal_get_usercodes", mock_get_ok):
         await push_coordinator.async_get_usercodes()
 
@@ -883,7 +883,7 @@ async def test_poll_failure_alert_dismissed_on_recovery(
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
 
     # Now succeed
-    mock_get_success = AsyncMock(return_value={1: "1234"})
+    mock_get_success = AsyncMock(return_value={1: SlotCredential.known("1234")})
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_success):
         await poll_coordinator.async_get_usercodes()
 
@@ -954,7 +954,7 @@ async def test_lock_offline_created_after_reach_then_drop(
 ) -> None:
     """Once reached, a later sustained outage raises lock_offline normally."""
     # A first successful poll proves the lock was online.
-    mock_get_ok = AsyncMock(return_value={1: "1234"})
+    mock_get_ok = AsyncMock(return_value={1: SlotCredential.known("1234")})
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_ok):
         await poll_coordinator.async_get_usercodes()
     assert poll_coordinator._reached_once is True
@@ -1027,7 +1027,7 @@ async def test_unreachable_clears_on_recovery(
                 await poll_coordinator.async_get_usercodes()
     assert poll_coordinator.unreachable is True
 
-    mock_get_ok = AsyncMock(return_value={1: "1234"})
+    mock_get_ok = AsyncMock(return_value={1: SlotCredential.known("1234")})
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_ok):
         await poll_coordinator.async_get_usercodes()
 
