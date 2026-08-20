@@ -20,6 +20,7 @@ interface AddUserCardElement extends HTMLElement {
     _name: string;
     _pickerReady: boolean;
     _pin: string;
+    _pinVisible: boolean;
     _reload: () => void;
     _showDialog: boolean;
     hass: HomeAssistant;
@@ -181,9 +182,54 @@ describe('lcm-add-user', () => {
             expect(card._pin).toBe('4321');
         });
 
-        it('does not show the PIN while it is typed', () => {
-            const [, pin] = fields();
-            expect(pin.getAttribute('type')).toBe('password');
+        const pinField = () => card.shadowRoot!.querySelector<HTMLInputElement>('#add-user-pin')!;
+        const revealButton = () =>
+            card.shadowRoot!.querySelector<HTMLElement & { label: string; path: string }>(
+                '.lcm-reveal-button'
+            )!;
+
+        it('hides the PIN until asked', () => {
+            expect(pinField().getAttribute('type')).toBe('password');
+            expect(revealButton().label).toBe('Show PIN');
+        });
+
+        it('shows the PIN when the button is pressed', async () => {
+            revealButton().click();
+            await flush();
+
+            expect(card._pinVisible).toBe(true);
+            expect(pinField().getAttribute('type')).toBe('text');
+            expect(revealButton().label).toBe('Hide PIN');
+        });
+
+        it('hides it again on a second press', async () => {
+            revealButton().click();
+            await flush();
+            revealButton().click();
+            await flush();
+
+            expect(pinField().getAttribute('type')).toBe('password');
+        });
+
+        it('changes the icon with the state', async () => {
+            const hidden = revealButton().path;
+            revealButton().click();
+            await flush();
+
+            expect(revealButton().path).not.toBe(hidden);
+        });
+
+        it('reopens hidden, whatever it was left as', async () => {
+            revealButton().click();
+            await flush();
+            expect(card._pinVisible).toBe(true);
+
+            card._showDialog = false;
+            card.shadowRoot!.querySelector<HTMLElement>('ha-card')!.click();
+            await flush();
+
+            expect(card._pinVisible).toBe(false);
+            expect(pinField().getAttribute('type')).toBe('password');
         });
 
         it('takes Enabled from the checkbox', async () => {

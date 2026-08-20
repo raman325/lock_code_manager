@@ -1,10 +1,10 @@
-import { mdiAccountPlus } from '@mdi/js';
+import { mdiAccountPlus, mdiEye, mdiEyeOff } from '@mdi/js';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
 import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
-import { lcmCssVars, lcmDialogActionStyles } from './shared-styles';
+import { lcmCssVars, lcmDialogActionStyles, lcmRevealButtonStyles } from './shared-styles';
 import { LockCodeManagerAddUserCardConfig } from './types';
 
 /**
@@ -20,6 +20,7 @@ export class LockCodeManagerAddUserCard extends LitElement {
     static styles = [
         lcmCssVars,
         lcmDialogActionStyles,
+        lcmRevealButtonStyles,
         css`
             ha-card {
                 align-items: center;
@@ -97,6 +98,17 @@ export class LockCodeManagerAddUserCard extends LitElement {
                 text-transform: none;
             }
 
+            .field-control {
+                align-items: center;
+                display: flex;
+                gap: 4px;
+            }
+
+            .field-control .field-input {
+                flex: 1;
+                min-width: 0;
+            }
+
             .field-input {
                 background: var(--card-background-color, #fff);
                 border: 1px solid var(--lcm-border-color-strong);
@@ -146,6 +158,8 @@ export class LockCodeManagerAddUserCard extends LitElement {
     @state() private _condition = '';
 
     @state() private _pickerReady = false;
+
+    @state() private _pinVisible = false;
 
     static getStubConfig(): Partial<LockCodeManagerAddUserCardConfig> {
         return { type: 'custom:lcm-add-user' };
@@ -199,6 +213,7 @@ export class LockCodeManagerAddUserCard extends LitElement {
         this._name = '';
         this._pin = '';
         this._condition = '';
+        this._pinVisible = false;
         this._enabled = true;
         this._error = undefined;
         this._showDialog = true;
@@ -216,30 +231,44 @@ export class LockCodeManagerAddUserCard extends LitElement {
                         A slot is picked for you on every lock in this entry. Leave the PIN blank to
                         set one later.
                     </p>
-                    <label class="field">
-                        <span class="field-label">Name</span>
-                        <input
-                            class="field-input"
-                            type="text"
-                            required
-                            .value=${this._name}
-                            @input=${(e: Event) => {
-                                this._name = (e.target as HTMLInputElement).value;
-                            }}
-                        />
-                    </label>
-                    <label class="field">
-                        <span class="field-label">PIN</span>
-                        <input
-                            class="field-input"
-                            type="password"
-                            inputmode="numeric"
-                            .value=${this._pin}
-                            @input=${(e: Event) => {
-                                this._pin = (e.target as HTMLInputElement).value;
-                            }}
-                        />
-                    </label>
+                    <div class="field">
+                        <label class="field-label" for="add-user-name">Name</label>
+                        <div class="field-control">
+                            <input
+                                id="add-user-name"
+                                class="field-input"
+                                type="text"
+                                required
+                                .value=${this._name}
+                                @input=${(e: Event) => {
+                                    this._name = (e.target as HTMLInputElement).value;
+                                }}
+                            />
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="add-user-pin">PIN</label>
+                        <div class="field-control">
+                            <input
+                                id="add-user-pin"
+                                class="field-input"
+                                type=${this._pinVisible ? 'text' : 'password'}
+                                inputmode="numeric"
+                                .value=${this._pin}
+                                @input=${(e: Event) => {
+                                    this._pin = (e.target as HTMLInputElement).value;
+                                }}
+                            />
+                            <ha-icon-button
+                                class="lcm-reveal-button"
+                                .path=${this._pinVisible ? mdiEyeOff : mdiEye}
+                                .label=${this._pinVisible ? 'Hide PIN' : 'Show PIN'}
+                                @click=${() => {
+                                    this._pinVisible = !this._pinVisible;
+                                }}
+                            ></ha-icon-button>
+                        </div>
+                    </div>
                     ${this._renderConditionField()}
                     <label class="dialog-check">
                         <input
@@ -290,7 +319,7 @@ export class LockCodeManagerAddUserCard extends LitElement {
     private _renderConditionField(): TemplateResult | typeof nothing {
         if (!this._pickerReady) return nothing;
         return html`
-            <label class="field">
+            <div class="field">
                 <span class="field-label">Active only when</span>
                 <ha-entity-picker
                     .hass=${this.hass}
@@ -305,7 +334,7 @@ export class LockCodeManagerAddUserCard extends LitElement {
                 <span class="field-help">
                     Optional. The PIN works only while this entity is on.
                 </span>
-            </label>
+            </div>
         `;
     }
 
