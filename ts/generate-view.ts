@@ -106,6 +106,17 @@ export async function generateView(
         };
     });
 
+    // Between the users and the locks, because it acts on the list above it.
+    sections.push({
+        cards: [
+            {
+                config_entry_id: configEntry.entry_id,
+                type: 'custom:lcm-add-user'
+            }
+        ],
+        type: 'grid'
+    });
+
     if (show_lock_cards) {
         // Sort locks by name (already included in response)
         const sortedLocks = [...configEntryData.locks].sort((a, b) =>
