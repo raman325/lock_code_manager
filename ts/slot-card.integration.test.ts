@@ -4565,4 +4565,26 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(msg.name).toBeUndefined();
         });
     });
+
+    describe('addressing by the user entity', () => {
+        it('prefers the entity over a name, because a rename does not move it', async () => {
+            el = document.createElement('lcm-user') as SlotCardElement;
+            const hass = createMockHassWithConnection();
+            el.setConfig({
+                config_entry_id: 'my-entry',
+                name: 'Stale',
+                type: 'custom:lcm-user',
+                user_entity_id: 'text.all_locks_raman_name'
+            });
+            el.hass = hass;
+            container.appendChild(el);
+            await flush();
+
+            const subscribeMessage = hass.connection.subscribeMessage as ReturnType<typeof vi.fn>;
+            const msg = subscribeMessage.mock.calls[0][1];
+            expect(msg.user_entity_id).toBe('text.all_locks_raman_name');
+            expect(msg.name).toBeUndefined();
+            expect(msg.slot).toBeUndefined();
+        });
+    });
 });

@@ -286,11 +286,12 @@ class LcmUserCardEditor extends LitElement {
         if (value === this._config.name) {
             return;
         }
-        // A named card drops the slot number: carrying both would keep it
-        // showing whoever holds that number, whatever the name said. Clearing
-        // the name keeps it, though, or the card is left addressing nobody.
+        // A named card drops the slot number and the entity: carrying more
+        // than one addressee would keep it showing whoever the other one
+        // points at, whatever the name said. Clearing the name keeps them,
+        // or the card is left addressing nobody.
         if (value) {
-            const { slot: _slot, ...rest } = this._config;
+            const { slot: _slot, user_entity_id: _entity, ...rest } = this._config;
             this._config = { ...rest, name: value };
         } else {
             this._config = { ...this._config, name: value };

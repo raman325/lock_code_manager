@@ -94,7 +94,7 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     condition_helpers?: string[];
     /** Config entry ID for the LCM instance */
     config_entry_id: string;
-    /** The user this section shows, preferred over the slot number */
+    /** The user this section shows, by name */
     name?: string;
     /**
      * @deprecated No longer used by the slot card; kept so existing dashboard
@@ -116,6 +116,8 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     type: 'custom:lock-code-manager-slot';
     /** Use new slot cards (true) or legacy entities cards (false). Default: true */
     use_slot_cards?: boolean;
+    /** Any entity of the user this section shows; steadier than the name */
+    user_entity_id?: string;
 }
 
 export interface LockCodeManagerLockSectionStrategyConfig {
@@ -206,8 +208,9 @@ export interface LockCodeManagerSlotCardConfig {
     /** Config entry title for the LCM instance (use this OR config_entry_id) */
     config_entry_title?: string;
     /**
-     * The user to display. Preferred over `slot`, and matched the way a
-     * config entry title is: ignoring case and punctuation.
+     * The user to display. Matched the way a config entry title is,
+     * ignoring case and punctuation. Convenient to write by hand, but it
+     * moves when the user is renamed -- prefer `user_entity_id`.
      */
     name?: string;
     /** Show code sensors (actual code on lock) in lock status section (default: true) */
@@ -221,11 +224,18 @@ export interface LockCodeManagerSlotCardConfig {
     /** Show sync status per lock in lock status (default: true) */
     show_lock_sync?: boolean;
     /**
-     * Slot number to display. Superseded by `name` and kept only so cards
-     * written before the rename keep working; it will be removed.
+     * Slot number to display. Superseded and kept only so cards written
+     * before the rename keep working; it will be removed.
      */
     slot?: number;
     type: 'custom:lcm-user' | 'custom:lcm-slot';
+    /**
+     * Any entity belonging to the user to display, and the steadiest way to
+     * name one: this integration's entity IDs do not move when a user is
+     * renamed, so a stored card goes on working through a rename that would
+     * strand one holding a name.
+     */
+    user_entity_id?: string;
 }
 
 export interface SlotCardLockStatus {

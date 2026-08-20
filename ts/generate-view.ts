@@ -49,6 +49,17 @@ export async function generateView(
 
     const slots = Object.keys(configEntryData.slots).map((slotNum) => parseInt(slotNum, 10));
 
+    // One entity per slot, to address its card by. Any of the slot's entities
+    // would do -- the unique ID carries the slot number either way -- so this
+    // takes the first, which keeps the choice stable across renders.
+    const userEntityIds = new Map<number, string>();
+    for (const entity of configEntryData.entities) {
+        const slotNum = parseInt(entity.unique_id.split('|')[1] ?? '', 10);
+        if (!isNaN(slotNum) && !userEntityIds.has(slotNum)) {
+            userEntityIds.set(slotNum, entity.entity_id);
+        }
+    }
+
     // Build badges - lock state badges only
     // Note: Template badges are not supported by HA, so we only use entity badges
     // The slot cards already show detailed status (active, sync, conditions)
@@ -78,7 +89,9 @@ export async function generateView(
                 }),
                 config_entry_id: configEntry.entry_id,
                 // The slot number rides along so a section can still be
-                // addressed by it; the name is what the card prefers.
+                // addressed by it, and the name for anyone reading the
+                // generated config; the entity is what the card uses,
+                // because it survives a rename.
                 name: configEntryData.slots[slotNum]?.name ?? undefined,
                 show_code_sensors,
                 show_conditions,
@@ -87,7 +100,8 @@ export async function generateView(
                 show_lock_sync,
                 slot: slotNum,
                 type: 'custom:lock-code-manager-slot',
-                use_slot_cards
+                use_slot_cards,
+                user_entity_id: userEntityIds.get(slotNum)
             }
         };
     });

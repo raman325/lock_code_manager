@@ -188,7 +188,8 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
             this._config?.config_entry_id !== config.config_entry_id ||
             this._config?.config_entry_title !== config.config_entry_title ||
             this._config?.name !== config.name ||
-            this._config?.slot !== config.slot
+            this._config?.slot !== config.slot ||
+            this._config?.user_entity_id !== config.user_entity_id
         ) {
             this._unsubscribe();
             this._data = undefined;
@@ -248,6 +249,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
             name?: string;
             reveal: boolean;
             slot?: number;
+            user_entity_id?: string;
         } = {
             reveal: this._shouldReveal(),
             type: 'lock_code_manager/subscribe_code_slot',
@@ -1193,10 +1195,20 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
      * one place so the three commands cannot disagree about who they mean.
      */
     private _hasAddressee(): boolean {
-        return Boolean(this._config?.name) || this._config?.slot !== undefined;
+        return (
+            Boolean(this._config?.user_entity_id) ||
+            Boolean(this._config?.name) ||
+            this._config?.slot !== undefined
+        );
     }
 
-    private _addressee(): { name: string } | { slot: number } {
+    private _addressee(): { user_entity_id: string } | { name: string } | { slot: number } {
+        // The entity first: this integration's entity IDs do not move when a
+        // user is renamed, so a stored card holding one survives a rename
+        // that would strand a card holding the name.
+        if (this._config?.user_entity_id) {
+            return { user_entity_id: this._config.user_entity_id };
+        }
         return this._config?.name ? { name: this._config.name } : { slot: this._config!.slot! };
     }
 

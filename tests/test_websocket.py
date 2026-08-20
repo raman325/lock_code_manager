@@ -58,6 +58,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_SLOT,
     ATTR_SLOT_NUM,
     ATTR_SYNC_STATUS,
+    ATTR_USER_ENTITY_ID,
     ATTR_USERCODE,
     BACKOFF_FAILURE_THRESHOLD,
     CONF_CONDITIONS,
@@ -68,7 +69,9 @@ from custom_components.lock_code_manager.const import (
     CONF_PIN,
     CONF_SLOTS,
     CONF_USERS,
+    DOMAIN,
 )
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
@@ -3380,7 +3383,7 @@ class TestAddressingASlotByUser:
             options: dict = {}
 
         with pytest.raises(ServiceValidationError, match="more than one user"):
-            _slot_from(_Entry(), {CONF_NAME: "ada lovelace"})
+            _slot_from(hass, _Entry(), {CONF_NAME: "ada lovelace"})
 
     async def test_clearing_a_condition_for_an_unknown_user_is_refused(
         self,
@@ -3411,7 +3414,7 @@ class TestAddressingASlotByUser:
             options: dict = {}
 
         with pytest.raises(ServiceValidationError, match="not been given a slot"):
-            _slot_from(_Entry(), {CONF_NAME: "pending"})
+            _slot_from(hass, _Entry(), {CONF_NAME: "pending"})
 
     async def test_setting_a_condition_for_an_unknown_user_is_refused(
         self,
@@ -3441,3 +3444,74 @@ class TestAddressingASlotByUser:
         result = await client.receive_json()
         assert not result["success"]
         assert result["error"]["code"] == "not_found"
+
+    async def test_an_entity_names_its_user(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        """
+        The steadiest handle: an entity id survives its user being renamed.
+
+        Unique IDs keep the slot number, which is why a rename moves nothing
+        in the registry -- so a stored card holding one of these goes on
+        working where a card holding the name would not.
+        """
+        entity_id = entity_registry.async_get_entity_id(
+            "text",
+            DOMAIN,
+            build_slot_unique_id(lock_code_manager_config_entry.entry_id, 1, CONF_NAME),
+        )
+        assert entity_id
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_USER_ENTITY_ID: entity_id,
+            }
+        )
+        assert (await client.receive_json())["success"]
+
+    async def test_an_entity_from_another_entry_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """An entity this entry does not own addresses nobody in it."""
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_USER_ENTITY_ID: LOCK_1_ENTITY_ID,
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert "does not belong" in result["error"]["message"]
+
+    async def test_an_entity_that_does_not_exist_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A card pointed at a deleted entity says so, rather than guessing."""
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_USER_ENTITY_ID: "text.gone",
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert "No entity" in result["error"]["message"]

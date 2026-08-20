@@ -85,6 +85,7 @@ from .const import (
     ATTR_SLOT,
     ATTR_SLOT_NUM,
     ATTR_SYNC_STATUS,
+    ATTR_USER_ENTITY_ID,
     ATTR_USERCODE,
     CONDITION_ENTITY_DOMAINS,
     CONF_CONDITIONS,
@@ -96,6 +97,7 @@ from .const import (
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
+from .domain.config import parse_slot_unique_id
 from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
@@ -244,20 +246,36 @@ def _get_last_changed(
     return None
 
 
-def _slot_from(config_entry: ConfigEntry, msg: dict[str, Any]) -> int:
+def _slot_from(
+    hass: HomeAssistant, config_entry: ConfigEntry, msg: dict[str, Any]
+) -> int:
     """
-    Resolve the slot a message names, by number or by whoever holds it.
+    Resolve the slot a message means, however it chose to say it.
 
-    The slot number is on its way out of every user-facing surface, so these
-    commands take a name as well. Resolution happens here rather than deeper
-    down because a slot number is still what the coordinator, the entities
-    and the provider all key on -- this is the boundary where the two
-    vocabularies meet.
+    An entity id is the steadiest of the three and what a stored card should
+    hold; a name is what a person writes; a slot number is what everything
+    below this line still keys on. Resolution happens here because this is
+    the boundary where those vocabularies meet.
     """
+    if entity_id := msg.get(ATTR_USER_ENTITY_ID):
+        # The steadiest handle there is. An entity id is unique by
+        # construction, and this integration's own never move when a user is
+        # renamed -- unique IDs keep the slot number, which is the whole
+        # reason a rename costs nothing. A card holding one goes on working
+        # through renames that would strand a card holding a name.
+        entity = er.async_get(hass).async_get(entity_id)
+        if entity is None:
+            raise ServiceValidationError(f"No entity {entity_id!r}")
+        slot = parse_slot_unique_id(config_entry.entry_id, entity.unique_id)
+        if slot is None:
+            raise ServiceValidationError(
+                f"{entity_id!r} does not belong to a user in this config entry"
+            )
+        return slot
     if (slot := msg.get(ATTR_SLOT)) is not None:
         return slot
     if not (name := msg.get(CONF_NAME)):
-        raise ServiceValidationError("Neither name nor slot provided")
+        raise ServiceValidationError("No entity, name or slot provided")
 
     # Matched slugified, the way a config entry title is, so a caller that
     # has only the slug an entity id was built from can still name its user.
@@ -1045,6 +1063,7 @@ def _serialize_slot_card_data(
         vol.Required("type"): "lock_code_manager/subscribe_code_slot",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
+        vol.Exclusive(ATTR_USER_ENTITY_ID, "user"): cv.entity_id,
         vol.Exclusive(ATTR_SLOT, "user"): int,
         vol.Exclusive(CONF_NAME, "user"): str,
         vol.Optional("reveal", default=False): bool,
@@ -1068,7 +1087,7 @@ async def subscribe_code_slot(
     - In-sync status changes
     - Calendar entity state changes (for event-based access control)
     """
-    slot_num = _slot_from(config_entry, msg)
+    slot_num = _slot_from(hass, config_entry, msg)
     reveal = msg["reveal"]
 
     if not get_entry_config(config_entry).has_slot(slot_num):
@@ -1238,6 +1257,7 @@ async def ws_clear_usercode(
         vol.Required("type"): "lock_code_manager/set_slot_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
+        vol.Exclusive(ATTR_USER_ENTITY_ID, "user"): cv.entity_id,
         vol.Exclusive(ATTR_SLOT, "user"): int,
         vol.Exclusive(CONF_NAME, "user"): str,
         vol.Required(CONF_ENTITY_ID): cv.entity_domain(CONDITION_ENTITY_DOMAINS),
@@ -1258,7 +1278,7 @@ async def ws_set_slot_condition(
     excluded platform (for example, the scheduler integration).
     """
     try:
-        slot = _slot_from(config_entry, msg)
+        slot = _slot_from(hass, config_entry, msg)
     except ServiceValidationError as err:
         connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
         return
@@ -1290,6 +1310,7 @@ async def ws_set_slot_condition(
         vol.Required("type"): "lock_code_manager/clear_slot_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
+        vol.Exclusive(ATTR_USER_ENTITY_ID, "user"): cv.entity_id,
         vol.Exclusive(ATTR_SLOT, "user"): int,
         vol.Exclusive(CONF_NAME, "user"): str,
     }
@@ -1305,7 +1326,7 @@ async def ws_clear_slot_condition(
 ) -> None:
     """Clear the condition entity from a slot."""
     try:
-        slot = _slot_from(config_entry, msg)
+        slot = _slot_from(hass, config_entry, msg)
     except ServiceValidationError as err:
         connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
         return
