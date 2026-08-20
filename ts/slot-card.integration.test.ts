@@ -3,6 +3,7 @@ import { html } from 'lit';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
+import { slotCardStyles } from './slot-card.styles';
 import { createMockHassWithConnection } from './test/mock-hass';
 import { SlotCardData } from './types';
 
@@ -282,13 +283,41 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(JSON.stringify(card.render())).toContain('name-edit-input');
         });
 
-        it('carries the state icon and chip on the same row', () => {
-            // They used to sit in a bar of their own, saying the same thing
-            // twice with a slot number between them.
+        it('gathers what is about the user into a meta row', () => {
+            // Icon, state and remove sit together above the name. None of
+            // them grows with the name, so sharing its row cost it about
+            // five characters before the ellipsis on a narrow card.
             card._data = makeSlotCardData({ name: 'Raman' });
             const json = JSON.stringify(card.render());
-            expect(json).toContain('hero-identity');
+            expect(json).toContain('hero-meta');
             expect(json).toContain('hero-icon');
+            expect(json).toContain('state-chip');
+            expect(json).toContain('hero-remove');
+        });
+
+        it('gives the name a line to itself, below that row', () => {
+            card._data = makeSlotCardData({ name: 'Raman' });
+            const markup = JSON.stringify(card.render());
+            const metaAt = markup.indexOf('hero-meta');
+            const titleAt = markup.indexOf('hero-title');
+
+            expect(metaAt).toBeGreaterThan(-1);
+            expect(titleAt).toBeGreaterThan(metaAt);
+            // Not nested inside it -- the row closes first.
+            expect(markup.slice(metaAt, titleAt)).toContain('</div>');
+        });
+
+        it('never truncates the name', () => {
+            // The rule this replaced set white-space: nowrap and an
+            // ellipsis, and on a narrow card the name lost to the chrome
+            // beside it. A cut-off name is a cut-off identity.
+            const rule = slotCardStyles
+                .map((part) => String((part as { cssText?: string }).cssText ?? ''))
+                .join('\n')
+                .match(/\.hero-title\s*\{([^}]*)\}/)![1];
+
+            expect(rule).not.toMatch(/white-space:\s*nowrap/);
+            expect(rule).not.toMatch(/text-overflow:\s*ellipsis/);
         });
 
         it('has no header bar left', () => {

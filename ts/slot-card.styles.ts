@@ -61,31 +61,53 @@ const slotCardComponentStyles = css`
         opacity: 0.9;
     }
 
-    /* Header Section — matches the lock card pattern: icon bubble + title + state chip on the right. */
-    /* The card's identity line: state icon, the user's name, state chip.
-       This replaced a separate header bar whose icon and chip both said
-       "state" while the title between them named a slot number. */
+    /* The card's identity block: a thin meta row of everything that is
+       *about* the user -- state icon, state chip, remove -- and then the
+       name on a line of its own beneath it.
+
+       The name shared a row with all three once, and lost: on a narrow
+       card the chrome took ~220px and left the name around five
+       characters before the ellipsis. Nothing in the meta row grows with
+       the name, so giving the name its own line is the only arrangement
+       where a long one stays readable. */
     .hero-identity {
+        display: flex;
+        flex-direction: column;
+        /* Tighter than the gap between the identity and the PIN row, so
+           the meta row reads as attached to the name rather than as a
+           third band of its own. */
+        gap: 4px;
+        min-width: 0;
+    }
+
+    .hero-meta {
         align-items: center;
         display: flex;
         gap: 12px;
-        margin-bottom: 12px;
+        min-width: 0;
+    }
+
+    /* Takes the space between the icon and the remove button so a long
+       state ("Blocked by condition") reads in full. */
+    .hero-meta .state-chip {
+        flex: 1;
         min-width: 0;
     }
 
     .hero-title {
-        flex: 1;
         font-size: inherit;
         font-weight: inherit;
         margin: 0;
         min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        /* Wraps rather than truncates: a cut-off name is a cut-off
+           identity, which is the one thing this card exists to show. A
+           name with no spaces breaks mid-word rather than overflowing. */
+        overflow-wrap: anywhere;
     }
 
     .hero-remove {
         align-items: center;
+        margin-left: auto;
         background: none;
         border: none;
         border-radius: 50%;
@@ -151,7 +173,6 @@ const slotCardComponentStyles = css`
         font-size: 11px;
         font-weight: 600;
         gap: 6px;
-        max-width: 60%;
         overflow: hidden;
         padding: 4px 10px;
         text-overflow: ellipsis;

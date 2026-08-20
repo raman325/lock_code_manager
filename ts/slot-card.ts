@@ -567,21 +567,23 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         return html`
             <div class="hero">
                 <div class="hero-identity">
-                    <div class="hero-icon" aria-hidden="true">
-                        <ha-svg-icon .path=${iconPath}></ha-svg-icon>
+                    <div class="hero-meta">
+                        <div class="hero-icon" aria-hidden="true">
+                            <ha-svg-icon .path=${iconPath}></ha-svg-icon>
+                        </div>
+                        ${this._renderStateChip()}
+                        <button
+                            class="hero-remove"
+                            aria-label="Remove user"
+                            title="Remove user"
+                            @click=${() => {
+                                this._showRemoveDialog = true;
+                            }}
+                        >
+                            <ha-svg-icon .path=${mdiDelete}></ha-svg-icon>
+                        </button>
                     </div>
                     <h2 class="hero-title">${this._renderHeroName()}</h2>
-                    ${this._renderStateChip()}
-                    <button
-                        class="hero-remove"
-                        aria-label="Remove user"
-                        title="Remove user"
-                        @click=${() => {
-                            this._showRemoveDialog = true;
-                        }}
-                    >
-                        <ha-svg-icon .path=${mdiDelete}></ha-svg-icon>
-                    </button>
                 </div>
                 <div class="hero-row">
                     <div class="hero-field hero-pin">
