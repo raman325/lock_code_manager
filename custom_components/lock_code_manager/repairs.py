@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.issue_registry import async_delete_issue
 
-from .const import DOMAIN
+from .const import DOMAIN, ENTITY_IDS_RENAMED_ISSUE
 from .domain.exceptions import LockCodeManagerError
 from .domain.locks import get_managed_lock
 from .domain.references import (
@@ -149,7 +149,7 @@ async def async_create_fix_flow(
     if issue_id.startswith(UNMANAGED_ISSUE_KEY):
         assert data is not None
         return UnmanagedCodeRepairFlow(data)
-    if issue_id.startswith("entity_ids_renamed_"):
+    if issue_id == ENTITY_IDS_RENAMED_ISSUE:
         return EntityIdsRenamedRepairFlow(
             issue_id, json.loads((data or {}).get("moved") or "{}")
         )

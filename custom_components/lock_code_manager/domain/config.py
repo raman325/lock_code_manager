@@ -128,7 +128,9 @@ class EntryConfig:
         if raw_users is None:
             # Converted by the migration's own function so the two cannot
             # disagree about what a slot-keyed entry means.
-            converted, assignment, _ = users_from_slots(mapping.get(CONF_SLOTS) or {})
+            converted, assignment, _, _ = users_from_slots(
+                mapping.get(CONF_SLOTS) or {}
+            )
             users = dict(converted)
         else:
             # Two keys reducing to one identity keep the FIRST. Both

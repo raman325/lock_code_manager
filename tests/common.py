@@ -122,19 +122,19 @@ def slot_entity_id(
 # The integration the mock lock entities belong to.
 LOCK_DEVICE_DOMAIN = "test"
 
-SLOT_1_ACTIVE_ENTITY = "binary_sensor.test1_active"
-SLOT_1_ENABLED_ENTITY = "switch.test1_enabled"
-SLOT_1_EVENT_ENTITY = "event.test1"
-SLOT_1_NAME_ENTITY = "text.test1_name"
-SLOT_1_PIN_ENTITY = "text.test1_pin"
-SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test1_test_1_in_sync"
+SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_test1_active"
+SLOT_1_ENABLED_ENTITY = "switch.mock_title_test1_enabled"
+SLOT_1_EVENT_ENTITY = "event.mock_title_test1"
+SLOT_1_NAME_ENTITY = "text.mock_title_test1_name"
+SLOT_1_PIN_ENTITY = "text.mock_title_test1_pin"
+SLOT_1_IN_SYNC_ENTITY = "binary_sensor.mock_title_test1_test_1_in_sync"
 
-SLOT_2_ENABLED_ENTITY = "switch.test2_enabled"
-SLOT_2_ACTIVE_ENTITY = "binary_sensor.test2_active"
-SLOT_2_EVENT_ENTITY = "event.test2"
-SLOT_2_PIN_ENTITY = "text.test2_pin"
-SLOT_2_NAME_ENTITY = "text.test2_name"
-SLOT_2_IN_SYNC_ENTITY = "binary_sensor.test2_test_1_in_sync"
+SLOT_2_ENABLED_ENTITY = "switch.mock_title_test2_enabled"
+SLOT_2_ACTIVE_ENTITY = "binary_sensor.mock_title_test2_active"
+SLOT_2_EVENT_ENTITY = "event.mock_title_test2"
+SLOT_2_PIN_ENTITY = "text.mock_title_test2_pin"
+SLOT_2_NAME_ENTITY = "text.mock_title_test2_name"
+SLOT_2_IN_SYNC_ENTITY = "binary_sensor.mock_title_test2_test_1_in_sync"
 
 
 @dataclass(repr=False, eq=False)

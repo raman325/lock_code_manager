@@ -41,9 +41,13 @@ _CONSUMED = frozenset({CONF_SLOTS, CONF_START_SLOT, CONF_NUM_SLOTS})
 
 def migrate_to_users(
     config: Mapping[str, Any],
-) -> tuple[dict[str, Any], list[str]]:
+) -> tuple[dict[str, Any], list[str], list[str]]:
     """
-    Return the user-keyed form of ``config``, and the slots whose name changed.
+    Return the user-keyed form of ``config``, and what it had to touch.
+
+    Reports the slots whose name changed, and the empty ones dropped: a slot
+    with neither a name nor a PIN was never a user, and carrying it across
+    would invent one.
 
     ``start_slot`` and ``num_slots`` are dropped rather than translated:
     allocation takes the lowest unoccupied slot, and the number of users is
@@ -56,19 +60,23 @@ def migrate_to_users(
         carried = {k: v for k, v in config.items() if k not in _CONSUMED}
         if CONF_USERS in carried:
             carried[CONF_USERS] = _condition_renamed(carried[CONF_USERS])
-        return carried, []
+        return carried, [], []
 
-    users, assignment, renamed = users_from_slots(config[CONF_SLOTS])
+    users, assignment, renamed, dropped = users_from_slots(config[CONF_SLOTS])
     users = _condition_renamed(users)
-    return {
-        **{k: v for k, v in config.items() if k not in _CONSUMED},
-        # Keyed by the name as displayed. The configuration is hand-editable,
-        # and this key is the only place a user's capitalization survives now
-        # that the name is not a field. Uniqueness stays case-insensitive:
-        # storage keeps the display form, comparison folds the case.
-        CONF_USERS: users,
-        CONF_SLOT_ASSIGNMENT: dict(assignment.slots),
-    }, renamed
+    return (
+        {
+            **{k: v for k, v in config.items() if k not in _CONSUMED},
+            # Keyed by the name as displayed. The configuration is hand-editable,
+            # and this key is the only place a user's capitalization survives now
+            # that the name is not a field. Uniqueness stays case-insensitive:
+            # storage keeps the display form, comparison folds the case.
+            CONF_USERS: users,
+            CONF_SLOT_ASSIGNMENT: dict(assignment.slots),
+        },
+        renamed,
+        dropped,
+    )
 
 
 def _condition_renamed(users: Mapping[str, Any]) -> dict[str, dict[str, Any]]:

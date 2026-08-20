@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 import json
 import logging
 from pathlib import Path
@@ -75,10 +75,13 @@ from .const import (
     CONF_CALENDAR,
     CONF_SLOTS,
     DOMAIN,
+    ENTITY_IDS_RENAMED_ISSUE,
     EVENT_CREDENTIAL_USED,
     LEGACY_EVENT_PIN_USED,
+    PER_LOCK_ENTITY_SUFFIX,
     PLATFORM_MAP,
     PLATFORMS,
+    RENAMES_KEY,
     SERVICE_ADD_USER,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
@@ -254,9 +257,12 @@ async def async_migrate_entry(
         # IDENTIFIERS do not move -- unique IDs keep the slot number, so no
         # entity loses its registry entry, its settings or its history. Only
         # the entity IDs are re-slugged, below, once the names are known.
-        new_data, renamed_in_data = migrate_to_users(config_entry.data)
-        new_options, renamed_in_options = migrate_to_users(config_entry.options)
+        new_data, renamed_in_data, dropped_in_data = migrate_to_users(config_entry.data)
+        new_options, renamed_in_options, dropped_in_options = migrate_to_users(
+            config_entry.options
+        )
         renamed = set(renamed_in_data) | set(renamed_in_options)
+        dropped = set(dropped_in_data) | set(dropped_in_options)
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=4
         )
@@ -275,21 +281,34 @@ async def async_migrate_entry(
             # not go through it. Automations built from the Slot Usage Limiter
             # and Slot Usage Notifier blueprints hold these ids directly, so
             # the user is given the mapping rather than left to find it.
+            # Accumulated across entries so a system with several of them
+            # gets ONE repair. Every entry migrates in the same restart, and
+            # each re-raises the issue with the union, so whichever goes last
+            # leaves it complete.
+            moved = hass.data.setdefault(DOMAIN, {}).setdefault(RENAMES_KEY, {})
+            moved.update(dict(re_slugged))
             async_create_issue(
                 hass,
                 DOMAIN,
-                f"entity_ids_renamed_{config_entry.entry_id}",
+                ENTITY_IDS_RENAMED_ISSUE,
                 is_fixable=True,
                 is_persistent=True,
                 severity=IssueSeverity.WARNING,
                 translation_key="entity_ids_renamed",
-                translation_placeholders={
-                    "entry_title": config_entry.title,
-                    "renames": format_moved(dict(re_slugged)),
-                },
+                translation_placeholders={"renames": format_moved(moved)},
                 # The flow looks up who still points at these when the user
                 # opens it; the migration only knows what moved.
-                data={"moved": json.dumps(dict(re_slugged))},
+                data={"moved": json.dumps(moved)},
+            )
+        if dropped:
+            _async_purge_dropped_slots(hass, config_entry, dropped)
+            _LOGGER.info(
+                "%s (%s): dropped %d empty slot(s) with neither a name nor a "
+                "PIN: %s. They held no credential and named nobody",
+                config_entry.entry_id,
+                config_entry.title,
+                len(dropped),
+                ", ".join(sorted(dropped, key=int)),
             )
         if renamed:
             _LOGGER.info(
@@ -1102,6 +1121,51 @@ def _async_rename_event_unique_ids(
         ent_reg.async_update_entity(entity_id, new_unique_id=wanted)
 
 
+def _lock_of(entry_id: str, unique_id: str) -> str | None:
+    """Return the lock a per-lock entity belongs to, or None if it has none."""
+    parts = unique_id.split("|")
+    return parts[3] if unique_id.startswith(f"{entry_id}|") and len(parts) > 3 else None
+
+
+def _lock_display_name(ent_reg: er.EntityRegistry, lock_entity_id: str) -> str:
+    """Name a lock the way its own integration does."""
+    entity = ent_reg.async_get(lock_entity_id)
+    if entity and (display := entity.name or entity.original_name):
+        return display
+    # No registry row to ask, so fall back to the object id, which is what
+    # the lock's own entity id was slugged from in the first place.
+    return lock_entity_id.split(".", 1)[-1].replace("_", " ")
+
+
+@callback
+def _async_purge_dropped_slots(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    dropped: Collection[str],
+) -> None:
+    """
+    Remove the registry rows of slots the migration did not carry across.
+
+    The update listener tears down a slot's entities when it leaves the
+    configuration, but it works from the difference between data and options
+    and the migration writes the new shape to both -- so from its point of
+    view these slots were never there. Left alone they would linger as
+    entities named for a user who does not exist, and a device to match.
+    """
+    slots = {int(slot_num) for slot_num in dropped}
+    ent_reg = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id):
+        if parse_slot_unique_id(config_entry.entry_id, entity.unique_id) in slots:
+            ent_reg.async_remove(entity.entity_id)
+    dev_reg = dr.async_get(hass)
+    for slot_num in slots:
+        identifiers = {
+            (DOMAIN, build_slot_device_identifier(config_entry.entry_id, slot_num))
+        }
+        if device := dev_reg.async_get_device(identifiers):
+            dev_reg.async_remove_device(device.id)
+
+
 @callback
 def _async_rename_slot_entity_ids(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
@@ -1130,13 +1194,25 @@ def _async_rename_slot_entity_ids(
         if slot_num is None or not (name := config.name_for(slot_num)):
             continue
         domain, object_id = entity.entity_id.split(".", 1)
-        if entity.original_name:
+        if lock_entity_id := _lock_of(config_entry.entry_id, entity.unique_id):
+            # Per-lock entities are one per lock on the SAME slot device, so
+            # the user's name alone names them all identically and Home
+            # Assistant separates them with a meaningless _2, _3. Their own
+            # name carries the lock, and it has to be rebuilt rather than
+            # read back: ``original_name`` is the text stored when the entity
+            # was created, which on an upgraded install predates this shape.
+            suggested = (
+                f"{config_entry.title} {name} "
+                f"{_lock_display_name(ent_reg, lock_entity_id)} "
+                f"{PER_LOCK_ENTITY_SUFFIX[entity.unique_id.split('|')[2]]}"
+            )
+        elif entity.original_name:
             # What Home Assistant would generate today: the device's name
             # followed by the entity's own. ``original_name`` is that name as
             # translated for THIS installation, so a system set up in another
             # language re-slugs into its own words -- and none of it depends
             # on the entry's title, which may have changed since.
-            suggested = f"{name} {entity.original_name}"
+            suggested = f"{config_entry.title} {name} {entity.original_name}"
         else:
             # The event entity has no name of its own, and a registry written
             # by an older Home Assistant may not have kept one. Swap the
@@ -1145,8 +1221,11 @@ def _async_rename_slot_entity_ids(
             old_prefix = slugify(f"{config_entry.title} Code slot {slot_num}")
             if object_id != old_prefix and not object_id.startswith(f"{old_prefix}_"):
                 continue
-            suggested = f"{slugify(name)}{object_id.removeprefix(old_prefix)}"
-        new_entity_id = ent_reg.async_generate_entity_id(
+            suggested = (
+                f"{slugify(f'{config_entry.title} {name}')}"
+                f"{object_id.removeprefix(old_prefix)}"
+            )
+        new_entity_id = ent_reg.async_get_available_entity_id(
             domain, suggested, current_entity_id=entity.entity_id
         )
         if new_entity_id == entity.entity_id:
@@ -1178,8 +1257,12 @@ def _async_rename_slot_devices(
     for slot_num, name in ((num, config.name_for(num)) for num in config.slot_numbers):
         identifier = build_slot_device_identifier(entry_id, slot_num)
         device = dev_reg.async_get_device(identifiers={(DOMAIN, identifier)})
-        if device is not None and name and device.name != name:
-            dev_reg.async_update_device(device.id, name=name)
+        # Same shape build_slot_device_info uses, entry title included: a
+        # rename that dropped the prefix would leave the device disagreeing
+        # with the entity IDs derived from it.
+        titled = f"{config_entry.title} {name}" if name else None
+        if device is not None and titled and device.name != titled:
+            dev_reg.async_update_device(device.id, name=titled)
 
 
 @callback

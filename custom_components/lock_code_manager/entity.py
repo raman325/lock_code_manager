@@ -47,13 +47,18 @@ def build_slot_device_info(config_entry: ConfigEntry, slot_num: int) -> DeviceIn
     device something the configuration disagrees with. A slot with no user is
     named as the migration would name it: this is reachable while entities are
     being moved off a foreign device before their slot is swept away.
+
+    Prefixed with the entry's title, because the entity IDs Home Assistant
+    derives from this name have to be unique across the whole installation
+    and a name is only unique within its entry. Two entries each holding a
+    "Raman" would otherwise collide into an arbitrary "_2".
     """
+    name = get_entry_config(config_entry).name_for(slot_num) or fallback_name(slot_num)
     return DeviceInfo(
         identifiers={
             (DOMAIN, build_slot_device_identifier(config_entry.entry_id, slot_num))
         },
-        name=get_entry_config(config_entry).name_for(slot_num)
-        or fallback_name(slot_num),
+        name=f"{config_entry.title} {name}",
         manufacturer="Lock Code Manager",
         model="User",
         via_device=(DOMAIN, config_entry.entry_id),
