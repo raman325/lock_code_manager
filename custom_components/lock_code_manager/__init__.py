@@ -1428,7 +1428,24 @@ async def _async_setup_new_locks(
 async def async_update_listener(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
-    """Update listener."""
+    """
+    Update listener.
+
+    Wraps the pass so ``runtime_data.settled`` is set however it ends,
+    including the early return and a failure. Anything waiting on it is
+    waiting to learn that the entry has finished reacting, and a pass that
+    raised has finished reacting as much as it is going to.
+    """
+    try:
+        await _async_apply_entry_update(hass, config_entry)
+    finally:
+        config_entry.runtime_data.settled.set()
+
+
+async def _async_apply_entry_update(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """Bring entities, devices and locks into line with the entry."""
     # Refresh the cached EntryConfig on EVERY update — including entity-driven
     # writes that go straight to data with empty options (e.g. a slot's name or
     # PIN being edited via its text entity). The early-return below skips the

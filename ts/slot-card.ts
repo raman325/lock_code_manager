@@ -303,6 +303,11 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         return html`<ha-card><div class="message">Connecting...</div></ha-card>`;
     }
 
+    /** Seam so a test can observe the reload without navigating the runner. */
+    protected _reload(): void {
+        window.location.reload();
+    }
+
     private _renderFromData(data: SlotCardData): TemplateResult {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const { pin, enabled, active, conditions, locks } = data;
@@ -1263,6 +1268,12 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                 name
             });
             this._showRemoveDialog = false;
+            // This card is about to be a card for nobody: its entities are
+            // gone and its subscription simply stops reporting, so without a
+            // reload it would sit here showing the person who was removed,
+            // PIN and all. The view is strategy-generated, so nothing short
+            // of a reload takes the card away.
+            this._reload();
         } catch (err) {
             this._setActionError(
                 `Could not remove ${name}: ${err instanceof Error ? err.message : String(err)}`

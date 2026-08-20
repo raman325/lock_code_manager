@@ -4542,6 +4542,7 @@ describe('LockCodeManagerSlotCard integration', () => {
     describe('removing a user', () => {
         let card: SlotCardElement & Record<string, unknown>;
         let calls: Array<Record<string, unknown>>;
+        let reloads: number;
 
         beforeEach(async () => {
             calls = [];
@@ -4559,6 +4560,11 @@ describe('LockCodeManagerSlotCard integration', () => {
                 return Promise.resolve();
             };
             card.hass = hass;
+            reloads = 0;
+            // Reloading would take the test runner's page with it.
+            card._reload = () => {
+                reloads += 1;
+            };
             container.appendChild(card);
             card._data = makeSlotCardData({ name: 'Raman' });
             await flush();
@@ -4593,6 +4599,30 @@ describe('LockCodeManagerSlotCard integration', () => {
                 name: 'Raman'
             });
             expect(card._showRemoveDialog).toBe(false);
+        });
+
+        it('reloads the actual page', () => {
+            const real = document.createElement('lcm-user') as SlotCardElement &
+                Record<string, unknown>;
+            const reload = vi.fn();
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: { ...window.location, reload }
+            });
+
+            (real as unknown as { _reload: () => void })._reload();
+
+            expect(reload).toHaveBeenCalled();
+        });
+
+        it('reloads, so the card for the removed user goes away', async () => {
+            // Its entities are gone and the subscription just stops
+            // reporting, so left alone the card would go on showing the
+            // person who was removed, PIN and all.
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(reloads).toBe(1);
         });
 
         it('passes the choice to keep the code through', async () => {
@@ -4680,6 +4710,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             // Left open, because the user is still there.
             expect(card._actionError).toContain('Raman');
             expect(card._actionError).toContain('lock is asleep');
+            // A reload here would hide the error it needs to show.
+            expect(reloads).toBe(0);
         });
     });
 });

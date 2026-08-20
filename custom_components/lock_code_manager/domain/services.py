@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
@@ -15,6 +18,50 @@ from .config import EntryConfig
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry
+
+_LOGGER = logging.getLogger(__name__)
+
+# How long to wait for the entry to react to a write before returning
+# anyway. Generous, because the pass can set up a lock it has never
+# spoken to; a caller stuck here is waiting on that, not on this.
+_SETTLE_TIMEOUT = 30
+
+
+async def _async_write_and_settle(
+    hass: HomeAssistant, config_entry: ConfigEntry, options: dict[str, Any]
+) -> None:
+    """
+    Write the entry, and wait for it to have finished reacting.
+
+    ``async_update_entry`` schedules the update listener rather than
+    awaiting it, so without this a service returns before the entities for
+    the users it changed exist. A script that adds a user and then sets
+    their PIN through the new text entity would find nothing to set.
+
+    Waiting on the entry's settle event rather than on the specific
+    entities keeps this honest about what it can promise: another write
+    landing at the same time can release the wait early. That is no worse
+    than not waiting, which is the alternative.
+    """
+    runtime_data = config_entry.runtime_data
+    runtime_data.settled.clear()
+    if not hass.config_entries.async_update_entry(config_entry, options=options):
+        # Nothing changed, so no listener will run and nothing will set the
+        # event. Waiting here would burn the whole timeout for no reason.
+        return
+    try:
+        async with asyncio.timeout(_SETTLE_TIMEOUT):
+            await runtime_data.settled.wait()
+    except TimeoutError:
+        # The write itself is durable, so this is not a failure to report to
+        # the caller -- the entities will appear when the pass finishes.
+        _LOGGER.warning(
+            "%s (%s): entry did not finish updating within %ss; entities for "
+            "this change may appear late",
+            config_entry.entry_id,
+            config_entry.title,
+            _SETTLE_TIMEOUT,
+        )
 
 
 async def async_set_usercode(
@@ -71,7 +118,7 @@ async def async_set_slot_condition(
     _async_validate_condition(hass, entity_id)
 
     new_config = config.with_slot_field_set(slot, CONF_CONDITION, entity_id)
-    hass.config_entries.async_update_entry(config_entry, options=new_config.to_dict())
+    await _async_write_and_settle(hass, config_entry, new_config.to_dict())
 
 
 async def async_clear_slot_condition(
@@ -88,7 +135,7 @@ async def async_clear_slot_condition(
         raise ServiceValidationError(f"Slot {slot} not found in config entry")
 
     new_config = config.with_slot_field_removed(slot, CONF_CONDITION)
-    hass.config_entries.async_update_entry(config_entry, options=new_config.to_dict())
+    await _async_write_and_settle(hass, config_entry, new_config.to_dict())
 
 
 async def async_add_user(
@@ -153,9 +200,10 @@ async def async_add_user(
     assignment = config.assignment.reconcile(
         [*config.users, name], start=1, unavailable=unavailable
     )
-    hass.config_entries.async_update_entry(
+    await _async_write_and_settle(
+        hass,
         config_entry,
-        options=EntryConfig(
+        EntryConfig(
             locks=config.locks,
             users={**config.users, name: user},
             assignment=assignment,
@@ -201,9 +249,10 @@ async def async_delete_user(
     }
     # No unavailable set and so no lock read: a departure issues no numbers,
     # and everyone remaining keeps theirs by tenure.
-    hass.config_entries.async_update_entry(
+    await _async_write_and_settle(
+        hass,
         config_entry,
-        options=EntryConfig(
+        EntryConfig(
             locks=config.locks,
             users=remaining,
             assignment=config.assignment.reconcile(remaining, start=1),
