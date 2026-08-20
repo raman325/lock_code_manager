@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "9320d5439e15",
+  "strategy": "manual-commit",
+  "branch": "feat/manage-users-from-the-dashboard",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/entity.py",
+    "tests/test_diagnostics.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/93/20d5439e15/0/metadata.json",
+      "transcript": "/93/20d5439e15/0/full.jsonl",
+      "compact_transcript": "/93/20d5439e15/0/transcript.jsonl",
+      "content_hash": "/93/20d5439e15/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 24726,
+    "cache_read_tokens": 11855718,
+    "output_tokens": 14823,
+    "api_call_count": 26
+  }
+}
