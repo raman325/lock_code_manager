@@ -245,136 +245,50 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
     });
 
-    describe('header redesign (icon bubble + title + state chip)', () => {
+    describe('identity row (icon + user name + state chip)', () => {
         let card: SlotCardElement & Record<string, unknown>;
 
         beforeEach(async () => {
-            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card = document.createElement('lcm-user') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', name: 'Raman', type: 'custom:lcm-user' });
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
         });
 
-        /** Join a TemplateResult's static strings to inspect element tags */
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        function templateStrings(result: any): string {
-            return (result?.strings ?? []).join('');
-        }
-
-        /** Recursively join the static strings + primitive value text of a
-         *  TemplateResult and any nested templates */
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        function deepTemplateStrings(result: any): string {
-            if (result === null || result === undefined) return '';
-            if (typeof result === 'string') return result;
-            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
-            if (Array.isArray(result)) {
-                return result.map(deepTemplateStrings).join('');
-            }
-            if (typeof result !== 'object') return '';
-            const own = (result.strings ?? []).join('');
-            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
-            return own + nested;
-        }
-
-        /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('renders header with icon bubble, slot kicker as title, and active state chip', () => {
-            (card as any)._data = makeSlotCardData({
-                active: true,
-                config_entry_title: 'House Locks',
-                enabled: true,
-                name: 'Alice',
-                slot_num: 1
-            });
-
-            // Kicker text comes from _renderSlotKicker; prefer the card config
-            // title when set, otherwise fall back to the data payload title.
-            expect((card as any)._renderSlotKicker()).toBe('Slot 1 · House Locks');
-
-            // State chip should be rendered as the third value in header-top
-            // (after icon bubble and title).
-            const chip = (card as any)._renderStateChip();
-            const chipStrings = templateStrings(chip);
-            expect(chipStrings).toContain('state-chip');
-            // The class modifier and text are rendered as dynamic values.
-            expect(chip.values).toContain('active');
-            expect(chip.values).toContain('Active');
-
-            // Header structure: icon bubble + title (kicker) + state chip.
-            // The name lives in the hero band, NOT in the header.
-            const header = (card as any)._renderHeader();
-            const headerStrings = templateStrings(header);
-            expect(headerStrings).toContain('header-icon');
-            expect(headerStrings).toContain('header-title');
-            // Name no longer rendered in the header.
-            expect(headerStrings).not.toContain('class="name"');
-            const headerDeep = deepTemplateStrings(header);
-            // Icon (key) and chip should both be present.
-            expect(headerDeep).toContain('ha-svg-icon');
-            // State chip text flows through as a nested template value.
-            expect(headerDeep).toContain('Active');
+        it('titles the card with the user, not a slot number', () => {
+            card._data = makeSlotCardData({ name: 'Raman and Sherene' });
+            const json = JSON.stringify(card.render());
+            expect(json).toContain('Raman and Sherene');
+            expect(json).not.toContain('Slot ');
         });
 
-        it('renders state chip with descriptive text for inactive (blocked)', () => {
-            (card as any)._data = makeSlotCardData({
-                active: false,
-                enabled: true
-            });
-
-            const chip = (card as any)._renderStateChip();
-            const chipStrings = templateStrings(chip);
-            expect(chipStrings).toContain('state-chip');
-            expect(chip.values).toContain('inactive');
-            expect(chip.values).toContain('Blocked by condition');
+        it('shows a placeholder when the user has no name', () => {
+            card._data = makeSlotCardData({ name: '' });
+            expect(JSON.stringify(card.render())).toContain('Unnamed');
         });
 
-        it('renders state chip with descriptive text for disabled by user', () => {
-            (card as any)._data = makeSlotCardData({ enabled: false });
-
-            const chip = (card as any)._renderStateChip();
-            const chipStrings = templateStrings(chip);
-            expect(chipStrings).toContain('state-chip');
-            expect(chip.values).toContain('disabled');
-            expect(chip.values).toContain('Disabled by user');
+        it('keeps the name editable in place', () => {
+            // Renaming here renames the user everywhere; the card survives it
+            // because it addresses itself by an entity, not by this.
+            card._data = makeSlotCardData({ name: 'Raman' });
+            card._editingField = 'name';
+            expect(JSON.stringify(card.render())).toContain('name-edit-input');
         });
 
-        it('omits the title separator when no config_entry_title is available', () => {
-            (card as any)._data = makeSlotCardData({ config_entry_title: '' });
-            // _config has no title and data title is empty — kicker should be just "Slot N".
-            expect((card as any)._renderSlotKicker()).toBe('Slot 1');
+        it('carries the state icon and chip on the same row', () => {
+            // They used to sit in a bar of their own, saying the same thing
+            // twice with a slot number between them.
+            card._data = makeSlotCardData({ name: 'Raman' });
+            const json = JSON.stringify(card.render());
+            expect(json).toContain('hero-identity');
+            expect(json).toContain('hero-icon');
         });
 
-        it('falls back to data payload title when card config has no title', () => {
-            (card as any)._config = { config_entry_id: 'abc', slot: 2, type: 'custom:lcm-slot' };
-            (card as any)._data = makeSlotCardData({
-                config_entry_title: 'Payload Title',
-                slot_num: 2
-            });
-            expect((card as any)._renderSlotKicker()).toBe('Slot 2 · Payload Title');
+        it('has no header bar left', () => {
+            card._data = makeSlotCardData({ name: 'Raman' });
+            expect(JSON.stringify(card.render())).not.toContain('class="header"');
         });
-
-        it('prefers card config title over data payload title', () => {
-            (card as any)._config = {
-                config_entry_id: 'abc',
-                config_entry_title: 'Config Title',
-                slot: 1,
-                type: 'custom:lcm-slot'
-            };
-            (card as any)._data = makeSlotCardData({ config_entry_title: 'Payload Title' });
-            expect((card as any)._renderSlotKicker()).toBe('Slot 1 · Config Title');
-        });
-
-        it('does not render the name in the header (name lives in the hero band)', () => {
-            (card as any)._data = makeSlotCardData({ name: 'Alice' });
-            const header = (card as any)._renderHeader();
-            const headerDeep = deepTemplateStrings(header);
-            // Name value should NOT appear inside the header.
-            expect(headerDeep).not.toContain('Alice');
-            // No <No Name> placeholder either — that lives in the hero now.
-            expect(headerDeep).not.toContain('No Name');
-        });
-        /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
     describe('hero row (PIN + Enable)', () => {
@@ -4104,11 +4018,13 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
 
         describe('B1: semantic headings', () => {
-            it('header title is rendered as <h2>, not <span>', () => {
-                const tmpl = (card as any)._renderHeader();
+            it("the card's title is a heading, not a span", () => {
+                // It is the user's name now rather than a slot number, but it
+                // is still what a screen reader should announce the card by.
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked');
                 const joined = deepStrings(tmpl);
-                expect(joined).toContain('<h2 class="header-title"');
-                expect(joined).not.toContain('<span class="header-title"');
+                expect(joined).toContain('<h2 class="hero-title"');
+                expect(joined).not.toContain('<span class="hero-title"');
             });
 
             it('collapsible section title is rendered as <h3>', () => {
@@ -4131,10 +4047,10 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         describe('B2: aria-hidden on decorative icons and dots', () => {
-            it('header icon bubble has aria-hidden', () => {
-                const tmpl = (card as any)._renderHeader();
+            it('identity icon bubble has aria-hidden', () => {
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked');
                 const joined = deepStrings(tmpl);
-                expect(joined).toMatch(/<div class="header-icon" aria-hidden="true"/);
+                expect(joined).toMatch(/<div class="hero-icon" aria-hidden="true"/);
             });
 
             it('state-chip dot has aria-hidden', () => {
@@ -4380,25 +4296,25 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
         });
 
-        describe('VC6: header icon bubble surfaces state', () => {
+        describe('VC6: identity icon bubble surfaces state', () => {
             // The actual mdi path strings come from @mdi/js — we look up the
             // exact path values rather than hard-coding the SVG to keep these
             // tests robust to mdi package version bumps.
             it('renders mdiKey when stateClass is active (default)', async () => {
                 const { mdiKey } = await import('@mdi/js');
-                const tmpl = (card as any)._renderHeader('active');
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked', 'active');
                 expect(tmpl.values).toContain(mdiKey);
             });
 
             it('renders mdiClockOutline when stateClass is inactive', async () => {
                 const { mdiClockOutline } = await import('@mdi/js');
-                const tmpl = (card as any)._renderHeader('inactive');
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked', 'inactive');
                 expect(tmpl.values).toContain(mdiClockOutline);
             });
 
             it('renders mdiLockOff when stateClass is disabled', async () => {
                 const { mdiLockOff } = await import('@mdi/js');
-                const tmpl = (card as any)._renderHeader('disabled');
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked', 'disabled');
                 expect(tmpl.values).toContain(mdiLockOff);
             });
         });

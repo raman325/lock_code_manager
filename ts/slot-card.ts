@@ -367,9 +367,8 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                           </div>`
                         : nothing
                 }
-                ${this._renderHeader(stateClass)}
                 <div class="content">
-                    ${this._renderHero(pin, pinLength, enabled, mode)}
+                    ${this._renderHero(pin, pinLength, enabled, mode, stateClass)}
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
@@ -479,55 +478,6 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         this.dispatchEvent(event);
     }
 
-    private _renderHeader(
-        stateClass: 'active' | 'inactive' | 'disabled' = 'active'
-    ): TemplateResult {
-        const slotKicker = this._renderSlotKicker();
-        const stateChip = this._renderStateChip();
-
-        // Surface state on the icon bubble: key when active, clock when
-        // blocked by condition (matches the lock card's pending-clock
-        // motif), lock-off when the user has explicitly disabled the slot.
-        let iconPath: string;
-        switch (stateClass) {
-            case 'inactive':
-                iconPath = mdiClockOutline;
-                break;
-            case 'disabled':
-                iconPath = mdiLockOff;
-                break;
-            default:
-                iconPath = mdiKey;
-        }
-
-        return html`
-            <div class="header">
-                <div class="header-top">
-                    <div class="header-icon" aria-hidden="true">
-                        <ha-svg-icon .path=${iconPath}></ha-svg-icon>
-                    </div>
-                    <h2 class="header-title">${slotKicker}</h2>
-                    ${stateChip}
-                </div>
-            </div>
-        `;
-    }
-
-    private _renderSlotKicker(): string {
-        const slot = this._config?.slot;
-        const title = this._configEntryTitle();
-        return title ? `Slot ${slot} · ${title}` : `Slot ${slot}`;
-    }
-
-    private _configEntryTitle(): string | undefined {
-        // Prefer the explicit config_entry_title from the card config when set;
-        // otherwise fall back to the title surfaced in the websocket payload.
-        if (this._config?.config_entry_title) {
-            return this._config.config_entry_title;
-        }
-        return this._data?.config_entry_title || undefined;
-    }
-
     private _renderStateChip(): TemplateResult {
         const enabled = this._data?.enabled;
         const active = this._data?.active;
@@ -553,11 +503,48 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         `;
     }
 
+    /**
+     * The user's name, which is the card's title now that no slot number is.
+     *
+     * Editable in place, as it has always been -- renaming here renames the
+     * user everywhere, and the card goes on working because it addresses
+     * itself by an entity rather than by this.
+     */
+    private _renderHeroName(): TemplateResult {
+        const name = this._data?.name;
+        if (this._editingField === 'name') {
+            return html`<input
+                class="edit-input name-edit-input"
+                type="text"
+                aria-label="Edit name"
+                .value=${name ?? ''}
+                @blur=${this._handleEditBlur}
+                @keydown=${this._handleEditKeydown}
+            />`;
+        }
+        return html`<span
+            class="hero-name-value editable"
+            role="button"
+            tabindex="0"
+            aria-label="Edit name"
+            @click=${() => this._startEditing('name')}
+            @keydown=${(e: KeyboardEvent) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    this._startEditing('name');
+                }
+            }}
+        >
+            ${name ? html`${name}` : html`<em class="placeholder">Unnamed</em>`}
+        </span>`;
+    }
+
     private _renderHero(
         pin: string | null,
         pinLength: number | undefined,
         enabled: boolean | null,
-        mode: CodeDisplayMode
+        mode: CodeDisplayMode,
+        stateClass: 'active' | 'inactive' | 'disabled' = 'active'
     ): TemplateResult {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
         const hasPin = pin !== null || pinLength !== undefined;
@@ -572,41 +559,28 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         const name = this._data?.name;
         const editingName = this._editingField === 'name';
 
+        // The state icon leads the row the way a Home Assistant tile does:
+        // it is the card's avatar, not a second copy of the state chip.
+        let iconPath: string;
+        switch (stateClass) {
+            case 'inactive':
+                iconPath = mdiClockOutline;
+                break;
+            case 'disabled':
+                iconPath = mdiLockOff;
+                break;
+            default:
+                iconPath = mdiKey;
+        }
+
         return html`
             <div class="hero">
-                <div class="hero-row">
-                    <div class="hero-field">
-                        ${
-                            editingName
-                                ? html`<input
-                                      class="edit-input name-edit-input"
-                                      type="text"
-                                      aria-label="Edit name"
-                                      .value=${name ?? ''}
-                                      @blur=${this._handleEditBlur}
-                                      @keydown=${this._handleEditKeydown}
-                                  />`
-                                : html`<span
-                                      class="hero-name-value editable"
-                                      role="button"
-                                      tabindex="0"
-                                      aria-label="Edit name"
-                                      @click=${() => this._startEditing('name')}
-                                      @keydown=${(e: KeyboardEvent) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                              e.preventDefault();
-                                              this._startEditing('name');
-                                          }
-                                      }}
-                                  >
-                                      ${
-                                          name
-                                              ? html`${name}`
-                                              : html`<em class="placeholder">Unnamed</em>`
-                                      }
-                                  </span>`
-                        }
+                <div class="hero-identity">
+                    <div class="hero-icon" aria-hidden="true">
+                        <ha-svg-icon .path=${iconPath}></ha-svg-icon>
                     </div>
+                    <h2 class="hero-title">${this._renderHeroName()}</h2>
+                    ${this._renderStateChip()}
                 </div>
                 <div class="hero-row">
                     <div class="hero-field hero-pin">
