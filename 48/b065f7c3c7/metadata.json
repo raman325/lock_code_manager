@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "48b065f7c3c7",
+  "strategy": "manual-commit",
+  "branch": "feat/manage-users-from-the-dashboard",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/domain/models.py",
+    "custom_components/lock_code_manager/domain/services.py",
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "tests/test_services.py",
+    "ts/slot-card.integration.test.ts",
+    "ts/slot-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/48/b065f7c3c7/0/metadata.json",
+      "transcript": "/48/b065f7c3c7/0/full.jsonl",
+      "compact_transcript": "/48/b065f7c3c7/0/transcript.jsonl",
+      "content_hash": "/48/b065f7c3c7/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 50532,
+    "cache_read_tokens": 16039697,
+    "output_tokens": 32346,
+    "api_call_count": 51
+  }
+}
