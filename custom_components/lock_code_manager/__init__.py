@@ -308,6 +308,7 @@ async def async_migrate_entry(
                 len(renamed),
                 ", ".join(sorted(renamed, key=int)),
             )
+        _async_remove_hub_device(hass, config_entry)
         # Last, and part of the same version bump: from here on a slot
         # leaving the configuration takes its credential with it, so the
         # codes earlier versions left behind are offered up once, measured
@@ -732,7 +733,6 @@ async def async_setup_entry(
 ) -> bool:
     """Set up a config entry."""
     ent_reg = er.async_get(hass)
-    entry_id = config_entry.entry_id
     try:
         entity_id = next(
             entity_id
@@ -754,13 +754,6 @@ async def async_setup_entry(
         config=EntryConfig.from_entry(config_entry),
     )
 
-    dev_reg = dr.async_get(hass)
-    dev_reg.async_get_or_create(
-        config_entry_id=entry_id,
-        identifiers={(DOMAIN, entry_id)},
-        manufacturer="Lock Code Manager",
-        name=config_entry.title,
-    )
     _async_reclaim_entities_from_foreign_devices(hass, config_entry)
     _async_prune_orphaned_slot_devices(hass, config_entry)
 
@@ -1079,6 +1072,34 @@ def _async_reclaim_entities_from_foreign_devices(
             device.name,
         )
         dev_reg.async_remove_device(device.id)
+
+
+@callback
+def _async_remove_hub_device(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """
+    Take away the config entry's own device.
+
+    It never held an entity. It existed so the per-user devices could name
+    it in ``via_device`` and be drawn beneath it, which bought a line on a
+    device page and cost a device on every page that lists them. The users
+    are the devices worth having.
+
+    The ``via_device`` goes with it, and had to: Home Assistant reports a
+    ``via_device`` naming a device that is not there as a use it intends to
+    break, so leaving it behind would log on every registration.
+    """
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get_device(identifiers={(DOMAIN, config_entry.entry_id)})
+    if device is None:
+        return
+    _LOGGER.debug(
+        "%s (%s): Removing the config entry's own device; it holds no entities",
+        config_entry.entry_id,
+        config_entry.title,
+    )
+    dev_reg.async_remove_device(device.id)
 
 
 @callback

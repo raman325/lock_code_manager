@@ -39,6 +39,7 @@ from homeassistant.helpers import (
 from homeassistant.util import slugify
 
 from custom_components.lock_code_manager import (
+    _async_reclaim_entities_from_foreign_devices,
     _setup_entry_after_start,
     async_remove_config_entry_device,
     async_remove_entry,
@@ -1599,7 +1600,8 @@ async def test_removing_slot_removes_its_device(
     assert dev_reg.async_get_device(slot_2_identifiers) is None
     # The surviving slot and the entry's own device are untouched.
     assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|1")}) is not None
-    assert dev_reg.async_get_device({(DOMAIN, entry_id)}) is not None
+    # And there is no entry-level device left behind either.
+    assert dev_reg.async_get_device({(DOMAIN, entry_id)}) is None
 
 
 @pytest.mark.parametrize("stale_slot", [99, 0, -1])
@@ -1660,11 +1662,16 @@ async def test_remove_config_entry_device_allows_only_unconfigured_slots(
         is False
     )
 
-    entry_device = dev_reg.async_get_device({(DOMAIN, entry_id)})
-    assert entry_device is not None
+    # A device of ours whose identifier names no slot is not something this
+    # integration knows how to let go of.
+    unrecognized = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={(DOMAIN, entry_id)},
+        name="Not a slot",
+    )
     assert (
         await async_remove_config_entry_device(
-            hass, lock_code_manager_config_entry, entry_device
+            hass, lock_code_manager_config_entry, unrecognized
         )
         is False
     )
@@ -2175,9 +2182,10 @@ async def test_reclaim_leaves_our_own_empty_devices_alone(
 ) -> None:
     """Devices of ours that hold nothing are not copies to be cleaned up.
 
-    The entry's own device carries no entities by design -- it exists so the
-    slot devices have a parent -- which makes it a perfect match for the
-    removal pass. Only the check that it is one of ours keeps it.
+    The pass removes devices left behind by the 2026.8 device split, which
+    it recognises by their holding no entities. A device of ours can be
+    empty too -- transiently, while its entities are being moved onto it --
+    and only the check that it is one of ours tells the two apart.
     """
     dev_reg = dr.async_get(hass)
 
@@ -2190,17 +2198,21 @@ async def test_reclaim_leaves_our_own_empty_devices_alone(
     await hass.config_entries.async_setup(entry_id)
     await hass.async_block_till_done()
 
-    hub = dev_reg.async_get_device({(DOMAIN, entry_id)})
-    assert hub
+    ours = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={(DOMAIN, f"{entry_id}|404")},
+        name="A slot device with nothing on it yet",
+    )
     assert not er.async_entries_for_device(
-        er.async_get(hass), hub.id, include_disabled_entities=True
+        er.async_get(hass), ours.id, include_disabled_entities=True
     )
 
-    # A second setup runs the sweep against a registry that already has it.
-    await hass.config_entries.async_reload(entry_id)
-    await hass.async_block_till_done()
+    # Run the pass against a registry that has it. Not via a reload: Home
+    # Assistant does its own housekeeping there and takes empty devices
+    # away itself, which would prove nothing about this pass.
+    _async_reclaim_entities_from_foreign_devices(hass, config_entry)
 
-    assert dev_reg.async_get_device({(DOMAIN, entry_id)}) is not None
+    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|404")}) is not None
 
     await hass.config_entries.async_unload(entry_id)
 
@@ -2586,6 +2598,52 @@ async def test_migration_names_an_entity_the_old_version_left_nameless(
         "event", DOMAIN, f"{entry.entry_id}|1|{EVENT_CREDENTIAL_USED}"
     )
     assert after == "event.all_locks_raman_credential_used"
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_migration_takes_away_the_config_entrys_own_device(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The hub goes, and the users stop pointing at it.
+
+    It never held an entity: it existed only so the per-user devices could
+    name it in ``via_device``. Home Assistant reports a ``via_device``
+    naming a device that is not there as a use it intends to break, so the
+    two had to go together.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            "locks": [LOCK_1_ENTITY_ID],
+            "slots": {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    dev_reg = dr.async_get(hass)
+
+    # The registry as the released version leaves it.
+    hub = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        manufacturer="Lock Code Manager",
+        name="All Locks",
+    )
+    assert dev_reg.async_get_device({(DOMAIN, entry.entry_id)}) is not None
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert dev_reg.async_get_device({(DOMAIN, entry.entry_id)}) is None
+
+    user_device = dev_reg.async_get_device({(DOMAIN, f"{entry.entry_id}|1")})
+    assert user_device is not None
+    assert user_device.via_device_id is None
+    assert user_device.id != hub.id
 
     await hass.config_entries.async_unload(entry.entry_id)
 
