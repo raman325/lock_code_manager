@@ -87,11 +87,25 @@ describe('LockCodeManagerSlotCard integration', () => {
             );
         });
 
-        it('throws when it is given nobody to show', () => {
+        it('previews rather than throws when it is given nobody to show', () => {
+            // What the picker hands over the moment the card is added. An
+            // error belongs in the editor, not where a preview goes.
             el = document.createElement('lcm-user') as SlotCardElement;
-            expect(() => el.setConfig({ config_entry_id: 'abc', type: 'custom:lcm-user' })).toThrow(
-                'name or slot is required'
-            );
+            expect(() =>
+                el.setConfig({ config_entry_id: 'abc', type: 'custom:lcm-user' })
+            ).not.toThrow();
+            expect(el._isStub).toBe(true);
+        });
+
+        it('rejects a name that is not a string', () => {
+            el = document.createElement('lcm-user') as SlotCardElement;
+            expect(() =>
+                el.setConfig({
+                    config_entry_id: 'abc',
+                    name: 3 as unknown as string,
+                    type: 'custom:lcm-user'
+                })
+            ).toThrow('name must be a string');
         });
 
         it('throws when the slot number is out of range', () => {
@@ -831,7 +845,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el.setConfig({
                 condition_helpers: ['input_boolean.test_helper', 'input_datetime.date_helper'],
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             expect((el._config as Record<string, unknown>)?.condition_helpers).toEqual([
@@ -844,7 +858,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             expect((el._config as Record<string, unknown>)?.condition_helpers).toBeUndefined();
@@ -855,7 +869,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el.setConfig({
                 condition_helpers: [],
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             expect((el._config as Record<string, unknown>)?.condition_helpers).toEqual([]);
@@ -1402,7 +1416,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                     'input_boolean.nonexistent'
                 ],
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             card.hass = createMockHassWithConnection({
@@ -1440,7 +1454,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.helper_1'],
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             card2.hass = hass;
@@ -1471,7 +1485,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.nonexistent'],
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             card2.hass = hass;
@@ -1526,7 +1540,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.helper_1', 'input_boolean.helper_2'],
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             card2.hass = hass;
@@ -1561,7 +1575,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.helper_1'],
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             card2.hass = hass;
@@ -1603,7 +1617,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.helper_1', 'input_boolean.nonexistent'],
                 config_entry_id: 'abc',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             card2.hass = hass;
@@ -2047,7 +2061,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'real-entry',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             expect((el as Record<string, unknown>)._isStub).toBe(false);
@@ -2057,7 +2071,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'stub',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             el.hass = createMockHassWithConnection();
@@ -2066,9 +2080,9 @@ describe('LockCodeManagerSlotCard integration', () => {
 
             /* eslint-disable @typescript-eslint/no-explicit-any */
             const result = (el as any).render();
-            // The stub render returns a template containing "Lock Code Manager Slot Card"
+            // The stub render returns a template naming the card
             expect(result).toBeDefined();
-            expect(result.strings?.join('')).toContain('Lock Code Manager Slot Card');
+            expect(result.strings?.join('')).toContain('Lock Code Manager User Card');
             /* eslint-enable @typescript-eslint/no-explicit-any */
         });
     });
@@ -2083,7 +2097,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'real-entry',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             el.hass = createMockHassWithConnection();
@@ -2111,7 +2125,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'real-entry',
-                name: '',
+                name: 'Raman',
                 type: 'custom:lcm-user'
             });
             el.hass = createMockHassWithConnection();

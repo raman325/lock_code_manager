@@ -1051,6 +1051,7 @@ def _serialize_slot_card_data(
     }
 )
 @websocket_api.async_response
+@ws_handle_service_errors
 @async_get_entry
 async def subscribe_code_slot(
     hass: HomeAssistant,
@@ -1257,9 +1258,14 @@ async def ws_set_slot_condition(
     excluded platform (for example, the scheduler integration).
     """
     try:
+        slot = _slot_from(config_entry, msg)
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
+        return
+    try:
         await async_set_slot_condition(
             hass,
-            _slot_from(config_entry, msg),
+            slot,
             msg[CONF_ENTITY_ID],
             config_entry_id=config_entry.entry_id,
         )

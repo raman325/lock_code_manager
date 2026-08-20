@@ -140,6 +140,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
 
     static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
         const stub = { config_entry_id: 'stub', name: '', type: 'custom:lcm-user' };
+        // Marked so the preview never subscribes: it has no user to ask about.
         try {
             return await Promise.race([
                 (async () => {
@@ -173,8 +174,8 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         if (!config.config_entry_id && !config.config_entry_title) {
             throw new Error('config_entry_id or config_entry_title is required');
         }
-        if (config.name === undefined && config.slot === undefined) {
-            throw new Error('name or slot is required');
+        if (config.name !== undefined && typeof config.name !== 'string') {
+            throw new Error('name must be a string');
         }
         if (
             config.slot !== undefined &&
@@ -205,7 +206,10 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
             collapsed.includes('condition') || collapsed.includes('conditions')
         );
         this._lockStatusExpanded = !collapsed.includes('lock_status');
-        this._isStub = config.config_entry_id === 'stub';
+        // A card naming nobody yet is a stub too: that is exactly what the
+        // picker hands over when the card is added, and subscribing for an
+        // empty name only produces an error where a preview belongs.
+        this._isStub = config.config_entry_id === 'stub' || !this._hasAddressee();
         if (!this._isStub) {
             void this._subscribe();
         }
@@ -288,7 +292,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         // Show static preview for card picker (stub config)
         if (this._isStub) {
             return html`<ha-card>
-                <div class="message">Lock Code Manager Slot Card</div>
+                <div class="message">Lock Code Manager User Card</div>
             </ha-card>`;
         }
 
@@ -1188,10 +1192,12 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
      * A name where the config gives one, the slot number otherwise. Kept in
      * one place so the three commands cannot disagree about who they mean.
      */
+    private _hasAddressee(): boolean {
+        return Boolean(this._config?.name) || this._config?.slot !== undefined;
+    }
+
     private _addressee(): { name: string } | { slot: number } {
-        return this._config?.name !== undefined
-            ? { name: this._config.name }
-            : { slot: this._config!.slot! };
+        return this._config?.name ? { name: this._config.name } : { slot: this._config!.slot! };
     }
 
     private async _setSlotCondition(entity_id: string): Promise<void> {

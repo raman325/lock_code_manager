@@ -499,7 +499,7 @@ describe('LcmSlotCardEditor integration', () => {
     let container: HTMLDivElement;
 
     beforeAll(async () => {
-        if (!customElements.get('lcm-slot-editor')) {
+        if (!customElements.get('lcm-user-editor')) {
             await import('./slot-card-editor');
         }
     });
@@ -521,7 +521,7 @@ describe('LcmSlotCardEditor integration', () => {
     }
 
     function createEditor(config?: Partial<LockCodeManagerSlotCardConfig>): EditorElement {
-        const editor = document.createElement('lcm-slot-editor') as EditorElement;
+        const editor = document.createElement('lcm-user-editor') as EditorElement;
         editor.setConfig({
             config_entry_id: 'abc',
             slot: 1,

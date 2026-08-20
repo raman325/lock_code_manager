@@ -286,10 +286,15 @@ class LcmUserCardEditor extends LitElement {
         if (value === this._config.name) {
             return;
         }
-        // The slot number goes with it. A card carrying both would keep
-        // showing whoever held that number, whatever the name said.
-        const { slot: _slot, ...rest } = this._config;
-        this._config = { ...rest, name: value };
+        // A named card drops the slot number: carrying both would keep it
+        // showing whoever holds that number, whatever the name said. Clearing
+        // the name keeps it, though, or the card is left addressing nobody.
+        if (value) {
+            const { slot: _slot, ...rest } = this._config;
+            this._config = { ...rest, name: value };
+        } else {
+            this._config = { ...this._config, name: value };
+        }
         this._dispatchConfig();
     }
 
@@ -408,5 +413,3 @@ class LcmUserCardEditor extends LitElement {
 }
 
 customElements.define('lcm-user-editor', LcmUserCardEditor);
-// The editor the deprecated custom:lcm-slot still asks for.
-customElements.define('lcm-slot-editor', class extends LcmUserCardEditor {});

@@ -3412,3 +3412,32 @@ class TestAddressingASlotByUser:
 
         with pytest.raises(ServiceValidationError, match="not been given a slot"):
             _slot_from(_Entry(), {CONF_NAME: "pending"})
+
+    async def test_setting_a_condition_for_an_unknown_user_is_refused(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        Reported as not-found, the same as its sibling command.
+
+        The two used to disagree: this one sniffed the message text for
+        "not found", which none of the resolver's wordings contain, so the
+        identical input came back as an unknown error here and a not-found
+        there.
+        """
+        hass.states.async_set("binary_sensor.somewhere", STATE_ON)
+        client = await hass_ws_client(hass)
+        await client.send_json_auto_id(
+            {
+                "type": "lock_code_manager/set_slot_condition",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "nobody",
+                CONF_ENTITY_ID: "binary_sensor.somewhere",
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert result["error"]["code"] == "not_found"
