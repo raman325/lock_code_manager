@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "5f7562d98dfb",
+  "strategy": "manual-commit",
+  "branch": "fix/v3-live-test-findings",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_frontend_contract.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5f/7562d98dfb/0/metadata.json",
+      "transcript": "/5f/7562d98dfb/0/full.jsonl",
+      "compact_transcript": "/5f/7562d98dfb/0/transcript.jsonl",
+      "content_hash": "/5f/7562d98dfb/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 21565,
+    "cache_read_tokens": 17690026,
+    "output_tokens": 18565,
+    "api_call_count": 26
+  }
+}
