@@ -33,11 +33,13 @@ from pathlib import Path
 import re
 from typing import Any
 
-from homeassistant.components import automation, script
+from homeassistant.components import automation, persistent_notification, script
 from homeassistant.config import AUTOMATION_CONFIG_PATH, SCRIPT_CONFIG_PATH
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.yaml import load_yaml
+
+from ..const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,3 +170,51 @@ def format_moved(moved: Mapping[str, str]) -> str:
 def format_labels(labels: Iterable[str]) -> str:
     """Return the referring configs as a markdown list."""
     return "\n".join(f"- {label}" for label in labels) or "- (none found)"
+
+
+async def async_notify_moved(hass: HomeAssistant, moved: Mapping[str, str]) -> None:
+    """
+    Tell the user which entity IDs moved, and what still points at the old ones.
+
+    A notification rather than a repair, because there is nothing here to
+    repair: rewriting somebody's ``automations.yaml`` was tried and abandoned,
+    so this only ever reported. A repair offers a fix and waits to be
+    resolved; this is a thing to read once and dismiss.
+
+    Deferred until Home Assistant has started, which is the whole reason it
+    cannot be raised from the migration: the lookup below needs the
+    automation and script components to have loaded their configuration, and
+    during a config entry's setup they may not have.
+    """
+    referrers = await async_find_referrers(hass, moved)
+    lines = [
+        "Lock Code Manager identifies each user by name rather than by slot "
+        "number, so these entity IDs were renamed:",
+        "",
+        format_moved(dict(moved)),
+        "",
+        "History and statistics moved with them, and dashboards built by Lock "
+        "Code Manager keep working.",
+    ]
+    if referrers.total:
+        lines += [
+            "",
+            "**These still refer to the old IDs and need updating**",
+            "",
+            format_labels(referrers.labels),
+            "",
+            "For an automation built from a Lock Code Manager blueprint, the "
+            "quickest fix is to open it and pick the entity again, or recreate "
+            "it. Lock Code Manager does not edit your automations for you.",
+        ]
+    else:
+        # Worth saying rather than leaving the reader to wonder whether it
+        # was checked: nothing of theirs has to change.
+        lines += ["", "Nothing else in your configuration refers to the old IDs."]
+
+    persistent_notification.async_create(
+        hass,
+        "\n".join(lines),
+        title="Lock Code Manager entity IDs have been renamed",
+        notification_id=f"{DOMAIN}_entity_ids_renamed",
+    )

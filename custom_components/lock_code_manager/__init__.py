@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection, Iterable, Sequence
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -75,7 +74,6 @@ from .const import (
     CONF_CALENDAR,
     CONF_SLOTS,
     DOMAIN,
-    ENTITY_IDS_RENAMED_ISSUE,
     EVENT_CREDENTIAL_USED,
     LEGACY_EVENT_PIN_USED,
     PER_LOCK_ENTITY_SUFFIX,
@@ -115,7 +113,7 @@ from .domain.pin_generator import (
     generate_pin,
 )
 from .domain.queries import get_entry_config
-from .domain.references import format_moved
+from .domain.references import async_notify_moved
 from .domain.services import (
     async_add_user,
     async_clear_slot_condition,
@@ -281,24 +279,14 @@ async def async_migrate_entry(
             # not go through it. Automations built from the Slot Usage Limiter
             # and Slot Usage Notifier blueprints hold these ids directly, so
             # the user is given the mapping rather than left to find it.
-            # Accumulated across entries so a system with several of them
-            # gets ONE repair. Every entry migrates in the same restart, and
-            # each re-raises the issue with the union, so whichever goes last
-            # leaves it complete.
-            moved = hass.data.setdefault(DOMAIN, {}).setdefault(RENAMES_KEY, {})
-            moved.update(dict(re_slugged))
-            async_create_issue(
-                hass,
-                DOMAIN,
-                ENTITY_IDS_RENAMED_ISSUE,
-                is_fixable=True,
-                is_persistent=True,
-                severity=IssueSeverity.WARNING,
-                translation_key="entity_ids_renamed",
-                translation_placeholders={"renames": format_moved(moved)},
-                # The flow looks up who still points at these when the user
-                # opens it; the migration only knows what moved.
-                data={"moved": json.dumps(moved)},
+            # Only recorded here. Telling the user waits for Home Assistant
+            # to have started, because working out what still points at the
+            # old IDs needs the automation and script components to have
+            # loaded, and during a config entry's setup they may not have.
+            # Accumulated across entries so several of them produce one
+            # message rather than one apiece.
+            hass.data.setdefault(DOMAIN, {}).setdefault(RENAMES_KEY, {}).update(
+                dict(re_slugged)
             )
         if dropped:
             _async_purge_dropped_slots(hass, config_entry, dropped)
@@ -695,6 +683,14 @@ def _setup_entry_after_start(
     a reload racing with EVENT_HOMEASSISTANT_STARTED cannot stack multiple
     listeners on the same entry.
     """
+    # Popped, so it runs once however many entries were migrated. At boot
+    # this fires after every entry has, so the renames are complete; on a
+    # single entry's reload only that entry's are there to report.
+    if moved := hass.data.get(DOMAIN, {}).pop(RENAMES_KEY, None):
+        config_entry.async_create_task(
+            hass, async_notify_moved(hass, moved), "notify_entity_ids_renamed"
+        )
+
     runtime_data = config_entry.runtime_data
     if not runtime_data.update_listener_registered:
         runtime_data.update_listener_registered = True
