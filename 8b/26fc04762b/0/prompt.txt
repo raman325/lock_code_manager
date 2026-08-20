@@ -2826,3 +2826,7 @@ nevermind, I see it now. lets merge the PR and now there are two new enhancement
 
 1. add a remove slot action with a confirm modal to each user card
 2. add a custom card that allows users to define a new user. Put the card in a new section between the user cards and lock cards. There may be a better way to expose this but it makes the entire thing self manageable from the dashboard
+
+---
+
+for the remove action, you can expose the check. For the add card, I am thinking that it's just a plus sign button that opens a modal with the inputs to set up the card. Submitting adds the card then refreshes the page
