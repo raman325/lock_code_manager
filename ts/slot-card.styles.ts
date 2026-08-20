@@ -29,7 +29,6 @@ const slotCardComponentStyles = css`
     /* Lit's reset is minimal — neutralize default heading margins so the
        newly-promoted h2/h3 elements (card title, collapsible section
        titles) keep the same visual rhythm as the prior <span>/<div>. */
-    .header-title,
     .collapsible-title {
         margin: 0;
     }
@@ -62,23 +61,29 @@ const slotCardComponentStyles = css`
     }
 
     /* Header Section — matches the lock card pattern: icon bubble + title + state chip on the right. */
-    .header {
-        align-items: center;
-        border-bottom: 1px solid var(--lcm-border-color);
-        display: flex;
-        gap: 12px;
-        padding: 16px;
-    }
-
-    .header-top {
+    /* The card's identity line: state icon, the user's name, state chip.
+       This replaced a separate header bar whose icon and chip both said
+       "state" while the title between them named a slot number. */
+    .hero-identity {
         align-items: center;
         display: flex;
-        flex: 1;
         gap: 12px;
+        margin-bottom: 12px;
         min-width: 0;
     }
 
-    .header-icon {
+    .hero-title {
+        flex: 1;
+        font-size: inherit;
+        font-weight: inherit;
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .hero-icon {
         align-items: center;
         background: var(--lcm-active-bg);
         border-radius: 50%;
@@ -89,19 +94,9 @@ const slotCardComponentStyles = css`
         justify-content: center;
         width: 40px;
     }
-    .header-icon ha-svg-icon {
-        --mdc-icon-size: 24px;
-    }
 
-    .header-title {
-        color: var(--primary-text-color);
-        flex: 1;
-        font-size: 18px;
-        font-weight: 500;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+    .hero-icon ha-svg-icon {
+        --mdc-icon-size: 24px;
     }
 
     .state-chip {
