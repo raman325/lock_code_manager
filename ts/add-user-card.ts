@@ -1,4 +1,4 @@
-import { mdiAccountPlus, mdiEye, mdiEyeOff } from '@mdi/js';
+import { mdiAccountPlus, mdiDiceMultiple, mdiEye, mdiEyeOff } from '@mdi/js';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
@@ -6,6 +6,11 @@ import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from '
 import { HomeAssistant } from './ha_type_stubs';
 import { lcmCssVars, lcmDialogActionStyles, lcmRevealButtonStyles } from './shared-styles';
 import { LockCodeManagerAddUserCardConfig } from './types';
+
+/** What `generate_pin` accepts, and what it defaults to. */
+const MIN_PIN_LENGTH = 4;
+const MAX_PIN_LENGTH = 12;
+const DEFAULT_PIN_LENGTH = 4;
 
 /**
  * The button that adds a user to a Lock Code Manager config entry.
@@ -90,6 +95,58 @@ export class LockCodeManagerAddUserCard extends LitElement {
                 text-transform: uppercase;
             }
 
+            .field-generate {
+                align-items: center;
+                display: flex;
+                gap: 8px;
+                margin-top: 8px;
+            }
+
+            .generate-button {
+                align-items: center;
+                background: none;
+                border: 1px solid var(--lcm-border-color-strong);
+                border-radius: 4px;
+                color: var(--primary-color);
+                cursor: pointer;
+                display: flex;
+                font-family: inherit;
+                font-size: 13px;
+                font-weight: 500;
+                gap: 6px;
+                padding: 6px 10px;
+            }
+
+            .generate-button:hover {
+                background: rgba(var(--rgb-primary-color), 0.08);
+            }
+
+            .generate-button[disabled] {
+                color: var(--disabled-text-color);
+                cursor: default;
+            }
+
+            .generate-button ha-svg-icon {
+                --mdc-icon-size: 16px;
+            }
+
+            .length-input {
+                background: var(--card-background-color, #fff);
+                border: 1px solid var(--lcm-border-color-strong);
+                border-radius: 4px;
+                box-sizing: border-box;
+                color: var(--primary-text-color);
+                font-family: inherit;
+                font-size: 13px;
+                padding: 6px 8px;
+                width: 56px;
+            }
+
+            .length-label {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+            }
+
             .field-help {
                 color: var(--secondary-text-color);
                 font-size: 12px;
@@ -161,6 +218,10 @@ export class LockCodeManagerAddUserCard extends LitElement {
 
     @state() private _pinVisible = false;
 
+    @state() private _pinLength = DEFAULT_PIN_LENGTH;
+
+    @state() private _generating = false;
+
     static getStubConfig(): Partial<LockCodeManagerAddUserCardConfig> {
         return { type: 'custom:lcm-add-user' };
     }
@@ -214,6 +275,7 @@ export class LockCodeManagerAddUserCard extends LitElement {
         this._pin = '';
         this._condition = '';
         this._pinVisible = false;
+        this._pinLength = DEFAULT_PIN_LENGTH;
         this._enabled = true;
         this._error = undefined;
         this._showDialog = true;
@@ -267,6 +329,29 @@ export class LockCodeManagerAddUserCard extends LitElement {
                                     this._pinVisible = !this._pinVisible;
                                 }}
                             ></ha-icon-button>
+                        </div>
+                        <div class="field-generate">
+                            <button
+                                type="button"
+                                class="generate-button"
+                                .disabled=${this._generating}
+                                @click=${this._generatePin}
+                            >
+                                <ha-svg-icon .path=${mdiDiceMultiple}></ha-svg-icon>
+                                Generate
+                            </button>
+                            <input
+                                id="add-user-pin-length"
+                                class="length-input"
+                                type="number"
+                                min=${MIN_PIN_LENGTH}
+                                max=${MAX_PIN_LENGTH}
+                                .value=${String(this._pinLength)}
+                                @input=${(e: Event) => {
+                                    this._pinLength = Number((e.target as HTMLInputElement).value);
+                                }}
+                            />
+                            <label class="length-label" for="add-user-pin-length"> digits </label>
                         </div>
                     </div>
                     ${this._renderConditionField()}
@@ -336,6 +421,50 @@ export class LockCodeManagerAddUserCard extends LitElement {
                 </span>
             </div>
         `;
+    }
+
+    /**
+     * Fill the PIN field from the `generate_pin` action.
+     *
+     * The action owns what "safe" means -- it rejects sequences, repeats
+     * and the common-leak list, and draws from `secrets` -- so this asks
+     * for a PIN rather than inventing one. The result is revealed: a code
+     * you cannot read is one you cannot pass on.
+     */
+    private async _generatePin(): Promise<void> {
+        if (!this.hass || this._generating) return;
+        if (
+            !Number.isInteger(this._pinLength) ||
+            this._pinLength < MIN_PIN_LENGTH ||
+            this._pinLength > MAX_PIN_LENGTH
+        ) {
+            this._error = `Length must be between ${MIN_PIN_LENGTH} and ${MAX_PIN_LENGTH}`;
+            return;
+        }
+        this._generating = true;
+        this._error = undefined;
+        try {
+            const result = await this.hass.callService(
+                'lock_code_manager',
+                'generate_pin',
+                { length: this._pinLength },
+                undefined,
+                undefined,
+                true
+            );
+            const pin = (result?.response as { pin?: string } | undefined)?.pin;
+            if (!pin) {
+                throw new Error('No PIN came back');
+            }
+            this._pin = pin;
+            this._pinVisible = true;
+        } catch (err) {
+            this._error = `Could not generate a PIN: ${
+                err instanceof Error ? err.message : String(err)
+            }`;
+        } finally {
+            this._generating = false;
+        }
     }
 
     private async _commit(): Promise<void> {

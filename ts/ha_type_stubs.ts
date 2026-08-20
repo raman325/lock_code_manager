@@ -13,12 +13,28 @@ export interface EntityRegistryEntry {
     unique_id: string;
 }
 
+/** What a service returns when asked for its response. */
+export interface ServiceCallResponse {
+    response?: unknown;
+}
+
 export interface HomeAssistant {
     config: HassConfig;
     connection: Connection;
     resources: object;
     states: HassEntities;
-    callService(domain: string, service: string, data?: object): Promise<void>; // eslint-disable-line typescript-sort-keys/interface -- Methods grouped logically, not alphabetically
+    // Home Assistant's own signature, which carries more than the void this
+    // used to claim: a service declaring a response hands it back here, and
+    // `generate_pin` is one.
+    // eslint-disable-next-line typescript-sort-keys/interface -- Methods grouped logically, not alphabetically
+    callService(
+        domain: string,
+        service: string,
+        data?: object,
+        target?: object,
+        notifyOnError?: boolean,
+        returnResponse?: boolean
+    ): Promise<ServiceCallResponse>;
     callWS<T>(msg: MessageBase): Promise<T>; // eslint-disable-line typescript-sort-keys/interface -- Methods grouped logically, not alphabetically
 }
 

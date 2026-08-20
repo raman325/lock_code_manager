@@ -17,9 +17,11 @@ interface AddUserCardElement extends HTMLElement {
     _condition: string;
     _enabled: boolean;
     _error?: string;
+    _generatePin: () => Promise<void>;
     _name: string;
     _pickerReady: boolean;
     _pin: string;
+    _pinLength: number;
     _pinVisible: boolean;
     _reload: () => void;
     _showDialog: boolean;
@@ -230,6 +232,118 @@ describe('lcm-add-user', () => {
 
             expect(card._pinVisible).toBe(false);
             expect(pinField().getAttribute('type')).toBe('password');
+        });
+
+        describe('generating one', () => {
+            const generateButton = () =>
+                card.shadowRoot!.querySelector<HTMLButtonElement>('.generate-button')!;
+
+            beforeEach(() => {
+                card.hass.callService = (
+                    domain: string,
+                    service: string,
+                    data: Record<string, unknown>
+                ) => {
+                    calls.push({ data, domain, service });
+                    return Promise.resolve({ response: { pin: '739284' } });
+                };
+            });
+
+            it('asks the action for the PIN rather than inventing one', async () => {
+                await card._generatePin();
+
+                expect(calls).toEqual([
+                    {
+                        data: { length: 4 },
+                        domain: 'lock_code_manager',
+                        service: 'generate_pin'
+                    }
+                ]);
+                expect(card._pin).toBe('739284');
+            });
+
+            it('reveals what it generated', async () => {
+                expect(card._pinVisible).toBe(false);
+                await card._generatePin();
+
+                // A code you cannot read is one you cannot pass on.
+                expect(card._pinVisible).toBe(true);
+                expect(pinField().getAttribute('type')).toBe('text');
+            });
+
+            it('generates at the length asked for', async () => {
+                const length =
+                    card.shadowRoot!.querySelector<HTMLInputElement>('#add-user-pin-length')!;
+                length.value = '8';
+                length.dispatchEvent(new Event('input'));
+                await flush();
+
+                await card._generatePin();
+
+                expect(calls[0].data).toEqual({ length: 8 });
+            });
+
+            it('generates from the button', async () => {
+                generateButton().click();
+                await flush();
+
+                expect(calls).toHaveLength(1);
+            });
+
+            it('refuses a length the action would reject', async () => {
+                card._pinLength = 99;
+                await card._generatePin();
+
+                expect(calls).toHaveLength(0);
+                expect(card._error).toContain('between 4 and 12');
+            });
+
+            it('refuses a length that is not a whole number', async () => {
+                card._pinLength = Number.NaN;
+                await card._generatePin();
+
+                expect(calls).toHaveLength(0);
+                expect(card._error).toContain('between 4 and 12');
+            });
+
+            it('says so when the action gives back no PIN', async () => {
+                card.hass.callService = () => Promise.resolve({ response: {} });
+                await card._generatePin();
+
+                expect(card._error).toContain('No PIN came back');
+                expect(card._pin).toBe('');
+            });
+
+            it('says so when the action fails', async () => {
+                card.hass.callService = () => Promise.reject(new Error('nope'));
+                await card._generatePin();
+
+                expect(card._error).toContain('nope');
+            });
+
+            it('shows a rejection that is not an Error', async () => {
+                // HA's websocket rejects with a plain object, not an Error.
+                // eslint-disable-next-line prefer-promise-reject-errors
+                card.hass.callService = () => Promise.reject('length rejected');
+                await card._generatePin();
+
+                expect(card._error).toContain('length rejected');
+            });
+
+            it('generates once when the button is hit twice', async () => {
+                await Promise.all([card._generatePin(), card._generatePin()]);
+
+                expect(calls).toHaveLength(1);
+            });
+
+            it('reopens back at the default length', async () => {
+                card._pinLength = 10;
+                card._showDialog = false;
+                card.shadowRoot!.querySelector<HTMLElement>('ha-card')!.click();
+                await flush();
+
+                expect(card._pinLength).toBe(4);
+            });
         });
 
         it('takes Enabled from the checkbox', async () => {
