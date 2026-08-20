@@ -1206,3 +1206,106 @@ describe('generateNewSlotCard', () => {
         expect(result.show_lock_sync).toBe(true);
     });
 });
+
+describe('addressing generated sections by entity', () => {
+    const testConfigEntry: ConfigEntryJSONFragment = {
+        disabled_by: '',
+        domain: 'lock_code_manager',
+        entry_id: 'entry456',
+        pref_disable_new_entities: false,
+        pref_disable_polling: false,
+        reason: null,
+        source: 'user',
+        state: 'loaded',
+        supports_options: true,
+        supports_remove_device: false,
+        supports_unload: true,
+        title: 'All Locks'
+    };
+
+    it('hands each section an entity of its user', async () => {
+        // The section passes this to the card, which prefers it over the
+        // name: entity IDs do not move when a user is renamed, so a stored
+        // card holding one survives what would strand one holding a name.
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [
+                {
+                    config_entry_id: 'entry456',
+                    entity_id: 'text.all_locks_raman_name',
+                    name: '',
+                    original_name: 'Name',
+                    unique_id: 'entry456|1|name'
+                },
+                {
+                    config_entry_id: 'entry456',
+                    entity_id: 'text.all_locks_raman_pin',
+                    name: '',
+                    original_name: 'PIN',
+                    unique_id: 'entry456|1|pin'
+                },
+                {
+                    config_entry_id: 'entry456',
+                    entity_id: 'text.all_locks_guest_name',
+                    name: '',
+                    original_name: 'Name',
+                    unique_id: 'entry456|2|name'
+                }
+            ],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
+            slots: {
+                1: { condition: null, name: 'Raman' },
+                2: { condition: null, name: 'Guest' }
+            }
+        };
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                return [];
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {});
+
+        const strategies = result.sections.map(
+            (section) => section.strategy as { user_entity_id?: string }
+        );
+        // The first entity seen for a slot wins, so the choice is stable
+        // across renders rather than depending on registry order.
+        expect(strategies[0].user_entity_id).toBe('text.all_locks_raman_name');
+        expect(strategies[1].user_entity_id).toBe('text.all_locks_guest_name');
+    });
+
+    it('leaves a section unaddressed when its user has no entities yet', async () => {
+        // Reachable while a slot is being set up: the configuration knows
+        // the user before any entity for them exists. The name and slot
+        // number still address them.
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
+            slots: { 1: { condition: null, name: 'Raman' } }
+        };
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                return [];
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {});
+
+        const strategy = result.sections[0].strategy as {
+            name?: string;
+            slot: number;
+            user_entity_id?: string;
+        };
+        expect(strategy.user_entity_id).toBeUndefined();
+        expect(strategy.name).toBe('Raman');
+        expect(strategy.slot).toBe(1);
+    });
+});
