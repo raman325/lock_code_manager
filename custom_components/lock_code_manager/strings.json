@@ -350,17 +350,6 @@
       "title": "Lock setup failed: {lock_entity_id}",
       "description": "Lock Code Manager could not set up `{lock_entity_id}`: {error}\n\nIts entities are created but unavailable, and code synchronization is paused for this lock. After addressing the cause, reload the lock's integration (or Lock Code Manager) to retry. This issue will be automatically dismissed when setup succeeds."
     },
-    "entity_ids_renamed": {
-      "title": "Entity IDs now follow your users' names",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Entity IDs now follow your users' names",
-            "description": "Lock Code Manager identifies each user by name rather than by slot number, so the entity IDs in **Lock Code Manager** were renamed:\n\n{renames}\n\nHistory and statistics moved with them, and dashboards built by Lock Code Manager keep working.\n\n**These still refer to the old IDs and need updating**\n\n{referrers}\n\nFor an automation built from a Lock Code Manager blueprint, the quickest fix is to open it and pick the entity again, or recreate it. Lock Code Manager does not edit your automations for you.\n\nSubmit to dismiss this message."
-          }
-        }
-      }
-    },
     "unmanaged_code": {
       "title": "Unmanaged code on {lock} in slot {slot}",
       "fix_flow": {
