@@ -2720,3 +2720,11 @@ interesting, they show as unset for me, so these might be stale leftovers from t
 ---
 
 can you set a PIN without naming< I thought we protected that somehow
+
+---
+
+I don't think the slot cards are all that useful anymore and I am trying to figure out what to do about it. I am thinking we create a user card which is basically like a slot card except its slotless and contains all the other info. Then we replace the slot cards with user cards in the strategy. We can deprecate the use of the slot card and schedule it for removal in a future release
+
+---
+
+I agree 2 built on 1. Ignore what I said about contain all other info, I just think we should get rid of the slot number from the card and make it user centric. And yes backend should accept name, with the expectation that we remove slot in the future
