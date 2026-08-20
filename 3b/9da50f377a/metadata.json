@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "3b9da50f377a",
+  "strategy": "manual-commit",
+  "branch": "feat/unmanaged-codes-repair",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/domain/unmanaged.py",
+    "custom_components/lock_code_manager/repairs.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_coordinator.py",
+    "tests/test_unmanaged_codes.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3b/9da50f377a/0/metadata.json",
+      "transcript": "/3b/9da50f377a/0/full.jsonl",
+      "compact_transcript": "/3b/9da50f377a/0/transcript.jsonl",
+      "content_hash": "/3b/9da50f377a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 45680,
+    "cache_read_tokens": 19480054,
+    "output_tokens": 32705,
+    "api_call_count": 43
+  }
+}
