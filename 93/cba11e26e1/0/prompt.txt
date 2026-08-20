@@ -2653,3 +2653,50 @@ we want to make sure that after this one time check, we don't check for unmanage
 ---
 
 instead of using a storage marker, we should use the config entry version. In this case we can justify the one time version update. We simply change the version for the v3 branch to 5 (yes this is getting confusing)
+
+---
+
+help me draft the security advisory. Should I request a CVE? Heres the template:
+### Impact
+_What kind of vulnerability is it? Who is impacted?_
+
+### Patches
+_Has the problem been patched? What versions should users upgrade to?_
+
+### Workarounds
+_Is there a way for users to fix or remediate the vulnerability without upgrading?_
+
+### References
+_Are there any links users can visit to find out more?_
+
+---
+
+I need it in markdown
+
+---
+
+what do you mean you sent it
+
+---
+
+what should the title be?
+
+---
+
+wait sorry what exactly was the bug? If the slot was cleared because it was inactive, was it cleared properly?
+
+---
+
+ok so the more accurate way to state this is that before this release (and I think this should be release 5.x, so we can make the config entry version 4 and close the open PR or regtarget it) we did not clean up PINs when slots were removed from the config, but going forward with the move to user based, they will be, so we are doing one check to give you the option to clear slots before this new behavior takes over. It's not a bug or a CVE, it's expected beahvior
+
+---
+
+lets rebase v3 on main, then do a live smoketest of the v3 branch. We should take a fullbackup from HA, try the upgrade, verify everything works as expected, then revert
+
+---
+
+go
+
+---
+
+ah OK so I had two. There should only be one even though there were two config entries
