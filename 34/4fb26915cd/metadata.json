@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "344fb26915cd",
+  "strategy": "manual-commit",
+  "branch": "feat/card-header-without-a-slot-number",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/slot-card.integration.test.ts",
+    "ts/slot-card.styles.ts",
+    "ts/slot-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/34/4fb26915cd/0/metadata.json",
+      "transcript": "/34/4fb26915cd/0/full.jsonl",
+      "compact_transcript": "/34/4fb26915cd/0/transcript.jsonl",
+      "content_hash": "/34/4fb26915cd/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 90,
+    "cache_creation_tokens": 37066,
+    "cache_read_tokens": 42668253,
+    "output_tokens": 23932,
+    "api_call_count": 45
+  }
+}
