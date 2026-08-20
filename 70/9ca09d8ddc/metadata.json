@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "709ca09d8ddc",
+  "strategy": "manual-commit",
+  "branch": "feat/user-centric-card",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/generate-view.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/70/9ca09d8ddc/0/metadata.json",
+      "transcript": "/70/9ca09d8ddc/0/full.jsonl",
+      "compact_transcript": "/70/9ca09d8ddc/0/transcript.jsonl",
+      "content_hash": "/70/9ca09d8ddc/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 14185,
+    "cache_read_tokens": 17656750,
+    "output_tokens": 8622,
+    "api_call_count": 20
+  }
+}
