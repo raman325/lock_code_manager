@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "cf120f3d01cf",
+  "strategy": "manual-commit",
+  "branch": "feat/user-centric-card",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/generate-view.test.ts",
+    "ts/generate-view.ts",
+    "ts/slot-card-editor.test.ts",
+    "ts/slot-card-editor.ts",
+    "ts/slot-card.integration.test.ts",
+    "ts/slot-card.ts",
+    "ts/slot-section-strategy.ts",
+    "ts/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cf/120f3d01cf/0/metadata.json",
+      "transcript": "/cf/120f3d01cf/0/full.jsonl",
+      "compact_transcript": "/cf/120f3d01cf/0/transcript.jsonl",
+      "content_hash": "/cf/120f3d01cf/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 94,
+    "cache_creation_tokens": 810585,
+    "cache_read_tokens": 36412421,
+    "output_tokens": 22319,
+    "api_call_count": 47
+  }
+}
