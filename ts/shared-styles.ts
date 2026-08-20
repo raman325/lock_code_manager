@@ -417,14 +417,22 @@ export const lcmEditableStyles = css`
 `;
 
 /**
- * Dialog action buttons.
+ * Dialog action buttons, rendered at the foot of the dialog body.
  *
- * Plain `<button>` dressed as a Home Assistant text button rather than
- * `ha-button`: a dashboard page has not necessarily registered HA's form
- * components, and an unregistered custom element renders as nothing at all.
- * Slotting into `ha-dialog` works the same either way.
+ * Two things this avoids. `ha-button` is not necessarily registered on a
+ * Lovelace view, and an unregistered custom element renders as nothing at
+ * all. And `ha-dialog`'s primaryAction/secondaryAction slots do not
+ * reliably pick up children projected from a card's shadow root, which is
+ * why the condition dialog already keeps its controls in the body.
  */
 export const lcmDialogActionStyles = css`
+    .dialog-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 8px;
+    }
+
     .dialog-action {
         background: none;
         border: none;

@@ -4604,7 +4604,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
 
             card.shadowRoot!.querySelector<HTMLButtonElement>(
-                'button.dialog-action[slot="secondaryAction"]'
+                '.dialog-actions button:first-of-type'
             )!.click();
             await flush();
 

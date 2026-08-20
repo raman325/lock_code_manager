@@ -241,18 +241,17 @@ export class LockCodeManagerAddUserCard extends LitElement {
                             ? html`<div class="dialog-saving" aria-live="polite">Adding…</div>`
                             : nothing
                     }
+                    <div class="dialog-actions">
+                        <button class="dialog-action" @click=${this._close}>Cancel</button>
+                        <button
+                            class="dialog-action"
+                            .disabled=${this._saving}
+                            @click=${this._commit}
+                        >
+                            Add
+                        </button>
+                    </div>
                 </div>
-                <button class="dialog-action" slot="secondaryAction" @click=${this._close}>
-                    Cancel
-                </button>
-                <button
-                    class="dialog-action"
-                    slot="primaryAction"
-                    .disabled=${this._saving}
-                    @click=${this._commit}
-                >
-                    Add
-                </button>
             </ha-dialog>
         `;
     }

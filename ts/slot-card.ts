@@ -1267,24 +1267,24 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                             ? html`<div class="dialog-saving" aria-live="polite">Removing…</div>`
                             : nothing
                     }
+                    <div class="dialog-actions">
+                        <button
+                            class="dialog-action"
+                            @click=${() => {
+                                this._showRemoveDialog = false;
+                            }}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            class="dialog-action destructive"
+                            .disabled=${this._removing}
+                            @click=${this._commitRemove}
+                        >
+                            Remove
+                        </button>
+                    </div>
                 </div>
-                <button
-                    class="dialog-action"
-                    slot="secondaryAction"
-                    @click=${() => {
-                        this._showRemoveDialog = false;
-                    }}
-                >
-                    Cancel
-                </button>
-                <button
-                    class="dialog-action destructive"
-                    slot="primaryAction"
-                    .disabled=${this._removing}
-                    @click=${this._commitRemove}
-                >
-                    Remove
-                </button>
             </ha-dialog>
         `;
     }

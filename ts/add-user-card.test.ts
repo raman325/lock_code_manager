@@ -196,7 +196,7 @@ describe('lcm-add-user', () => {
 
         it('closes on cancel without adding anybody', async () => {
             card.shadowRoot!.querySelector<HTMLButtonElement>(
-                'button.dialog-action[slot="secondaryAction"]'
+                '.dialog-actions button:first-of-type'
             )!.click();
             await flush();
 
@@ -215,7 +215,7 @@ describe('lcm-add-user', () => {
         it('adds from the Add button', async () => {
             card._name = 'Raman';
             card.shadowRoot!.querySelector<HTMLButtonElement>(
-                'button.dialog-action[slot="primaryAction"]'
+                '.dialog-actions button:last-of-type'
             )!.click();
             await flush();
 
