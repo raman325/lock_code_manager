@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "f74d3b7f7a74",
+  "strategy": "manual-commit",
+  "branch": "feat/user-centric-card",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "tests/test_websocket.py",
+    "ts/slot-card-editor.test.ts",
+    "ts/slot-card-editor.ts",
+    "ts/slot-card.integration.test.ts",
+    "ts/slot-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f7/4d3b7f7a74/0/metadata.json",
+      "transcript": "/f7/4d3b7f7a74/0/full.jsonl",
+      "compact_transcript": "/f7/4d3b7f7a74/0/transcript.jsonl",
+      "content_hash": "/f7/4d3b7f7a74/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 23049,
+    "cache_read_tokens": 18217534,
+    "output_tokens": 14599,
+    "api_call_count": 22
+  }
+}
