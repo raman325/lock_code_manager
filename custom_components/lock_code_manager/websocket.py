@@ -47,7 +47,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.util import dt as dt_util
+from homeassistant.util import dt as dt_util, slugify
 
 from .const import (
     ATTR_ACTIVE,
@@ -242,6 +242,44 @@ def _get_last_changed(
         if state.last_changed:
             return state.last_changed.isoformat()
     return None
+
+
+def _slot_from(config_entry: ConfigEntry, msg: dict[str, Any]) -> int:
+    """
+    Resolve the slot a message names, by number or by whoever holds it.
+
+    The slot number is on its way out of every user-facing surface, so these
+    commands take a name as well. Resolution happens here rather than deeper
+    down because a slot number is still what the coordinator, the entities
+    and the provider all key on -- this is the boundary where the two
+    vocabularies meet.
+    """
+    if (slot := msg.get(ATTR_SLOT)) is not None:
+        return slot
+    if not (name := msg.get(CONF_NAME)):
+        raise ServiceValidationError("Neither name nor slot provided")
+
+    # Matched slugified, the way a config entry title is, so a caller that
+    # has only the slug an entity id was built from can still name its user.
+    config = get_entry_config(config_entry)
+    wanted = slugify(name)
+    matches = [known for known in config.users if slugify(known) == wanted]
+    if not matches:
+        raise ServiceValidationError(f"No user named {name!r} in this config entry")
+    if len(matches) > 1:
+        # Slugifying collapses more than the name rules do -- "Ada-Lovelace"
+        # and "Ada Lovelace" are two users but one slug. Picking either would
+        # write somebody else's credential.
+        raise ServiceValidationError(
+            f"{name!r} matches more than one user in this config entry: "
+            f"{', '.join(sorted(matches))}"
+        )
+    if (resolved := config.assignment.slot(matches[0])) is None:
+        # A user can exist in the configuration without a number, while
+        # allocation is still deciding where they go. There is nothing on any
+        # lock to address yet.
+        raise ServiceValidationError(f"{matches[0]!r} has not been given a slot yet")
+    return resolved
 
 
 def _get_slot_condition_entity_id(
@@ -1007,7 +1045,8 @@ def _serialize_slot_card_data(
         vol.Required("type"): "lock_code_manager/subscribe_code_slot",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
-        vol.Required(ATTR_SLOT): int,
+        vol.Exclusive(ATTR_SLOT, "user"): int,
+        vol.Exclusive(CONF_NAME, "user"): str,
         vol.Optional("reveal", default=False): bool,
     }
 )
@@ -1028,7 +1067,7 @@ async def subscribe_code_slot(
     - In-sync status changes
     - Calendar entity state changes (for event-based access control)
     """
-    slot_num = msg[ATTR_SLOT]
+    slot_num = _slot_from(config_entry, msg)
     reveal = msg["reveal"]
 
     if not get_entry_config(config_entry).has_slot(slot_num):
@@ -1198,7 +1237,8 @@ async def ws_clear_usercode(
         vol.Required("type"): "lock_code_manager/set_slot_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
-        vol.Required(ATTR_SLOT): int,
+        vol.Exclusive(ATTR_SLOT, "user"): int,
+        vol.Exclusive(CONF_NAME, "user"): str,
         vol.Required(CONF_ENTITY_ID): cv.entity_domain(CONDITION_ENTITY_DOMAINS),
     }
 )
@@ -1219,7 +1259,7 @@ async def ws_set_slot_condition(
     try:
         await async_set_slot_condition(
             hass,
-            msg[ATTR_SLOT],
+            _slot_from(config_entry, msg),
             msg[CONF_ENTITY_ID],
             config_entry_id=config_entry.entry_id,
         )
@@ -1244,7 +1284,8 @@ async def ws_set_slot_condition(
         vol.Required("type"): "lock_code_manager/clear_slot_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
-        vol.Required(ATTR_SLOT): int,
+        vol.Exclusive(ATTR_SLOT, "user"): int,
+        vol.Exclusive(CONF_NAME, "user"): str,
     }
 )
 @websocket_api.async_response
@@ -1257,7 +1298,10 @@ async def ws_clear_slot_condition(
     config_entry: ConfigEntry,
 ) -> None:
     """Clear the condition entity from a slot."""
-    await async_clear_slot_condition(
-        hass, msg[ATTR_SLOT], config_entry_id=config_entry.entry_id
-    )
+    try:
+        slot = _slot_from(config_entry, msg)
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
+        return
+    await async_clear_slot_condition(hass, slot, config_entry_id=config_entry.entry_id)
     connection.send_result(msg["id"], {"success": True})
