@@ -14,9 +14,11 @@ import { createMockHassWithConnection } from './test/mock-hass';
 
 interface AddUserCardElement extends HTMLElement {
     _commit: () => Promise<void>;
+    _condition: string;
     _enabled: boolean;
     _error?: string;
     _name: string;
+    _pickerReady: boolean;
     _pin: string;
     _reload: () => void;
     _showDialog: boolean;
@@ -223,6 +225,70 @@ describe('lcm-add-user', () => {
         });
     });
 
+    describe('the condition field', () => {
+        beforeEach(async () => {
+            card.shadowRoot!.querySelector<HTMLElement>('ha-card')!.click();
+            await flush();
+        });
+
+        it('is left out when Home Assistant gave us no picker', () => {
+            expect(card._pickerReady).toBe(false);
+            expect(card.shadowRoot!.querySelector('ha-entity-picker')).toBeNull();
+            // Not replaced by a free-text entity id: a mistyped one is worse
+            // than setting the condition from the user card afterwards.
+            const labels = [...card.shadowRoot!.querySelectorAll('.field-label')].map((element) =>
+                element.textContent?.trim()
+            );
+            expect(labels).toEqual(['Name', 'PIN']);
+        });
+
+        it('appears once the picker is registered', async () => {
+            card._pickerReady = true;
+            await flush();
+
+            expect(card.shadowRoot!.querySelector('ha-entity-picker')).toBeTruthy();
+        });
+
+        it('takes the entity the picker reports', async () => {
+            card._pickerReady = true;
+            await flush();
+
+            card.shadowRoot!.querySelector('ha-entity-picker')!.dispatchEvent(
+                new CustomEvent('value-changed', { detail: { value: 'calendar.guests' } })
+            );
+            await flush();
+
+            expect(card._condition).toBe('calendar.guests');
+        });
+
+        it('clears back to no condition', async () => {
+            card._pickerReady = true;
+            card._condition = 'calendar.guests';
+            await flush();
+
+            card.shadowRoot!.querySelector('ha-entity-picker')!.dispatchEvent(
+                new CustomEvent('value-changed', { detail: { value: null } })
+            );
+            await flush();
+
+            expect(card._condition).toBe('');
+        });
+
+        it('only offers entities that can gate a PIN', async () => {
+            card._pickerReady = true;
+            await flush();
+
+            const picker = card.shadowRoot!.querySelector('ha-entity-picker')! as unknown as {
+                entityFilter: (state: { entity_id: string }) => boolean;
+                includeDomains: readonly string[];
+            };
+
+            expect(picker.includeDomains).toContain('calendar');
+            expect(picker.entityFilter({ entity_id: 'calendar.guests' })).toBe(true);
+            expect(picker.entityFilter({ entity_id: 'light.kitchen' })).toBe(false);
+        });
+    });
+
     describe('adding', () => {
         beforeEach(async () => {
             card.shadowRoot!.querySelector<HTMLElement>('ha-card')!.click();
@@ -293,6 +359,21 @@ describe('lcm-add-user', () => {
             // call carrying the pair, so the id wins.
             expect(calls[0].data).toMatchObject({ config_entry_id: 'entry-1' });
             expect(calls[0].data).not.toHaveProperty('config_entry_title');
+        });
+
+        it('sends the condition when one was picked', async () => {
+            card._name = 'Raman';
+            card._condition = 'calendar.guests';
+            await card._commit();
+
+            expect(calls[0].data).toMatchObject({ condition: 'calendar.guests' });
+        });
+
+        it('omits the condition when none was picked', async () => {
+            card._name = 'Raman';
+            await card._commit();
+
+            expect(calls[0].data).not.toHaveProperty('condition');
         });
 
         it('asks for a name instead of adding a blank user', async () => {

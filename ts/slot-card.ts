@@ -17,6 +17,7 @@ import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { until } from 'lit/directives/until.js';
 
+import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
 import { slotCardStyles } from './slot-card.styles';
 import { LcmSubscriptionMixin } from './subscription-mixin';
@@ -35,23 +36,6 @@ const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 interface HassElement extends HTMLElement {
     hass?: HomeAssistant;
 }
-
-/** Subset of HA's loadCardHelpers() return value we depend on. */
-interface CardHelpers {
-    createCardElement: (config: { entities: string[]; type: string }) => HTMLElement & {
-        constructor: { getConfigElement?: () => Promise<unknown> };
-    };
-    createRowElement: (config: { entity: string }) => HTMLElement;
-}
-
-/** Domains the Manage Condition entity picker is restricted to. */
-const CONDITION_DOMAINS = [
-    'calendar',
-    'schedule',
-    'binary_sensor',
-    'switch',
-    'input_boolean'
-] as const;
 
 /** Internal interface for lock sync status display */
 interface LockSyncStatus {
@@ -227,7 +211,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     // ha-entity-picker before the user can open the condition dialog.
     override connectedCallback(): void {
         super.connectedCallback();
-        void this._ensureEntityPickerLoaded();
+        void ensureEntityPickerLoaded();
     }
 
     // We override disconnectedCallback here to clean up the action-error
@@ -878,34 +862,6 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     }
 
     /**
-     * Force HA's `ha-entity-picker` element to register. The picker is
-     * lazy-loaded by Home Assistant — the Lovelace editor context loads it
-     * eagerly, but a standalone custom card never triggers the load, so
-     * the unregistered tag inside our condition dialog stays empty. We
-     * piggyback on the entities-card config element, which uses
-     * ha-entity-picker internally, so requesting its `getConfigElement()`
-     * forces the picker to register as a side effect.
-     *
-     * Idempotent: short-circuits once the picker is in the
-     * customElements registry. Failures are swallowed (logged via
-     * console.warn) because the dialog itself still opens — the picker
-     * just won't render until HA registers it some other way.
-     */
-    private async _ensureEntityPickerLoaded(): Promise<void> {
-        if (customElements.get('ha-entity-picker')) return;
-        const loadHelpers = window.loadCardHelpers;
-        if (!loadHelpers) return;
-        try {
-            const helpers = await loadHelpers();
-            const cardElement = helpers.createCardElement({ entities: [], type: 'entities' });
-            await cardElement.constructor.getConfigElement?.();
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn('lcm-slot: failed to lazy-load ha-entity-picker', err);
-        }
-    }
-
-    /**
      * Lazy-loads (and caches) an HA entity row element using the
      * `loadCardHelpers().createRowElement()` helper. Falls back to a plain
      * text node when the helper isn't available (e.g. older HA, jsdom test
@@ -1126,7 +1082,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         // re-trigger here in case the card connected in a state where the
         // global helper wasn't yet available. Idempotent — short-circuits
         // once the element is registered.
-        void this._ensureEntityPickerLoaded();
+        void ensureEntityPickerLoaded();
         this._dialogEntityId = null;
         this._showConditionDialog = true;
     }
@@ -1328,9 +1284,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                         .label=${'Condition entity'}
                         .includeDomains=${CONDITION_DOMAINS}
                         .entityFilter=${(_state: { entity_id: string }) =>
-                            (CONDITION_DOMAINS as readonly string[]).includes(
-                                _state.entity_id.split('.')[0]
-                            )}
+                            isConditionEntity(_state.entity_id)}
                         @value-changed=${(e: CustomEvent) => this._handlePickerChange(e)}
                     ></ha-entity-picker>
                     ${
@@ -1570,7 +1524,6 @@ declare global {
             preview?: boolean;
             type: string;
         }>;
-        loadCardHelpers?: () => Promise<CardHelpers>;
     }
 }
 

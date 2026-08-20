@@ -34,8 +34,12 @@ describe('cards only use Home Assistant elements a dashboard has loaded', () => 
         'ha-switch'
     ]);
 
-    /** Available only because a card force-loads it before rendering. */
-    const LAZY_LOADED = new Map([['ha-entity-picker', '_ensureEntityPickerLoaded']]);
+    /**
+     * Available only because a card force-loads it before rendering, and
+     * only if the card also copes with the load failing -- HA does not
+     * promise to hand a dashboard its picker.
+     */
+    const LAZY_LOADED = new Map([['ha-entity-picker', 'ensureEntityPickerLoaded']]);
 
     const cardFiles = fs
         .readdirSync(tsDir)

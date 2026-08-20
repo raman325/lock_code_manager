@@ -2,6 +2,7 @@ import { mdiAccountPlus } from '@mdi/js';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
+import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
 import { lcmCssVars, lcmDialogActionStyles } from './shared-styles';
 import { LockCodeManagerAddUserCardConfig } from './types';
@@ -88,6 +89,14 @@ export class LockCodeManagerAddUserCard extends LitElement {
                 text-transform: uppercase;
             }
 
+            .field-help {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+                font-weight: 400;
+                letter-spacing: normal;
+                text-transform: none;
+            }
+
             .field-input {
                 background: var(--card-background-color, #fff);
                 border: 1px solid var(--lcm-border-color-strong);
@@ -134,6 +143,10 @@ export class LockCodeManagerAddUserCard extends LitElement {
 
     @state() private _error?: string;
 
+    @state() private _condition = '';
+
+    @state() private _pickerReady = false;
+
     static getStubConfig(): Partial<LockCodeManagerAddUserCardConfig> {
         return { type: 'custom:lcm-add-user' };
     }
@@ -147,6 +160,13 @@ export class LockCodeManagerAddUserCard extends LitElement {
 
     getCardSize(): number {
         return 1;
+    }
+
+    connectedCallback(): void {
+        super.connectedCallback();
+        void ensureEntityPickerLoaded().then((ready) => {
+            this._pickerReady = ready;
+        });
     }
 
     render(): TemplateResult {
@@ -178,6 +198,7 @@ export class LockCodeManagerAddUserCard extends LitElement {
     private _open(): void {
         this._name = '';
         this._pin = '';
+        this._condition = '';
         this._enabled = true;
         this._error = undefined;
         this._showDialog = true;
@@ -219,6 +240,7 @@ export class LockCodeManagerAddUserCard extends LitElement {
                             }}
                         />
                     </label>
+                    ${this._renderConditionField()}
                     <label class="dialog-check">
                         <input
                             type="checkbox"
@@ -256,6 +278,37 @@ export class LockCodeManagerAddUserCard extends LitElement {
         `;
     }
 
+    /**
+     * The condition field, or nothing at all.
+     *
+     * Home Assistant does not always hand a dashboard its entity picker,
+     * and there is no honest substitute -- an entity id typed from memory
+     * is a support ticket. When the picker is missing the field is left
+     * out and the user card's own condition dialog covers it, one step
+     * later, with the picker it force-loads for itself.
+     */
+    private _renderConditionField(): TemplateResult | typeof nothing {
+        if (!this._pickerReady) return nothing;
+        return html`
+            <label class="field">
+                <span class="field-label">Active only when</span>
+                <ha-entity-picker
+                    .hass=${this.hass}
+                    .value=${this._condition}
+                    .includeDomains=${CONDITION_DOMAINS}
+                    .entityFilter=${(state: { entity_id: string }) =>
+                        isConditionEntity(state.entity_id)}
+                    @value-changed=${(e: CustomEvent) => {
+                        this._condition = (e.detail?.value as string) || '';
+                    }}
+                ></ha-entity-picker>
+                <span class="field-help">
+                    Optional. The PIN works only while this entity is on.
+                </span>
+            </label>
+        `;
+    }
+
     private async _commit(): Promise<void> {
         const name = this._name.trim();
         if (!name) {
@@ -278,7 +331,8 @@ export class LockCodeManagerAddUserCard extends LitElement {
                 ...(this._config.config_entry_id
                     ? { config_entry_id: this._config.config_entry_id }
                     : { config_entry_title: this._config.config_entry_title }),
-                ...(this._pin && { pin: this._pin })
+                ...(this._pin && { pin: this._pin }),
+                ...(this._condition && { condition: this._condition })
             });
         } catch (err) {
             this._error = err instanceof Error ? err.message : String(err);
