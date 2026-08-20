@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "595583963514",
+  "strategy": "manual-commit",
+  "branch": "feat/manage-users-from-the-dashboard",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/full-width-box-sizing.test.ts",
+    "ts/shared-styles.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/59/5583963514/0/metadata.json",
+      "transcript": "/59/5583963514/0/full.jsonl",
+      "compact_transcript": "/59/5583963514/0/transcript.jsonl",
+      "content_hash": "/59/5583963514/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 19325,
+    "cache_read_tokens": 3949968,
+    "output_tokens": 8341,
+    "api_call_count": 23
+  }
+}
