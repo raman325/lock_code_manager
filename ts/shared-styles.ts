@@ -393,6 +393,10 @@ export const lcmEditableStyles = css`
         background: var(--card-background-color, #fff);
         border: 1px solid var(--primary-color);
         border-radius: 4px;
+        /* Without this the padding and border are added to the 100%, so the
+           input overruns its container -- in the hero row that put the name
+           field under the state pill. */
+        box-sizing: border-box;
         color: var(--primary-text-color);
         font-family: inherit;
         font-size: inherit;
