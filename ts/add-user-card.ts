@@ -338,7 +338,7 @@ export class LockCodeManagerAddUserCard extends LitElement {
                                 @click=${this._generatePin}
                             >
                                 <ha-svg-icon .path=${mdiDiceMultiple}></ha-svg-icon>
-                                Generate
+                                Generate PIN
                             </button>
                             <input
                                 id="add-user-pin-length"
