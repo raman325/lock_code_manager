@@ -41,6 +41,12 @@ ATTR_LOCK_CONFIG_ENTRY_ID = "lock_config_entry_id"
 ATTR_EXTRA_DATA = "extra_data"
 ATTR_MANAGED = "managed"
 # One repair for the whole entity-ID rename, however many entries moved.
+# What a per-lock entity is called after the lock's name. Mirrors the
+# ``entity`` names in strings.json, which the migration cannot read: it has to
+# build the id the running integration would generate. test_frontend_contract
+# holds the two together.
+PER_LOCK_ENTITY_SUFFIX = {"code": "PIN", "in_sync": "in sync"}
+
 ENTITY_IDS_RENAMED_ISSUE = "entity_ids_renamed"
 # Where the migration accumulates those renames while entries migrate.
 RENAMES_KEY = "migration_renames"

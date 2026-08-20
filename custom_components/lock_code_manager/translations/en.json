@@ -101,7 +101,7 @@
     },
     "sensor": {
       "code": {
-        "name": "{lock_name} code"
+        "name": "{lock_name} PIN"
       }
     },
     "switch": {

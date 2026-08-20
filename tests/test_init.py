@@ -2064,7 +2064,8 @@ async def test_setup_reclaims_entities_left_on_a_split_device(
         {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
     )
     assert slot_device
-    assert ent_reg.async_get(stranded.entity_id).device_id == slot_device.id
+    reclaimed = ent_reg.async_get_entity_id(stranded.domain, DOMAIN, stranded.unique_id)
+    assert ent_reg.async_get(reclaimed).device_id == slot_device.id
     assert dev_reg.async_get(split.id) is None
 
     await hass.config_entries.async_unload(entry_id)
@@ -2156,7 +2157,12 @@ async def test_reclaim_skips_entities_it_has_no_slot_device_for(
 
     assert ent_reg.async_get(no_device.entity_id).device_id is None
     # Already on one of our devices, so the sweep has nothing to do for it.
-    assert ent_reg.async_get(settled.entity_id).device_id == ours.id
+    assert (
+        ent_reg.async_get(
+            ent_reg.async_get_entity_id(settled.domain, DOMAIN, settled.unique_id)
+        ).device_id
+        == ours.id
+    )
     # Still on the foreign device, which therefore survives the removal pass.
     assert ent_reg.async_get(unparseable.entity_id).device_id == foreign.id
     assert dev_reg.async_get(foreign.id) is not None
@@ -2233,7 +2239,9 @@ async def test_reclaim_moves_a_disabled_entity_rather_than_deleting_it(
     await hass.config_entries.async_setup(entry_id)
     await hass.async_block_till_done()
 
-    survivor = ent_reg.async_get(disabled.entity_id)
+    survivor = ent_reg.async_get(
+        ent_reg.async_get_entity_id(disabled.domain, DOMAIN, disabled.unique_id)
+    )
     assert survivor is not None
     assert survivor.disabled_by is er.RegistryEntryDisabler.USER
     slot_device = dev_reg.async_get_device(
@@ -2328,7 +2336,8 @@ async def test_reclaim_moves_an_entity_off_the_lock_integrations_device(
         {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
     )
     assert slot_device
-    assert ent_reg.async_get(stranded.entity_id).device_id == slot_device.id
+    reclaimed = ent_reg.async_get_entity_id(stranded.domain, DOMAIN, stranded.unique_id)
+    assert ent_reg.async_get(reclaimed).device_id == slot_device.id
     # The lock's own device is another integration's and must survive.
     assert dev_reg.async_get(lock_device.id) is not None
 
@@ -2819,3 +2828,103 @@ async def test_removing_a_slot_clears_its_code_off_the_lock(
         # back empty; both mean nothing is programmed there.
         credential = (await lock.async_get_usercodes()).get(2)
         assert not (credential and credential.pin)
+
+
+async def test_a_per_lock_entity_id_names_the_lock_it_belongs_to(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    One user, several locks: each per-lock entity has to say which lock.
+
+    They all sit on the same slot device, so naming them after the user alone
+    makes identical slugs and Home Assistant separates them with _2 and _3 --
+    suffixes assigned in whatever order the rename happened to run, which
+    identify nothing and are worse than the lock-shaped IDs they replaced.
+    Rebuilding the name from the lock is what keeps them tellable apart.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+            CONF_SLOTS: {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        ent_reg.async_get_or_create(
+            "sensor",
+            DOMAIN,
+            f"{entry.entry_id}|1|{ATTR_CODE}|{lock_entity_id}",
+            config_entry=entry,
+            suggested_object_id=f"{lock_entity_id.split('.')[1]}_code_slot_1",
+            # As a released version stored it: no lock in the entity's own
+            # name, which is why it cannot be read back and reused.
+            original_name="Code slot 1",
+        )
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    moved = [
+        ent_reg.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.entry_id}|1|{ATTR_CODE}|{lock_entity_id}"
+        )
+        for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
+    ]
+    # The user, then the lock, then the credential type -- no slot number and
+    # no collision suffix.
+    assert moved == ["sensor.raman_test_1_pin", "sensor.raman_test_2_pin"]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_per_lock_entity_survives_its_lock_leaving_the_registry(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A lock with no registry row still has to name its entities.
+
+    The lock's entity can be gone by the time this runs -- excluded from
+    Z-Wave, integration removed -- while Lock Code Manager's own entities for
+    it remain. Skipping them would leave slot-shaped IDs behind forever, so
+    the name falls back to the lock's object id, which is what its entity id
+    was slugged from to begin with.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="All Locks",
+        data={
+            CONF_LOCKS: ["lock.departed"],
+            CONF_SLOTS: {1: {"enabled": True, "name": "Raman", "pin": "1111"}},
+        },
+        version=3,
+        minor_version=1,
+    )
+    entry.add_to_hass(hass)
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        f"{entry.entry_id}|1|{ATTR_CODE}|lock.departed",
+        config_entry=entry,
+        suggested_object_id="departed_code_slot_1",
+        original_name="Code slot 1",
+    )
+    assert ent_reg.async_get("lock.departed") is None
+
+    # Setup itself cannot succeed without the lock, but the migration runs
+    # ahead of it, so the rename still has to do something sensible.
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.version == 4
+
+    assert (
+        ent_reg.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.entry_id}|1|{ATTR_CODE}|lock.departed"
+        )
+        == "sensor.raman_departed_pin"
+    )

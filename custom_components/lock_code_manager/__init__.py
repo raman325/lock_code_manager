@@ -78,6 +78,7 @@ from .const import (
     ENTITY_IDS_RENAMED_ISSUE,
     EVENT_CREDENTIAL_USED,
     LEGACY_EVENT_PIN_USED,
+    PER_LOCK_ENTITY_SUFFIX,
     PLATFORM_MAP,
     PLATFORMS,
     RENAMES_KEY,
@@ -1120,6 +1121,22 @@ def _async_rename_event_unique_ids(
         ent_reg.async_update_entity(entity_id, new_unique_id=wanted)
 
 
+def _lock_of(entry_id: str, unique_id: str) -> str | None:
+    """Return the lock a per-lock entity belongs to, or None if it has none."""
+    parts = unique_id.split("|")
+    return parts[3] if unique_id.startswith(f"{entry_id}|") and len(parts) > 3 else None
+
+
+def _lock_display_name(ent_reg: er.EntityRegistry, lock_entity_id: str) -> str:
+    """Name a lock the way its own integration does."""
+    entity = ent_reg.async_get(lock_entity_id)
+    if entity and (display := entity.name or entity.original_name):
+        return display
+    # No registry row to ask, so fall back to the object id, which is what
+    # the lock's own entity id was slugged from in the first place.
+    return lock_entity_id.split(".", 1)[-1].replace("_", " ")
+
+
 @callback
 def _async_purge_dropped_slots(
     hass: HomeAssistant,
@@ -1177,7 +1194,18 @@ def _async_rename_slot_entity_ids(
         if slot_num is None or not (name := config.name_for(slot_num)):
             continue
         domain, object_id = entity.entity_id.split(".", 1)
-        if entity.original_name:
+        if lock_entity_id := _lock_of(config_entry.entry_id, entity.unique_id):
+            # Per-lock entities are one per lock on the SAME slot device, so
+            # the user's name alone names them all identically and Home
+            # Assistant separates them with a meaningless _2, _3. Their own
+            # name carries the lock, and it has to be rebuilt rather than
+            # read back: ``original_name`` is the text stored when the entity
+            # was created, which on an upgraded install predates this shape.
+            suggested = (
+                f"{name} {_lock_display_name(ent_reg, lock_entity_id)} "
+                f"{PER_LOCK_ENTITY_SUFFIX[entity.unique_id.split('|')[2]]}"
+            )
+        elif entity.original_name:
             # What Home Assistant would generate today: the device's name
             # followed by the entity's own. ``original_name`` is that name as
             # translated for THIS installation, so a system set up in another

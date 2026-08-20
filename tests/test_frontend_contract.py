@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 
@@ -15,6 +16,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_IN_SYNC,
     CONDITION_ENTITY_DOMAINS,
     EVENT_CREDENTIAL_USED,
+    PER_LOCK_ENTITY_SUFFIX,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 
@@ -155,3 +157,32 @@ def test_the_frontend_and_backend_agree_on_the_slot_payload() -> None:
         CONF_NAME,
         CONF_CONDITION,
     }
+
+
+def test_per_lock_suffixes_match_the_entity_names() -> None:
+    """
+    The migration's per-lock suffixes are the ones the entities really use.
+
+    The migration has to build the entity ID the running integration would
+    generate, but it runs before any entity exists, so it cannot read the
+    name off one. It carries its own copy of the suffix instead -- and a copy
+    that drifts renames every per-lock entity onto an ID nothing else agrees
+    with.
+    """
+    names = json.loads(
+        (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "custom_components"
+            / "lock_code_manager"
+            / "strings.json"
+        ).read_text()
+    )["entity"]
+
+    for key, suffix in PER_LOCK_ENTITY_SUFFIX.items():
+        declared = next(
+            entity["name"]
+            for domain in names.values()
+            for entity_key, entity in domain.items()
+            if entity_key == key
+        )
+        assert declared == f"{{lock_name}} {suffix}"
