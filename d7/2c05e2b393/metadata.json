@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "d72c05e2b393",
+  "strategy": "manual-commit",
+  "branch": "fix/repair-names-the-right-version",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d7/2c05e2b393/0/metadata.json",
+      "transcript": "/d7/2c05e2b393/0/full.jsonl",
+      "compact_transcript": "/d7/2c05e2b393/0/transcript.jsonl",
+      "content_hash": "/d7/2c05e2b393/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 7062,
+    "cache_read_tokens": 7830930,
+    "output_tokens": 4975,
+    "api_call_count": 9
+  }
+}
