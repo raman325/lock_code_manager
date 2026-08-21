@@ -129,6 +129,7 @@ from .domain.util import (
     PER_LOCK_ISSUE_KEYS,
     build_pin_deobfuscation_map,
     deobfuscate_pins,
+    lock_display_name,
     per_lock_issue_id,
 )
 from .entity import build_slot_device_info
@@ -307,6 +308,7 @@ async def async_migrate_entry(
                 len(renamed),
                 ", ".join(sorted(renamed, key=int)),
             )
+        _async_remove_hub_device(hass, config_entry)
         # Last, and part of the same version bump: from here on a slot
         # leaving the configuration takes its credential with it, so the
         # codes earlier versions left behind are offered up once, measured
@@ -731,7 +733,6 @@ async def async_setup_entry(
 ) -> bool:
     """Set up a config entry."""
     ent_reg = er.async_get(hass)
-    entry_id = config_entry.entry_id
     try:
         entity_id = next(
             entity_id
@@ -753,14 +754,6 @@ async def async_setup_entry(
         config=EntryConfig.from_entry(config_entry),
     )
 
-    dev_reg = dr.async_get(hass)
-    dev_reg.async_get_or_create(
-        config_entry_id=entry_id,
-        identifiers={(DOMAIN, entry_id)},
-        manufacturer="Lock Code Manager",
-        name=config_entry.title,
-        serial_number=entry_id,
-    )
     _async_reclaim_entities_from_foreign_devices(hass, config_entry)
     _async_prune_orphaned_slot_devices(hass, config_entry)
 
@@ -1082,6 +1075,34 @@ def _async_reclaim_entities_from_foreign_devices(
 
 
 @callback
+def _async_remove_hub_device(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """
+    Take away the config entry's own device.
+
+    It never held an entity. It existed so the per-user devices could name
+    it in ``via_device`` and be drawn beneath it, which bought a line on a
+    device page and cost a device on every page that lists them. The users
+    are the devices worth having.
+
+    The ``via_device`` goes with it, and had to: Home Assistant reports a
+    ``via_device`` naming a device that is not there as a use it intends to
+    break, so leaving it behind would log on every registration.
+    """
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get_device(identifiers={(DOMAIN, config_entry.entry_id)})
+    if device is None:
+        return
+    _LOGGER.debug(
+        "%s (%s): Removing the config entry's own device; it holds no entities",
+        config_entry.entry_id,
+        config_entry.title,
+    )
+    dev_reg.async_remove_device(device.id)
+
+
+@callback
 def _async_rename_event_unique_ids(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
@@ -1121,16 +1142,6 @@ def _lock_of(entry_id: str, unique_id: str) -> str | None:
     """Return the lock a per-lock entity belongs to, or None if it has none."""
     parts = unique_id.split("|")
     return parts[3] if unique_id.startswith(f"{entry_id}|") and len(parts) > 3 else None
-
-
-def _lock_display_name(ent_reg: er.EntityRegistry, lock_entity_id: str) -> str:
-    """Name a lock the way its own integration does."""
-    entity = ent_reg.async_get(lock_entity_id)
-    if entity and (display := entity.name or entity.original_name):
-        return display
-    # No registry row to ask, so fall back to the object id, which is what
-    # the lock's own entity id was slugged from in the first place.
-    return lock_entity_id.split(".", 1)[-1].replace("_", " ")
 
 
 @callback
@@ -1199,7 +1210,7 @@ def _async_rename_slot_entity_ids(
             # was created, which on an upgraded install predates this shape.
             suggested = (
                 f"{config_entry.title} {name} "
-                f"{_lock_display_name(ent_reg, lock_entity_id)} "
+                f"{lock_display_name(hass, lock_entity_id)} "
                 f"{PER_LOCK_ENTITY_SUFFIX[entity.unique_id.split('|')[2]]}"
             )
         elif entity.original_name:
@@ -1210,17 +1221,20 @@ def _async_rename_slot_entity_ids(
             # on the entry's title, which may have changed since.
             suggested = f"{config_entry.title} {name} {entity.original_name}"
         else:
-            # The event entity has no name of its own, and a registry written
-            # by an older Home Assistant may not have kept one. Swap the
-            # device slug instead, which needs the ID to still look like one
-            # this integration generated.
+            # A registry row written by an older Home Assistant may have kept
+            # no name at all, so there is nothing to append the way the branch
+            # above does. The key inside the unique ID says what the entity is
+            # -- it is what the translated name is looked up by -- and unlike
+            # the old object id it is there even when the entity was created
+            # without a name, which is how the credential-used event was.
+            #
+            # Guarded on the ID still looking like one this integration
+            # generated, so a hand-renamed entity is left alone.
             old_prefix = slugify(f"{config_entry.title} Code slot {slot_num}")
             if object_id != old_prefix and not object_id.startswith(f"{old_prefix}_"):
                 continue
-            suggested = (
-                f"{slugify(f'{config_entry.title} {name}')}"
-                f"{object_id.removeprefix(old_prefix)}"
-            )
+            key = entity.unique_id.split("|")[2]
+            suggested = f"{config_entry.title} {name} {key.replace('_', ' ')}"
         new_entity_id = ent_reg.async_get_available_entity_id(
             domain, suggested, current_entity_id=entity.entity_id
         )
@@ -1428,7 +1442,24 @@ async def _async_setup_new_locks(
 async def async_update_listener(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
-    """Update listener."""
+    """
+    Update listener.
+
+    Wraps the pass so ``runtime_data.settled`` is set however it ends,
+    including the early return and a failure. Anything waiting on it is
+    waiting to learn that the entry has finished reacting, and a pass that
+    raised has finished reacting as much as it is going to.
+    """
+    try:
+        await _async_apply_entry_update(hass, config_entry)
+    finally:
+        config_entry.runtime_data.settled.set()
+
+
+async def _async_apply_entry_update(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """Bring entities, devices and locks into line with the entry."""
     # Refresh the cached EntryConfig on EVERY update — including entity-driven
     # writes that go straight to data with empty options (e.g. a slot's name or
     # PIN being edited via its text entity). The early-return below skips the

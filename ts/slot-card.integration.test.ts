@@ -3,6 +3,7 @@ import { html } from 'lit';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
+import { slotCardStyles } from './slot-card.styles';
 import { createMockHassWithConnection } from './test/mock-hass';
 import { SlotCardData } from './types';
 
@@ -250,7 +251,13 @@ describe('LockCodeManagerSlotCard integration', () => {
 
         beforeEach(async () => {
             card = document.createElement('lcm-user') as SlotCardElement & Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', name: 'Raman', type: 'custom:lcm-user' });
+            // Addressed by title, so the card itself never learns the entry id —
+            // only the resolved data carries it.
+            card.setConfig({
+                config_entry_title: 'Test Config',
+                name: 'Raman',
+                type: 'custom:lcm-user'
+            });
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
@@ -276,13 +283,41 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(JSON.stringify(card.render())).toContain('name-edit-input');
         });
 
-        it('carries the state icon and chip on the same row', () => {
-            // They used to sit in a bar of their own, saying the same thing
-            // twice with a slot number between them.
+        it('gathers what is about the user into a meta row', () => {
+            // Icon, state and remove sit together above the name. None of
+            // them grows with the name, so sharing its row cost it about
+            // five characters before the ellipsis on a narrow card.
             card._data = makeSlotCardData({ name: 'Raman' });
             const json = JSON.stringify(card.render());
-            expect(json).toContain('hero-identity');
+            expect(json).toContain('hero-meta');
             expect(json).toContain('hero-icon');
+            expect(json).toContain('state-chip');
+            expect(json).toContain('hero-remove');
+        });
+
+        it('gives the name a line to itself, below that row', () => {
+            card._data = makeSlotCardData({ name: 'Raman' });
+            const markup = JSON.stringify(card.render());
+            const metaAt = markup.indexOf('hero-meta');
+            const titleAt = markup.indexOf('hero-title');
+
+            expect(metaAt).toBeGreaterThan(-1);
+            expect(titleAt).toBeGreaterThan(metaAt);
+            // Not nested inside it -- the row closes first.
+            expect(markup.slice(metaAt, titleAt)).toContain('</div>');
+        });
+
+        it('never truncates the name', () => {
+            // The rule this replaced set white-space: nowrap and an
+            // ellipsis, and on a narrow card the name lost to the chrome
+            // beside it. A cut-off name is a cut-off identity.
+            const rule = slotCardStyles
+                .map((part) => String((part as { cssText?: string }).cssText ?? ''))
+                .join('\n')
+                .match(/\.hero-title\s*\{([^}]*)\}/)![1];
+
+            expect(rule).not.toMatch(/white-space:\s*nowrap/);
+            expect(rule).not.toMatch(/text-overflow:\s*ellipsis/);
         });
 
         it('has no header bar left', () => {
@@ -4501,6 +4536,182 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(msg.user_entity_id).toBe('text.all_locks_raman_name');
             expect(msg.name).toBeUndefined();
             expect(msg.slot).toBeUndefined();
+        });
+    });
+
+    describe('removing a user', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+        let calls: Array<Record<string, unknown>>;
+        let reloads: number;
+
+        beforeEach(async () => {
+            calls = [];
+            card = document.createElement('lcm-user') as SlotCardElement & Record<string, unknown>;
+            // Addressed by title, so the card itself never learns the entry id —
+            // only the resolved data carries it.
+            card.setConfig({
+                config_entry_title: 'Test Config',
+                name: 'Raman',
+                type: 'custom:lcm-user'
+            });
+            const hass = createMockHassWithConnection();
+            hass.callService = (domain: string, service: string, data: Record<string, unknown>) => {
+                calls.push({ data, domain, service });
+                return Promise.resolve();
+            };
+            card.hass = hass;
+            reloads = 0;
+            // Reloading would take the test runner's page with it.
+            card._reload = () => {
+                reloads += 1;
+            };
+            container.appendChild(card);
+            card._data = makeSlotCardData({ name: 'Raman' });
+            await flush();
+        });
+
+        it('asks before removing anybody', () => {
+            const json = JSON.stringify(card.render());
+            expect(json).toContain('hero-remove');
+            // The dialog is not open until asked for.
+            expect(card._showRemoveDialog).toBe(false);
+        });
+
+        it('offers to clear the code, ticked', () => {
+            // Unticking hands the credential over instead of revoking it, so
+            // the default has to be the one that revokes.
+            card._showRemoveDialog = true;
+            expect(card._removeClearsCredentials).toBe(true);
+            expect(JSON.stringify(card.render())).toContain('checkbox');
+        });
+
+        it('removes the user, clearing by default', async () => {
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0].domain).toBe('lock_code_manager');
+            expect(calls[0].service).toBe('delete_user');
+            expect(calls[0].data).toMatchObject({
+                clear_credentials: true,
+                // Resolved by the backend, not configured on the card.
+                config_entry_id: 'test-entry',
+                name: 'Raman'
+            });
+            expect(card._showRemoveDialog).toBe(false);
+        });
+
+        it('reloads the actual page', () => {
+            const real = document.createElement('lcm-user') as SlotCardElement &
+                Record<string, unknown>;
+            const reload = vi.fn();
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: { ...window.location, reload }
+            });
+
+            (real as unknown as { _reload: () => void })._reload();
+
+            expect(reload).toHaveBeenCalled();
+        });
+
+        it('reloads, so the card for the removed user goes away', async () => {
+            // Its entities are gone and the subscription just stops
+            // reporting, so left alone the card would go on showing the
+            // person who was removed, PIN and all.
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(reloads).toBe(1);
+        });
+
+        it('passes the choice to keep the code through', async () => {
+            card._showRemoveDialog = true;
+            card._removeClearsCredentials = false;
+            await card._commitRemove();
+
+            expect(calls[0].data).toMatchObject({ clear_credentials: false });
+        });
+
+        it('opens the dialog from the button in the hero row', async () => {
+            const button = card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!;
+            expect(button).toBeTruthy();
+            expect(button.getAttribute('aria-label')).toBe('Remove user');
+
+            button.click();
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(true);
+            expect(card.shadowRoot!.querySelector('ha-dialog')).toBeTruthy();
+        });
+
+        it('carries an untick through to the service call', async () => {
+            card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!.click();
+            await flush();
+
+            const checkbox =
+                card.shadowRoot!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+            checkbox.checked = false;
+            checkbox.dispatchEvent(new Event('change'));
+            await flush();
+
+            expect(card._removeClearsCredentials).toBe(false);
+        });
+
+        it('closes without removing anybody on cancel', async () => {
+            card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!.click();
+            await flush();
+
+            card.shadowRoot!.querySelector<HTMLButtonElement>(
+                '.dialog-actions button:first-of-type'
+            )!.click();
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(false);
+            expect(calls).toHaveLength(0);
+        });
+
+        it('removes once when the button is hit twice', async () => {
+            card._showRemoveDialog = true;
+            // Deliberately not awaited: the second call lands while the first
+            // is still in flight, which is what an impatient double-click does.
+            const first = card._commitRemove();
+            const second = card._commitRemove();
+            await Promise.all([first, second]);
+
+            expect(calls).toHaveLength(1);
+        });
+
+        it('closes when dismissed with escape or the scrim', async () => {
+            card._showRemoveDialog = true;
+            await flush();
+
+            card.shadowRoot!.querySelector('ha-dialog')!.dispatchEvent(new Event('closed'));
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(false);
+            expect(calls).toHaveLength(0);
+        });
+
+        it('refuses to guess which user to remove before data arrives', async () => {
+            card._data = undefined;
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(calls).toHaveLength(0);
+            expect(card._actionError).toContain('not initialized');
+        });
+
+        it('names the user in the error when the service refuses', async () => {
+            card.hass.callService = () => Promise.reject(new Error('lock is asleep'));
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            // Left open, because the user is still there.
+            expect(card._actionError).toContain('Raman');
+            expect(card._actionError).toContain('lock is asleep');
+            // A reload here would hide the error it needs to show.
+            expect(reloads).toBe(0);
         });
     });
 });

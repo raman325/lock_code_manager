@@ -90,6 +90,7 @@
     },
     "event": {
       "credential_used": {
+        "name": "Credential used",
         "state_attributes": {
           "event_type": {
             "state": {

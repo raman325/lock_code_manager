@@ -156,6 +156,12 @@ class LockCodeManagerConfigEntryRuntimeData:
     # entry. Guards against stacking when _setup_entry_after_start runs more
     # than once (for example, a reload racing with EVENT_HOMEASSISTANT_STARTED).
     update_listener_registered: bool = False
+    # Set whenever the update listener finishes a pass. Home Assistant runs
+    # update listeners as a task rather than awaiting them, so a caller that
+    # writes to the entry returns before the entry has reacted -- before the
+    # entities for a user it just added exist. Anything that must not return
+    # early clears this, writes, and waits for it.
+    settled: asyncio.Event = field(default_factory=asyncio.Event)
     # (lock, slot) pairs whose credential is to be left on the lock when the
     # slot leaves the configuration, set by the delete-user service and drained
     # by the update listener. A hand-off cannot be expressed in the new

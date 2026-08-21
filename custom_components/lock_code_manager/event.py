@@ -72,7 +72,6 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         BaseLockCodeManagerEntity.__init__(
             self, hass, ent_reg, config_entry, slot_num, key
         )
-        self._attr_name = None
 
     def _get_supported_locks(self) -> list[BaseLock]:
         """Get locks that support code slot events."""

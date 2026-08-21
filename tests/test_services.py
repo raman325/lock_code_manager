@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -37,7 +38,9 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
 )
+from custom_components.lock_code_manager.domain import services
 from custom_components.lock_code_manager.domain.allocation import SlotAllocationError
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
@@ -473,6 +476,152 @@ async def test_add_user_service(
     assert config.assignment.slot("test1") == 1
     assert config.assignment.slot("test2") == 2
     assert config.assignment.slot("Newcomer") not in (1, 2)
+
+
+async def test_add_user_service_returns_once_the_entities_exist(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """
+    When the call returns, the new user's entities are there.
+
+    Deliberately no ``async_block_till_done`` between the call and the
+    assertion. Home Assistant runs update listeners as a task rather than
+    awaiting them, so a service that only writes returns before the entry
+    has reacted -- a script that adds a user and then sets their PIN
+    through the new text entity would find nothing to set, and the
+    dashboard reloads the moment the call returns.
+
+    This states the contract; it does not prove the wait carries it. The
+    add path happens to finish inside the awaits this call already makes,
+    so it passes either way. ``test_delete_user_service_returns_once_the_
+    entities_are_gone`` is the one that fails without it.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "Newcomer",
+            CONF_PIN: "9876",
+        },
+        blocking=True,
+    )
+
+    slot = get_entry_config(
+        hass.config_entries.async_get_entry(entry.entry_id)
+    ).assignment.slot("Newcomer")
+    # The per-lock entities, not just the slot's own: they are created at
+    # the very end of the pass, after it has awaited the locks, so they are
+    # what actually distinguishes "the entry has reacted" from "the write
+    # landed".
+    assert entity_registry.async_get_entity_id(
+        "binary_sensor",
+        DOMAIN,
+        build_slot_unique_id(entry.entry_id, slot, "in_sync", LOCK_1_ENTITY_ID),
+    )
+
+
+async def test_service_does_not_wait_when_the_write_changed_nothing(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A write that changes nothing runs no listener, so nothing would ever
+    arrive to end the wait. Two identical calls landing before the entry
+    settles is the way there: the second writes the options the first
+    already wrote.
+    """
+    entry = lock_code_manager_config_entry
+    slot = get_entry_config(entry).assignment.slot("test1")
+    hass.states.async_set("binary_sensor.settle_probe", STATE_ON)
+
+    with patch.object(
+        hass.config_entries, "async_update_entry", return_value=False
+    ) as update:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SLOT_CONDITION,
+            {
+                "config_entry_id": entry.entry_id,
+                ATTR_SLOT: slot,
+                CONF_ENTITY_ID: "binary_sensor.settle_probe",
+            },
+            blocking=True,
+        )
+
+    assert update.called
+
+
+async def test_service_reports_an_entry_that_never_settles(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A pass that never finishes must not hold the caller forever.
+
+    The write is already durable when the wait starts, so timing out is
+    not a failure to hand back -- the entities arrive late rather than not
+    at all, and saying otherwise would report a working add as broken.
+    """
+    entry = lock_code_manager_config_entry
+    slot = get_entry_config(entry).assignment.slot("test1")
+    hass.states.async_set("binary_sensor.settle_probe", STATE_ON)
+
+    async def _never() -> None:
+        await asyncio.sleep(10)
+
+    with (
+        patch.object(services, "_SETTLE_TIMEOUT", 0.01),
+        patch.object(entry.runtime_data.settled, "wait", _never),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SLOT_CONDITION,
+            {
+                "config_entry_id": entry.entry_id,
+                ATTR_SLOT: slot,
+                CONF_ENTITY_ID: "binary_sensor.settle_probe",
+            },
+            blocking=True,
+        )
+
+    assert "did not finish updating" in caplog.text
+    # The write still landed; only the waiting gave up.
+    assert (
+        get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).slot(
+            slot
+        )[CONF_CONDITION]
+        == "binary_sensor.settle_probe"
+    )
+
+
+async def test_delete_user_service_returns_once_the_entities_are_gone(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """The same promise on the way out, for the same reason."""
+    entry = lock_code_manager_config_entry
+    slot = get_entry_config(entry).assignment.slot("test1")
+    unique_id = f"{entry.entry_id}|{slot}|{CONF_NAME}"
+    assert entity_registry.async_get_entity_id("text", DOMAIN, unique_id)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {"config_entry_id": entry.entry_id, CONF_NAME: "test1"},
+        blocking=True,
+    )
+
+    assert entity_registry.async_get_entity_id("text", DOMAIN, unique_id) is None
 
 
 async def test_add_user_service_rejects_a_duplicate_name(

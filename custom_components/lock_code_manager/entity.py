@@ -61,7 +61,6 @@ def build_slot_device_info(config_entry: ConfigEntry, slot_num: int) -> DeviceIn
         name=f"{config_entry.title} {name}",
         manufacturer="Lock Code Manager",
         model="User",
-        via_device=(DOMAIN, config_entry.entry_id),
     )
 
 

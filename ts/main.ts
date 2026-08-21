@@ -1,3 +1,4 @@
+import './add-user-card';
 import { LockCodeManagerDashboardStrategy } from './dashboard-strategy';
 import './lock-codes-card';
 import './lock-codes-card-editor';

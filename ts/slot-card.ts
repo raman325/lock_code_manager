@@ -17,6 +17,7 @@ import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { until } from 'lit/directives/until.js';
 
+import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
 import { slotCardStyles } from './slot-card.styles';
 import { LcmSubscriptionMixin } from './subscription-mixin';
@@ -35,23 +36,6 @@ const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 interface HassElement extends HTMLElement {
     hass?: HomeAssistant;
 }
-
-/** Subset of HA's loadCardHelpers() return value we depend on. */
-interface CardHelpers {
-    createCardElement: (config: { entities: string[]; type: string }) => HTMLElement & {
-        constructor: { getConfigElement?: () => Promise<unknown> };
-    };
-    createRowElement: (config: { entity: string }) => HTMLElement;
-}
-
-/** Domains the Manage Condition entity picker is restricted to. */
-const CONDITION_DOMAINS = [
-    'calendar',
-    'schedule',
-    'binary_sensor',
-    'switch',
-    'input_boolean'
-] as const;
 
 /** Internal interface for lock sync status display */
 interface LockSyncStatus {
@@ -118,6 +102,12 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     @state() private _showConditionDialog = false;
     @state() private _dialogEntityId: string | null = null;
     @state() private _dialogSaving = false;
+    @state() private _showRemoveDialog = false;
+    // Defaults to clearing, matching the service. Unticking it hands the
+    // credential over rather than revoking it: the code goes on working and
+    // this integration stops managing it.
+    @state() private _removeClearsCredentials = true;
+    @state() private _removing = false;
 
     _hass?: HomeAssistant;
     private _entityRowCache = new Map<string, HTMLElement>();
@@ -221,7 +211,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     // ha-entity-picker before the user can open the condition dialog.
     override connectedCallback(): void {
         super.connectedCallback();
-        void this._ensureEntityPickerLoaded();
+        void ensureEntityPickerLoaded();
     }
 
     // We override disconnectedCallback here to clean up the action-error
@@ -313,6 +303,11 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         return html`<ha-card><div class="message">Connecting...</div></ha-card>`;
     }
 
+    /** Seam so a test can observe the reload without navigating the runner. */
+    protected _reload(): void {
+        window.location.reload();
+    }
+
     private _renderFromData(data: SlotCardData): TemplateResult {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const { pin, enabled, active, conditions, locks } = data;
@@ -374,6 +369,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                 </div>
                 ${this._renderEventRow()}
                 ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
+                ${this._showRemoveDialog ? this._renderRemoveDialog() : nothing}
             </ha-card>
         `;
     }
@@ -576,11 +572,23 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         return html`
             <div class="hero">
                 <div class="hero-identity">
-                    <div class="hero-icon" aria-hidden="true">
-                        <ha-svg-icon .path=${iconPath}></ha-svg-icon>
+                    <div class="hero-meta">
+                        <div class="hero-icon" aria-hidden="true">
+                            <ha-svg-icon .path=${iconPath}></ha-svg-icon>
+                        </div>
+                        ${this._renderStateChip()}
+                        <button
+                            class="hero-remove"
+                            aria-label="Remove user"
+                            title="Remove user"
+                            @click=${() => {
+                                this._showRemoveDialog = true;
+                            }}
+                        >
+                            <ha-svg-icon .path=${mdiDelete}></ha-svg-icon>
+                        </button>
                     </div>
                     <h2 class="hero-title">${this._renderHeroName()}</h2>
-                    ${this._renderStateChip()}
                 </div>
                 <div class="hero-row">
                     <div class="hero-field hero-pin">
@@ -861,34 +869,6 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     }
 
     /**
-     * Force HA's `ha-entity-picker` element to register. The picker is
-     * lazy-loaded by Home Assistant — the Lovelace editor context loads it
-     * eagerly, but a standalone custom card never triggers the load, so
-     * the unregistered tag inside our condition dialog stays empty. We
-     * piggyback on the entities-card config element, which uses
-     * ha-entity-picker internally, so requesting its `getConfigElement()`
-     * forces the picker to register as a side effect.
-     *
-     * Idempotent: short-circuits once the picker is in the
-     * customElements registry. Failures are swallowed (logged via
-     * console.warn) because the dialog itself still opens — the picker
-     * just won't render until HA registers it some other way.
-     */
-    private async _ensureEntityPickerLoaded(): Promise<void> {
-        if (customElements.get('ha-entity-picker')) return;
-        const loadHelpers = window.loadCardHelpers;
-        if (!loadHelpers) return;
-        try {
-            const helpers = await loadHelpers();
-            const cardElement = helpers.createCardElement({ entities: [], type: 'entities' });
-            await cardElement.constructor.getConfigElement?.();
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn('lcm-slot: failed to lazy-load ha-entity-picker', err);
-        }
-    }
-
-    /**
      * Lazy-loads (and caches) an HA entity row element using the
      * `loadCardHelpers().createRowElement()` helper. Falls back to a plain
      * text node when the helper isn't available (e.g. older HA, jsdom test
@@ -1109,7 +1089,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         // re-trigger here in case the card connected in a state where the
         // global helper wasn't yet available. Idempotent — short-circuits
         // once the element is registered.
-        void this._ensureEntityPickerLoaded();
+        void ensureEntityPickerLoaded();
         this._dialogEntityId = null;
         this._showConditionDialog = true;
     }
@@ -1215,6 +1195,94 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         await this._hass.callWS(msg);
     }
 
+    private _renderRemoveDialog(): TemplateResult {
+        const name = this._data?.name || 'this user';
+        return html`
+            <ha-dialog
+                open
+                @closed=${() => {
+                    this._showRemoveDialog = false;
+                }}
+                .heading=${`Remove ${name}?`}
+            >
+                <div class="dialog-content">
+                    <p class="dialog-description">
+                        ${name} will be removed from this Lock Code Manager configuration. Their
+                        entities go with them.
+                    </p>
+                    <label class="dialog-check">
+                        <input
+                            type="checkbox"
+                            .checked=${this._removeClearsCredentials}
+                            @change=${(e: Event) => {
+                                this._removeClearsCredentials = (
+                                    e.target as HTMLInputElement
+                                ).checked;
+                            }}
+                        />
+                        <span>
+                            Also clear their code from the locks. Leave this unticked to keep the
+                            code working and simply stop managing it here.
+                        </span>
+                    </label>
+                    ${
+                        this._removing
+                            ? html`<div class="dialog-saving" aria-live="polite">Removing…</div>`
+                            : nothing
+                    }
+                    <div class="dialog-actions">
+                        <button
+                            class="dialog-action"
+                            @click=${() => {
+                                this._showRemoveDialog = false;
+                            }}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            class="dialog-action destructive"
+                            .disabled=${this._removing}
+                            @click=${this._commitRemove}
+                        >
+                            Remove
+                        </button>
+                    </div>
+                </div>
+            </ha-dialog>
+        `;
+    }
+
+    private async _commitRemove(): Promise<void> {
+        const name = this._data?.name;
+        const entryId = this._data?.config_entry_id ?? this._config?.config_entry_id;
+        if (!this._hass || !name || !entryId) {
+            this._setActionError('Card not initialized');
+            return;
+        }
+        if (this._removing) return;
+        this._removing = true;
+        try {
+            await this._hass.callService('lock_code_manager', 'delete_user', {
+                clear_credentials: this._removeClearsCredentials,
+                config_entry_id: entryId,
+                name
+            });
+            this._showRemoveDialog = false;
+            // This card is about to be a card for nobody: its entities are
+            // gone and its subscription simply stops reporting, so without a
+            // reload it would sit here showing the person who was removed,
+            // PIN and all. The view is strategy-generated, so nothing short
+            // of a reload takes the card away.
+            this._reload();
+        } catch (err) {
+            this._setActionError(
+                `Could not remove ${name}: ${err instanceof Error ? err.message : String(err)}`
+            );
+        } finally {
+            this._removing = false;
+        }
+    }
+
     private _renderConditionDialog(): TemplateResult {
         return html`
             <ha-dialog open @closed=${this._closeConditionDialog} .heading=${'Add condition'}>
@@ -1229,9 +1297,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                         .label=${'Condition entity'}
                         .includeDomains=${CONDITION_DOMAINS}
                         .entityFilter=${(_state: { entity_id: string }) =>
-                            (CONDITION_DOMAINS as readonly string[]).includes(
-                                _state.entity_id.split('.')[0]
-                            )}
+                            isConditionEntity(_state.entity_id)}
                         @value-changed=${(e: CustomEvent) => this._handlePickerChange(e)}
                     ></ha-entity-picker>
                     ${
@@ -1471,7 +1537,6 @@ declare global {
             preview?: boolean;
             type: string;
         }>;
-        loadCardHelpers?: () => Promise<CardHelpers>;
     }
 }
 

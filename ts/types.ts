@@ -196,6 +196,14 @@ export interface LockCodesCardConfig {
     type: 'custom:lcm-lock-codes';
 }
 
+export interface LockCodeManagerAddUserCardConfig {
+    /** Config entry ID for the LCM instance (use this OR config_entry_title) */
+    config_entry_id?: string;
+    /** Config entry title for the LCM instance (use this OR config_entry_id) */
+    config_entry_title?: string;
+    type: string;
+}
+
 export interface LockCodeManagerSlotCardConfig {
     /** How to display code/PIN values (consistent with lock-data card) */
     code_display?: CodeDisplayMode;

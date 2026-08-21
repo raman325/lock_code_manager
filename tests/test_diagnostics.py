@@ -116,20 +116,23 @@ async def test_device_diagnostics_lock_device(
         assert LOCK_1_ENTITY_ID in result["locks"]
 
 
-async def test_device_diagnostics_config_entry_device(
+async def test_device_diagnostics_for_a_device_that_is_not_a_slot(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ) -> None:
-    """Test device diagnostics for the config entry parent device."""
+    """A device with no slot in its identifier gets the whole entry instead."""
     dev_reg = dr.async_get(hass)
     entry_id = lock_code_manager_config_entry.entry_id
 
-    ce_device = dev_reg.async_get_device(identifiers={(DOMAIN, entry_id)})
-    assert ce_device is not None
+    other = dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={(DOMAIN, f"{entry_id}|not-a-slot")},
+        name="Something else",
+    )
 
     result = await async_get_device_diagnostics(
-        hass, lock_code_manager_config_entry, ce_device
+        hass, lock_code_manager_config_entry, other
     )
 
     # Falls through to config entry diagnostics (superset)

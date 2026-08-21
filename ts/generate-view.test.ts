@@ -598,6 +598,22 @@ describe('generateSlotCard', () => {
     });
 });
 
+/**
+ * The sections driven by a strategy of the given type.
+ *
+ * Tests ask for these rather than counting `sections`, so that adding a
+ * section to the view -- the add-user button, say -- does not read as a
+ * change in how many users or locks the view rendered.
+ */
+function strategySections(
+    sections: Array<{ strategy?: unknown }> | undefined,
+    type: string
+): Array<{ strategy?: unknown }> {
+    return (sections ?? []).filter(
+        (section) => (section.strategy as { type?: string } | undefined)?.type === type
+    );
+}
+
 describe('generateView', () => {
     const testConfigEntry: ConfigEntryJSONFragment = {
         disabled_by: '',
@@ -658,9 +674,10 @@ describe('generateView', () => {
         );
         expect(lockBadge).toBeDefined();
         expect(result.type).toBe('sections');
-        expect(result.sections).toHaveLength(1);
+        const userSections = strategySections(result.sections, 'custom:lock-code-manager-slot');
+        expect(userSections).toHaveLength(1);
         // Sections now contain strategies, not rendered cards
-        const strategy = result.sections[0].strategy as {
+        const strategy = userSections[0].strategy as {
             slot: number;
             type: string;
         };
@@ -746,7 +763,7 @@ describe('generateView', () => {
             useSlotCards: false
         });
 
-        expect(result.sections).toHaveLength(3);
+        expect(strategySections(result.sections, 'custom:lock-code-manager-slot')).toHaveLength(3);
     });
 
     it('passes use_slot_cards=false to section strategy for legacy mode', async () => {
@@ -859,9 +876,10 @@ describe('generateView', () => {
             useSlotCards: true
         });
 
-        expect(result.sections).toHaveLength(2);
+        const userSections = strategySections(result.sections, 'custom:lock-code-manager-slot');
+        expect(userSections).toHaveLength(2);
         // Verify sections use slot section strategies
-        const strategies = result.sections.map((s) => s.strategy) as Array<{
+        const strategies = userSections.map((s) => s.strategy) as Array<{
             config_entry_id: string;
             slot: number;
             type: string;
@@ -1005,19 +1023,100 @@ describe('generateView lock codes cards', () => {
             useSlotCards: true
         });
 
-        // Should have 1 slot section + 2 lock sections
-        expect(result.sections).toHaveLength(3);
-
-        // Extract strategies from sections
-        const strategies = result.sections.map((s) => s.strategy) as Array<{ type: string }>;
-
         // Lock codes should use lock section strategies
-        const lockStrategies = strategies.filter((s) => s.type === 'custom:lock-code-manager-lock');
-        expect(lockStrategies).toHaveLength(2);
+        expect(strategySections(result.sections, 'custom:lock-code-manager-lock')).toHaveLength(2);
 
         // Slot should use slot section strategy
-        const slotStrategies = strategies.filter((s) => s.type === 'custom:lock-code-manager-slot');
-        expect(slotStrategies).toHaveLength(1);
+        expect(strategySections(result.sections, 'custom:lock-code-manager-slot')).toHaveLength(1);
+    });
+
+    it('puts the add-user button between the users and the locks', async () => {
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
+            slots: {
+                1: { condition: null, name: 'Raman' },
+                2: { condition: null, name: 'Sherene' }
+            }
+        };
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            },
+            states: {
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: true,
+            codeDisplay: 'unmasked',
+            useSlotCards: true
+        });
+
+        const kinds = result.sections!.map(
+            (section) =>
+                (section.strategy as { type?: string } | undefined)?.type ??
+                (
+                    (section as { cards?: Array<{ type?: string }> }).cards?.[0] as
+                        { type?: string } | undefined
+                )?.type
+        );
+
+        expect(kinds).toEqual([
+            'custom:lock-code-manager-slot',
+            'custom:lock-code-manager-slot',
+            'custom:lcm-add-user',
+            'custom:lock-code-manager-lock'
+        ]);
+    });
+
+    it('hands the add-user button the config entry it adds to', async () => {
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [],
+            slots: { 1: { condition: null, name: 'Raman' } }
+        };
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            },
+            states: {}
+        });
+
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: true
+        });
+
+        const addSection = result.sections!.find((section) =>
+            (section as { cards?: Array<{ type?: string }> }).cards?.some(
+                (card) => card.type === 'custom:lcm-add-user'
+            )
+        ) as { cards: Array<{ config_entry_id?: string; type?: string }> };
+
+        expect(addSection.cards[0].config_entry_id).toBe('entry123');
     });
 
     it('sorts lock codes cards alphabetically by friendly name', async () => {
@@ -1141,14 +1240,8 @@ describe('generateView lock codes cards', () => {
         });
 
         // Should only have 1 slot section, no lock sections
-        expect(result.sections).toHaveLength(1);
-        const strategies = result.sections.map((s) => s.strategy) as Array<{ type: string }>;
-        const lockStrategies = strategies.filter(
-            (s) => s?.type === 'custom:lock-code-manager-lock'
-        );
-        expect(lockStrategies).toHaveLength(0);
-        // Verify it's a slot strategy
-        expect(strategies[0].type).toBe('custom:lock-code-manager-slot');
+        expect(strategySections(result.sections, 'custom:lock-code-manager-slot')).toHaveLength(1);
+        expect(strategySections(result.sections, 'custom:lock-code-manager-lock')).toHaveLength(0);
     });
 });
 

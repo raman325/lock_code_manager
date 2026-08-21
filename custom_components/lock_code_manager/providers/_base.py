@@ -72,7 +72,7 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
-from ..domain.util import mask_pin, per_lock_issue_id
+from ..domain.util import lock_display_name, mask_pin, per_lock_issue_id
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
 
@@ -401,7 +401,7 @@ class BaseLock:
     @property
     def display_name(self) -> str:
         """Return a human-readable name for this lock."""
-        return self.lock.name or self.lock.original_name or self.lock.entity_id
+        return lock_display_name(self.hass, self.lock.entity_id)
 
     def mask_pin(self, pin: str | None, code_slot: int | str = 0) -> str:
         """Return a masked representation of a PIN for logging."""
