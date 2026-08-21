@@ -1,0 +1,21 @@
+do the whole list. I merged 1462 and I am thinking we merge 1279 in too after rebase
+
+---
+
+should we have a wiki page on managing a rental/guest and talk about adding a user named guest 1 or whatever and then changing the name as needed. Or adding and removing users as needed on the fly
+
+---
+
+for the cleaner who comes on tuesdays, taht can be managed with a permanent slot and a schedule condition
+
+---
+
+is there any risk that 1279 makes the experience worse for users? e.g. accepts less digits than can be supported or even worse, misinforms
+
+---
+
+yes fix the thing in a new PR
+
+---
+
+or no in the same PR
