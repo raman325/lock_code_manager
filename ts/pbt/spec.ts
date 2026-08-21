@@ -7,7 +7,7 @@
  */
 /* eslint-disable no-underscore-dangle -- window.__lcmHarness is the harness's fixed extractor surface */
 import { always, eventually, now } from '@antithesishq/bombadil';
-import { actions, extract } from '@antithesishq/bombadil/browser';
+import { actions, extract, getFingerprint } from '@antithesishq/bombadil/browser';
 
 export * from '@antithesishq/bombadil/browser/defaults';
 
@@ -117,24 +117,38 @@ export const suspendedStateEventuallyShowsBanner = always(() =>
     )
 );
 
-/** Click chaos-panel buttons and card-internal (shadow DOM) buttons. */
+/**
+ * Click chaos-panel buttons and card-internal (shadow DOM) buttons.
+ *
+ * A click carries a fingerprint of the element it came from, not just a
+ * point, so a replay can tell whether the thing it is about to click is
+ * still the thing the run originally clicked. Built with the library's own
+ * ``getFingerprint`` rather than by hand, so it keeps matching whatever the
+ * schema asks for next.
+ */
 const clickablePoints = extract((state) => {
-    const points: { name: string; x: number; y: number }[] = [];
+    const points: { fingerprint: ReturnType<typeof getFingerprint>; x: number; y: number }[] = [];
+    const view = state.document.defaultView;
+    const width = view?.innerWidth ?? 0;
+    const height = view?.innerHeight ?? 0;
     for (const el of deepQueryAll(state.document, 'button')) {
         const rect = el.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-            points.push({
-                name: el.id || el.textContent?.trim().slice(0, 24) || 'button',
-                x: rect.left + rect.width / 2,
-                y: rect.top + rect.height / 2
-            });
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        // Rects are relative to the viewport, so anything scrolled past has
+        // negative coordinates -- which the action schema rejects outright.
+        // Offer only what is on screen right now; scrolling is its own
+        // action, and what it reveals becomes clickable on the next state.
+        const onScreen = x >= 0 && y >= 0 && x < width && y < height;
+        if (rect.width > 0 && rect.height > 0 && onScreen) {
+            points.push({ fingerprint: getFingerprint(el), x, y });
         }
     }
     return points;
 });
 
 export const clickButtons = actions(() =>
-    clickablePoints.current.map(({ name, x, y }) => {
-        return { Click: { name, point: { x, y } } };
+    clickablePoints.current.map(({ fingerprint, x, y }) => {
+        return { Click: { fingerprint, point: { x, y } } };
     })
 );
