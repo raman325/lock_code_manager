@@ -2882,3 +2882,15 @@ Do the restore and emigrate
 ---
 
 Wait a sec, wasn’t the backup taken before we bumped LCM? If not that was a misstep on our part
+
+---
+
+Did the entities properly migrate? The event entity for Raman and sherene should have a history but maybe we can’t migrate the state history with the entity id change? I don’t think that’s true though
+
+---
+
+decide what happened. My best guess is that the recorder keeps movoing forward even if my configuration moves backward. So there's a broken period of time with the data and it converted fine the first time but then we started rewinding but recorder kept moving forward
+
+---
+
+I don't care about my history as long as my users' history is preserved
