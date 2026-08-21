@@ -22,10 +22,13 @@ Features:
   - `binary_sensor` / `switch` / `input_boolean` — active when on
   - `schedule` — active during scheduled times
 - [Services and actions](https://github.com/raman325/lock_code_manager/wiki/Services-and-Actions)
-  for setting/clearing PINs, attaching condition entities, hard-refreshing
-  from the lock, and generating safe random PINs from automations
+  for adding and removing users, setting/clearing PINs, attaching condition
+  entities, hard-refreshing from the lock, and generating safe random PINs
+  from automations
 - [Blueprints](https://github.com/raman325/lock_code_manager/wiki/Blueprints)
   for advanced use cases like usage limiting, calendar-driven PINs, and more
+- [Guest and rental workflows](https://github.com/raman325/lock_code_manager/wiki/Managing-Guests-and-Rentals)
+  — rotate a standing user per booking, or add and remove them per stay
 - Dashboard strategies and custom cards for managing codes and viewing lock
   status — from one-line auto-generated dashboards to fully hand-composed
   layouts
@@ -124,6 +127,11 @@ input tables, and import buttons.
 Visit the [Wiki](https://github.com/raman325/lock_code_manager/wiki) for detailed
 documentation including configuration, troubleshooting, dashboard setup, and development guides.
 
+**Upgrading from 4.x?** 5.0 is configured by user rather than by slot number,
+and migrating renames every entity ID. Read
+[Upgrading to 5.0](https://github.com/raman325/lock_code_manager/wiki/Upgrading-to-5.0)
+first — the migration is one-way.
+
 ## UI & Dashboards
 
 Lock Code Manager ships custom Lovelace **strategies** (which auto-generate UI
@@ -135,7 +143,7 @@ you want where you want it.
 
 - [UI overview & decision guide][wiki-ui-overview] — start here
 - [UI Strategies][wiki-ui-strategies] — dashboard, view, and section strategies
-- [Custom Cards][wiki-ui-cards] — slot card, lock-codes card, and code-display modes
+- [Custom Cards][wiki-ui-cards] — user card, add-user card, lock-codes card, and code-display modes
 
 [wiki-ui-overview]: https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management
 [wiki-ui-strategies]: https://github.com/raman325/lock_code_manager/wiki/UI-Strategies
