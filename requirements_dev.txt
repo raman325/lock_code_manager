@@ -17,4 +17,4 @@ zeroconf==0.150.0
 zha==2.1.0
 zha-quirks==2.2.0
 zigpy>=2.1.0
-zwave-js-server-python==0.73.0
+zwave-js-server-python==0.73.1
