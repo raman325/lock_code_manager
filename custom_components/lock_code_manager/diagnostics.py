@@ -205,7 +205,7 @@ async def async_get_config_entry_diagnostics(
             str(slot_num): _slot_diagnostic(
                 hass, config_entry, slot_num, all_locks, instance_id, ent_reg, dev_reg
             )
-            for slot_num in entry_config.slots
+            for slot_num in entry_config.slot_numbers
         },
     }
 

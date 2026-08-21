@@ -393,6 +393,10 @@ export const lcmEditableStyles = css`
         background: var(--card-background-color, #fff);
         border: 1px solid var(--primary-color);
         border-radius: 4px;
+        /* Without this the padding and border are added to the 100%, so the
+           input overruns its container -- in the hero row that put the name
+           field under the state pill. */
+        box-sizing: border-box;
         color: var(--primary-text-color);
         font-family: inherit;
         font-size: inherit;
@@ -409,6 +413,60 @@ export const lcmEditableStyles = css`
         color: var(--secondary-text-color);
         font-size: var(--lcm-section-header-size);
         margin-top: 4px;
+    }
+`;
+
+/**
+ * Dialog action buttons, rendered at the foot of the dialog body.
+ *
+ * Two things this avoids. `ha-button` is not necessarily registered on a
+ * Lovelace view, and an unregistered custom element renders as nothing at
+ * all. And `ha-dialog`'s primaryAction/secondaryAction slots do not
+ * reliably pick up children projected from a card's shadow root, which is
+ * why the condition dialog already keeps its controls in the body.
+ */
+export const lcmDialogActionStyles = css`
+    .dialog-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 8px;
+    }
+
+    .dialog-action {
+        background: none;
+        border: none;
+        border-radius: 4px;
+        color: var(--primary-color);
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+        padding: 10px 12px;
+        transition: background-color 0.2s;
+    }
+
+    .dialog-action:hover {
+        background: rgba(var(--rgb-primary-color), 0.08);
+    }
+
+    .dialog-action:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
+    .dialog-action[disabled] {
+        color: var(--disabled-text-color);
+        cursor: default;
+    }
+
+    .dialog-action.destructive {
+        color: var(--error-color, #db4437);
+    }
+
+    .dialog-action.destructive:hover {
+        background: rgba(var(--rgb-error-color, 219, 68, 55), 0.08);
     }
 `;
 

@@ -20,8 +20,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import (
+    CONF_CONDITION,
     CONF_ENABLED,
-    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     STATE_OFF,
@@ -33,6 +33,7 @@ from homeassistant.core import (
     HomeAssistant,
     callback,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -40,8 +41,9 @@ from homeassistant.helpers.issue_registry import (
     async_delete_issue,
 )
 
-from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
+from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
 from .config import EntryConfig
+from .names import name_error, normalize_name
 from .queries import get_entry_config
 
 if TYPE_CHECKING:
@@ -155,7 +157,7 @@ class SlotEntityCoordinator:
     @property
     def condition_entity_id(self) -> str | None:
         """Return the configured condition entity ID for this slot."""
-        return self._slot_config().get(CONF_ENTITY_ID)
+        return self._slot_config().get(CONF_CONDITION)
 
     # -- Registration (entities, sync managers) ------------------------------
 
@@ -204,8 +206,37 @@ class SlotEntityCoordinator:
     # -- Intent dispatch -----------------------------------------------------
 
     async def async_request_name_update(self, value: str) -> None:
-        """Apply a slot name write requested by the text entity."""
-        self._write_config_fields({CONF_NAME: value})
+        """
+        Apply a slot name write requested by the text entity.
+
+        The name is the identity the configuration is keyed by, so this path
+        enforces the same rules the config flow does. Without it the ordinary
+        way to rename a user in the frontend would be a hole straight through
+        them: an empty name, or a duplicate of somebody else's, would land in
+        the config entry unchallenged.
+        """
+        name = normalize_name(value)
+        if error := name_error(name):
+            raise InvalidNameError(error, self._slot_num)
+
+        # Compared against every configured user, not only those holding a
+        # slot: a user without one is still a name that cannot be taken, and
+        # renaming onto them would be refused further down without an error
+        # ever reaching the caller.
+        config = get_entry_config(self._config_entry)
+        mine = config.name_for(self._slot_num)
+        conflict = next(
+            (
+                other
+                for other in config.users
+                if other != mine and other.casefold() == name.casefold()
+            ),
+            None,
+        )
+        if conflict is not None:
+            raise InvalidNameError("name_not_unique", self._slot_num, conflict)
+
+        self._write_config_fields({CONF_NAME: name})
 
     async def async_request_pin_update(self, value: str) -> None:
         """
@@ -368,16 +399,16 @@ class SlotEntityCoordinator:
         Compute the slot's active state from config + condition entity.
 
         Every relevant slot config key must be truthy. The condition
-        entity (``CONF_ENTITY_ID``) is truthy when its state is ``on``;
+        entity (``CONF_CONDITION``) is truthy when its state is ``on``;
         ``off`` is False and any other state (unknown, unavailable,
         missing) is None and treated as inactive.
         """
         slot_config = self._slot_config()
         states: dict[str, bool | None] = {}
         for key, value in slot_config.items():
-            if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
+            if key in (EVENT_CREDENTIAL_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
                 continue
-            if key == CONF_ENTITY_ID:
+            if key == CONF_CONDITION:
                 hass_state = self._hass.states.get(value)
                 if hass_state is None:
                     states[key] = None
@@ -428,3 +459,28 @@ class SlotEntityCoordinator:
 
 class PinRequiredError(Exception):
     """Raised when a slot cannot be enabled because no PIN is configured."""
+
+
+class InvalidNameError(HomeAssistantError):
+    """
+    Raised when a slot name write would break the name rules.
+
+    Subclasses ``HomeAssistantError`` so a caller that forgets to translate
+    it still surfaces as a validation refusal rather than an unknown-error
+    500. Carries the translation key and placeholders so the entity renders
+    the same localized message the config flow shows for the same rule,
+    instead of inventing a second English-only wording.
+    """
+
+    def __init__(
+        self, error_key: str, slot_num: int, conflicting_name: str | None = None
+    ) -> None:
+        """Store the error key, the slot written to, and any user in the way."""
+        self.error_key = error_key
+        self.slot_num = slot_num
+        self.conflicting_name = conflicting_name
+        self.placeholders = {
+            "slot_num": str(slot_num),
+            "conflicting_name": str(conflicting_name),
+        }
+        super().__init__(f"{error_key} (slot {slot_num})")

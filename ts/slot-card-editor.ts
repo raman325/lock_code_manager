@@ -15,7 +15,7 @@ const CODE_DISPLAY_OPTIONS: Array<{ label: string; value: CodeDisplayMode }> = [
     { label: 'Always Visible', value: 'unmasked' }
 ];
 
-class LcmSlotCardEditor extends LitElement {
+class LcmUserCardEditor extends LitElement {
     static styles = css`
         .editor-row {
             margin-bottom: 16px;
@@ -119,12 +119,9 @@ class LcmSlotCardEditor extends LitElement {
 
             <div class="editor-row">
                 <ha-input
-                    .label=${'Slot Number'}
-                    .value=${String(this._config.slot ?? '')}
-                    type="number"
-                    min="1"
-                    max="9999"
-                    @input=${this._slotChanged}
+                    .label=${'User'}
+                    .value=${this._config.name ?? ''}
+                    @input=${this._nameChanged}
                 ></ha-input>
             </div>
 
@@ -281,16 +278,24 @@ class LcmSlotCardEditor extends LitElement {
         this._dispatchConfig();
     }
 
-    private _slotChanged(ev: Event): void {
+    private _nameChanged(ev: Event): void {
         if (!this._config) {
             return;
         }
-        const target = ev.target as HTMLInputElement;
-        const value = parseInt(target.value, 10);
-        if (isNaN(value) || value === this._config.slot) {
+        const { value } = ev.target as HTMLInputElement;
+        if (value === this._config.name) {
             return;
         }
-        this._config = { ...this._config, slot: value };
+        // A named card drops the slot number and the entity: carrying more
+        // than one addressee would keep it showing whoever the other one
+        // points at, whatever the name said. Clearing the name keeps them,
+        // or the card is left addressing nobody.
+        if (value) {
+            const { slot: _slot, user_entity_id: _entity, ...rest } = this._config;
+            this._config = { ...rest, name: value };
+        } else {
+            this._config = { ...this._config, name: value };
+        }
         this._dispatchConfig();
     }
 
@@ -408,4 +413,4 @@ class LcmSlotCardEditor extends LitElement {
     }
 }
 
-customElements.define('lcm-slot-editor', LcmSlotCardEditor);
+customElements.define('lcm-user-editor', LcmUserCardEditor);

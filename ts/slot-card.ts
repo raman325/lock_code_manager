@@ -17,6 +17,7 @@ import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { until } from 'lit/directives/until.js';
 
+import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
 import { slotCardStyles } from './slot-card.styles';
 import { LcmSubscriptionMixin } from './subscription-mixin';
@@ -35,23 +36,6 @@ const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 interface HassElement extends HTMLElement {
     hass?: HomeAssistant;
 }
-
-/** Subset of HA's loadCardHelpers() return value we depend on. */
-interface CardHelpers {
-    createCardElement: (config: { entities: string[]; type: string }) => HTMLElement & {
-        constructor: { getConfigElement?: () => Promise<unknown> };
-    };
-    createRowElement: (config: { entity: string }) => HTMLElement;
-}
-
-/** Domains the Manage Condition entity picker is restricted to. */
-const CONDITION_DOMAINS = [
-    'calendar',
-    'schedule',
-    'binary_sensor',
-    'switch',
-    'input_boolean'
-] as const;
 
 /** Internal interface for lock sync status display */
 interface LockSyncStatus {
@@ -102,7 +86,7 @@ const LcmSlotCardBase = LcmSubscriptionMixin(LitElement);
  *
  * Phase 3: Uses websocket subscription for real-time updates.
  */
-class LockCodeManagerSlotCard extends LcmSlotCardBase {
+class LockCodeManagerUserCard extends LcmSlotCardBase {
     static styles = slotCardStyles;
 
     // Note: _revealed, _unsub, _subscribing provided by LcmSubscriptionMixin
@@ -118,6 +102,12 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() private _showConditionDialog = false;
     @state() private _dialogEntityId: string | null = null;
     @state() private _dialogSaving = false;
+    @state() private _showRemoveDialog = false;
+    // Defaults to clearing, matching the service. Unticking it hands the
+    // credential over rather than revoking it: the code goes on working and
+    // this integration stops managing it.
+    @state() private _removeClearsCredentials = true;
+    @state() private _removing = false;
 
     _hass?: HomeAssistant;
     private _entityRowCache = new Map<string, HTMLElement>();
@@ -135,11 +125,12 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     static getConfigElement(): HTMLElement {
-        return document.createElement('lcm-slot-editor');
+        return document.createElement('lcm-user-editor');
     }
 
     static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
-        const stub = { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
+        const stub = { config_entry_id: 'stub', name: '', type: 'custom:lcm-user' };
+        // Marked so the preview never subscribes: it has no user to ask about.
         try {
             return await Promise.race([
                 (async () => {
@@ -150,8 +141,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     if (entries.length > 0) {
                         return {
                             config_entry_id: entries[0].entry_id,
-                            slot: 1,
-                            type: 'custom:lcm-slot'
+                            name: '',
+                            type: 'custom:lcm-user'
                         };
                     }
                     return stub;
@@ -164,7 +155,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             // Log but don't surface to the user — this runs in the card
             // picker, where there's no dashboard banner to display errors.
             // eslint-disable-next-line no-console
-            console.warn('lcm-slot: failed to fetch config entries for stub config', err);
+            console.warn('lcm-user: failed to fetch config entries for stub config', err);
             return stub;
         }
     }
@@ -173,14 +164,22 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         if (!config.config_entry_id && !config.config_entry_title) {
             throw new Error('config_entry_id or config_entry_title is required');
         }
-        if (typeof config.slot !== 'number' || config.slot < 1 || config.slot > 9999) {
+        if (config.name !== undefined && typeof config.name !== 'string') {
+            throw new Error('name must be a string');
+        }
+        if (
+            config.slot !== undefined &&
+            (typeof config.slot !== 'number' || config.slot < 1 || config.slot > 9999)
+        ) {
             throw new Error('slot must be a number between 1 and 9999');
         }
         // If config changed, unsubscribe and resubscribe
         if (
             this._config?.config_entry_id !== config.config_entry_id ||
             this._config?.config_entry_title !== config.config_entry_title ||
-            this._config?.slot !== config.slot
+            this._config?.name !== config.name ||
+            this._config?.slot !== config.slot ||
+            this._config?.user_entity_id !== config.user_entity_id
         ) {
             this._unsubscribe();
             this._data = undefined;
@@ -198,7 +197,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             collapsed.includes('condition') || collapsed.includes('conditions')
         );
         this._lockStatusExpanded = !collapsed.includes('lock_status');
-        this._isStub = config.config_entry_id === 'stub';
+        // A card naming nobody yet is a stub too: that is exactly what the
+        // picker hands over when the card is added, and subscribing for an
+        // empty name only produces an error where a preview belongs.
+        this._isStub = config.config_entry_id === 'stub' || !this._hasAddressee();
         if (!this._isStub) {
             void this._subscribe();
         }
@@ -209,7 +211,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     // ha-entity-picker before the user can open the condition dialog.
     override connectedCallback(): void {
         super.connectedCallback();
-        void this._ensureEntityPickerLoaded();
+        void ensureEntityPickerLoaded();
     }
 
     // We override disconnectedCallback here to clean up the action-error
@@ -234,12 +236,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const msg: MessageBase & {
             config_entry_id?: string;
             config_entry_title?: string;
+            name?: string;
             reveal: boolean;
-            slot: number;
+            slot?: number;
+            user_entity_id?: string;
         } = {
             reveal: this._shouldReveal(),
-            slot: this._config.slot,
-            type: 'lock_code_manager/subscribe_code_slot'
+            type: 'lock_code_manager/subscribe_code_slot',
+            ...this._addressee()
         };
         if (this._config.config_entry_id) {
             msg.config_entry_id = this._config.config_entry_id;
@@ -280,7 +284,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Show static preview for card picker (stub config)
         if (this._isStub) {
             return html`<ha-card>
-                <div class="message">Lock Code Manager Slot Card</div>
+                <div class="message">Lock Code Manager User Card</div>
             </ha-card>`;
         }
 
@@ -297,6 +301,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         // Fallback to state-based approach (initial load before subscription)
         return html`<ha-card><div class="message">Connecting...</div></ha-card>`;
+    }
+
+    /** Seam so a test can observe the reload without navigating the runner. */
+    protected _reload(): void {
+        window.location.reload();
     }
 
     private _renderFromData(data: SlotCardData): TemplateResult {
@@ -353,14 +362,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           </div>`
                         : nothing
                 }
-                ${this._renderHeader(stateClass)}
                 <div class="content">
-                    ${this._renderHero(pin, pinLength, enabled, mode)}
+                    ${this._renderHero(pin, pinLength, enabled, mode, stateClass)}
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
                 ${this._renderEventRow()}
                 ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
+                ${this._showRemoveDialog ? this._renderRemoveDialog() : nothing}
             </ha-card>
         `;
     }
@@ -465,55 +474,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this.dispatchEvent(event);
     }
 
-    private _renderHeader(
-        stateClass: 'active' | 'inactive' | 'disabled' = 'active'
-    ): TemplateResult {
-        const slotKicker = this._renderSlotKicker();
-        const stateChip = this._renderStateChip();
-
-        // Surface state on the icon bubble: key when active, clock when
-        // blocked by condition (matches the lock card's pending-clock
-        // motif), lock-off when the user has explicitly disabled the slot.
-        let iconPath: string;
-        switch (stateClass) {
-            case 'inactive':
-                iconPath = mdiClockOutline;
-                break;
-            case 'disabled':
-                iconPath = mdiLockOff;
-                break;
-            default:
-                iconPath = mdiKey;
-        }
-
-        return html`
-            <div class="header">
-                <div class="header-top">
-                    <div class="header-icon" aria-hidden="true">
-                        <ha-svg-icon .path=${iconPath}></ha-svg-icon>
-                    </div>
-                    <h2 class="header-title">${slotKicker}</h2>
-                    ${stateChip}
-                </div>
-            </div>
-        `;
-    }
-
-    private _renderSlotKicker(): string {
-        const slot = this._config?.slot;
-        const title = this._configEntryTitle();
-        return title ? `Slot ${slot} · ${title}` : `Slot ${slot}`;
-    }
-
-    private _configEntryTitle(): string | undefined {
-        // Prefer the explicit config_entry_title from the card config when set;
-        // otherwise fall back to the title surfaced in the websocket payload.
-        if (this._config?.config_entry_title) {
-            return this._config.config_entry_title;
-        }
-        return this._data?.config_entry_title || undefined;
-    }
-
     private _renderStateChip(): TemplateResult {
         const enabled = this._data?.enabled;
         const active = this._data?.active;
@@ -539,11 +499,48 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         `;
     }
 
+    /**
+     * The user's name, which is the card's title now that no slot number is.
+     *
+     * Editable in place, as it has always been -- renaming here renames the
+     * user everywhere, and the card goes on working because it addresses
+     * itself by an entity rather than by this.
+     */
+    private _renderHeroName(): TemplateResult {
+        const name = this._data?.name;
+        if (this._editingField === 'name') {
+            return html`<input
+                class="edit-input name-edit-input"
+                type="text"
+                aria-label="Edit name"
+                .value=${name ?? ''}
+                @blur=${this._handleEditBlur}
+                @keydown=${this._handleEditKeydown}
+            />`;
+        }
+        return html`<span
+            class="hero-name-value editable"
+            role="button"
+            tabindex="0"
+            aria-label="Edit name"
+            @click=${() => this._startEditing('name')}
+            @keydown=${(e: KeyboardEvent) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    this._startEditing('name');
+                }
+            }}
+        >
+            ${name ? html`${name}` : html`<em class="placeholder">Unnamed</em>`}
+        </span>`;
+    }
+
     private _renderHero(
         pin: string | null,
         pinLength: number | undefined,
         enabled: boolean | null,
-        mode: CodeDisplayMode
+        mode: CodeDisplayMode,
+        stateClass: 'active' | 'inactive' | 'disabled' = 'active'
     ): TemplateResult {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
         const hasPin = pin !== null || pinLength !== undefined;
@@ -558,41 +555,40 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const name = this._data?.name;
         const editingName = this._editingField === 'name';
 
+        // The state icon leads the row the way a Home Assistant tile does:
+        // it is the card's avatar, not a second copy of the state chip.
+        let iconPath: string;
+        switch (stateClass) {
+            case 'inactive':
+                iconPath = mdiClockOutline;
+                break;
+            case 'disabled':
+                iconPath = mdiLockOff;
+                break;
+            default:
+                iconPath = mdiKey;
+        }
+
         return html`
             <div class="hero">
-                <div class="hero-row">
-                    <div class="hero-field">
-                        ${
-                            editingName
-                                ? html`<input
-                                      class="edit-input name-edit-input"
-                                      type="text"
-                                      aria-label="Edit name"
-                                      .value=${name ?? ''}
-                                      @blur=${this._handleEditBlur}
-                                      @keydown=${this._handleEditKeydown}
-                                  />`
-                                : html`<span
-                                      class="hero-name-value editable"
-                                      role="button"
-                                      tabindex="0"
-                                      aria-label="Edit name"
-                                      @click=${() => this._startEditing('name')}
-                                      @keydown=${(e: KeyboardEvent) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                              e.preventDefault();
-                                              this._startEditing('name');
-                                          }
-                                      }}
-                                  >
-                                      ${
-                                          name
-                                              ? html`${name}`
-                                              : html`<em class="placeholder">Unnamed</em>`
-                                      }
-                                  </span>`
-                        }
+                <div class="hero-identity">
+                    <div class="hero-meta">
+                        <div class="hero-icon" aria-hidden="true">
+                            <ha-svg-icon .path=${iconPath}></ha-svg-icon>
+                        </div>
+                        ${this._renderStateChip()}
+                        <button
+                            class="hero-remove"
+                            aria-label="Remove user"
+                            title="Remove user"
+                            @click=${() => {
+                                this._showRemoveDialog = true;
+                            }}
+                        >
+                            <ha-svg-icon .path=${mdiDelete}></ha-svg-icon>
+                        </button>
                     </div>
+                    <h2 class="hero-title">${this._renderHeroName()}</h2>
                 </div>
                 <div class="hero-row">
                     <div class="hero-field hero-pin">
@@ -873,34 +869,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     /**
-     * Force HA's `ha-entity-picker` element to register. The picker is
-     * lazy-loaded by Home Assistant — the Lovelace editor context loads it
-     * eagerly, but a standalone custom card never triggers the load, so
-     * the unregistered tag inside our condition dialog stays empty. We
-     * piggyback on the entities-card config element, which uses
-     * ha-entity-picker internally, so requesting its `getConfigElement()`
-     * forces the picker to register as a side effect.
-     *
-     * Idempotent: short-circuits once the picker is in the
-     * customElements registry. Failures are swallowed (logged via
-     * console.warn) because the dialog itself still opens — the picker
-     * just won't render until HA registers it some other way.
-     */
-    private async _ensureEntityPickerLoaded(): Promise<void> {
-        if (customElements.get('ha-entity-picker')) return;
-        const loadHelpers = window.loadCardHelpers;
-        if (!loadHelpers) return;
-        try {
-            const helpers = await loadHelpers();
-            const cardElement = helpers.createCardElement({ entities: [], type: 'entities' });
-            await cardElement.constructor.getConfigElement?.();
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn('lcm-slot: failed to lazy-load ha-entity-picker', err);
-        }
-    }
-
-    /**
      * Lazy-loads (and caches) an HA entity row element using the
      * `loadCardHelpers().createRowElement()` helper. Falls back to a plain
      * text node when the helper isn't available (e.g. older HA, jsdom test
@@ -1121,7 +1089,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // re-trigger here in case the card connected in a state where the
         // global helper wasn't yet available. Idempotent — short-circuits
         // once the element is registered.
-        void this._ensureEntityPickerLoaded();
+        void ensureEntityPickerLoaded();
         this._dialogEntityId = null;
         this._showConditionDialog = true;
     }
@@ -1174,12 +1142,36 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
     }
 
+    /**
+     * How this card names the user it shows.
+     *
+     * A name where the config gives one, the slot number otherwise. Kept in
+     * one place so the three commands cannot disagree about who they mean.
+     */
+    private _hasAddressee(): boolean {
+        return (
+            Boolean(this._config?.user_entity_id) ||
+            Boolean(this._config?.name) ||
+            this._config?.slot !== undefined
+        );
+    }
+
+    private _addressee(): { user_entity_id: string } | { name: string } | { slot: number } {
+        // The entity first: this integration's entity IDs do not move when a
+        // user is renamed, so a stored card holding one survives a rename
+        // that would strand a card holding the name.
+        if (this._config?.user_entity_id) {
+            return { user_entity_id: this._config.user_entity_id };
+        }
+        return this._config?.name ? { name: this._config.name } : { slot: this._config!.slot! };
+    }
+
     private async _setSlotCondition(entity_id: string): Promise<void> {
         if (!this._hass || !this._config) return;
         const msg: MessageBase & Record<string, unknown> = {
             entity_id,
-            slot: this._config.slot,
-            type: 'lock_code_manager/set_slot_condition'
+            type: 'lock_code_manager/set_slot_condition',
+            ...this._addressee()
         };
         if (this._config.config_entry_id) {
             msg.config_entry_id = this._config.config_entry_id;
@@ -1192,8 +1184,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private async _clearSlotCondition(): Promise<void> {
         if (!this._hass || !this._config) return;
         const msg: MessageBase & Record<string, unknown> = {
-            slot: this._config.slot,
-            type: 'lock_code_manager/clear_slot_condition'
+            type: 'lock_code_manager/clear_slot_condition',
+            ...this._addressee()
         };
         if (this._config.config_entry_id) {
             msg.config_entry_id = this._config.config_entry_id;
@@ -1201,6 +1193,94 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             msg.config_entry_title = this._config.config_entry_title;
         }
         await this._hass.callWS(msg);
+    }
+
+    private _renderRemoveDialog(): TemplateResult {
+        const name = this._data?.name || 'this user';
+        return html`
+            <ha-dialog
+                open
+                @closed=${() => {
+                    this._showRemoveDialog = false;
+                }}
+                .heading=${`Remove ${name}?`}
+            >
+                <div class="dialog-content">
+                    <p class="dialog-description">
+                        ${name} will be removed from this Lock Code Manager configuration. Their
+                        entities go with them.
+                    </p>
+                    <label class="dialog-check">
+                        <input
+                            type="checkbox"
+                            .checked=${this._removeClearsCredentials}
+                            @change=${(e: Event) => {
+                                this._removeClearsCredentials = (
+                                    e.target as HTMLInputElement
+                                ).checked;
+                            }}
+                        />
+                        <span>
+                            Also clear their code from the locks. Leave this unticked to keep the
+                            code working and simply stop managing it here.
+                        </span>
+                    </label>
+                    ${
+                        this._removing
+                            ? html`<div class="dialog-saving" aria-live="polite">Removing…</div>`
+                            : nothing
+                    }
+                    <div class="dialog-actions">
+                        <button
+                            class="dialog-action"
+                            @click=${() => {
+                                this._showRemoveDialog = false;
+                            }}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            class="dialog-action destructive"
+                            .disabled=${this._removing}
+                            @click=${this._commitRemove}
+                        >
+                            Remove
+                        </button>
+                    </div>
+                </div>
+            </ha-dialog>
+        `;
+    }
+
+    private async _commitRemove(): Promise<void> {
+        const name = this._data?.name;
+        const entryId = this._data?.config_entry_id ?? this._config?.config_entry_id;
+        if (!this._hass || !name || !entryId) {
+            this._setActionError('Card not initialized');
+            return;
+        }
+        if (this._removing) return;
+        this._removing = true;
+        try {
+            await this._hass.callService('lock_code_manager', 'delete_user', {
+                clear_credentials: this._removeClearsCredentials,
+                config_entry_id: entryId,
+                name
+            });
+            this._showRemoveDialog = false;
+            // This card is about to be a card for nobody: its entities are
+            // gone and its subscription simply stops reporting, so without a
+            // reload it would sit here showing the person who was removed,
+            // PIN and all. The view is strategy-generated, so nothing short
+            // of a reload takes the card away.
+            this._reload();
+        } catch (err) {
+            this._setActionError(
+                `Could not remove ${name}: ${err instanceof Error ? err.message : String(err)}`
+            );
+        } finally {
+            this._removing = false;
+        }
     }
 
     private _renderConditionDialog(): TemplateResult {
@@ -1217,9 +1297,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                         .label=${'Condition entity'}
                         .includeDomains=${CONDITION_DOMAINS}
                         .entityFilter=${(_state: { entity_id: string }) =>
-                            (CONDITION_DOMAINS as readonly string[]).includes(
-                                _state.entity_id.split('.')[0]
-                            )}
+                            isConditionEntity(_state.entity_id)}
                         @value-changed=${(e: CustomEvent) => this._handlePickerChange(e)}
                     ></ha-entity-picker>
                     ${
@@ -1427,6 +1505,28 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     // _unsubscribe, _shouldReveal, _subscribe inherited from mixin
 }
 
+customElements.define('lcm-user', LockCodeManagerUserCard);
+
+/**
+ * The name this card had when it was addressed by slot number.
+ *
+ * Registered as its own element rather than aliased, because a custom
+ * element can only be defined once per name and Home Assistant looks cards
+ * up by the string in the dashboard. Same implementation; the only
+ * difference is that it says it is on the way out.
+ */
+class LockCodeManagerSlotCard extends LockCodeManagerUserCard {
+    setConfig(config: LockCodeManagerSlotCardConfig): void {
+        // eslint-disable-next-line no-console
+        console.warn(
+            'custom:lcm-slot is deprecated and will be removed in a future ' +
+                'release. Use custom:lcm-user, which takes `name` instead of ' +
+                '`slot`.'
+        );
+        super.setConfig(config);
+    }
+}
+
 customElements.define('lcm-slot', LockCodeManagerSlotCard);
 
 declare global {
@@ -1437,14 +1537,13 @@ declare global {
             preview?: boolean;
             type: string;
         }>;
-        loadCardHelpers?: () => Promise<CardHelpers>;
     }
 }
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-    description: 'Displays and controls a Lock Code Manager code slot',
-    name: 'LCM Slot Card',
+    description: 'Displays and controls one Lock Code Manager user',
+    name: 'LCM User Card',
     preview: true,
-    type: 'lcm-slot'
+    type: 'lcm-user'
 });

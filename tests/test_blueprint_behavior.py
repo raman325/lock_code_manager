@@ -12,6 +12,7 @@ import contextlib
 import pathlib
 from unittest.mock import patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_mock_service,
@@ -22,10 +23,15 @@ from homeassistant.components import automation
 from homeassistant.components.blueprint import models
 from homeassistant.const import ATTR_FRIENDLY_NAME
 from homeassistant.core import Event, HomeAssistant, ServiceCall, State, callback
+from homeassistant.helpers import entity_registry as er, template
 from homeassistant.setup import async_setup_component
 from homeassistant.util import yaml as yaml_util
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import (
+    ATTR_CODE_SLOT,
+    ATTR_SLOT_FIELD,
+    DOMAIN,
+)
 from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import (
@@ -37,12 +43,8 @@ from .common import (
     SLOT_2_EVENT_ENTITY,
 )
 
-BLUEPRINT_FOLDER = (
-    pathlib.Path(__file__).resolve().parent.parent
-    / "blueprints"
-    / "automation"
-    / "lock_code_manager"
-)
+BLUEPRINTS_ROOT = pathlib.Path(__file__).resolve().parent.parent / "blueprints"
+BLUEPRINT_FOLDER = BLUEPRINTS_ROOT / "automation" / "lock_code_manager"
 
 NOTIFIER_PATH = "slot_usage_notifier.yaml"
 LIMITER_PATH = "slot_usage_limiter.yaml"
@@ -711,3 +713,77 @@ async def test_limiter_derives_slot_and_config_entry(
     # `_slot_number` ← state_attr(event_entity, 'code_slot') = 1
     assert "Mock Title" in title
     assert "Slot 1" in title
+
+
+@pytest.mark.parametrize(
+    ("blueprint", "variable", "slot_field"),
+    [
+        ("template/lock_code_manager/calendar_condition.yaml", "_name_entity", "name"),
+        (
+            "template/lock_code_manager/calendar_condition.yaml",
+            "_event_entity",
+            "credential_used",
+        ),
+        (
+            "automation/lock_code_manager/calendar_pin_setter.yaml",
+            "pin_entity",
+            "pin",
+        ),
+    ],
+)
+async def test_blueprints_find_the_entity_they_are_looking_for(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    blueprint: str,
+    variable: str,
+    slot_field: str,
+) -> None:
+    """
+    Render the lookups out of the shipped YAML against a real setup.
+
+    These templates resolve Lock Code Manager's own entities, and nothing else
+    renders them -- which is how one of them shipped matching an entity ID
+    suffix no entity has ever had. Reading the expression out of the file
+    rather than restating it here means the test cannot drift from what
+    users actually run.
+    """
+    source = yaml_util.parse_yaml(
+        (BLUEPRINTS_ROOT / blueprint).read_text(encoding="utf-8")
+    )
+    expression = _find_variable(source, variable)
+    assert expression, f"{blueprint} no longer defines {variable}"
+
+    entry_id = lock_code_manager_config_entry.entry_id
+    rendered = template.Template(expression, hass).async_render(
+        variables={
+            "_all_entities": template.Template(
+                "{{ integration_entities(title) }}", hass
+            ).async_render(variables={"title": lock_code_manager_config_entry.title}),
+            "slot_number": 1,
+        },
+        parse_result=False,
+    )
+
+    assert rendered, f"{blueprint}:{variable} matched nothing"
+    state = hass.states.get(rendered)
+    assert state is not None
+    assert state.attributes[ATTR_CODE_SLOT] == 1
+    assert state.attributes[ATTR_SLOT_FIELD] == slot_field
+    # Belongs to this entry, not merely to something named alike.
+    assert er.async_get(hass).async_get(rendered).config_entry_id == entry_id
+
+
+def _find_variable(source: dict, name: str) -> str | None:
+    """Return the template a blueprint assigns to ``name``, wherever it sits."""
+    if isinstance(source, dict):
+        for key, value in source.items():
+            if key == name and isinstance(value, str):
+                return value
+            if (found := _find_variable(value, name)) is not None:
+                return found
+    elif isinstance(source, list):
+        for item in source:
+            if (found := _find_variable(item, name)) is not None:
+                return found
+    return None

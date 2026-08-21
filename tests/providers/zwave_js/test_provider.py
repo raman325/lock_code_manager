@@ -19,6 +19,7 @@ from zwave_js_server.model.node import Node
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
@@ -36,6 +37,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     SetUserResult,
     User,
     WriteResult,
+    credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -340,7 +342,7 @@ async def test_hard_refresh_codes_calls_access_control(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -408,7 +410,7 @@ async def test_async_get_usercodes_returns_projection_with_managed_slots(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"3": {}, "4": {}},
+            CONF_SLOTS: {"3": {CONF_NAME: "User 3"}, "4": {CONF_NAME: "User 4"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -442,7 +444,7 @@ async def test_async_get_usercodes_overlays_pin_credentials(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "3": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "3": {CONF_NAME: "User 3"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -495,7 +497,7 @@ async def test_async_get_usercodes_reports_occupied_uc_slot_as_unreadable(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}, "3": {}},
+            CONF_SLOTS: {"2": {CONF_NAME: "User 2"}, "3": {CONF_NAME: "User 3"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -535,7 +537,7 @@ async def test_async_get_usercodes_reports_occupied_slot_with_no_user_as_unreada
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "3": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "3": {CONF_NAME: "User 3"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -567,7 +569,7 @@ async def test_async_get_usercodes_readable_credential_outranks_uc_occupancy(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -625,7 +627,7 @@ async def test_async_get_usercodes_skips_uc_occupancy_without_user_code_cc(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -657,7 +659,7 @@ async def test_async_internal_set_usercode_calls_primitives(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -700,7 +702,7 @@ async def test_async_internal_clear_usercode_calls_delete_primitives(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -1695,7 +1697,7 @@ async def test_set_usercode_user_code_cc_skips_set_user_and_writes_credential_on
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"5": {}},
+            CONF_SLOTS: {"5": {CONF_NAME: "User 5"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -1771,7 +1773,7 @@ async def test_async_set_usercode_builds_tagged_name_within_lock_limit(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}},
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}},
         },
     )
     lcm_entry.add_to_hass(hass)
@@ -2143,3 +2145,52 @@ async def test_reconcile_read_unexpected_error_does_not_replace_typed_error(
             name=None,
             source="sync",
         )
+
+
+async def test_scoped_read_covers_users_no_entry_manages(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """The node read spans the whole lock, so a wider scope costs nothing.
+
+    This is the property the per-index providers lack: nothing here filters
+    to the slots Lock Code Manager manages, so a code programmed by hand is
+    already in the answer.
+    """
+    users = [
+        User(
+            user_id=2,
+            credentials=[credential_from_slot(2, SlotCredential.known("1111"))],
+        ),
+        User(
+            user_id=8,
+            credentials=[credential_from_slot(8, SlotCredential.known("2222"))],
+        ),
+    ]
+    with patch.object(zwave_js_lock, "async_get_users", AsyncMock(return_value=users)):
+        codes = await zwave_js_lock.async_get_usercodes(range(1, 6))
+
+    # Slot 8 is outside anything this entry manages, and the read still saw it.
+    assert codes[2].is_present
+    assert codes[8].is_present
+
+
+async def test_scoped_read_keeps_the_user_code_occupancy_repair(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """A wider read still gets the repair that makes the narrow read honest.
+
+    On User Code CC locks the unified read drops a slot the lock reports as
+    occupied but whose code it withholds (issue #1397), which is why
+    ``_overlay_uc_occupancy`` exists. Occupancy is derived from this read, so
+    sourcing it from anywhere the repair does not reach would report an
+    occupied slot as free -- the one mistake that overwrites a real
+    credential.
+    """
+    with patch.object(zwave_js_lock, "async_get_users", AsyncMock(return_value=[])):
+        codes = await zwave_js_lock.async_get_usercodes(range(1, 6))
+
+    occupied = {slot for slot, credential in codes.items() if credential.is_present}
+    # The unified read returned nothing, so anything present here came from
+    # the value database via the repair.
+    assert occupied
+    assert all(codes[slot] is SlotCredential.unreadable() for slot in occupied)

@@ -1061,3 +1061,52 @@ async def test_base_orchestration_clear(
     codes = await schlage_lock.async_get_usercodes()
     assert codes[1] is SlotCredential.empty()
     assert codes[2] is SlotCredential.empty()
+
+
+async def test_occupied_indices_sees_tags_no_entry_manages(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A tag left behind by a removed configuration still claims its number.
+
+    Nothing else knows about it: the slot is not in any entry's managed set,
+    so allocation would happily issue it and land on the orphaned code.
+    """
+    mock_response = {
+        LOCK_ENTITY_ID: {
+            "code-a": {"name": "lcm:1:Raman", "code": "1234"},
+            "code-b": {"name": "lcm:7:Departed", "code": "5678"},
+            "code-c": {"name": "Cleaner", "code": "9999"},
+        }
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=mock_response)
+    )
+
+    # Slot 7 is tagged but unmanaged; the untagged code claims no slot at all,
+    # because a Schlage code is addressed by its own identifier.
+    codes = await schlage_lock.async_get_usercodes(range(1, 11))
+    assert codes[1].is_present
+    assert codes[7].is_present
+
+
+async def test_occupied_indices_respects_the_limit(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Numbers beyond the window the caller asked about are not reported."""
+    mock_response = {
+        LOCK_ENTITY_ID: {
+            "code-a": {"name": "lcm:1:Raman", "code": "1234"},
+            "code-b": {"name": "lcm:9:Far", "code": "5678"},
+        }
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=mock_response)
+    )
+
+    codes = await schlage_lock.async_get_usercodes(range(1, 6))
+    assert codes[1].is_present
+    assert 9 not in codes

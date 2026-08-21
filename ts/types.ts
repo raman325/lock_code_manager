@@ -59,6 +59,11 @@ export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerS
     type: 'custom:lock-code-manager';
 }
 
+export interface SlotInfo {
+    condition: string | null;
+    name: string | null;
+}
+
 export interface SlotMapping {
     calendarEntityId: string | null | undefined;
     codeEventEntity: LockCodeManagerEntityEntry;
@@ -68,6 +73,8 @@ export interface SlotMapping {
     mainEntities: LockCodeManagerEntityEntry[];
     pinActiveEntity: LockCodeManagerEntityEntry;
     slotNum: number;
+    /** Who holds this slot. What the section is titled. */
+    userName: string | null;
 }
 
 export interface LockCodeManagerViewStrategyConfig extends LockCodeManagerStrategyConfig {
@@ -87,6 +94,8 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     condition_helpers?: string[];
     /** Config entry ID for the LCM instance */
     config_entry_id: string;
+    /** The user this section shows, by name */
+    name?: string;
     /**
      * @deprecated No longer used by the slot card; kept so existing dashboard
      * configurations continue to validate. The slot card's Lock Status section
@@ -107,6 +116,8 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     type: 'custom:lock-code-manager-slot';
     /** Use new slot cards (true) or legacy entities cards (false). Default: true */
     use_slot_cards?: boolean;
+    /** Any entity of the user this section shows; steadier than the name */
+    user_entity_id?: string;
 }
 
 export interface LockCodeManagerLockSectionStrategyConfig {
@@ -125,7 +136,12 @@ export interface LockCodeManagerConfigEntryDataResponse {
     config_entry: ConfigEntryJSONFragment;
     entities: EntityRegistryEntry[];
     locks: LockInfo[];
-    slots: { [key: number]: string | null };
+    /**
+     * Keyed by slot number, which is what entity unique IDs carry, so the
+     * strategy can join the two. The name is what a person reads; the
+     * number is bookkeeping and never shown.
+     */
+    slots: { [key: number]: SlotInfo };
 }
 
 export interface LockCoordinatorSlotData {
@@ -180,6 +196,14 @@ export interface LockCodesCardConfig {
     type: 'custom:lcm-lock-codes';
 }
 
+export interface LockCodeManagerAddUserCardConfig {
+    /** Config entry ID for the LCM instance (use this OR config_entry_title) */
+    config_entry_id?: string;
+    /** Config entry title for the LCM instance (use this OR config_entry_id) */
+    config_entry_title?: string;
+    type: string;
+}
+
 export interface LockCodeManagerSlotCardConfig {
     /** How to display code/PIN values (consistent with lock-data card) */
     code_display?: CodeDisplayMode;
@@ -191,6 +215,12 @@ export interface LockCodeManagerSlotCardConfig {
     config_entry_id?: string;
     /** Config entry title for the LCM instance (use this OR config_entry_id) */
     config_entry_title?: string;
+    /**
+     * The user to display. Matched the way a config entry title is,
+     * ignoring case and punctuation. Convenient to write by hand, but it
+     * moves when the user is renamed -- prefer `user_entity_id`.
+     */
+    name?: string;
     /** Show code sensors (actual code on lock) in lock status section (default: true) */
     show_code_sensors?: boolean;
     /** Show conditions section (default: true) */
@@ -201,9 +231,19 @@ export interface LockCodeManagerSlotCardConfig {
     show_lock_status?: boolean;
     /** Show sync status per lock in lock status (default: true) */
     show_lock_sync?: boolean;
-    /** Slot number to display */
-    slot: number;
-    type: 'custom:lcm-slot';
+    /**
+     * Slot number to display. Superseded and kept only so cards written
+     * before the rename keep working; it will be removed.
+     */
+    slot?: number;
+    type: 'custom:lcm-user' | 'custom:lcm-slot';
+    /**
+     * Any entity belonging to the user to display, and the steadiest way to
+     * name one: this integration's entity IDs do not move when a user is
+     * renamed, so a stored card goes on working through a rename that would
+     * strand one holding a name.
+     */
+    user_entity_id?: string;
 }
 
 export interface SlotCardLockStatus {

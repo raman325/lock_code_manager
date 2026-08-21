@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import replace
 from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -105,7 +106,7 @@ class _NativeStubLock(BaseLock):
         user.credentials = []
         return True
 
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         return list(self._users.values())
 
     async def async_get_capabilities(self) -> LockCapabilities:
@@ -155,7 +156,7 @@ class _DegenerateStubLock(BaseLock):
         self.calls.append(("delete_credential", ref.user_id, ref.slot))
         return self._slots.pop(ref.slot, None) is not None
 
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         return [user_from_slot(slot, state) for slot, state in self._slots.items()]
 
 

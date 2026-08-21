@@ -49,6 +49,17 @@ export async function generateView(
 
     const slots = Object.keys(configEntryData.slots).map((slotNum) => parseInt(slotNum, 10));
 
+    // One entity per slot, to address its card by. Any of the slot's entities
+    // would do -- the unique ID carries the slot number either way -- so this
+    // takes the first, which keeps the choice stable across renders.
+    const userEntityIds = new Map<number, string>();
+    for (const entity of configEntryData.entities) {
+        const slotNum = parseInt(entity.unique_id.split('|')[1] ?? '', 10);
+        if (!isNaN(slotNum) && !userEntityIds.has(slotNum)) {
+            userEntityIds.set(slotNum, entity.entity_id);
+        }
+    }
+
     // Build badges - lock state badges only
     // Note: Template badges are not supported by HA, so we only use entity badges
     // The slot cards already show detailed status (active, sync, conditions)
@@ -77,6 +88,11 @@ export async function generateView(
                     condition_helpers: conditionHelpers[slotNum]
                 }),
                 config_entry_id: configEntry.entry_id,
+                // The slot number rides along so a section can still be
+                // addressed by it, and the name for anyone reading the
+                // generated config; the entity is what the card uses,
+                // because it survives a rename.
+                name: configEntryData.slots[slotNum]?.name ?? undefined,
                 show_code_sensors,
                 show_conditions,
                 show_lock_count: false,
@@ -84,9 +100,21 @@ export async function generateView(
                 show_lock_sync,
                 slot: slotNum,
                 type: 'custom:lock-code-manager-slot',
-                use_slot_cards
+                use_slot_cards,
+                user_entity_id: userEntityIds.get(slotNum)
             }
         };
+    });
+
+    // Between the users and the locks, because it acts on the list above it.
+    sections.push({
+        cards: [
+            {
+                config_entry_id: configEntry.entry_id,
+                type: 'custom:lcm-add-user'
+            }
+        ],
+        type: 'grid'
     });
 
     if (show_lock_cards) {
@@ -190,6 +218,19 @@ export function getEntityDisplayName(
 }
 
 /** @internal - exported for testing via generate-view.internal.ts */
+/**
+ * The one-line heading for a slot's section.
+ *
+ * A name goes straight into markdown, so a line break in it would close the
+ * heading and turn the rest into headings of its own. Names are free-form —
+ * nothing stops one containing a newline — and the result reads as a broken
+ * dashboard rather than a strange name.
+ */
+function headingFor(slotMapping: SlotMapping): string {
+    const name = slotMapping.userName?.replace(/\s+/g, ' ').replace(/^#+/, '').trim();
+    return name || `Slot ${slotMapping.slotNum}`;
+}
+
 export function generateSlotCard(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
@@ -201,7 +242,9 @@ export function generateSlotCard(
     return {
         cards: [
             {
-                content: `## Code Slot ${slotMapping.slotNum}`,
+                // Named for whoever holds it. The slot number is internal
+                // bookkeeping and has no business on a dashboard.
+                content: `## ${headingFor(slotMapping)}`,
                 type: 'markdown'
             },
             {
@@ -255,6 +298,7 @@ export function generateSlotCard(
 export function generateNewSlotCard(
     configEntry: ConfigEntryJSONFragment,
     slotNum: number,
+    userName: string | null,
     show_code_sensors: boolean,
     show_lock_sync: boolean,
     show_conditions = true,
@@ -268,8 +312,9 @@ export function generateNewSlotCard(
         show_conditions,
         show_lock_status,
         show_lock_sync,
-        slot: slotNum,
-        type: 'custom:lcm-slot'
+        // Named where the user has one; the number only where they do not.
+        ...(userName ? { name: userName } : { slot: slotNum }),
+        type: 'custom:lcm-user'
     };
     if (collapsed_sections && collapsed_sections.length > 0) {
         card.collapsed_sections = collapsed_sections;
@@ -306,7 +351,8 @@ export function getSlotMapping(
     const pinActiveEntity = lockCodeManagerEntities.find(
         (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     );
-    const calendarEntityId: string | null | undefined = configEntryData.slots[slotNum];
+    const slotInfo = configEntryData.slots[slotNum];
+    const calendarEntityId: string | null | undefined = slotInfo?.condition;
 
     return {
         calendarEntityId,
@@ -316,7 +362,8 @@ export function getSlotMapping(
         inSyncEntities,
         mainEntities,
         pinActiveEntity,
-        slotNum
+        slotNum,
+        userName: slotInfo?.name ?? null
     };
 }
 

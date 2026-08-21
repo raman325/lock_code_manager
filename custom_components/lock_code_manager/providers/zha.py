@@ -10,6 +10,7 @@ polling.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -25,6 +26,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.util import dt as dt_util
 
+from ..const import MAX_SEARCHED_SLOT
 from ..domain.credentials import (
     Credential,
     CredentialRef,
@@ -337,22 +339,32 @@ class ZHALock(BaseLock):
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
-        Read Personal Identification Number codes from all managed slots.
+        Read Personal Identification Number codes one index at a time.
 
-        Returns a user per slot via the one-slot-one-user projection.
-        Known codes surface as occupied users; failed reads produce
-        unreadable credentials so the coordinator does not treat a
-        transient cluster error as a confirmed-empty slot.
+        Returns a user per slot via the one-slot-one-user projection. The
+        cluster answers a single index per round trip, so ``slots`` bounds
+        the work and must be honoured.
+
+        ``empty`` means confirmed cleared, and ``AVAILABLE`` is the only
+        status that says so. ``known`` means the lock is accepting this code,
+        which only ``ENABLED`` says. Every other answer -- another status, a
+        failed read, a response shape this cannot parse -- is ``unreadable``:
+        something is there and its value cannot be trusted.
+
+        Both directions matter. Reporting a clear that did not happen makes
+        sync reprogram a slot that already holds a code and tells allocation
+        an occupied index is free; reporting a value the lock is not
+        honouring makes a code that will not open the door read as in sync.
         """
         cluster = await self._get_connected_cluster()
-        managed = self.managed_slots
-        if not managed:
+        scope = self.managed_slots if slots is None else slots
+        if not scope:
             return []
 
         slot_states: dict[int, SlotCredential] = {}
-        for slot_num in managed:
+        for slot_num in scope:
             try:
                 result = await cluster.get_pin_code(slot_num)
                 _LOGGER.debug(
@@ -361,11 +373,7 @@ class ZHALock(BaseLock):
                     slot_num,
                     result,
                 )
-                user_status, pin_code = self._parse_pin_response(result)
-                if user_status == DoorLock.UserStatus.Enabled and pin_code:
-                    slot_states[slot_num] = SlotCredential.known(pin_code)
-                else:
-                    slot_states[slot_num] = SlotCredential.empty()
+                parsed = self._parse_pin_response(result)
             except LockDisconnected:
                 raise
             except Exception:
@@ -376,7 +384,66 @@ class ZHALock(BaseLock):
                     exc_info=True,
                 )
                 slot_states[slot_num] = SlotCredential.unreadable()
+                continue
+
+            if parsed is None:
+                _LOGGER.debug(
+                    "Lock %s: unrecognized get_pin_code response for slot %s",
+                    self.lock.entity_id,
+                    slot_num,
+                )
+                slot_states[slot_num] = SlotCredential.unreadable()
+                continue
+
+            user_status, pin_code = parsed
+            # Available is the only status leaving this index free to write
+            # to, Enabled the only one whose code the lock says it accepts.
+            # Everything else holds something untrustworthy: claiming its
+            # value would read as in sync while the code does not open the
+            # door, and claiming it empty would hand it to allocation.
+            if user_status == DoorLock.UserStatus.Available:
+                slot_states[slot_num] = SlotCredential.empty()
+            elif user_status == DoorLock.UserStatus.Enabled and pin_code:
+                slot_states[slot_num] = SlotCredential.known(pin_code)
+            else:
+                slot_states[slot_num] = SlotCredential.unreadable()
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
+
+    async def async_get_max_slot(self) -> int | None:
+        """
+        Read how many Personal Identification Number users the lock supports.
+
+        The Zigbee Cluster Library defines this
+        (``num_of_pin_users_supported``), so the answer comes from the lock
+        rather than from a guess. A lock that will not report it has no
+        opinion, and the caller decides how far to look instead.
+        """
+        try:
+            cluster = await self._get_connected_cluster()
+            result = await cluster.read_attributes(
+                [DoorLock.AttributeDefs.num_of_pin_users_supported.id],
+                allow_cache=True,
+                only_cache=False,
+            )
+            supported = (result[0] or {}).get(
+                DoorLock.AttributeDefs.num_of_pin_users_supported.id
+            )
+        except Exception:
+            _LOGGER.debug(
+                "Lock %s: could not read the supported user count",
+                self.lock.entity_id,
+                exc_info=True,
+            )
+            return None
+
+        # Zero is what a lock reports when it will not say, not a lock with
+        # nowhere to write. The attribute is 16-bit, so a lock can also claim
+        # a range far past anything addressable through this cluster -- and
+        # this provider spends a round trip per index, so believing 65535
+        # would mean tens of thousands of them before a refusal.
+        if not supported:
+            return None
+        return min(int(supported), MAX_SEARCHED_SLOT)
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read all codes from the lock (no cache to invalidate)."""
@@ -385,8 +452,14 @@ class ZHALock(BaseLock):
     # -- Response parsing ----------------------------------------------------
 
     @staticmethod
-    def _parse_pin_response(result: Any) -> tuple[int, str]:
-        """Extract (user_status, pin_code) from a get_pin_code response."""
+    def _parse_pin_response(result: Any) -> tuple[int, str] | None:
+        """
+        Extract (user_status, pin_code) from a get_pin_code response.
+
+        ``None`` for a shape this does not recognize. Reporting such a
+        response as ``Available`` would answer "this slot is free" from a
+        reply that was never understood.
+        """
         if hasattr(result, "user_status"):
             pin = getattr(result, "code", "") or ""
             if isinstance(pin, bytes):
@@ -397,7 +470,7 @@ class ZHALock(BaseLock):
             if isinstance(pin, bytes):
                 pin = pin.decode("utf-8", errors="ignore")
             return result[1], str(pin) if pin else ""
-        return DoorLock.UserStatus.Available, ""
+        return None
 
     # -- Push updates --------------------------------------------------------
 

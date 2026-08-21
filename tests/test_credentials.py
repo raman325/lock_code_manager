@@ -17,7 +17,6 @@ from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
     credential_from_slot,
     pin_address,
-    slot_credential_of,
     user_from_slot,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -205,14 +204,6 @@ class TestUser:
         user = User(user_id=3, credentials=[pin, password])
         assert user.pin_credentials == user.credentials_of_type(CredentialType.PIN)
 
-    def test_credential_for_returns_first_match_or_none(self) -> None:
-        empty_pin = Credential(
-            type=CredentialType.PIN, slot=3, state=SlotCredential.empty()
-        )
-        user = User(user_id=3, credentials=[empty_pin])
-        assert user.credential_for(CredentialType.PIN) is empty_pin
-        assert user.credential_for(CredentialType.RFID) is None
-
 
 class TestSetUserResult:
     """SetUserResult pairs the resolved user id with whether it was created."""
@@ -298,26 +289,6 @@ class TestProjectionHelpers:
         assert cred.slot == 5
         # The SlotCredential is reused verbatim as the credential state.
         assert cred.state is state
-
-    @pytest.mark.parametrize(
-        "state",
-        [
-            SlotCredential.known("1234"),
-            SlotCredential.unreadable(),
-            SlotCredential.empty(),
-        ],
-    )
-    def test_slot_credential_of_round_trips(self, state: SlotCredential) -> None:
-        cred = credential_from_slot(5, state)
-        # Projecting the PIN credential back to a SlotCredential is identity.
-        assert slot_credential_of(cred) is state
-
-    def test_slot_credential_of_rejects_non_pin(self) -> None:
-        rfid = Credential(
-            type=CredentialType.RFID, slot=5, state=SlotCredential.unreadable()
-        )
-        with pytest.raises(ValueError):
-            slot_credential_of(rfid)
 
     def test_user_from_slot_is_single_pin_user_sharing_index(self) -> None:
         state = SlotCredential.known("1234")

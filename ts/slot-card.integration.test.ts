@@ -3,6 +3,7 @@ import { html } from 'lit';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
+import { slotCardStyles } from './slot-card.styles';
 import { createMockHassWithConnection } from './test/mock-hass';
 import { SlotCardData } from './types';
 
@@ -87,11 +88,39 @@ describe('LockCodeManagerSlotCard integration', () => {
             );
         });
 
-        it('throws when slot is missing', () => {
-            el = document.createElement('lcm-slot') as SlotCardElement;
-            expect(() => el.setConfig({ config_entry_id: 'abc', type: 'custom:lcm-slot' })).toThrow(
-                'slot must be a number between 1 and 9999'
-            );
+        it('previews rather than throws when it is given nobody to show', () => {
+            // What the picker hands over the moment the card is added. An
+            // error belongs in the editor, not where a preview goes.
+            el = document.createElement('lcm-user') as SlotCardElement;
+            expect(() =>
+                el.setConfig({ config_entry_id: 'abc', type: 'custom:lcm-user' })
+            ).not.toThrow();
+            expect(el._isStub).toBe(true);
+        });
+
+        it('rejects a name that is not a string', () => {
+            el = document.createElement('lcm-user') as SlotCardElement;
+            expect(() =>
+                el.setConfig({
+                    config_entry_id: 'abc',
+                    name: 3 as unknown as string,
+                    type: 'custom:lcm-user'
+                })
+            ).toThrow('name must be a string');
+        });
+
+        it('throws when the slot number is out of range', () => {
+            el = document.createElement('lcm-user') as SlotCardElement;
+            expect(() =>
+                el.setConfig({ config_entry_id: 'abc', slot: 0, type: 'custom:lcm-user' })
+            ).toThrow('slot must be a number between 1 and 9999');
+        });
+
+        it('takes a name instead of a slot', () => {
+            el = document.createElement('lcm-user') as SlotCardElement;
+            expect(() =>
+                el.setConfig({ config_entry_id: 'abc', name: 'Raman', type: 'custom:lcm-user' })
+            ).not.toThrow();
         });
 
         it('throws when slot is out of range', () => {
@@ -136,7 +165,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el.setConfig({
                 config_entry_title: 'My Lock Manager',
                 slot: 2,
-                type: 'custom:lcm-slot'
+                type: 'custom:lcm-user'
             });
             el.hass = hass;
 
@@ -217,136 +246,84 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
     });
 
-    describe('header redesign (icon bubble + title + state chip)', () => {
+    describe('identity row (icon + user name + state chip)', () => {
         let card: SlotCardElement & Record<string, unknown>;
 
         beforeEach(async () => {
-            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card = document.createElement('lcm-user') as SlotCardElement & Record<string, unknown>;
+            // Addressed by title, so the card itself never learns the entry id —
+            // only the resolved data carries it.
+            card.setConfig({
+                config_entry_title: 'Test Config',
+                name: 'Raman',
+                type: 'custom:lcm-user'
+            });
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
         });
 
-        /** Join a TemplateResult's static strings to inspect element tags */
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        function templateStrings(result: any): string {
-            return (result?.strings ?? []).join('');
-        }
-
-        /** Recursively join the static strings + primitive value text of a
-         *  TemplateResult and any nested templates */
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        function deepTemplateStrings(result: any): string {
-            if (result === null || result === undefined) return '';
-            if (typeof result === 'string') return result;
-            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
-            if (Array.isArray(result)) {
-                return result.map(deepTemplateStrings).join('');
-            }
-            if (typeof result !== 'object') return '';
-            const own = (result.strings ?? []).join('');
-            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
-            return own + nested;
-        }
-
-        /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('renders header with icon bubble, slot kicker as title, and active state chip', () => {
-            (card as any)._data = makeSlotCardData({
-                active: true,
-                config_entry_title: 'House Locks',
-                enabled: true,
-                name: 'Alice',
-                slot_num: 1
-            });
-
-            // Kicker text comes from _renderSlotKicker; prefer the card config
-            // title when set, otherwise fall back to the data payload title.
-            expect((card as any)._renderSlotKicker()).toBe('Slot 1 · House Locks');
-
-            // State chip should be rendered as the third value in header-top
-            // (after icon bubble and title).
-            const chip = (card as any)._renderStateChip();
-            const chipStrings = templateStrings(chip);
-            expect(chipStrings).toContain('state-chip');
-            // The class modifier and text are rendered as dynamic values.
-            expect(chip.values).toContain('active');
-            expect(chip.values).toContain('Active');
-
-            // Header structure: icon bubble + title (kicker) + state chip.
-            // The name lives in the hero band, NOT in the header.
-            const header = (card as any)._renderHeader();
-            const headerStrings = templateStrings(header);
-            expect(headerStrings).toContain('header-icon');
-            expect(headerStrings).toContain('header-title');
-            // Name no longer rendered in the header.
-            expect(headerStrings).not.toContain('class="name"');
-            const headerDeep = deepTemplateStrings(header);
-            // Icon (key) and chip should both be present.
-            expect(headerDeep).toContain('ha-svg-icon');
-            // State chip text flows through as a nested template value.
-            expect(headerDeep).toContain('Active');
+        it('titles the card with the user, not a slot number', () => {
+            card._data = makeSlotCardData({ name: 'Raman and Sherene' });
+            const json = JSON.stringify(card.render());
+            expect(json).toContain('Raman and Sherene');
+            expect(json).not.toContain('Slot ');
         });
 
-        it('renders state chip with descriptive text for inactive (blocked)', () => {
-            (card as any)._data = makeSlotCardData({
-                active: false,
-                enabled: true
-            });
-
-            const chip = (card as any)._renderStateChip();
-            const chipStrings = templateStrings(chip);
-            expect(chipStrings).toContain('state-chip');
-            expect(chip.values).toContain('inactive');
-            expect(chip.values).toContain('Blocked by condition');
+        it('shows a placeholder when the user has no name', () => {
+            card._data = makeSlotCardData({ name: '' });
+            expect(JSON.stringify(card.render())).toContain('Unnamed');
         });
 
-        it('renders state chip with descriptive text for disabled by user', () => {
-            (card as any)._data = makeSlotCardData({ enabled: false });
-
-            const chip = (card as any)._renderStateChip();
-            const chipStrings = templateStrings(chip);
-            expect(chipStrings).toContain('state-chip');
-            expect(chip.values).toContain('disabled');
-            expect(chip.values).toContain('Disabled by user');
+        it('keeps the name editable in place', () => {
+            // Renaming here renames the user everywhere; the card survives it
+            // because it addresses itself by an entity, not by this.
+            card._data = makeSlotCardData({ name: 'Raman' });
+            card._editingField = 'name';
+            expect(JSON.stringify(card.render())).toContain('name-edit-input');
         });
 
-        it('omits the title separator when no config_entry_title is available', () => {
-            (card as any)._data = makeSlotCardData({ config_entry_title: '' });
-            // _config has no title and data title is empty — kicker should be just "Slot N".
-            expect((card as any)._renderSlotKicker()).toBe('Slot 1');
+        it('gathers what is about the user into a meta row', () => {
+            // Icon, state and remove sit together above the name. None of
+            // them grows with the name, so sharing its row cost it about
+            // five characters before the ellipsis on a narrow card.
+            card._data = makeSlotCardData({ name: 'Raman' });
+            const json = JSON.stringify(card.render());
+            expect(json).toContain('hero-meta');
+            expect(json).toContain('hero-icon');
+            expect(json).toContain('state-chip');
+            expect(json).toContain('hero-remove');
         });
 
-        it('falls back to data payload title when card config has no title', () => {
-            (card as any)._config = { config_entry_id: 'abc', slot: 2, type: 'custom:lcm-slot' };
-            (card as any)._data = makeSlotCardData({
-                config_entry_title: 'Payload Title',
-                slot_num: 2
-            });
-            expect((card as any)._renderSlotKicker()).toBe('Slot 2 · Payload Title');
+        it('gives the name a line to itself, below that row', () => {
+            card._data = makeSlotCardData({ name: 'Raman' });
+            const markup = JSON.stringify(card.render());
+            const metaAt = markup.indexOf('hero-meta');
+            const titleAt = markup.indexOf('hero-title');
+
+            expect(metaAt).toBeGreaterThan(-1);
+            expect(titleAt).toBeGreaterThan(metaAt);
+            // Not nested inside it -- the row closes first.
+            expect(markup.slice(metaAt, titleAt)).toContain('</div>');
         });
 
-        it('prefers card config title over data payload title', () => {
-            (card as any)._config = {
-                config_entry_id: 'abc',
-                config_entry_title: 'Config Title',
-                slot: 1,
-                type: 'custom:lcm-slot'
-            };
-            (card as any)._data = makeSlotCardData({ config_entry_title: 'Payload Title' });
-            expect((card as any)._renderSlotKicker()).toBe('Slot 1 · Config Title');
+        it('never truncates the name', () => {
+            // The rule this replaced set white-space: nowrap and an
+            // ellipsis, and on a narrow card the name lost to the chrome
+            // beside it. A cut-off name is a cut-off identity.
+            const rule = slotCardStyles
+                .map((part) => String((part as { cssText?: string }).cssText ?? ''))
+                .join('\n')
+                .match(/\.hero-title\s*\{([^}]*)\}/)![1];
+
+            expect(rule).not.toMatch(/white-space:\s*nowrap/);
+            expect(rule).not.toMatch(/text-overflow:\s*ellipsis/);
         });
 
-        it('does not render the name in the header (name lives in the hero band)', () => {
-            (card as any)._data = makeSlotCardData({ name: 'Alice' });
-            const header = (card as any)._renderHeader();
-            const headerDeep = deepTemplateStrings(header);
-            // Name value should NOT appear inside the header.
-            expect(headerDeep).not.toContain('Alice');
-            // No <No Name> placeholder either — that lives in the hero now.
-            expect(headerDeep).not.toContain('No Name');
+        it('has no header bar left', () => {
+            card._data = makeSlotCardData({ name: 'Raman' });
+            expect(JSON.stringify(card.render())).not.toContain('class="header"');
         });
-        /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
     describe('hero row (PIN + Enable)', () => {
@@ -817,8 +794,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             el.setConfig({
                 condition_helpers: ['input_boolean.test_helper', 'input_datetime.date_helper'],
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             expect((el._config as Record<string, unknown>)?.condition_helpers).toEqual([
                 'input_boolean.test_helper',
@@ -830,8 +807,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             expect((el._config as Record<string, unknown>)?.condition_helpers).toBeUndefined();
         });
@@ -841,8 +818,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             el.setConfig({
                 condition_helpers: [],
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             expect((el._config as Record<string, unknown>)?.condition_helpers).toEqual([]);
         });
@@ -881,7 +858,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 config_entry_title: 'My Lock',
                 slot: 2,
-                type: 'custom:lcm-slot'
+                type: 'custom:lcm-user'
             });
             const hass2 = createMockHassWithConnection();
             const callWS2 = hass2.callWS as ReturnType<typeof vi.fn>;
@@ -917,7 +894,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 config_entry_title: 'My Lock',
                 slot: 3,
-                type: 'custom:lcm-slot'
+                type: 'custom:lcm-user'
             });
             const hass2 = createMockHassWithConnection();
             const callWS2 = hass2.callWS as ReturnType<typeof vi.fn>;
@@ -1388,8 +1365,8 @@ describe('LockCodeManagerSlotCard integration', () => {
                     'input_boolean.nonexistent'
                 ],
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             card.hass = createMockHassWithConnection({
                 states: {
@@ -1426,8 +1403,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.helper_1'],
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             card2.hass = hass;
             container.appendChild(card2);
@@ -1457,8 +1434,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.nonexistent'],
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             card2.hass = hass;
             container.appendChild(card2);
@@ -1512,8 +1489,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.helper_1', 'input_boolean.helper_2'],
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             card2.hass = hass;
             container.appendChild(card2);
@@ -1547,8 +1524,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.helper_1'],
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             card2.hass = hass;
             container.appendChild(card2);
@@ -1589,8 +1566,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             card2.setConfig({
                 condition_helpers: ['input_boolean.helper_1', 'input_boolean.nonexistent'],
                 config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             card2.hass = hass;
             container.appendChild(card2);
@@ -1982,8 +1959,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             const result = await SlotCard.getStubConfig(hass);
             expect(result).toEqual({
                 config_entry_id: 'real-entry-123',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: '',
+                type: 'custom:lcm-user'
             });
         });
 
@@ -1997,8 +1974,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             const result = await SlotCard.getStubConfig(hass);
             expect(result).toEqual({
                 config_entry_id: 'stub',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: '',
+                type: 'custom:lcm-user'
             });
         });
 
@@ -2012,8 +1989,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             const result = await SlotCard.getStubConfig(hass);
             expect(result).toEqual({
                 config_entry_id: 'stub',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: '',
+                type: 'custom:lcm-user'
             });
         });
     });
@@ -2023,8 +2000,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'stub',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: '',
+                type: 'custom:lcm-user'
             });
             expect((el as Record<string, unknown>)._isStub).toBe(true);
         });
@@ -2033,8 +2010,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'real-entry',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             expect((el as Record<string, unknown>)._isStub).toBe(false);
         });
@@ -2043,8 +2020,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'stub',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             el.hass = createMockHassWithConnection();
             container.appendChild(el);
@@ -2052,9 +2029,9 @@ describe('LockCodeManagerSlotCard integration', () => {
 
             /* eslint-disable @typescript-eslint/no-explicit-any */
             const result = (el as any).render();
-            // The stub render returns a template containing "Lock Code Manager Slot Card"
+            // The stub render returns a template naming the card
             expect(result).toBeDefined();
-            expect(result.strings?.join('')).toContain('Lock Code Manager Slot Card');
+            expect(result.strings?.join('')).toContain('Lock Code Manager User Card');
             /* eslint-enable @typescript-eslint/no-explicit-any */
         });
     });
@@ -2069,8 +2046,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'real-entry',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             el.hass = createMockHassWithConnection();
             container.appendChild(el);
@@ -2097,8 +2074,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             el.setConfig({
                 config_entry_id: 'real-entry',
-                slot: 1,
-                type: 'custom:lcm-slot'
+                name: 'Raman',
+                type: 'custom:lcm-user'
             });
             el.hass = createMockHassWithConnection();
             container.appendChild(el);
@@ -4076,11 +4053,13 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
 
         describe('B1: semantic headings', () => {
-            it('header title is rendered as <h2>, not <span>', () => {
-                const tmpl = (card as any)._renderHeader();
+            it("the card's title is a heading, not a span", () => {
+                // It is the user's name now rather than a slot number, but it
+                // is still what a screen reader should announce the card by.
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked');
                 const joined = deepStrings(tmpl);
-                expect(joined).toContain('<h2 class="header-title"');
-                expect(joined).not.toContain('<span class="header-title"');
+                expect(joined).toContain('<h2 class="hero-title"');
+                expect(joined).not.toContain('<span class="hero-title"');
             });
 
             it('collapsible section title is rendered as <h3>', () => {
@@ -4103,10 +4082,10 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         describe('B2: aria-hidden on decorative icons and dots', () => {
-            it('header icon bubble has aria-hidden', () => {
-                const tmpl = (card as any)._renderHeader();
+            it('identity icon bubble has aria-hidden', () => {
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked');
                 const joined = deepStrings(tmpl);
-                expect(joined).toMatch(/<div class="header-icon" aria-hidden="true"/);
+                expect(joined).toMatch(/<div class="hero-icon" aria-hidden="true"/);
             });
 
             it('state-chip dot has aria-hidden', () => {
@@ -4352,25 +4331,25 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
         });
 
-        describe('VC6: header icon bubble surfaces state', () => {
+        describe('VC6: identity icon bubble surfaces state', () => {
             // The actual mdi path strings come from @mdi/js — we look up the
             // exact path values rather than hard-coding the SVG to keep these
             // tests robust to mdi package version bumps.
             it('renders mdiKey when stateClass is active (default)', async () => {
                 const { mdiKey } = await import('@mdi/js');
-                const tmpl = (card as any)._renderHeader('active');
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked', 'active');
                 expect(tmpl.values).toContain(mdiKey);
             });
 
             it('renders mdiClockOutline when stateClass is inactive', async () => {
                 const { mdiClockOutline } = await import('@mdi/js');
-                const tmpl = (card as any)._renderHeader('inactive');
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked', 'inactive');
                 expect(tmpl.values).toContain(mdiClockOutline);
             });
 
             it('renders mdiLockOff when stateClass is disabled', async () => {
                 const { mdiLockOff } = await import('@mdi/js');
-                const tmpl = (card as any)._renderHeader('disabled');
+                const tmpl = (card as any)._renderHero(null, undefined, true, 'masked', 'disabled');
                 expect(tmpl.values).toContain(mdiLockOff);
             });
         });
@@ -4504,5 +4483,235 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('addressing a user by name', () => {
+        it('names the user rather than the slot they hold', async () => {
+            el = document.createElement('lcm-user') as SlotCardElement;
+            const hass = createMockHassWithConnection();
+            el.setConfig({ config_entry_id: 'my-entry', name: 'Raman', type: 'custom:lcm-user' });
+            el.hass = hass;
+
+            container.appendChild(el);
+            await flush();
+
+            const subscribeMessage = hass.connection.subscribeMessage as ReturnType<typeof vi.fn>;
+            const msg = subscribeMessage.mock.calls[0][1];
+            expect(msg.name).toBe('Raman');
+            expect(msg.slot).toBeUndefined();
+        });
+
+        it('still sends a slot number when that is all it was given', async () => {
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            const hass = createMockHassWithConnection();
+            el.setConfig({ config_entry_id: 'my-entry', slot: 4, type: 'custom:lcm-slot' });
+            el.hass = hass;
+
+            container.appendChild(el);
+            await flush();
+
+            const subscribeMessage = hass.connection.subscribeMessage as ReturnType<typeof vi.fn>;
+            const msg = subscribeMessage.mock.calls[0][1];
+            expect(msg.slot).toBe(4);
+            expect(msg.name).toBeUndefined();
+        });
+    });
+
+    describe('addressing by the user entity', () => {
+        it('prefers the entity over a name, because a rename does not move it', async () => {
+            el = document.createElement('lcm-user') as SlotCardElement;
+            const hass = createMockHassWithConnection();
+            el.setConfig({
+                config_entry_id: 'my-entry',
+                name: 'Stale',
+                type: 'custom:lcm-user',
+                user_entity_id: 'text.all_locks_raman_name'
+            });
+            el.hass = hass;
+            container.appendChild(el);
+            await flush();
+
+            const subscribeMessage = hass.connection.subscribeMessage as ReturnType<typeof vi.fn>;
+            const msg = subscribeMessage.mock.calls[0][1];
+            expect(msg.user_entity_id).toBe('text.all_locks_raman_name');
+            expect(msg.name).toBeUndefined();
+            expect(msg.slot).toBeUndefined();
+        });
+    });
+
+    describe('removing a user', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+        let calls: Array<Record<string, unknown>>;
+        let reloads: number;
+
+        beforeEach(async () => {
+            calls = [];
+            card = document.createElement('lcm-user') as SlotCardElement & Record<string, unknown>;
+            // Addressed by title, so the card itself never learns the entry id —
+            // only the resolved data carries it.
+            card.setConfig({
+                config_entry_title: 'Test Config',
+                name: 'Raman',
+                type: 'custom:lcm-user'
+            });
+            const hass = createMockHassWithConnection();
+            hass.callService = (domain: string, service: string, data: Record<string, unknown>) => {
+                calls.push({ data, domain, service });
+                return Promise.resolve();
+            };
+            card.hass = hass;
+            reloads = 0;
+            // Reloading would take the test runner's page with it.
+            card._reload = () => {
+                reloads += 1;
+            };
+            container.appendChild(card);
+            card._data = makeSlotCardData({ name: 'Raman' });
+            await flush();
+        });
+
+        it('asks before removing anybody', () => {
+            const json = JSON.stringify(card.render());
+            expect(json).toContain('hero-remove');
+            // The dialog is not open until asked for.
+            expect(card._showRemoveDialog).toBe(false);
+        });
+
+        it('offers to clear the code, ticked', () => {
+            // Unticking hands the credential over instead of revoking it, so
+            // the default has to be the one that revokes.
+            card._showRemoveDialog = true;
+            expect(card._removeClearsCredentials).toBe(true);
+            expect(JSON.stringify(card.render())).toContain('checkbox');
+        });
+
+        it('removes the user, clearing by default', async () => {
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0].domain).toBe('lock_code_manager');
+            expect(calls[0].service).toBe('delete_user');
+            expect(calls[0].data).toMatchObject({
+                clear_credentials: true,
+                // Resolved by the backend, not configured on the card.
+                config_entry_id: 'test-entry',
+                name: 'Raman'
+            });
+            expect(card._showRemoveDialog).toBe(false);
+        });
+
+        it('reloads the actual page', () => {
+            const real = document.createElement('lcm-user') as SlotCardElement &
+                Record<string, unknown>;
+            const reload = vi.fn();
+            Object.defineProperty(window, 'location', {
+                configurable: true,
+                value: { ...window.location, reload }
+            });
+
+            (real as unknown as { _reload: () => void })._reload();
+
+            expect(reload).toHaveBeenCalled();
+        });
+
+        it('reloads, so the card for the removed user goes away', async () => {
+            // Its entities are gone and the subscription just stops
+            // reporting, so left alone the card would go on showing the
+            // person who was removed, PIN and all.
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(reloads).toBe(1);
+        });
+
+        it('passes the choice to keep the code through', async () => {
+            card._showRemoveDialog = true;
+            card._removeClearsCredentials = false;
+            await card._commitRemove();
+
+            expect(calls[0].data).toMatchObject({ clear_credentials: false });
+        });
+
+        it('opens the dialog from the button in the hero row', async () => {
+            const button = card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!;
+            expect(button).toBeTruthy();
+            expect(button.getAttribute('aria-label')).toBe('Remove user');
+
+            button.click();
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(true);
+            expect(card.shadowRoot!.querySelector('ha-dialog')).toBeTruthy();
+        });
+
+        it('carries an untick through to the service call', async () => {
+            card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!.click();
+            await flush();
+
+            const checkbox =
+                card.shadowRoot!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+            checkbox.checked = false;
+            checkbox.dispatchEvent(new Event('change'));
+            await flush();
+
+            expect(card._removeClearsCredentials).toBe(false);
+        });
+
+        it('closes without removing anybody on cancel', async () => {
+            card.shadowRoot!.querySelector<HTMLButtonElement>('.hero-remove')!.click();
+            await flush();
+
+            card.shadowRoot!.querySelector<HTMLButtonElement>(
+                '.dialog-actions button:first-of-type'
+            )!.click();
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(false);
+            expect(calls).toHaveLength(0);
+        });
+
+        it('removes once when the button is hit twice', async () => {
+            card._showRemoveDialog = true;
+            // Deliberately not awaited: the second call lands while the first
+            // is still in flight, which is what an impatient double-click does.
+            const first = card._commitRemove();
+            const second = card._commitRemove();
+            await Promise.all([first, second]);
+
+            expect(calls).toHaveLength(1);
+        });
+
+        it('closes when dismissed with escape or the scrim', async () => {
+            card._showRemoveDialog = true;
+            await flush();
+
+            card.shadowRoot!.querySelector('ha-dialog')!.dispatchEvent(new Event('closed'));
+            await flush();
+
+            expect(card._showRemoveDialog).toBe(false);
+            expect(calls).toHaveLength(0);
+        });
+
+        it('refuses to guess which user to remove before data arrives', async () => {
+            card._data = undefined;
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            expect(calls).toHaveLength(0);
+            expect(card._actionError).toContain('not initialized');
+        });
+
+        it('names the user in the error when the service refuses', async () => {
+            card.hass.callService = () => Promise.reject(new Error('lock is asleep'));
+            card._showRemoveDialog = true;
+            await card._commitRemove();
+
+            // Left open, because the user is still there.
+            expect(card._actionError).toContain('Raman');
+            expect(card._actionError).toContain('lock is asleep');
+            // A reload here would hide the error it needs to show.
+            expect(reloads).toBe(0);
+        });
     });
 });

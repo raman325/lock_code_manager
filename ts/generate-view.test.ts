@@ -311,7 +311,10 @@ describe('getSlotMapping', () => {
             { entity_id: 'lock.front', name: 'Front Lock' },
             { entity_id: 'lock.back', name: 'Back Lock' }
         ],
-        slots: { 1: 'calendar.slot_1', 2: null }
+        slots: {
+            1: { condition: 'calendar.slot_1', name: 'Raman' },
+            2: { condition: null, name: 'Guest' }
+        }
     };
 
     it('separates entities by category', () => {
@@ -490,9 +493,21 @@ describe('generateSlotCard', () => {
             inSyncEntities: [],
             mainEntities: [createTestEntity(slotNum, 'enabled', `switch.slot_${slotNum}_enabled`)],
             pinActiveEntity: createTestEntity(slotNum, ACTIVE_KEY, `binary_sensor.slot_${slotNum}`),
-            slotNum
+            slotNum,
+            userName: 'Raman'
         };
     }
+
+    it('keeps the heading on one line whatever the name contains', () => {
+        // Names are free-form, and a line break would close the heading and
+        // turn the rest of the name into headings of its own.
+        const card = generateSlotCard(createMockHass({}) as never, {} as never, {
+            ...createMinimalSlotMapping(1),
+            userName: '# Big\n\n## Fake'
+        });
+
+        expect((card.cards as { content: string }[])[0].content).toBe('## Big ## Fake');
+    });
 
     it('generates vertical-stack card with markdown header and entities', () => {
         const hass = createMockHass();
@@ -503,7 +518,7 @@ describe('generateSlotCard', () => {
         expect(result.type).toBe('vertical-stack');
         expect(result.cards).toHaveLength(2);
         expect(result.cards[0]).toEqual({
-            content: '## Code Slot 1',
+            content: '## Raman',
             type: 'markdown'
         });
         expect(result.cards[1].type).toBe('entities');
@@ -583,6 +598,22 @@ describe('generateSlotCard', () => {
     });
 });
 
+/**
+ * The sections driven by a strategy of the given type.
+ *
+ * Tests ask for these rather than counting `sections`, so that adding a
+ * section to the view -- the add-user button, say -- does not read as a
+ * change in how many users or locks the view rendered.
+ */
+function strategySections(
+    sections: Array<{ strategy?: unknown }> | undefined,
+    type: string
+): Array<{ strategy?: unknown }> {
+    return (sections ?? []).filter(
+        (section) => (section.strategy as { type?: string } | undefined)?.type === type
+    );
+}
+
 describe('generateView', () => {
     const testConfigEntry: ConfigEntryJSONFragment = {
         disabled_by: '',
@@ -604,7 +635,7 @@ describe('generateView', () => {
             config_entry: testConfigEntry,
             entities: [],
             locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
         const lovelaceResources: LovelaceResource[] = [];
 
@@ -643,9 +674,10 @@ describe('generateView', () => {
         );
         expect(lockBadge).toBeDefined();
         expect(result.type).toBe('sections');
-        expect(result.sections).toHaveLength(1);
+        const userSections = strategySections(result.sections, 'custom:lock-code-manager-slot');
+        expect(userSections).toHaveLength(1);
         // Sections now contain strategies, not rendered cards
-        const strategy = result.sections[0].strategy as {
+        const strategy = userSections[0].strategy as {
             slot: number;
             type: string;
         };
@@ -731,7 +763,7 @@ describe('generateView', () => {
             useSlotCards: false
         });
 
-        expect(result.sections).toHaveLength(3);
+        expect(strategySections(result.sections, 'custom:lock-code-manager-slot')).toHaveLength(3);
     });
 
     it('passes use_slot_cards=false to section strategy for legacy mode', async () => {
@@ -739,7 +771,7 @@ describe('generateView', () => {
             config_entry: testConfigEntry,
             entities: [],
             locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -781,7 +813,7 @@ describe('generateView', () => {
                 { entity_id: 'lock.z_back', name: 'Back Lock' },
                 { entity_id: 'lock.a_front', name: 'Front Lock' }
             ],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -844,9 +876,10 @@ describe('generateView', () => {
             useSlotCards: true
         });
 
-        expect(result.sections).toHaveLength(2);
+        const userSections = strategySections(result.sections, 'custom:lock-code-manager-slot');
+        expect(userSections).toHaveLength(2);
         // Verify sections use slot section strategies
-        const strategies = result.sections.map((s) => s.strategy) as Array<{
+        const strategies = userSections.map((s) => s.strategy) as Array<{
             config_entry_id: string;
             slot: number;
             type: string;
@@ -912,7 +945,7 @@ describe('generateView', () => {
             config_entry: testConfigEntry,
             entities: [],
             locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -963,7 +996,7 @@ describe('generateView lock codes cards', () => {
                 { entity_id: 'lock.front', name: 'Front Lock' },
                 { entity_id: 'lock.back', name: 'Back Lock' }
             ],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -990,19 +1023,100 @@ describe('generateView lock codes cards', () => {
             useSlotCards: true
         });
 
-        // Should have 1 slot section + 2 lock sections
-        expect(result.sections).toHaveLength(3);
-
-        // Extract strategies from sections
-        const strategies = result.sections.map((s) => s.strategy) as Array<{ type: string }>;
-
         // Lock codes should use lock section strategies
-        const lockStrategies = strategies.filter((s) => s.type === 'custom:lock-code-manager-lock');
-        expect(lockStrategies).toHaveLength(2);
+        expect(strategySections(result.sections, 'custom:lock-code-manager-lock')).toHaveLength(2);
 
         // Slot should use slot section strategy
-        const slotStrategies = strategies.filter((s) => s.type === 'custom:lock-code-manager-slot');
-        expect(slotStrategies).toHaveLength(1);
+        expect(strategySections(result.sections, 'custom:lock-code-manager-slot')).toHaveLength(1);
+    });
+
+    it('puts the add-user button between the users and the locks', async () => {
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
+            slots: {
+                1: { condition: null, name: 'Raman' },
+                2: { condition: null, name: 'Sherene' }
+            }
+        };
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            },
+            states: {
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: true,
+            codeDisplay: 'unmasked',
+            useSlotCards: true
+        });
+
+        const kinds = result.sections!.map(
+            (section) =>
+                (section.strategy as { type?: string } | undefined)?.type ??
+                (
+                    (section as { cards?: Array<{ type?: string }> }).cards?.[0] as
+                        { type?: string } | undefined
+                )?.type
+        );
+
+        expect(kinds).toEqual([
+            'custom:lock-code-manager-slot',
+            'custom:lock-code-manager-slot',
+            'custom:lcm-add-user',
+            'custom:lock-code-manager-lock'
+        ]);
+    });
+
+    it('hands the add-user button the config entry it adds to', async () => {
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [],
+            slots: { 1: { condition: null, name: 'Raman' } }
+        };
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            },
+            states: {}
+        });
+
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: true
+        });
+
+        const addSection = result.sections!.find((section) =>
+            (section as { cards?: Array<{ type?: string }> }).cards?.some(
+                (card) => card.type === 'custom:lcm-add-user'
+            )
+        ) as { cards: Array<{ config_entry_id?: string; type?: string }> };
+
+        expect(addSection.cards[0].config_entry_id).toBe('entry123');
     });
 
     it('sorts lock codes cards alphabetically by friendly name', async () => {
@@ -1014,7 +1128,7 @@ describe('generateView lock codes cards', () => {
                 { entity_id: 'lock.a_front', name: 'Front Door' },
                 { entity_id: 'lock.m_back', name: 'Back Door' }
             ],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -1061,7 +1175,7 @@ describe('generateView lock codes cards', () => {
             config_entry: testConfigEntry,
             entities: [],
             locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -1102,7 +1216,7 @@ describe('generateView lock codes cards', () => {
                 { entity_id: 'lock.front', name: 'Front Lock' },
                 { entity_id: 'lock.back', name: 'Back Lock' }
             ],
-            slots: { 1: null }
+            slots: { 1: { condition: null, name: 'Raman' } }
         };
 
         const hass = createMockHass({
@@ -1126,14 +1240,8 @@ describe('generateView lock codes cards', () => {
         });
 
         // Should only have 1 slot section, no lock sections
-        expect(result.sections).toHaveLength(1);
-        const strategies = result.sections.map((s) => s.strategy) as Array<{ type: string }>;
-        const lockStrategies = strategies.filter(
-            (s) => s?.type === 'custom:lock-code-manager-lock'
-        );
-        expect(lockStrategies).toHaveLength(0);
-        // Verify it's a slot strategy
-        expect(strategies[0].type).toBe('custom:lock-code-manager-slot');
+        expect(strategySections(result.sections, 'custom:lock-code-manager-slot')).toHaveLength(1);
+        expect(strategySections(result.sections, 'custom:lock-code-manager-lock')).toHaveLength(0);
     });
 });
 
@@ -1153,32 +1261,144 @@ describe('generateNewSlotCard', () => {
         title: 'Test Config'
     };
 
-    it('generates slot card with correct type and slot number', () => {
-        const result = generateNewSlotCard(testConfigEntry, 3, false, false);
+    it('names the user it shows, not the slot they happen to hold', () => {
+        const result = generateNewSlotCard(testConfigEntry, 3, 'Raman', false, false);
 
-        expect(result.type).toBe('custom:lcm-slot');
-        expect(result.slot).toBe(3);
+        expect(result.type).toBe('custom:lcm-user');
+        expect(result.name).toBe('Raman');
+        expect(result.slot).toBeUndefined();
         expect(result.config_entry_id).toBe('entry456');
     });
 
+    it('falls back to the slot number for a user with no name', () => {
+        const result = generateNewSlotCard(testConfigEntry, 3, null, false, false);
+
+        expect(result.type).toBe('custom:lcm-user');
+        expect(result.slot).toBe(3);
+        expect(result.name).toBeUndefined();
+    });
+
     it('passes show_code_sensors option', () => {
-        const result = generateNewSlotCard(testConfigEntry, 1, true, false);
+        const result = generateNewSlotCard(testConfigEntry, 1, 'Raman', true, false);
 
         expect(result.show_code_sensors).toBe(true);
     });
 
     it('passes show_lock_sync option', () => {
-        const result = generateNewSlotCard(testConfigEntry, 1, false, true);
+        const result = generateNewSlotCard(testConfigEntry, 1, 'Raman', false, true);
 
         expect(result.show_lock_sync).toBe(true);
     });
 
     it('passes both options when enabled', () => {
-        const result = generateNewSlotCard(testConfigEntry, 5, true, true);
+        const result = generateNewSlotCard(testConfigEntry, 5, 'Raman', true, true);
 
-        expect(result.type).toBe('custom:lcm-slot');
-        expect(result.slot).toBe(5);
+        expect(result.type).toBe('custom:lcm-user');
+        expect(result.name).toBe('Raman');
         expect(result.show_code_sensors).toBe(true);
         expect(result.show_lock_sync).toBe(true);
+    });
+});
+
+describe('addressing generated sections by entity', () => {
+    const testConfigEntry: ConfigEntryJSONFragment = {
+        disabled_by: '',
+        domain: 'lock_code_manager',
+        entry_id: 'entry456',
+        pref_disable_new_entities: false,
+        pref_disable_polling: false,
+        reason: null,
+        source: 'user',
+        state: 'loaded',
+        supports_options: true,
+        supports_remove_device: false,
+        supports_unload: true,
+        title: 'All Locks'
+    };
+
+    it('hands each section an entity of its user', async () => {
+        // The section passes this to the card, which prefers it over the
+        // name: entity IDs do not move when a user is renamed, so a stored
+        // card holding one survives what would strand one holding a name.
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [
+                {
+                    config_entry_id: 'entry456',
+                    entity_id: 'text.all_locks_raman_name',
+                    name: '',
+                    original_name: 'Name',
+                    unique_id: 'entry456|1|name'
+                },
+                {
+                    config_entry_id: 'entry456',
+                    entity_id: 'text.all_locks_raman_pin',
+                    name: '',
+                    original_name: 'PIN',
+                    unique_id: 'entry456|1|pin'
+                },
+                {
+                    config_entry_id: 'entry456',
+                    entity_id: 'text.all_locks_guest_name',
+                    name: '',
+                    original_name: 'Name',
+                    unique_id: 'entry456|2|name'
+                }
+            ],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
+            slots: {
+                1: { condition: null, name: 'Raman' },
+                2: { condition: null, name: 'Guest' }
+            }
+        };
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                return [];
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {});
+
+        const strategies = result.sections.map(
+            (section) => section.strategy as { user_entity_id?: string }
+        );
+        // The first entity seen for a slot wins, so the choice is stable
+        // across renders rather than depending on registry order.
+        expect(strategies[0].user_entity_id).toBe('text.all_locks_raman_name');
+        expect(strategies[1].user_entity_id).toBe('text.all_locks_guest_name');
+    });
+
+    it('leaves a section unaddressed when its user has no entities yet', async () => {
+        // Reachable while a slot is being set up: the configuration knows
+        // the user before any entity for them exists. The name and slot
+        // number still address them.
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
+            slots: { 1: { condition: null, name: 'Raman' } }
+        };
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                return [];
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {});
+
+        const strategy = result.sections[0].strategy as {
+            name?: string;
+            slot: number;
+            user_entity_id?: string;
+        };
+        expect(strategy.user_entity_id).toBeUndefined();
+        expect(strategy.name).toBe('Raman');
+        expect(strategy.slot).toBe(1);
     });
 });

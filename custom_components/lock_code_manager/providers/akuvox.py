@@ -14,6 +14,7 @@ services (``list_users``, ``add_user``, ``modify_user``, ``delete_user``).
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Literal
@@ -123,7 +124,20 @@ class AkuvoxLock(BaseLock):
                 f"Malformed list_users entity response from {entity_id}: "
                 f"expected dict, got {type(entity_response).__name__}"
             )
-        return entity_response.get("users", [])
+        # A response with no usable user list is a shape this does not
+        # understand, not a device with no users. Returning an empty list
+        # would say "every slot is free", which is the answer that gets a
+        # real credential overwritten. The type is checked as well as the
+        # key: a wrongly typed value would otherwise surface as a bare
+        # TypeError from the caller's loop, past every handler that knows
+        # what to do with this integration's own errors.
+        users = entity_response.get("users")
+        if not isinstance(users, list):
+            raise LockCodeManagerProviderError(
+                f"Malformed list_users entity response from {entity_id}: "
+                f"expected a list of users, got {type(users).__name__}"
+            )
+        return users
 
     async def _async_add_user(self, name: str, pin: str) -> None:
         """Add a new user with the given name and PIN."""
@@ -290,7 +304,7 @@ class AkuvoxLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
-    async def async_get_users(self) -> list[User]:
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Return users by reading tagged local users from the Akuvox device.
 
@@ -301,7 +315,7 @@ class AkuvoxLock(BaseLock):
         Personal Identification Numbers are readable on Akuvox, so occupied
         slots report the actual value.
         """
-        managed_slots = self.managed_slots
+        managed_slots = self.managed_slots if slots is None else set(slots)
         if not managed_slots:
             return []
 

@@ -116,15 +116,19 @@ variables:
     {{ state_attr(calendar_entity, 'all_day') | default(false, true) }}
   slot_number: !input slot_number
   _name_entity: >
-    {{ _all_entities
-       | select('match', 'text\\..*_code_slot_' ~ slot_number ~ '_name')
-       | first | default('') }}
+    {{ expand(_all_entities)
+       | selectattr('attributes.slot_field', 'defined')
+       | selectattr('attributes.slot_field', 'eq', 'name')
+       | selectattr('attributes.code_slot', 'eq', slot_number | int)
+       | map(attribute='entity_id') | first | default('') }}
   name_state: >
     {{ states(_name_entity) if _name_entity else '' }}
   _event_entity: >
-    {{ _all_entities
-       | select('match', 'event\\..*_code_slot_' ~ slot_number ~ '_pin_used')
-       | first | default('') }}
+    {{ expand(_all_entities)
+       | selectattr('attributes.slot_field', 'defined')
+       | selectattr('attributes.slot_field', 'eq', 'credential_used')
+       | selectattr('attributes.code_slot', 'eq', slot_number | int)
+       | map(attribute='entity_id') | first | default('') }}
   lock_entity_ids: >
     {{ state_attr(_event_entity, 'event_types') | default([]) }}
   _condition_result: !input condition_template

@@ -19,15 +19,20 @@ SERVICE_SET_USERCODE = "set_usercode"
 SERVICE_CLEAR_USERCODE = "clear_usercode"
 SERVICE_SET_SLOT_CONDITION = "set_slot_condition"
 SERVICE_CLEAR_SLOT_CONDITION = "clear_slot_condition"
+SERVICE_ADD_USER = "add_user"
+SERVICE_DELETE_USER = "delete_user"
 SERVICE_GENERATE_PIN = "generate_pin"
 SERVICE_DEOBFUSCATE_LOG = "deobfuscate_log"
 
 ATTR_TEXT = "text"
 
-ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
-ATTR_ENTITIES_REMOVED_TRACKER = "entities_removed_tracker"
 
 ATTR_CODE_SLOT = "code_slot"
+ATTR_CREDENTIAL_TYPE = "credential_type"
+# Which property of the slot an entity represents ("pin", "name", "enabled").
+# Published so a template can find an entity without matching on its ID, whose
+# shape depends on the user's name and on the language it was created in.
+ATTR_SLOT_FIELD = "slot_field"
 ATTR_USERCODE = "usercode"
 ATTR_FROM = "from"
 ATTR_TO = "to"
@@ -35,6 +40,22 @@ ATTR_LCM_CONFIG_ENTRY_ID = "lock_code_manager_config_entry_id"
 ATTR_LOCK_CONFIG_ENTRY_ID = "lock_config_entry_id"
 ATTR_EXTRA_DATA = "extra_data"
 ATTR_MANAGED = "managed"
+# Any entity of the user being addressed. Distinct from ``entity_id``,
+# which on the condition commands means the condition entity itself.
+ATTR_USER_ENTITY_ID = "user_entity_id"
+
+# What a per-lock entity is called after the lock's name. Mirrors the
+# ``entity`` names in strings.json, which the migration cannot read: it has to
+# build the id the running integration would generate. test_frontend_contract
+# holds the two together.
+PER_LOCK_ENTITY_SUFFIX = {"code": "PIN", "in_sync": "in sync"}
+
+# One repair for the whole entity-ID rename, however many entries moved.
+ENTITY_IDS_RENAMED_ISSUE = "entity_ids_renamed"
+# Where the migration accumulates those renames while entries migrate.
+RENAMES_KEY = "migration_renames"
+
+ATTR_CLEAR_CREDENTIALS = "clear_credentials"
 ATTR_SLOT = "slot"
 ATTR_SLOT_NUM = "slot_num"
 ATTR_CODE_LENGTH = "code_length"
@@ -50,7 +71,6 @@ ATTR_LAST_SYNCED = "last_synced"
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 ATTR_CONFIG_ENTRY_TITLE = "config_entry_title"
 ATTR_EVENT_ENTITY_ID = "event_entity_id"
-ATTR_CALENDAR_ENTITY_ID = "calendar_entity_id"
 ATTR_CALENDAR = "calendar"
 ATTR_CALENDAR_NEXT = "calendar_next"
 ATTR_CALENDAR_ACTIVE = "active"
@@ -79,7 +99,10 @@ ATTR_CODE_SLOT_NAME = "code_slot_name"
 ATTR_NOTIFICATION_SOURCE = "notification_source"
 
 # Event entity event type
-EVENT_PIN_USED = "pin_used"
+# The entity key, and so the last part of its unique ID. Renamed from
+# "pin_used" in version 4; the migration rewrites the stored ones.
+EVENT_CREDENTIAL_USED = "credential_used"
+LEGACY_EVENT_PIN_USED = "pin_used"
 
 # Configuration Properties
 CONF_CONFIG_ENTRY = "config_entry"
@@ -87,6 +110,11 @@ CONF_CONDITIONS = "conditions"
 CONF_ENTITIES = "entities"
 CONF_LOCKS = "locks"
 CONF_SLOTS = "slots"
+CONF_USERS = "users"
+CONF_NUM_USERS = "num_users"
+
+# Retired from the configuration in version 3, but still recognised so the
+# migration can drop them from a version 2 entry.
 CONF_NUM_SLOTS = "num_slots"
 CONF_START_SLOT = "start_slot"
 
@@ -99,7 +127,7 @@ ATTR_SYNC_STATUS = "sync_status"
 # Code slot properties
 CONF_CALENDAR = "calendar"
 
-# Supported domains for condition entities (CONF_ENTITY_ID option)
+# Supported domains for condition entities (CONF_CONDITION option)
 CONDITION_ENTITY_DOMAINS = [
     "calendar",
     "binary_sensor",
@@ -127,13 +155,24 @@ SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 
 
 # Defaults
-DEFAULT_NUM_SLOTS = 3
-DEFAULT_START = 1
+DEFAULT_NUM_USERS = 3
+
+# How far a search for free slot numbers goes when no lock will say where its
+# own range ends.
+#
+# 255 is the largest value a one-byte user identifier can carry, and the older
+# credential command classes address users with one. Where the slot number is
+# this integration's own tag rather than an index on the lock (Schlage,
+# Akuvox, virtual) there is no device range at all and this stands in.
+#
+# Bounds only the SEARCH: a number a user already holds above it keeps
+# working, and a lock reporting a larger range is believed up to it.
+MAX_SEARCHED_SLOT = 255
 
 PLATFORM_MAP = {
     CONF_CALENDAR: Platform.CALENDAR,
     CONF_ENABLED: Platform.SWITCH,
     CONF_NAME: Platform.TEXT,
     CONF_PIN: Platform.TEXT,
-    EVENT_PIN_USED: Platform.EVENT,
+    EVENT_CREDENTIAL_USED: Platform.EVENT,
 }

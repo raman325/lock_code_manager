@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
@@ -98,21 +99,42 @@ def _per_lock_entity_id(
     return entity_id
 
 
+def slot_entity_id(
+    hass: HomeAssistant,
+    platform: str,
+    config_entry: ConfigEntry,
+    slot_num: int,
+    key: str,
+) -> str:
+    """
+    Resolve a slot's entity by unique ID.
+
+    Spelling the entity ID out ties the test to the name of whoever holds the
+    slot, since that is what the device -- and so the slug -- is named after.
+    """
+    entity_id = er.async_get(hass).async_get_entity_id(
+        platform, DOMAIN, build_slot_unique_id(config_entry.entry_id, slot_num, key)
+    )
+    assert entity_id, f"No {key} entity for slot {slot_num}"
+    return entity_id
+
+
 # The integration the mock lock entities belong to.
 LOCK_DEVICE_DOMAIN = "test"
 
-SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
-SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
-SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
-SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
-SLOT_1_IN_SYNC_ENTITY = "binary_sensor.mock_title_code_slot_1_test_1_in_sync"
+SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_test1_active"
+SLOT_1_ENABLED_ENTITY = "switch.mock_title_test1_enabled"
+SLOT_1_EVENT_ENTITY = "event.mock_title_test1_credential_used"
+SLOT_1_NAME_ENTITY = "text.mock_title_test1_name"
+SLOT_1_PIN_ENTITY = "text.mock_title_test1_pin"
+SLOT_1_IN_SYNC_ENTITY = "binary_sensor.mock_title_test1_test_1_in_sync"
 
-SLOT_2_ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
-SLOT_2_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
-SLOT_2_EVENT_ENTITY = "event.mock_title_code_slot_2"
-SLOT_2_PIN_ENTITY = "text.mock_title_code_slot_2_pin"
-SLOT_2_NAME_ENTITY = "text.mock_title_code_slot_2_name"
-SLOT_2_IN_SYNC_ENTITY = "binary_sensor.mock_title_code_slot_2_test_1_in_sync"
+SLOT_2_ENABLED_ENTITY = "switch.mock_title_test2_enabled"
+SLOT_2_ACTIVE_ENTITY = "binary_sensor.mock_title_test2_active"
+SLOT_2_EVENT_ENTITY = "event.mock_title_test2_credential_used"
+SLOT_2_PIN_ENTITY = "text.mock_title_test2_pin"
+SLOT_2_NAME_ENTITY = "text.mock_title_test2_name"
+SLOT_2_IN_SYNC_ENTITY = "binary_sensor.mock_title_test2_test_1_in_sync"
 
 
 @dataclass(repr=False, eq=False)
@@ -194,13 +216,22 @@ class MockLCMLock(BaseLock):
         self.service_calls["clear_usercode"].append((code_slot,))
         return True
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """Return dictionary of code slots and usercodes."""
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
         codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
         codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
-        return codes
+        if slots is None:
+            return codes
+        # Mirrors the base projection, including the part that matters: a slot
+        # in the scope that holds nothing is empty, and a slot the lock holds
+        # OUTSIDE the scope is still reported. Answering with exactly the
+        # scope would model the one shape where a caller's own bounds check
+        # is a no-op.
+        return {**dict.fromkeys(slots, SlotCredential.empty()), **codes}
 
 
 @dataclass(repr=False, eq=False)

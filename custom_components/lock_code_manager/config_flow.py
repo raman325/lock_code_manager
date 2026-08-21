@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
-from functools import partial
+from collections.abc import Iterable, Mapping, Sequence
 import logging
 from typing import Any
 
@@ -12,7 +11,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
     config_validation as cv,
@@ -25,29 +24,31 @@ from homeassistant.util import slugify
 from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
-    CONF_NUM_SLOTS,
-    CONF_SLOTS,
-    CONF_START_SLOT,
-    DEFAULT_NUM_SLOTS,
-    DEFAULT_START,
+    CONF_NUM_USERS,
+    CONF_USERS,
+    DEFAULT_NUM_USERS,
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
+from .domain.allocation import (
+    SlotAllocationError,
+    async_allocate_for,
+    async_check_slot_capacity,
+)
 from .domain.config import EntryConfig
-from .domain.credentials import CredentialType
-from .domain.exceptions import LockCodeManagerError
-from .domain.models import SlotCredential
+from .domain.names import name_error, normalize_name, validate_user_names
 from .domain.queries import get_entry_config
+from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import INTEGRATIONS_CLASS_MAP
 
 _LOGGER = logging.getLogger(__name__)
 
 CODE_SLOT_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_NAME): cv.string,
+        vol.Required(CONF_NAME): cv.string,
         vol.Optional(CONF_PIN): cv.string,
         vol.Required(CONF_ENABLED, default=True): cv.boolean,
-        vol.Optional(CONF_ENTITY_ID): sel.EntitySelector(
+        vol.Optional(CONF_CONDITION): sel.EntitySelector(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
         ),
     }
@@ -66,9 +67,21 @@ def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-CODE_SLOTS_SCHEMA = vol.All(
-    vol.Schema({vol.Coerce(int): CODE_SLOT_SCHEMA}), enabled_requires_pin
+# The editor's shape: users keyed by name, with no slot number anywhere. The
+# name is the key rather than a field, so a duplicate is unrepresentable
+# rather than rejected -- the same reason the stored configuration is keyed
+# that way.
+USER_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_PIN): cv.string,
+        vol.Required(CONF_ENABLED, default=True): cv.boolean,
+        vol.Optional(CONF_CONDITION): sel.EntitySelector(
+            sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
+        ),
+    }
 )
+
+USERS_SCHEMA = vol.All(vol.Schema({cv.string: USER_SCHEMA}), enabled_requires_pin)
 
 LOCKS_FILTER_CONFIG = [
     sel.EntityFilterSelectorConfig(integration=platform, domain=LOCK_DOMAIN)
@@ -97,7 +110,9 @@ def _check_common_slots(
             for entry in hass.config_entries.async_entries(DOMAIN)
             if (config := get_entry_config(entry)).has_lock(lock)
             and (
-                common_slots := sorted(set(config.slots) & {int(s) for s in slots_list})
+                common_slots := sorted(
+                    config.slot_numbers & {int(s) for s in slots_list}
+                )
             )
             and not (config_entry and config_entry == entry)
         )
@@ -111,272 +126,94 @@ def _check_common_slots(
         }
 
 
-async def _async_check_slot_capacity(
+async def _async_validate_users_yaml(
     hass: HomeAssistant,
+    raw_users: dict[Any, Any],
     locks: Iterable[str],
-    slots_list: Iterable[int | str],
-) -> tuple[dict, dict]:
-    """
-    Reject slot numbers no lock in the set could ever hold.
-
-    Only locks whose credential index IS the slot number are checked (see
-    ``BaseLock.credential_index_follows_slot``) -- Matter allocates its own
-    index, so a slot number above its credential count is perfectly legal
-    there. Catching this at configuration time is what issue #1398 asked
-    for: the write would otherwise fail forever on the device with nothing
-    but a connectivity warning to show for it.
-
-    A lock that cannot be queried is skipped rather than blocking the flow.
-    Capabilities need the lock awake, and a battery lock that happens to be
-    asleep must not make the config flow unusable; the same check runs again
-    at write time, where it can suspend the affected slot precisely.
-    """
-    dev_reg = dr.async_get(hass)
-    ent_reg = er.async_get(hass)
-    slots = sorted({int(slot) for slot in slots_list})
-    for lock_entity_id in locks:
-        try:
-            lock_instance = _async_build_lock_instance(
-                hass, dev_reg, ent_reg, lock_entity_id
-            )
-            if not lock_instance.credential_index_follows_slot:
-                continue
-            capabilities = await lock_instance.async_get_capabilities()
-        except _LockQuerySkipped:
-            continue
-        except LockCodeManagerError as err:
-            _LOGGER.debug(
-                "Skipping slot capacity check for %s: %s", lock_entity_id, err
-            )
-            continue
-        except Exception:
-            _LOGGER.warning(
-                "Skipping slot capacity check for %s; its slot count could not "
-                "be determined",
-                lock_entity_id,
-                exc_info=True,
-            )
-            continue
-
-        num_slots = capabilities.bounded_slot_count(CredentialType.PIN)
-        if num_slots is None:
-            continue
-        if out_of_range := [slot for slot in slots if not 1 <= slot <= num_slots]:
-            return {"base": "slot_out_of_range"}, {
-                "lock": lock_entity_id,
-                "num_slots": str(num_slots),
-                "out_of_range_slots": ", ".join(str(slot) for slot in out_of_range),
-            }
-    return {}, {}
-
-
-async def _async_validate_slots_yaml(
-    hass: HomeAssistant,
-    raw_slots: dict[Any, Any],
-    locks: Iterable[str],
-    config_entry: ConfigEntry | None = None,
 ) -> tuple[dict | None, dict, dict]:
     """
-    Validate a slots-YAML submission for the config and options flows.
+    Validate a users submission for the editor and the yaml setup path.
 
-    Runs ``CODE_SLOTS_SCHEMA`` over ``raw_slots`` and, when it parses cleanly,
-    checks for slots already configured on the same locks by another entry and
-    for slot numbers beyond what the locks can hold. Returns the parsed slots
-    (or ``None`` if validation failed) along with the accumulated error and
-    description-placeholder dicts.
+    Slot numbers are not part of this shape at all: the editor names users,
+    and the numbers are allocated afterwards from whatever the locks leave
+    free. What can still fail is a name that is empty or that means the same
+    person as another, and a count of users no lock could hold.
+
+    Returns the parsed users -- or ``None`` when validation failed -- with the
+    accumulated errors and description placeholders.
     """
+    # A block still keyed by slot number coerces cleanly into users named
+    # "1", "2", which is a silently wrong reading of what was pasted.
+    if raw_users and all(isinstance(key, int) for key in raw_users):
+        return None, {"base": "users_keyed_by_slot"}, {}
+
     try:
-        parsed_slots = CODE_SLOTS_SCHEMA(raw_slots)
+        parsed_users = USERS_SCHEMA(raw_users)
     except vol.Invalid as err:
-        _LOGGER.error("Invalid YAML: %s", err)
+        _LOGGER.error("Invalid users: %s", err)
         return None, {"base": "invalid_config"}, {}
 
-    errors, placeholders = _check_common_slots(hass, locks, parsed_slots, config_entry)
-    if not errors:
-        errors, placeholders = await _async_check_slot_capacity(
-            hass, locks, parsed_slots
+    if problem := validate_user_names(parsed_users):
+        name, error = problem
+        return None, {"base": error}, {"name": name}
+
+    # The same refusal the guided path gives. Both write the one field, so a
+    # condition entity this integration cannot read must fail on both routes
+    # or the editor becomes a way around the check.
+    ent_reg = er.async_get(hass)
+    for name, fields in parsed_users.items():
+        if not (condition := fields.get(CONF_CONDITION)):
+            continue
+        entity_entry = ent_reg.async_get(condition)
+        if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
+            return (
+                None,
+                {"base": "excluded_platform"},
+                {
+                    "name": name,
+                    "integration": entity_entry.platform,
+                    "docs_url": (
+                        "https://github.com/raman325/lock_code_manager/wiki/"
+                        "Unsupported-Condition-Entity-Integrations"
+                    ),
+                },
+            )
+
+    # The count is what a lock has to hold, now that nobody picks a number.
+    try:
+        await async_check_slot_capacity(hass, locks, [len(parsed_users)])
+    except SlotAllocationError as err:
+        return (
+            None,
+            {"base": "too_many_users"},
+            {**err.placeholders, "num_users": str(len(parsed_users))},
         )
-    return parsed_slots, errors, placeholders
+    return parsed_users, {}, {}
 
 
-class _LockQuerySkipped(LockCodeManagerError):
-    """Raised when a lock should be skipped before any provider call."""
-
-
-def _async_build_lock_instance(
+async def _allocate_for(
     hass: HomeAssistant,
-    dev_reg: dr.DeviceRegistry,
-    ent_reg: er.EntityRegistry,
-    lock_entity_id: str,
-) -> Any:
+    locks: Sequence[str],
+    num_users: int,
+    *,
+    excluding: ConfigEntry | None = None,
+) -> tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]:
     """
-    Build a temporary lock provider instance for ``lock_entity_id``.
+    Find numbers for ``num_users``, or say why it could not.
 
-    Performs setup-time checks (entity in registry, supported platform,
-    parent config entry exists) and instantiates the provider class.
-    Raises ``_LockQuerySkipped`` if any setup-time check fails.
+    Allocation itself lives in ``domain.allocation``, which the services call
+    too; this only turns its refusals into the form errors a flow renders.
     """
-    lock_entry = ent_reg.async_get(lock_entity_id)
-    if not lock_entry:
-        _LOGGER.warning(
-            "Entity %s not found in registry; skipping usercode check",
-            lock_entity_id,
+    try:
+        unavailable = await async_allocate_for(
+            hass, locks, num_users, excluding=excluding
         )
-        raise _LockQuerySkipped(lock_entity_id)
-    if lock_entry.platform not in INTEGRATIONS_CLASS_MAP:
-        _LOGGER.debug(
-            "Lock %s uses unsupported platform %s; skipping usercode check",
-            lock_entity_id,
-            lock_entry.platform,
-        )
-        raise _LockQuerySkipped(lock_entity_id)
-    lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
-    if lock_config_entry is None:
-        _LOGGER.warning(
-            "Config entry for lock %s not found; skipping usercode check",
-            lock_entity_id,
-        )
-        raise _LockQuerySkipped(lock_entity_id)
-
-    return INTEGRATIONS_CLASS_MAP[lock_entry.platform](
-        hass, dev_reg, ent_reg, lock_config_entry, lock_entry
-    )
+    except SlotAllocationError as err:
+        return None, {"base": err.translation_key}, err.placeholders
+    return unavailable, {}, {}
 
 
-async def _async_get_all_codes(
-    hass: HomeAssistant,
-    dev_reg: dr.DeviceRegistry,
-    ent_reg: er.EntityRegistry,
-    lock_entity_ids: list[str],
-) -> dict[str, dict[int, SlotCredential]]:
-    """
-    Query locks for all usercodes.
-
-    Returns ``codes_by_lock`` mapping each lock entity ID to its slot/credential
-    dict (``SlotCredential.empty()`` for empty slots).  Locks that fail to query
-    are skipped with logging.
-    """
-    result: dict[str, dict[int, SlotCredential]] = {}
-    # Query sequentially to avoid flooding networks (e.g. Z-Wave, Matter)
-    # with simultaneous requests across multiple locks
-    for lock_entity_id in lock_entity_ids:
-        try:
-            lock_instance = _async_build_lock_instance(
-                hass, dev_reg, ent_reg, lock_entity_id
-            )
-            usercodes = await lock_instance.async_internal_get_usercodes()
-        except _LockQuerySkipped:
-            continue
-        except LockCodeManagerError as err:
-            _LOGGER.warning(
-                "Failed to get usercodes from %s: %s",
-                lock_entity_id,
-                err,
-            )
-            continue
-        except Exception:
-            _LOGGER.warning(
-                "Failed to get usercodes from %s; this lock's codes will not be shown",
-                lock_entity_id,
-                exc_info=True,
-            )
-            continue
-
-        if usercodes:
-            result[lock_entity_id] = usercodes
-    return result
-
-
-def _scope_codes_to_pairs(
-    all_codes: dict[str, dict[int, SlotCredential]],
-    pairs: Iterable[tuple[str, int]],
-) -> dict[str, dict[int, SlotCredential]]:
-    """Filter raw query results to only the ``(lock, slot)`` pairs given."""
-    scoped_codes: dict[str, dict[int, SlotCredential]] = {}
-    for lock, slot in pairs:
-        if (code := all_codes.get(lock, {}).get(slot)) is not None:
-            scoped_codes.setdefault(lock, {})[slot] = code
-    return scoped_codes
-
-
-class _ExistingCodesFlowMixin:
-    """
-    Mixin providing existing-codes detection and confirmation for config/options flows.
-
-    When slots already have codes on the lock, this mixin shows a confirmation
-    dialog listing which locks/slots are affected.  Clearing is NOT done here —
-    the sync manager handles reconciliation when the config entry loads.
-    """
-
-    _all_codes: dict[str, dict[int, SlotCredential]]
-    _occupied_lock_slots: list[tuple[str, int]]
-    _next_step: Callable[[], Awaitable[dict[str, Any]]] | None
-
-    def _init_existing_codes_state(self) -> None:
-        """Initialize mixin state. Call from the inheriting flow's __init__."""
-        self._all_codes = {}
-        self._occupied_lock_slots = []
-        self._next_step = None
-
-    def _find_occupied_lock_slots(
-        self, slot_nums: Iterable[int]
-    ) -> list[tuple[str, int]]:
-        """Return (lock_entity_id, slot_num) pairs that have non-empty codes."""
-        return sorted(
-            (lock_entity_id, slot_num)
-            for slot_num in slot_nums
-            for lock_entity_id, codes in self._all_codes.items()
-            if (credential := codes.get(slot_num)) is not None and credential.is_present
-        )
-
-    @staticmethod
-    def _format_occupied_slots(
-        occupied: list[tuple[str, int]],
-    ) -> str:
-        """Format occupied lock/slot pairs for display in the confirmation dialog."""
-        return "\n".join(
-            f"- {lock_entity_id}: slot {slot_num}"
-            for lock_entity_id, slot_num in occupied
-        )
-
-    async def _create_entry(
-        self, *, title: str, data: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Create the config entry."""
-        return self.async_create_entry(  # type: ignore[attr-defined]
-            title=title, data=data
-        )
-
-    async def async_step_existing_codes_confirm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Confirm that existing codes will be overwritten by the sync manager."""
-        return self.async_show_menu(  # type: ignore[attr-defined]
-            step_id="existing_codes_confirm",
-            menu_options=["existing_codes_continue", "existing_codes_cancel"],
-            description_placeholders={
-                "details": self._format_occupied_slots(self._occupied_lock_slots),
-            },
-        )
-
-    async def async_step_existing_codes_continue(
-        self, user_input: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """User acknowledged existing codes. Proceed to next step."""
-        if self._next_step is None:
-            return self.async_abort(reason="unknown")  # type: ignore[attr-defined]
-        return await self._next_step()
-
-    async def async_step_existing_codes_cancel(
-        self, user_input: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """User cancelled. Abort the flow."""
-        return self.async_abort(reason="existing_codes_cancelled")  # type: ignore[attr-defined]
-
-
-class LockCodeManagerFlowHandler(
-    _ExistingCodesFlowMixin, config_entries.ConfigFlow, domain=DOMAIN
-):
+class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for Lock Code Manager."""
 
     VERSION = 4
@@ -388,8 +225,10 @@ class LockCodeManagerFlowHandler(
         self.title: str = ""
         self.ent_reg: er.EntityRegistry = None
         self.dev_reg: dr.DeviceRegistry = None
-        self.slots_to_configure: list[int] = []
-        self._init_existing_codes_state()
+        self._users_to_configure = 0
+        # The numbers allocation must avoid, settled when the user said how
+        # many users they wanted.
+        self._unavailable: frozenset[int] = frozenset()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -405,10 +244,6 @@ class LockCodeManagerFlowHandler(
             await self.async_set_unique_id(slugify(self.title))
             self._abort_if_unique_id_configured()
             self.data = user_input
-            # Scan locks for existing codes once upfront
-            self._all_codes = await _async_get_all_codes(
-                self.hass, self.dev_reg, self.ent_reg, user_input[CONF_LOCKS]
-            )
             return await self.async_step_choose_path()
 
         return self.async_show_form(
@@ -431,44 +266,38 @@ class LockCodeManagerFlowHandler(
     async def async_step_ui(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Handle a UI oriented flow."""
-        errors = {}
-        description_placeholders = {}
+        """Ask how many users to configure."""
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, Any] = {}
         if user_input is not None:
-            start = user_input[CONF_START_SLOT]
-            num_slots = user_input[CONF_NUM_SLOTS]
-            requested_slots = list(range(start, start + num_slots))
-            additional_errors, additional_placeholders = _check_common_slots(
-                self.hass, self.data[CONF_LOCKS], requested_slots
-            )
-            if not additional_errors:
-                (
-                    additional_errors,
-                    additional_placeholders,
-                ) = await _async_check_slot_capacity(
-                    self.hass, self.data[CONF_LOCKS], requested_slots
-                )
-            errors.update(additional_errors)
-            description_placeholders.update(additional_placeholders)
-            if not errors:
-                self.slots_to_configure = requested_slots
-                self._occupied_lock_slots = self._find_occupied_lock_slots(
-                    self.slots_to_configure
-                )
-                if self._occupied_lock_slots:
-                    self._next_step = self.async_step_code_slot
-                    return await self.async_step_existing_codes_confirm()
+            num_users = user_input[CONF_NUM_USERS]
+            # Settled before a single name is collected. Which users get
+            # configured does not change which numbers allocation issues, so
+            # the count alone decides whether they fit -- and a refusal here
+            # is one the user can still act on.
+            (
+                unavailable,
+                errors,
+                description_placeholders,
+            ) = await _allocate_for(self.hass, self.data[CONF_LOCKS], num_users)
+            if unavailable is not None:
+                self._users_to_configure = num_users
+                self._unavailable = unavailable
                 return await self.async_step_code_slot()
 
         return self.async_show_form(
             step_id="ui",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_START_SLOT, default=DEFAULT_START): POSITIVE_INT,
-                    vol.Required(
-                        CONF_NUM_SLOTS, default=DEFAULT_NUM_SLOTS
-                    ): POSITIVE_INT,
-                }
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Required(
+                            CONF_NUM_USERS, default=DEFAULT_NUM_USERS
+                        ): POSITIVE_INT,
+                    }
+                ),
+                # A refusal comes back to this form, so it comes back holding
+                # what was refused rather than making the user find it again.
+                user_input,
             ),
             errors=errors,
             description_placeholders=description_placeholders,
@@ -478,25 +307,41 @@ class LockCodeManagerFlowHandler(
     async def async_step_code_slot(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Handle code slots step."""
+        """Collect one user's configuration, repeating until the count is met."""
         errors: dict[str, str] = {}
-        current_slot = self.slots_to_configure[0]
-        description_placeholders: dict[str, Any] = {"slot_num": current_slot}
-        self.data.setdefault(CONF_SLOTS, {})
+        self.data.setdefault(CONF_USERS, {})
+        configured = len(self.data[CONF_USERS])
+        description_placeholders: dict[str, Any] = {
+            "user_num": configured + 1,
+            "num_users": self._users_to_configure,
+        }
 
         if user_input is not None:
             if _slot_enabled_without_pin(user_input):
                 errors[CONF_PIN] = "missing_pin_if_enabled"
 
-            # Check for excluded platforms with a single registry lookup
-            # self.ent_reg is set in async_step_user which always runs first
-            if entity_id := user_input.get(CONF_ENTITY_ID):
+            if error := name_error(user_input.get(CONF_NAME)):
+                errors[CONF_NAME] = error
+            else:
+                # Normalize BOTH sides. Comparing a stripped candidate against
+                # unstripped stored names lets "Raman " and "Raman" both
+                # through in one order but not the other.
+                user_input[CONF_NAME] = normalize_name(user_input[CONF_NAME])
+                if any(
+                    name.casefold() == user_input[CONF_NAME].casefold()
+                    for name in self.data[CONF_USERS]
+                ):
+                    errors[CONF_NAME] = "name_not_unique"
+
+            # A single registry lookup covers the excluded-platform check.
+            # self.ent_reg is set in async_step_user, which always runs first.
+            if entity_id := user_input.get(CONF_CONDITION):
                 entity_entry = self.ent_reg.async_get(entity_id)
                 if (
                     entity_entry
                     and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS
                 ):
-                    errors[CONF_ENTITY_ID] = "excluded_platform"
+                    errors[CONF_CONDITION] = "excluded_platform"
                     description_placeholders["integration"] = entity_entry.platform
                     description_placeholders["docs_url"] = (
                         "https://github.com/raman325/lock_code_manager/wiki/"
@@ -504,67 +349,112 @@ class LockCodeManagerFlowHandler(
                     )
 
             if not errors:
-                slot_num = int(self.slots_to_configure.pop(0))
-                self.data[CONF_SLOTS][slot_num] = CODE_SLOT_SCHEMA(user_input)
-                if not self.slots_to_configure:
-                    return await self._create_entry(title=self.title, data=self.data)
-                current_slot = self.slots_to_configure[0]
-                description_placeholders["slot_num"] = current_slot
+                validated = CODE_SLOT_SCHEMA(user_input)
+                name = validated.pop(CONF_NAME)
+                self.data[CONF_USERS][name] = validated
+                configured = len(self.data[CONF_USERS])
+                if configured >= self._users_to_configure:
+                    return await self._async_finish_ui_setup()
+                description_placeholders["user_num"] = configured + 1
 
         return self.async_show_form(
             step_id="code_slot",
             data_schema=CODE_SLOT_SCHEMA,
             errors=errors,
             description_placeholders=description_placeholders,
-            last_step=len(self.slots_to_configure) == 1,
+            last_step=len(self.data[CONF_USERS]) + 1 == self._users_to_configure,
         )
 
+    async def _async_finish_ui_setup(self) -> dict[str, Any]:
+        """Assign slots to the collected users and create the entry."""
+        # Both refusals -- unreadable locks and a count that will not fit --
+        # were settled in async_step_ui, against the same occupancy and the
+        # same count. Nothing collected since can change either answer.
+        assignment = SlotAssignment.empty().reconcile(
+            self.data[CONF_USERS], start=1, unavailable=self._unavailable
+        )
+        self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
+        return self.async_create_entry(title=self.title, data=self.data)
+
     async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
-        """Handle yaml flow step."""
-        errors = {}
-        description_placeholders = {}
+        """Take a block of users, then allocate their numbers."""
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, Any] = {}
         if not user_input:
             user_input = {}
         if user_input:
             (
-                slots,
+                users,
                 validation_errors,
                 validation_placeholders,
-            ) = await _async_validate_slots_yaml(
-                self.hass, user_input[CONF_SLOTS], self.data[CONF_LOCKS]
+            ) = await _async_validate_users_yaml(
+                self.hass, user_input[CONF_USERS], self.data[CONF_LOCKS]
             )
             errors.update(validation_errors)
             description_placeholders.update(validation_placeholders)
 
             if not errors:
-                assert slots is not None
-                self.data[CONF_SLOTS] = slots
-                self._occupied_lock_slots = self._find_occupied_lock_slots(slots.keys())
-                if self._occupied_lock_slots:
-                    self._next_step = partial(
-                        self._create_entry,
-                        title=self.title,
-                        data=self.data,
+                assert users is not None
+                # Same allocation the guided path uses, against the same
+                # occupancy: nobody picks a number on either route, so
+                # neither can land on one a lock already holds.
+                (
+                    unavailable,
+                    allocation_errors,
+                    allocation_placeholders,
+                ) = await _allocate_for(self.hass, self.data[CONF_LOCKS], len(users))
+                if unavailable is None:
+                    return self.async_show_form(
+                        step_id="yaml",
+                        data_schema=self._users_schema(user_input),
+                        errors=allocation_errors,
+                        description_placeholders=allocation_placeholders,
+                        last_step=True,
                     )
-                    return await self.async_step_existing_codes_confirm()
+                self.data[CONF_USERS] = users
+                assignment = SlotAssignment.empty().reconcile(
+                    users, start=1, unavailable=unavailable
+                )
+                self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
                 return self.async_create_entry(title=self.title, data=self.data)
 
         return self.async_show_form(
             step_id="yaml",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_SLOTS, default=user_input.get(CONF_SLOTS, {})
-                    ): SLOTS_YAML_SELECTOR,
-                }
-            ),
+            data_schema=self._users_schema(user_input),
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=True,
         )
 
-    async def async_step_reauth(self, user_input: dict[str, Any] | None = None):
-        """Handle reauth flow step."""
+    @staticmethod
+    def _users_schema(user_input: dict[str, Any]) -> vol.Schema:
+        """Return the users editor, redisplaying whatever was submitted."""
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_USERS, default=user_input.get(CONF_USERS, {})
+                ): SLOTS_YAML_SELECTOR,
+            }
+        )
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any] | None = None):
+        """
+        Entry point for reauth. Home Assistant passes the ENTRY'S OWN DATA here.
+
+        Delegated immediately, and the argument ignored, so the confirm step
+        can read ``user_input is None`` as "render the form" rather than
+        inspecting the payload to guess whether its caller was Home Assistant
+        or the user. Guessing wrong updates the entry and reloads it.
+        """
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None):
+        """
+        Handle the reauth form.
+
+        Reached only through :meth:`async_step_reauth`, so ``user_input is
+        None`` unambiguously means "render the form".
+        """
         config_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
@@ -576,11 +466,12 @@ class LockCodeManagerFlowHandler(
         }
 
         if user_input is None:
-            # The frontend re-invokes the step with no input to render the
-            # form; seed the lock selector from the entry's current config.
+            # Either the frontend re-invoking the step to render the form, or
+            # the initial call carrying the entry's data. Seed the lock
+            # selector from the entry's current config either way.
             user_input = {CONF_LOCKS: list(get_entry_config(config_entry).locks)}
-        elif CONF_SLOTS not in user_input:
-            existing_slots = get_entry_config(config_entry).slots.keys()
+        else:
+            existing_slots = get_entry_config(config_entry).slot_numbers
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass,
                 user_input[CONF_LOCKS],
@@ -590,12 +481,13 @@ class LockCodeManagerFlowHandler(
             if not additional_errors:
                 # Reauth is where a lock gets swapped, so it is also where an
                 # already-valid slot set can become too large for the new lock.
-                (
-                    additional_errors,
-                    additional_placeholders,
-                ) = await _async_check_slot_capacity(
-                    self.hass, user_input[CONF_LOCKS], existing_slots
-                )
+                try:
+                    await async_check_slot_capacity(
+                        self.hass, user_input[CONF_LOCKS], existing_slots
+                    )
+                except SlotAllocationError as err:
+                    additional_errors = {"base": err.translation_key}
+                    additional_placeholders = err.placeholders
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
@@ -605,11 +497,13 @@ class LockCodeManagerFlowHandler(
                 # merges options-preferred, so leaving stale options in
                 # place would silently override this reauth fix on the
                 # next load.
+                # Resolved through EntryConfig, not by merging raw dicts: the
+                # two sides may be in different shapes, and a raw merge carries
+                # both, discarding the very save this block exists to consume.
                 self.hass.config_entries.async_update_entry(
                     config_entry,
                     data={
-                        **config_entry.data,
-                        **config_entry.options,
+                        **get_entry_config(config_entry).to_dict(),
                         **user_input,
                     },
                     options={},
@@ -621,7 +515,7 @@ class LockCodeManagerFlowHandler(
                 return self.async_abort(reason="locks_updated")
 
         return self.async_show_form(
-            step_id="reauth",
+            step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -641,46 +535,75 @@ class LockCodeManagerFlowHandler(
         return LockCodeManagerOptionsFlow()
 
 
-class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.OptionsFlow):
+class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
     """Options flow for Lock Code Manager."""
-
-    def __init__(self) -> None:
-        """Initialize options flow."""
-        self._init_existing_codes_state()
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Handle a flow initialized by the user."""
-        errors = {}
-        description_placeholders = {}
+        """Edit the entry's users. Numbers are not part of this."""
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, Any] = {}
         if not user_input:
             user_input = {}
 
         if user_input:
             (
-                parsed_slots,
+                users,
                 validation_errors,
                 validation_placeholders,
-            ) = await _async_validate_slots_yaml(
-                self.hass,
-                user_input[CONF_SLOTS],
-                user_input[CONF_LOCKS],
-                self.config_entry,
+            ) = await _async_validate_users_yaml(
+                self.hass, user_input[CONF_USERS], user_input[CONF_LOCKS]
             )
             errors.update(validation_errors)
             description_placeholders.update(validation_placeholders)
 
             if not errors:
-                assert parsed_slots is not None
-                user_input[CONF_SLOTS] = parsed_slots
-                return await self._maybe_confirm_then_persist(user_input)
+                assert users is not None
+                (
+                    unavailable,
+                    allocation_errors,
+                    allocation_placeholders,
+                ) = await _allocate_for(
+                    self.hass,
+                    user_input[CONF_LOCKS],
+                    len(users),
+                    # Its own numbers do not constrain it: kept ones are held
+                    # by tenure, released ones are free for whoever comes next.
+                    excluding=self.config_entry,
+                )
+                if unavailable is None:
+                    errors.update(allocation_errors)
+                    description_placeholders.update(allocation_placeholders)
+                else:
+                    config = get_entry_config(self.config_entry)
+                    # Reconciled against what the entry already holds, so a
+                    # user who was here before keeps their number and only
+                    # newcomers are issued one. Moving somebody would rewrite
+                    # their credential on every lock.
+                    assignment = config.assignment.reconcile(
+                        users, start=1, unavailable=unavailable
+                    )
+                    # Written through EntryConfig so whatever else the entry
+                    # carries survives the edit. Building the dict by hand
+                    # drops every key this form does not ask about.
+                    return self.async_create_entry(
+                        title="",
+                        data=EntryConfig(
+                            locks=tuple(user_input[CONF_LOCKS]),
+                            users=users,
+                            assignment=assignment,
+                            extra=config.extra,
+                        ).to_dict(),
+                    )
 
-        # Use to_dict() rather than .locks / .slots directly — to_dict
-        # returns plain mutable dict/list, while EntryConfig.slots is a
-        # deeply read-only MappingProxyType which the form selectors
-        # can't JSON-serialize.
-        defaults = get_entry_config(self.config_entry).to_dict()
+        config = get_entry_config(self.config_entry)
+        # Plain dict/list, because the form selectors cannot serialize the
+        # deeply read-only mappings EntryConfig uses internally.
+        defaults = {
+            CONF_LOCKS: list(config.locks),
+            CONF_USERS: {name: dict(user) for name, user in config.users.items()},
+        }
 
         return self.async_show_form(
             step_id="init",
@@ -691,8 +614,8 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
                         default=user_input.get(CONF_LOCKS, defaults[CONF_LOCKS]),
                     ): LOCK_ENTITY_SELECTOR,
                     vol.Required(
-                        CONF_SLOTS,
-                        default=user_input.get(CONF_SLOTS, defaults[CONF_SLOTS]),
+                        CONF_USERS,
+                        default=user_input.get(CONF_USERS, defaults[CONF_USERS]),
                     ): SLOTS_YAML_SELECTOR,
                 }
             ),
@@ -700,39 +623,3 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
             description_placeholders=description_placeholders,
             last_step=True,
         )
-
-    async def _maybe_confirm_then_persist(
-        self, user_input: dict[str, Any]
-    ) -> dict[str, Any]:
-        """
-        Scan added (lock, slot) pairs for codes; show confirmation if any exist.
-
-        Compares the submitted (lock, slot) pairs against the entry's
-        current configuration. If any newly-added pair has a non-empty
-        code on its lock, show the confirmation step before persisting.
-        """
-        diff = get_entry_config(self.config_entry) - EntryConfig.from_mapping(
-            user_input
-        )
-        if not diff.pairs_added:
-            return self.async_create_entry(title="", data=user_input)
-
-        # Query only the locks involved in newly-added pairs
-        locks_to_query = sorted({lock for lock, _ in diff.pairs_added})
-        ent_reg = er.async_get(self.hass)
-        dev_reg = dr.async_get(self.hass)
-        all_codes = await _async_get_all_codes(
-            self.hass, dev_reg, ent_reg, locks_to_query
-        )
-
-        # Scope to ONLY the added pairs so the confirmation dialog only
-        # shows newly-added lock/slot pairs, not already-managed ones
-        self._all_codes = _scope_codes_to_pairs(all_codes, diff.pairs_added)
-
-        added_slot_nums = {slot for _, slot in diff.pairs_added}
-        self._occupied_lock_slots = self._find_occupied_lock_slots(added_slot_nums)
-        if not self._occupied_lock_slots:
-            return self.async_create_entry(title="", data=user_input)
-
-        self._next_step = partial(self._create_entry, title="", data=user_input)
-        return await self.async_step_existing_codes_confirm()

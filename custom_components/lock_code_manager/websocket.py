@@ -28,6 +28,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
+    CONF_CONDITION,
     CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_PIN,
@@ -84,6 +85,7 @@ from .const import (
     ATTR_SLOT,
     ATTR_SLOT_NUM,
     ATTR_SYNC_STATUS,
+    ATTR_USER_ENTITY_ID,
     ATTR_USERCODE,
     CONDITION_ENTITY_DOMAINS,
     CONF_CONDITIONS,
@@ -93,12 +95,17 @@ from .const import (
     CONF_NAME,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_PIN_USED,
+    EVENT_CREDENTIAL_USED,
 )
+from .domain.config import parse_slot_unique_id
 from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
-from .domain.queries import get_entry_config, get_managed_slots
+from .domain.queries import (
+    find_config_entry_by_title,
+    get_entry_config,
+    get_managed_slots,
+)
 from .domain.services import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -239,23 +246,65 @@ def _get_last_changed(
     return None
 
 
-def _find_config_entry_by_title(hass: HomeAssistant, title: str) -> ConfigEntry | None:
-    """Find a config entry by title (slugified comparison)."""
-    return next(
-        (
-            entry
-            for entry in hass.config_entries.async_entries(DOMAIN)
-            if slugify(entry.title) == slugify(title)
-        ),
-        None,
-    )
+def _slot_from(
+    hass: HomeAssistant, config_entry: ConfigEntry, msg: dict[str, Any]
+) -> int:
+    """
+    Resolve the slot a message means, however it chose to say it.
+
+    An entity id is the steadiest of the three and what a stored card should
+    hold; a name is what a person writes; a slot number is what everything
+    below this line still keys on. Resolution happens here because this is
+    the boundary where those vocabularies meet.
+    """
+    if entity_id := msg.get(ATTR_USER_ENTITY_ID):
+        # The steadiest handle there is. An entity id is unique by
+        # construction, and this integration's own never move when a user is
+        # renamed -- unique IDs keep the slot number, which is the whole
+        # reason a rename costs nothing. A card holding one goes on working
+        # through renames that would strand a card holding a name.
+        entity = er.async_get(hass).async_get(entity_id)
+        if entity is None:
+            raise ServiceValidationError(f"No entity {entity_id!r}")
+        slot = parse_slot_unique_id(config_entry.entry_id, entity.unique_id)
+        if slot is None:
+            raise ServiceValidationError(
+                f"{entity_id!r} does not belong to a user in this config entry"
+            )
+        return slot
+    if (slot := msg.get(ATTR_SLOT)) is not None:
+        return slot
+    if not (name := msg.get(CONF_NAME)):
+        raise ServiceValidationError("No entity, name or slot provided")
+
+    # Matched slugified, the way a config entry title is, so a caller that
+    # has only the slug an entity id was built from can still name its user.
+    config = get_entry_config(config_entry)
+    wanted = slugify(name)
+    matches = [known for known in config.users if slugify(known) == wanted]
+    if not matches:
+        raise ServiceValidationError(f"No user named {name!r} in this config entry")
+    if len(matches) > 1:
+        # Slugifying collapses more than the name rules do -- "Ada-Lovelace"
+        # and "Ada Lovelace" are two users but one slug. Picking either would
+        # write somebody else's credential.
+        raise ServiceValidationError(
+            f"{name!r} matches more than one user in this config entry: "
+            f"{', '.join(sorted(matches))}"
+        )
+    if (resolved := config.assignment.slot(matches[0])) is None:
+        # A user can exist in the configuration without a number, while
+        # allocation is still deciding where they go. There is nothing on any
+        # lock to address yet.
+        raise ServiceValidationError(f"{matches[0]!r} has not been given a slot yet")
+    return resolved
 
 
 def _get_slot_condition_entity_id(
     config_entry: ConfigEntry, slot_num: int
 ) -> str | None:
     """Get condition entity ID from slot config."""
-    return get_entry_config(config_entry).slot(slot_num).get(CONF_ENTITY_ID)
+    return get_entry_config(config_entry).slot(slot_num).get(CONF_CONDITION)
 
 
 def async_get_entry(
@@ -277,7 +326,7 @@ def async_get_entry(
     ) -> None:
         """Provide user specific data and store to function."""
         if config_entry_title := msg.get("config_entry_title"):
-            config_entry = _find_config_entry_by_title(hass, config_entry_title)
+            config_entry = find_config_entry_by_title(hass, config_entry_title)
         elif config_entry_id := msg.get("config_entry_id"):
             config_entry = hass.config_entries.async_get_entry(config_entry_id)
         else:
@@ -400,8 +449,17 @@ async def get_config_entry_data(
                 }
                 for lock_id, lock in entry_locks.items()
             ],
+            # Still keyed by slot, because that is what entity unique IDs
+            # carry and the card joins the two on it. The NAME travels with
+            # it so the card never has to work out who a slot belongs to:
+            # a dashboard strategy builds configuration, and entity states
+            # are not reliably populated while it runs.
             CONF_SLOTS: {
-                k: v.get(CONF_ENTITY_ID) for k, v in entry_config.slots.items()
+                slot_num: {
+                    CONF_NAME: entry_config.name_for(slot_num),
+                    CONF_CONDITION: slot.get(CONF_CONDITION),
+                }
+                for slot_num, slot in entry_config.slots.items()
             },
         },
     )
@@ -511,7 +569,7 @@ def _build_slot_entities(
         pin_entity_id=_id(TEXT_DOMAIN, CONF_PIN),
         enabled_entity_id=_id(SWITCH_DOMAIN, CONF_ENABLED),
         active_entity_id=_id(BINARY_SENSOR_DOMAIN, ATTR_ACTIVE),
-        event_entity_id=_id(EVENT_DOMAIN, EVENT_PIN_USED),
+        event_entity_id=_id(EVENT_DOMAIN, EVENT_CREDENTIAL_USED),
     )
 
 
@@ -524,7 +582,7 @@ def _get_slot_entity_ids(
         slot_int: _build_slot_entities(ent_reg, entry.entry_id, slot_int)
         for entry in hass.config_entries.async_entries(DOMAIN)
         if get_entry_config(entry).has_lock(lock_entity_id)
-        for slot_int in get_entry_config(entry).slots
+        for slot_int in get_entry_config(entry).slot_numbers
     }
 
 
@@ -1005,11 +1063,14 @@ def _serialize_slot_card_data(
         vol.Required("type"): "lock_code_manager/subscribe_code_slot",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
-        vol.Required(ATTR_SLOT): int,
+        vol.Exclusive(ATTR_USER_ENTITY_ID, "user"): cv.entity_id,
+        vol.Exclusive(ATTR_SLOT, "user"): int,
+        vol.Exclusive(CONF_NAME, "user"): str,
         vol.Optional("reveal", default=False): bool,
     }
 )
 @websocket_api.async_response
+@ws_handle_service_errors
 @async_get_entry
 async def subscribe_code_slot(
     hass: HomeAssistant,
@@ -1026,7 +1087,7 @@ async def subscribe_code_slot(
     - In-sync status changes
     - Calendar entity state changes (for event-based access control)
     """
-    slot_num = msg[ATTR_SLOT]
+    slot_num = _slot_from(hass, config_entry, msg)
     reveal = msg["reveal"]
 
     if not get_entry_config(config_entry).has_slot(slot_num):
@@ -1196,7 +1257,9 @@ async def ws_clear_usercode(
         vol.Required("type"): "lock_code_manager/set_slot_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
-        vol.Required(ATTR_SLOT): int,
+        vol.Exclusive(ATTR_USER_ENTITY_ID, "user"): cv.entity_id,
+        vol.Exclusive(ATTR_SLOT, "user"): int,
+        vol.Exclusive(CONF_NAME, "user"): str,
         vol.Required(CONF_ENTITY_ID): cv.entity_domain(CONDITION_ENTITY_DOMAINS),
     }
 )
@@ -1215,8 +1278,16 @@ async def ws_set_slot_condition(
     excluded platform (for example, the scheduler integration).
     """
     try:
+        slot = _slot_from(hass, config_entry, msg)
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
+        return
+    try:
         await async_set_slot_condition(
-            hass, config_entry.entry_id, msg[ATTR_SLOT], msg[CONF_ENTITY_ID]
+            hass,
+            slot,
+            msg[CONF_ENTITY_ID],
+            config_entry_id=config_entry.entry_id,
         )
         connection.send_result(msg["id"], {"success": True})
     except ServiceValidationError as err:
@@ -1239,7 +1310,9 @@ async def ws_set_slot_condition(
         vol.Required("type"): "lock_code_manager/clear_slot_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
-        vol.Required(ATTR_SLOT): int,
+        vol.Exclusive(ATTR_USER_ENTITY_ID, "user"): cv.entity_id,
+        vol.Exclusive(ATTR_SLOT, "user"): int,
+        vol.Exclusive(CONF_NAME, "user"): str,
     }
 )
 @websocket_api.async_response
@@ -1252,5 +1325,10 @@ async def ws_clear_slot_condition(
     config_entry: ConfigEntry,
 ) -> None:
     """Clear the condition entity from a slot."""
-    await async_clear_slot_condition(hass, config_entry.entry_id, msg[ATTR_SLOT])
+    try:
+        slot = _slot_from(hass, config_entry, msg)
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
+        return
+    await async_clear_slot_condition(hass, slot, config_entry_id=config_entry.entry_id)
     connection.send_result(msg["id"], {"success": True})

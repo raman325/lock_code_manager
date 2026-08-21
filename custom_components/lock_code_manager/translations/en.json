@@ -2,16 +2,22 @@
   "config": {
     "abort": {
       "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
-      "existing_codes_cancelled": "Setup cancelled. Existing codes were not modified.",
       "locks_updated": "The locks for your config entry have been updated.",
       "unknown": "An unexpected error occurred during setup."
     },
     "error": {
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
-      "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
-      "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
-      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
-      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}"
+      "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
+      "missing_pin_if_enabled": "A PIN must be set for any user who is enabled.",
+      "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
+      "name_required": "Every user needs a name. The name identifies them on your locks.",
+      "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+      "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
+      "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
+      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
+      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
+      "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+      "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true"
     },
     "step": {
       "choose_path": {
@@ -29,31 +35,15 @@
           "name": "Name",
           "pin": "PIN Code"
         },
-        "description": "**Configure slot {slot_num}:** A slot is active when the condition entity (if configured) is 'on'. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
-        "title": "Configure Slot {slot_num}"
-      },
-      "existing_codes_confirm": {
-        "title": "Existing Codes Detected",
-        "description": "Existing codes were found on the following lock slots:\n\n{details}\n\nThese codes will be overwritten when the sync manager reconciles the configured state. Continue to proceed or cancel to back out.",
-        "menu_options": {
-          "existing_codes_continue": "Continue",
-          "existing_codes_cancel": "Cancel"
-        }
-      },
-      "reauth": {
-        "data": {
-          "locks": "Locks"
-        },
-        "description": "The lock `{lock}`, in the configuration for `{name}`, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
-        "title": "Update locks for {name}"
+        "description": "A user is active when their condition entity (if configured) is 'on'. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
+        "title": "User {user_num} of {num_users}"
       },
       "ui": {
         "data": {
-          "num_slots": "Number of slots",
-          "start_slot": "Start from slot #"
+          "num_users": "Number of users"
         },
-        "description": "Configure slots for all codes you want on the lock. You can add and remove slots later using the integration services.",
-        "title": "How Many Slots?"
+        "description": "How many users do you want to set up? You can add or remove users later. Lock Code Manager picks which code slot each user occupies, skipping any slot that already holds a code.",
+        "title": "How Many Users?"
       },
       "user": {
         "data": {
@@ -69,6 +59,13 @@
         },
         "description": "The config is expected to be a dictionary where the key is the slot number. For more information, check the docs.",
         "title": "Configure slots"
+      },
+      "reauth_confirm": {
+        "data": {
+          "locks": "Locks"
+        },
+        "description": "The lock `{lock}`, in the configuration for `{name}`, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
+        "title": "Update locks for {name}"
       }
     }
   },
@@ -92,11 +89,12 @@
       }
     },
     "event": {
-      "pin_used": {
+      "credential_used": {
+        "name": "Credential used",
         "state_attributes": {
           "event_type": {
             "state": {
-              "pin_used": "PIN used"
+              "credential_used": "PIN used"
             }
           }
         }
@@ -104,7 +102,7 @@
     },
     "sensor": {
       "code": {
-        "name": "{lock_name} code"
+        "name": "{lock_name} PIN"
       }
     },
     "switch": {
@@ -123,13 +121,21 @@
   },
   "options": {
     "abort": {
-      "existing_codes_cancelled": "Update cancelled. Existing codes were not modified.",
       "unknown": "An unexpected error occurred while updating options."
     },
     "error": {
-      "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
-      "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}.",
-      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}. Renumber them to fall within 1-{num_slots}, or manage that lock from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity."
+      "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
+      "name_required": "Every user needs a name. The name identifies them on your locks.",
+      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
+      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
+      "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true",
+      "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
+      "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+      "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+      "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
+      "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
+      "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
+      "missing_pin_if_enabled": "PIN must be set if slot is enabled."
     },
     "step": {
       "init": {
@@ -139,18 +145,40 @@
         },
         "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
         "title": "Lock Code Manager"
-      },
-      "existing_codes_confirm": {
-        "title": "Existing Codes Detected",
-        "description": "Existing codes were found on newly-added lock slots:\n\n{details}\n\nThese codes will be overwritten when the sync manager reconciles the configured state. Continue to proceed or cancel to back out without saving.",
-        "menu_options": {
-          "existing_codes_continue": "Continue",
-          "existing_codes_cancel": "Cancel"
-        }
       }
     }
   },
   "services": {
+    "add_user": {
+      "name": "Add user",
+      "description": "Add a person to a Lock Code Manager config entry. Their slot number is chosen by reading the entry's locks for a free one, so nothing already programmed is overwritten.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry to add this person to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "What to call this person. Must be unique within the entry, and cannot contain '|'."
+        },
+        "pin": {
+          "name": "PIN",
+          "description": "The PIN this person uses. Required if they are enabled."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Whether to program the PIN onto the locks straight away. Defaults to yes."
+        },
+        "condition": {
+          "name": "Condition entity",
+          "description": "An entity whose state decides when this person's PIN works."
+        }
+      }
+    },
     "clear_slot_condition": {
       "name": "Clear slot condition",
       "description": "Remove a code slot's condition entity, leaving its PIN active whenever the slot is enabled.",
@@ -158,6 +186,10 @@
         "config_entry_id": {
           "name": "Config entry",
           "description": "The Lock Code Manager entry that manages the slot."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
         },
         "slot": {
           "name": "Code slot",
@@ -176,6 +208,28 @@
         "code_slot": {
           "name": "Code slot",
           "description": "The code slot on the lock, addressed by its number."
+        }
+      }
+    },
+    "delete_user": {
+      "name": "Delete user",
+      "description": "Remove a person from a Lock Code Manager config entry, and by default clear their credentials from its locks.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry to remove this person from."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person to remove."
+        },
+        "clear_credentials": {
+          "name": "Clear credentials",
+          "description": "Whether to clear this person's credentials from the locks. Defaults to yes. Turn it off to hand the credential over: Lock Code Manager stops managing the slot and whatever is programmed there keeps working."
         }
       }
     },
@@ -210,6 +264,10 @@
         "config_entry_id": {
           "name": "Config entry",
           "description": "The Lock Code Manager entry that manages the slot."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
         },
         "slot": {
           "name": "Code slot",
@@ -299,7 +357,7 @@
         "step": {
           "init": {
             "title": "Unmanaged code on {lock} in slot {slot}",
-            "description": "Lock {lock} has a code programmed in slot {slot}, and no Lock Code Manager configuration accounts for it.\n\nThere are two ways this happens, and Lock Code Manager cannot tell them apart:\n\n- Somebody programmed the code directly on the lock's keypad or in another app.\n- Lock Code Manager left it behind. Before version 4.4.7, deleting a user removed them from the configuration without clearing their code from the lock, so codes stranded that way are still there and still work.\n\nUntil this is settled, slot {slot} stays out of use: Lock Code Manager will not assign a new user to a slot it can still read a code in, because overwriting somebody's own code is the worse mistake.\n\n**Clear the code** removes it from the lock. It stops working immediately and cannot be recovered — choose this only if you know nobody relies on it.\n\n**Keep the code** leaves it exactly as it is and stops asking about this slot.",
+            "description": "Lock {lock} has a code programmed in slot {slot}, and no Lock Code Manager configuration accounts for it.\n\nThere are two ways this happens, and Lock Code Manager cannot tell them apart:\n\n- Somebody programmed the code directly on the lock's keypad or in another app.\n- Lock Code Manager left it behind. Before this version, deleting a user removed them from the configuration without clearing their code from the lock, so codes stranded that way are still there and still work.\n\nUntil this is settled, slot {slot} stays out of use: Lock Code Manager will not assign a new user to a slot it can still read a code in, because overwriting somebody's own code is the worse mistake.\n\n**Clear the code** removes it from the lock. It stops working immediately and cannot be recovered — choose this only if you know nobody relies on it.\n\n**Keep the code** leaves it exactly as it is and stops asking about this slot.",
             "menu_options": {
               "clear": "Clear the code from slot {slot}",
               "keep": "Keep the code and stop asking"
@@ -311,6 +369,29 @@
           "unmanaged_code_clear_failed": "The code in slot {slot} on {lock} could not be cleared: {error}\n\nIt is still on the lock, so this repair stays open."
         }
       }
+    }
+  },
+  "exceptions": {
+    "name_not_unique": {
+      "message": "{conflicting_name} already uses that name. Names must be unique within a Lock Code Manager entry."
+    },
+    "name_required": {
+      "message": "Code slot {slot_num} needs a name. The name identifies this user on your locks."
+    },
+    "too_many_users": {
+      "message": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit."
+    },
+    "numbers_needed_exceed_capacity": {
+      "message": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots."
+    },
+    "occupancy_unknown": {
+      "message": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it cannot verify are free."
+    },
+    "search_limit_reached": {
+      "message": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager searches."
+    },
+    "slot_out_of_range": {
+      "message": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}."
     }
   }
 }

@@ -9,6 +9,7 @@ import { css } from 'lit';
 import {
     lcmCollapsibleStyles,
     lcmCssVars,
+    lcmDialogActionStyles,
     lcmEditableStyles,
     lcmReducedMotionStyles,
     lcmRevealButtonStyles,
@@ -29,7 +30,6 @@ const slotCardComponentStyles = css`
     /* Lit's reset is minimal — neutralize default heading margins so the
        newly-promoted h2/h3 elements (card title, collapsible section
        titles) keep the same visual rhythm as the prior <span>/<div>. */
-    .header-title,
     .collapsible-title {
         margin: 0;
     }
@@ -61,24 +61,95 @@ const slotCardComponentStyles = css`
         opacity: 0.9;
     }
 
-    /* Header Section — matches the lock card pattern: icon bubble + title + state chip on the right. */
-    .header {
-        align-items: center;
-        border-bottom: 1px solid var(--lcm-border-color);
+    /* The card's identity block: a thin meta row of everything that is
+       *about* the user -- state icon, state chip, remove -- and then the
+       name on a line of its own beneath it.
+
+       The name shared a row with all three once, and lost: on a narrow
+       card the chrome took ~220px and left the name around five
+       characters before the ellipsis. Nothing in the meta row grows with
+       the name, so giving the name its own line is the only arrangement
+       where a long one stays readable. */
+    .hero-identity {
         display: flex;
-        gap: 12px;
-        padding: 16px;
+        flex-direction: column;
+        /* Tighter than the gap between the identity and the PIN row, so
+           the meta row reads as attached to the name rather than as a
+           third band of its own. */
+        gap: 4px;
+        min-width: 0;
     }
 
-    .header-top {
+    .hero-meta {
         align-items: center;
         display: flex;
-        flex: 1;
         gap: 12px;
         min-width: 0;
     }
 
-    .header-icon {
+    /* Takes the space between the icon and the remove button so a long
+       state ("Blocked by condition") reads in full. */
+    .hero-meta .state-chip {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .hero-title {
+        font-size: inherit;
+        font-weight: inherit;
+        margin: 0;
+        min-width: 0;
+        /* Wraps rather than truncates: a cut-off name is a cut-off
+           identity, which is the one thing this card exists to show. A
+           name with no spaces breaks mid-word rather than overflowing. */
+        overflow-wrap: anywhere;
+    }
+
+    .hero-remove {
+        align-items: center;
+        margin-left: auto;
+        background: none;
+        border: none;
+        border-radius: 50%;
+        color: var(--secondary-text-color);
+        cursor: pointer;
+        display: flex;
+        flex-shrink: 0;
+        height: 36px;
+        justify-content: center;
+        padding: 0;
+        width: 36px;
+    }
+
+    .hero-remove:hover {
+        background: var(--lcm-hover-bg, rgba(0, 0, 0, 0.06));
+        color: var(--error-color, #db4437);
+    }
+
+    .hero-remove ha-svg-icon {
+        --mdc-icon-size: 20px;
+    }
+
+    .dialog-check {
+        align-items: flex-start;
+        display: flex;
+        gap: 10px;
+        margin-top: 12px;
+    }
+
+    .dialog-check span {
+        color: var(--secondary-text-color);
+        font-size: 14px;
+    }
+
+    .dialog-check input[type='checkbox'] {
+        accent-color: var(--primary-color);
+        height: 18px;
+        margin: 0;
+        width: 18px;
+    }
+
+    .hero-icon {
         align-items: center;
         background: var(--lcm-active-bg);
         border-radius: 50%;
@@ -89,19 +160,9 @@ const slotCardComponentStyles = css`
         justify-content: center;
         width: 40px;
     }
-    .header-icon ha-svg-icon {
-        --mdc-icon-size: 24px;
-    }
 
-    .header-title {
-        color: var(--primary-text-color);
-        flex: 1;
-        font-size: 18px;
-        font-weight: 500;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+    .hero-icon ha-svg-icon {
+        --mdc-icon-size: 24px;
     }
 
     .state-chip {
@@ -112,7 +173,6 @@ const slotCardComponentStyles = css`
         font-size: 11px;
         font-weight: 600;
         gap: 6px;
-        max-width: 60%;
         overflow: hidden;
         padding: 4px 10px;
         text-overflow: ellipsis;
@@ -695,6 +755,7 @@ const slotCardComponentStyles = css`
 
 export const slotCardStyles = [
     lcmCssVars,
+    lcmDialogActionStyles,
     lcmSectionStyles,
     lcmStatusIndicatorStyles,
     lcmRevealButtonStyles,

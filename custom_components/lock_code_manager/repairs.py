@@ -98,14 +98,19 @@ class UnmanagedCodeRepairFlow(RepairsFlow):
 
 
 async def async_create_fix_flow(
-    hass: HomeAssistant, issue_id: str, data: dict[str, Any] | None
+    hass: HomeAssistant, issue_id: str, data: dict[str, str] | None
 ) -> RepairsFlow:
     """Create a fix flow for a repair issue."""
     if issue_id.startswith(UNMANAGED_ISSUE_KEY):
         assert data is not None
         return UnmanagedCodeRepairFlow(data)
     if issue_id.startswith(
-        ("number_of_uses_removed", "slot_disabled_", "pin_required_", "slot_suspended_")
+        (
+            "number_of_uses_removed",
+            "slot_disabled_",
+            "pin_required_",
+            "slot_suspended_",
+        )
     ):
         return AcknowledgeRepairFlow()
     raise ValueError(f"Unknown issue: {issue_id}")
