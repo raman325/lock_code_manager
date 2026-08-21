@@ -270,6 +270,40 @@ class TestLockCapabilities:
             caps.credential_types[CredentialType.RFID] = pin_cap  # type: ignore[index]
 
 
+def _caps(min_length: int, max_length: int) -> LockCapabilities:
+    """Build a single-PIN-type LockCapabilities with the given length bounds."""
+    return LockCapabilities(
+        supports_user_management=True,
+        max_users=30,
+        credential_types={
+            CredentialType.PIN: CredentialTypeCapability(
+                num_slots=30,
+                min_length=min_length,
+                max_length=max_length,
+                supports_learn=False,
+            )
+        },
+    )
+
+
+class TestLengthBounds:
+    """LockCapabilities.length_bounds normalizes per-type length limits."""
+
+    def test_returns_min_and_max_for_supported_type(self) -> None:
+        assert _caps(4, 8).length_bounds(CredentialType.PIN) == (4, 8)
+
+    def test_unsupported_type_returns_none(self) -> None:
+        assert _caps(4, 8).length_bounds(CredentialType.RFID) is None
+
+    def test_non_positive_max_means_unbounded(self) -> None:
+        # Matter reports max_pin_length as `... or 0` -- 0 is "unknown", not
+        # "zero characters", so it must normalize to no upper bound.
+        assert _caps(4, 0).length_bounds(CredentialType.PIN) == (4, None)
+
+    def test_negative_min_clamps_to_zero(self) -> None:
+        assert _caps(-1, 8).length_bounds(CredentialType.PIN) == (0, 8)
+
+
 class TestProjectionHelpers:
     """Pure 1:1:1 projection between a managed slot and the User/Credential model."""
 

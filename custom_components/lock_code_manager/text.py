@@ -49,8 +49,10 @@ async def async_setup_entry(
 class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
     """Text entity for lock code manager."""
 
-    _attr_native_min = 0
-    _attr_native_max = 9999
+    # Defaults for keys with no length constraint (the slot name) and the
+    # fallback when bound locks advertise nothing or an unsatisfiable range.
+    _DEFAULT_MIN = 0
+    _DEFAULT_MAX = 9999
 
     def __init__(
         self,
@@ -66,6 +68,37 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
             self, hass, ent_reg, config_entry, slot_num, key
         )
         self._attr_mode = text_mode
+
+    @property
+    def native_min(self) -> int:
+        """
+        Return the minimum value length -- always the permissive default.
+
+        The advertised per-lock minimum is deliberately NOT surfaced here.
+        Home Assistant's ``text.set_value`` service rejects
+        ``len(value) < native_min`` before the value reaches the coordinator,
+        which would block the empty string that clears a slot and would replace
+        the coordinator's per-lock error with a generic one. The coordinator
+        (``SlotEntityCoordinator._validate_credential_length``) is the
+        authoritative minimum gate; an empty PIN is exempt because it clears
+        the slot.
+        """
+        return self._DEFAULT_MIN
+
+    @property
+    def native_max(self) -> int:
+        """
+        Return the maximum value length -- always the permissive default.
+
+        The advertised maximum is deliberately NOT surfaced here, for the same
+        reason as the minimum. Home Assistant turns ``native_max`` into the
+        field's ``maxlength``, so a lock advertising a limit lower than it
+        really accepts would stop the keystrokes with no message at all: the
+        field simply refuses to grow and nothing says why. The coordinator
+        refuses the write instead, naming the lock and the range it claims,
+        which is what somebody needs to see to recognise a bad advertisement.
+        """
+        return self._DEFAULT_MAX
 
     @property
     def native_value(self) -> str | None:

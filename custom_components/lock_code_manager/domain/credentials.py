@@ -269,6 +269,13 @@ class CredentialTypeCapability:
     ``supports_learn`` is True when the lock can enroll the credential at the
     device (for example a fingerprint learn flow) rather than being told the
     value.
+
+    Length convention shared by every provider: a non-positive ``max_length``
+    means "no advertised maximum / unknown" -- never a literal zero-length
+    limit, which would be meaningless -- so providers map an absent or
+    unreadable maximum to ``0`` (Matter's ``max_pin_length or 0`` idiom). A
+    non-positive ``min_length`` means "no minimum". ``length_bounds`` applies
+    this normalization; do not emit a literal ``0`` to express a real limit.
     """
 
     num_slots: int
@@ -334,6 +341,26 @@ class LockCapabilities:
         if capability is None or capability.num_slots <= 0:
             return None
         return capability.num_slots
+
+    def length_bounds(
+        self, credential_type: CredentialType
+    ) -> tuple[int, int | None] | None:
+        """
+        Return the effective ``(min, max)`` value length for a credential type.
+
+        ``None`` when the type is unsupported. A non-positive advertised
+        bound means "unbounded" rather than a literal limit: Matter reports
+        ``max_pin_length`` as ``... or 0``, where ``0`` is "unknown", so it
+        normalizes to no upper bound (``max`` of ``None``). A non-positive
+        minimum normalizes to ``0`` (no minimum).
+        """
+        cap = self.capability_for(credential_type)
+        if cap is None:
+            return None
+        return (
+            max(cap.min_length, 0),
+            cap.max_length if cap.max_length > 0 else None,
+        )
 
 
 def credential_from_slot(slot: int, state: SlotCredential) -> Credential:
