@@ -122,6 +122,30 @@ def test_pin_max_takes_tightest_common(hass: HomeAssistant) -> None:
     assert (entity.native_min, entity.native_max) == (0, 8)
 
 
+def test_pin_max_stays_open_when_no_length_suits_every_lock(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Locks that cannot agree leave the field open rather than capping it.
+
+    One lock demanding at least 8 and another accepting at most 6 have no
+    length in common. Surfacing the smaller maximum would stop the user
+    typing past 6 while the coordinator rejects anything under 8 -- a field
+    that refuses the only value it will accept, and says so in a message the
+    user cannot act on.
+
+    The coordinator still refuses the write, naming both locks and what each
+    one wants, which is the part the user can do something about.
+    """
+    entity = _make_text_entity(
+        hass,
+        CONF_PIN,
+        [_fake_lock("lock.a", _pin_caps(8, 12)), _fake_lock("lock.b", _pin_caps(4, 6))],
+    )
+
+    assert (entity.native_min, entity.native_max) == (0, 9999)
+
+
 def test_native_min_stays_zero_despite_advertised_minimum(hass: HomeAssistant) -> None:
     """The advertised minimum is never surfaced as a hard floor.
 

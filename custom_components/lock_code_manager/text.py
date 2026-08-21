@@ -128,9 +128,16 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
         # coordinator's length gate iterates -- LCM binds every lock to every
         # slot. If per-slot lock binding is ever added, this surface and the
         # coordinator gate must both switch to the slot's subset together.
-        _lo, hi = aggregate_length_bounds(
+        lo, hi = aggregate_length_bounds(
             (lock.cached_capabilities for lock in self.locks), credential_type
         )
+        if lo is not None and hi is not None and lo > hi:
+            # No length satisfies every lock. Capping the field at the smaller
+            # maximum would stop the user typing the length the coordinator
+            # then demands -- a field that refuses the only value it will
+            # accept. Leave it open and let the coordinator say which locks
+            # disagree and what each one wants.
+            return self._DEFAULT_MAX
         hi = self._DEFAULT_MAX if hi is None else hi
         # Home Assistant validates the stored value against this ceiling when it
         # renders state and raises if the value is longer, so the ceiling must
