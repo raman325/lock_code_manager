@@ -2,7 +2,6 @@
 
 import logging
 from types import SimpleNamespace
-from unittest.mock import PropertyMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -30,7 +29,6 @@ from custom_components.lock_code_manager.domain.models import (
     LockCodeManagerConfigEntryRuntimeData,
 )
 from custom_components.lock_code_manager.text import (
-    CREDENTIAL_TYPE_BY_CONF_KEY,
     LockCodeManagerText,
 )
 
@@ -94,55 +92,39 @@ def _make_text_entity(
     return entity
 
 
-def test_conf_key_credential_type_map() -> None:
-    """The map exposes PIN and excludes the (non-credential) name key."""
-    assert CREDENTIAL_TYPE_BY_CONF_KEY[CONF_PIN] is CredentialType.PIN
-    assert CONF_NAME not in CREDENTIAL_TYPE_BY_CONF_KEY
-
-
 def test_pin_bounds_default_without_capabilities(hass: HomeAssistant) -> None:
     """An uncached lock contributes no constraint; bounds stay 0/9999."""
     entity = _make_text_entity(hass, CONF_PIN, [_fake_lock("lock.a", None)])
     assert (entity.native_min, entity.native_max) == (0, 9999)
 
 
-def test_pin_max_reflects_single_lock(hass: HomeAssistant) -> None:
-    """A lock advertising 4-8 surfaces a max of 8; the min stays permissive."""
-    entity = _make_text_entity(hass, CONF_PIN, [_fake_lock("lock.a", _pin_caps(4, 8))])
-    assert (entity.native_min, entity.native_max) == (0, 8)
-
-
-def test_pin_max_takes_tightest_common(hass: HomeAssistant) -> None:
-    """Two locks collapse to the smallest advertised maximum."""
-    entity = _make_text_entity(
-        hass,
-        CONF_PIN,
-        [_fake_lock("lock.a", _pin_caps(4, 8)), _fake_lock("lock.b", _pin_caps(6, 10))],
-    )
-    assert (entity.native_min, entity.native_max) == (0, 8)
-
-
-def test_pin_max_stays_open_when_no_length_suits_every_lock(
+def test_bounds_stay_permissive_whatever_the_locks_advertise(
     hass: HomeAssistant,
 ) -> None:
     """
-    Locks that cannot agree leave the field open rather than capping it.
+    Neither end of the advertised range is surfaced to Home Assistant.
 
-    One lock demanding at least 8 and another accepting at most 6 have no
-    length in common. Surfacing the smaller maximum would stop the user
-    typing past 6 while the coordinator rejects anything under 8 -- a field
-    that refuses the only value it will accept, and says so in a message the
-    user cannot act on.
+    Surfacing the minimum would make ``text.set_value`` reject the empty
+    string that clears a slot. Surfacing the maximum would become the field's
+    ``maxlength``, so a lock claiming a tighter limit than it really accepts
+    would stop the keystrokes with no message at all -- nothing on screen
+    would say why the field refused to grow.
 
-    The coordinator still refuses the write, naming both locks and what each
-    one wants, which is the part the user can do something about.
+    The coordinator gates both ends instead, and names the lock and the range
+    it claims, which is what somebody needs to recognise a bad advertisement.
     """
+    for advertised in ((4, 8), (6, 6), (8, 12)):
+        entity = _make_text_entity(
+            hass, CONF_PIN, [_fake_lock("lock.a", _pin_caps(*advertised))]
+        )
+        assert (entity.native_min, entity.native_max) == (0, 9999)
+
+    # Including locks that cannot agree on any length at all.
     entity = _make_text_entity(
         hass,
         CONF_PIN,
         [_fake_lock("lock.a", _pin_caps(8, 12)), _fake_lock("lock.b", _pin_caps(4, 6))],
     )
-
     assert (entity.native_min, entity.native_max) == (0, 9999)
 
 
@@ -154,25 +136,6 @@ def test_native_min_stays_zero_despite_advertised_minimum(hass: HomeAssistant) -
     """
     entity = _make_text_entity(hass, CONF_PIN, [_fake_lock("lock.a", _pin_caps(6, 8))])
     assert entity.native_min == 0
-    assert entity.native_max == 8
-
-
-def test_native_max_widens_to_admit_longer_stored_value(hass: HomeAssistant) -> None:
-    """A stored PIN longer than the advertised max still renders (ceiling widens).
-
-    HA raises at state-render time if the value exceeds native_max, so a PIN
-    written before a (now tighter) lock advertised its limit forces the ceiling
-    up to admit it.
-    """
-    entity = _make_text_entity(hass, CONF_PIN, [_fake_lock("lock.a", _pin_caps(4, 8))])
-    with patch.object(
-        LockCodeManagerText,
-        "native_value",
-        new_callable=PropertyMock,
-        return_value="1234567890",
-    ):
-        assert entity.native_min == 0
-        assert entity.native_max == 10  # widened up to admit the length-10 value
 
 
 def test_name_entity_ignores_capabilities(hass: HomeAssistant) -> None:
@@ -181,36 +144,12 @@ def test_name_entity_ignores_capabilities(hass: HomeAssistant) -> None:
     assert (entity.native_min, entity.native_max) == (0, 9999)
 
 
-async def test_lock_add_remove_rewrites_state(hass: HomeAssistant) -> None:
-    """Lock set changes re-push state so the frontend re-reads bounds."""
-    entity = _make_text_entity(hass, CONF_PIN, [])
-    entity.hass = hass
-    entity.entity_id = "text.test"
-
-    with patch.object(entity, "async_write_ha_state") as mock_write:
-        added = _fake_lock("lock.a", _pin_caps(4, 8))
-        entity._handle_add_locks([added])
-        await hass.async_block_till_done()
-        assert added in entity.locks
-        # The added lock's max is surfaced; the min stays permissive.
-        assert (entity.native_min, entity.native_max) == (0, 8)
-        assert mock_write.called  # immediate re-push, plus one after the probe
-        mock_write.reset_mock()
-
-        entity._handle_remove_lock("lock.a")
-        await hass.async_block_till_done()
-        assert entity.locks == []
-        # Removing the only lock reverts the surfaced ceiling to the default.
-        assert (entity.native_min, entity.native_max) == (0, 9999)
-        assert mock_write.called  # the removal re-pushed state
-
-
 async def test_pin_entity_surfaces_lock_bounds(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """The PIN entity's state exposes the bound lock's length range."""
+    """The PIN entity leaves its length range open whatever the lock advertises."""
     # Without advertised capabilities the entity uses the default range.
     # Home Assistant clamps the reported max to its 255-char state ceiling.
     state = hass.states.get(SLOT_2_PIN_ENTITY)
@@ -232,9 +171,9 @@ async def test_pin_entity_surfaces_lock_bounds(
 
     state = hass.states.get(SLOT_2_PIN_ENTITY)
     assert state
-    # The minimum is owned by the coordinator, not surfaced as a hard floor.
+    # Both ends are owned by the coordinator, not surfaced as hard limits.
     assert state.attributes[ATTR_MIN] == 0
-    assert state.attributes[ATTR_MAX] == 8
+    assert state.attributes[ATTR_MAX] == 255
 
 
 async def test_pin_clear_through_service_with_minimum_advertised(

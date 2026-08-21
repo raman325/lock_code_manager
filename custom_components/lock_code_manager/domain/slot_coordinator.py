@@ -249,11 +249,12 @@ class SlotEntityCoordinator:
 
         A non-empty PIN is validated against every bound lock's advertised
         length range before it is written; an empty PIN clears the slot and
-        is exempt. This is the authoritative *minimum* gate: the text entity
-        keeps ``native_min`` permissive so Home Assistant's ``text.set_value``
-        service neither rejects the empty clear nor pre-empts the per-lock
-        error built here. The maximum is additionally surfaced as the entity's
-        ``native_max`` ceiling, which Home Assistant does enforce.
+        is exempt. This is the authoritative gate for BOTH ends: the text
+        entity keeps ``native_min`` and ``native_max`` permissive so Home
+        Assistant's ``text.set_value`` service neither rejects the empty clear
+        nor pre-empts the per-lock error built here -- and so a lock
+        advertising a limit tighter than it really accepts cannot silently
+        stop the keystrokes with no message at all.
         """
         if not value.strip():
             value = ""

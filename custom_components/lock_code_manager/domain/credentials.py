@@ -16,7 +16,7 @@ coordinator's currency.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -361,38 +361,6 @@ class LockCapabilities:
             max(cap.min_length, 0),
             cap.max_length if cap.max_length > 0 else None,
         )
-
-
-def aggregate_length_bounds(
-    capabilities: Iterable[LockCapabilities | None],
-    credential_type: CredentialType,
-) -> tuple[int | None, int | None]:
-    """
-    Fold many locks' length limits into one tightest-common ``(min, max)``.
-
-    Each bound is ``None`` when nothing constrains it. Locks with no
-    capabilities (``None``) or that do not support ``credential_type``
-    contribute nothing, so an all-unknown set yields ``(None, None)``.
-
-    The result is the tightest range every lock can satisfy: the largest
-    minimum and the smallest maximum. A returned ``min`` greater than ``max``
-    signals an unsatisfiable intersection across locks; the caller decides how
-    to present it. User-interface defaults deliberately live in the caller, not
-    here, so non-interface callers can reuse this unchanged.
-    """
-    mins: list[int] = []
-    maxes: list[int] = []
-    for caps in capabilities:
-        if caps is None:
-            continue
-        bounds = caps.length_bounds(credential_type)
-        if bounds is None:
-            continue
-        lo, hi = bounds
-        mins.append(lo)
-        if hi is not None:
-            maxes.append(hi)
-    return (max(mins) if mins else None, min(maxes) if maxes else None)
 
 
 def credential_from_slot(slot: int, state: SlotCredential) -> Credential:
