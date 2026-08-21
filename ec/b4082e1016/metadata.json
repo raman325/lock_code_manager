@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "ecb4082e1016",
+  "strategy": "manual-commit",
+  "branch": "fix/bombadil-0-7-click-fingerprint",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "ts/pbt/spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ec/b4082e1016/0/metadata.json",
+      "transcript": "/ec/b4082e1016/0/full.jsonl",
+      "compact_transcript": "/ec/b4082e1016/0/transcript.jsonl",
+      "content_hash": "/ec/b4082e1016/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 13515,
+    "cache_read_tokens": 8591605,
+    "output_tokens": 6030,
+    "api_call_count": 11
+  }
+}
