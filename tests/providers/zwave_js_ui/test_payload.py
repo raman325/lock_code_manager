@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.providers.zwave_js_ui import (
         (b'{"time": 1, "value": {"userId": 3}}', {"userId": 3}),
         (b'{"time": 1, "value": null}', None),
         (b'{"nested": {"value": 1}}', {"nested": {"value": 1}}),  # no top-level value
+        # An empty payload is how MQTT clears a retained message, not a value.
         (b"", None),
         ("1234", 1234),  # str input works too
     ],

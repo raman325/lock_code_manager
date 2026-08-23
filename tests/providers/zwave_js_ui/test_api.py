@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 import json
 from typing import Any
@@ -27,7 +28,9 @@ from .conftest import (
     ZUI_PREFIX,
     ZWaveJSUIApiResponder,
     _minimal_lock,
+    async_discover_zui_lock,
     async_start_gateway_resolution,
+    build_zui_lock,
     fire_zui_gateway_status,
 )
 
@@ -213,14 +216,14 @@ async def test_unresolvable_prefix_cannot_be_resolved(
 
 
 async def test_api_call_round_trip(
-    zui_lock_provider: ZWaveJSUILock,
+    zui_gateway_resolved: ZWaveJSUILock,
     zui_api_responder: ZWaveJSUIApiResponder,
     mqtt_mock,
 ) -> None:
     """A request goes out on ``<api base>/api/<name>/set`` and its answer comes back."""
     zui_api_responder.set_result("sendCommand", {"userIdStatus": 1})
 
-    response = await zui_lock_provider._async_api_call_at(
+    response = await zui_gateway_resolved._async_api_call_at(
         ZUI_API_BASE, "sendCommand", [{"nodeId": ZUI_NODE_ID}]
     )
 
@@ -237,7 +240,7 @@ async def test_api_call_round_trip(
 
 async def test_responses_for_other_callers_are_ignored(
     hass: HomeAssistant,
-    zui_lock_provider: ZWaveJSUILock,
+    zui_gateway_resolved: ZWaveJSUILock,
     zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
@@ -256,6 +259,7 @@ async def test_responses_for_other_callers_are_ignored(
             "not json at all",
             json.dumps([1, 2, 3]),
             json.dumps({"success": True, "result": "no origin at all"}),
+            json.dumps({"success": True, "result": "origin with no id", "origin": {}}),
             json.dumps(
                 {
                     "success": True,
@@ -270,13 +274,19 @@ async def test_responses_for_other_callers_are_ignored(
 
     zui_api_responder.set_handler("getInfo", _handler)
 
-    response = await zui_lock_provider._async_api_call_at(ZUI_API_BASE, "getInfo", [])
+    response = await zui_gateway_resolved._async_api_call_at(
+        ZUI_API_BASE, "getInfo", []
+    )
 
     assert response["result"] == "ours"
+    # The registry is empty again, so a late foreign response is dropped
+    # before it is even parsed.
+    async_fire_mqtt_message(hass, topic, json.dumps({"success": True}))
+    assert zui_gateway_resolved._pending_api_calls == {}
 
 
 async def test_unanswered_call_is_disconnected(
-    zui_lock_provider: ZWaveJSUILock, zui_api_responder: ZWaveJSUIApiResponder
+    zui_gateway_resolved: ZWaveJSUILock, zui_api_responder: ZWaveJSUIApiResponder
 ) -> None:
     """
     A gateway that never answers reads as a broken link, not a failed operation.
@@ -285,11 +295,14 @@ async def test_unanswered_call_is_disconnected(
     LockOperationFailed would retry the same write against a dead broker.
     """
     with pytest.raises(LockDisconnected, match="Timed out waiting"):
-        await zui_lock_provider._async_api_call_at(ZUI_API_BASE, "getInfo", [])
+        await zui_gateway_resolved._async_api_call_at(ZUI_API_BASE, "getInfo", [])
+
+    # The abandoned call leaves nothing behind to leak.
+    assert zui_gateway_resolved._pending_api_calls == {}
 
 
 async def test_explicit_failure_is_an_operation_failure(
-    zui_lock_provider: ZWaveJSUILock, zui_api_responder: ZWaveJSUIApiResponder
+    zui_gateway_resolved: ZWaveJSUILock, zui_api_responder: ZWaveJSUIApiResponder
 ) -> None:
     """``success: false`` carries the gateway's own message through."""
     zui_api_responder.set_result(
@@ -297,7 +310,7 @@ async def test_explicit_failure_is_an_operation_failure(
     )
 
     with pytest.raises(LockOperationFailed, match="Node 20 is not alive"):
-        await zui_lock_provider._async_api_call_at(ZUI_API_BASE, "sendCommand", [])
+        await zui_gateway_resolved._async_api_call_at(ZUI_API_BASE, "sendCommand", [])
 
 
 @pytest.mark.parametrize(
@@ -310,7 +323,7 @@ async def test_explicit_failure_is_an_operation_failure(
     ],
 )
 async def test_publish_failures_are_routed_by_kind(
-    zui_lock_provider: ZWaveJSUILock,
+    zui_gateway_resolved: ZWaveJSUILock,
     error: Exception,
     expected: type[Exception],
 ) -> None:
@@ -322,7 +335,7 @@ async def test_publish_failures_are_routed_by_kind(
         ),
         pytest.raises(expected, match="Failed to publish getInfo"),
     ):
-        await zui_lock_provider._async_api_call_at(ZUI_API_BASE, "getInfo", [])
+        await zui_gateway_resolved._async_api_call_at(ZUI_API_BASE, "getInfo", [])
 
 
 async def test_user_code_command_shapes_the_send_command_envelope(
@@ -369,3 +382,146 @@ async def test_non_api_publishes_pass_through_the_responder(
     assert zui_api_responder(f"{ZUI_API_BASE}/api/getInfo", "{}") is DEFAULT
     assert zui_api_responder(f"{ZUI_API_BASE}/api/getInfo/set", "not json") is DEFAULT
     assert zui_api_responder.requests == []
+
+
+async def test_gateway_that_never_answers_is_skipped(
+    hass: HomeAssistant,
+    zui_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A gateway that goes silent on getInfo times out into a non-match.
+
+    Distinct from a gateway that answers an error: nothing comes back at all,
+    so the per-gateway timeout is what has to be absorbed. One unresponsive
+    gateway must not strand every lock behind a healthy one.
+    """
+
+    def _handler(api_base: str, _request: dict[str, Any]) -> dict[str, Any] | None:
+        if api_base == OTHER_API_BASE:
+            return None
+        return {"success": True, "result": {"homeid": ZUI_HOME_ID}}
+
+    zui_api_responder.set_handler("getInfo", _handler)
+
+    task = await async_start_gateway_resolution(hass, zui_lock_provider)
+    fire_zui_gateway_status(hass)
+    fire_zui_gateway_status(hass, client=OTHER_GATEWAY_NAME)
+
+    assert await task == ZUI_API_BASE
+
+
+async def test_boolean_home_id_never_matches(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown, zui_api_responder
+) -> None:
+    """
+    A gateway answering ``homeid: true`` is a non-match, even on home id 1.
+
+    ``True == 1`` in Python, so on a network whose home id really is 1 a JSON
+    boolean would otherwise match and make the choice ambiguous -- turning a
+    resolvable lock unreachable. The same trap this module already guards on
+    userIdStatus.
+    """
+    entity = await async_discover_zui_lock(hass, home_hex="0x1")
+    lock = build_zui_lock(hass, entity)
+    zui_api_responder.set_handler(
+        "getInfo",
+        lambda api_base, _request: {
+            "success": True,
+            "result": {"homeid": True if api_base == OTHER_API_BASE else 1},
+        },
+    )
+
+    task = await async_start_gateway_resolution(hass, lock)
+    fire_zui_gateway_status(hass)
+    fire_zui_gateway_status(hass, client=OTHER_GATEWAY_NAME)
+
+    assert await task == ZUI_API_BASE
+
+
+async def test_api_call_without_a_response_subscription_fails_loud(
+    zui_lock_provider: ZWaveJSUILock,
+) -> None:
+    """
+    Calling before the gateway is resolved refuses rather than subscribing.
+
+    Subscribing here and publishing in the same breath is exactly the race
+    the persistent subscription exists to avoid: Home Assistant defers the
+    wire SUBSCRIBE behind a debouncer, so the answer would arrive before the
+    broker knew to route it.
+    """
+    with pytest.raises(LockDisconnected, match="No zwave-js-ui api response"):
+        await zui_lock_provider._async_api_call_at(ZUI_API_BASE, "getInfo", [])
+
+
+async def test_subscribe_refusal_is_a_disconnect(
+    zui_lock_provider: ZWaveJSUILock,
+) -> None:
+    """
+    MQTT refusing a subscription routes to the reconnect path.
+
+    Home Assistant raises HomeAssistantError when MQTT is unloaded, reloading,
+    or disabled, and the BaseLock contract forbids that escaping a provider.
+    """
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zwave_js_ui.async_subscribe",
+            new=AsyncMock(side_effect=HomeAssistantError("mqtt not set up")),
+        ),
+        pytest.raises(LockDisconnected, match="Failed to subscribe"),
+    ):
+        await zui_lock_provider._async_resolve_api_base()
+
+
+async def test_disconnect_drops_the_cached_gateway(
+    hass: HomeAssistant,
+    zui_gateway_resolved: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A disconnected call invalidates the cached base so the next one rediscovers.
+
+    Without this a gateway that was renamed or replaced stays cached and every
+    later call publishes at a topic nobody answers, until the integration is
+    reloaded by hand.
+    """
+    lock = zui_gateway_resolved
+    assert lock._api_base == ZUI_API_BASE
+
+    with pytest.raises(LockDisconnected, match="Timed out waiting"):
+        await lock._async_api_call("getInfo", [])
+    assert lock._api_base is None
+
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    task = asyncio.create_task(lock._async_api_call("getInfo", []))
+    await hass.async_block_till_done()
+    fire_zui_gateway_status(hass)
+
+    assert (await task)["result"] == {"homeid": ZUI_HOME_ID}
+    assert lock._api_base == ZUI_API_BASE
+
+
+async def test_teardown_releases_the_response_subscription(
+    hass: HomeAssistant, zui_gateway_resolved: ZWaveJSUILock
+) -> None:
+    """
+    Teardown drops the subscription, the cached base, and every waiting call.
+
+    The base goes with the subscription because a reconnect can bring back a
+    renamed gateway or a different broker entirely.
+    """
+    lock = zui_gateway_resolved
+    pending = asyncio.create_task(lock._async_api_call_at(ZUI_API_BASE, "getInfo", []))
+    await hass.async_block_till_done()
+    assert lock._pending_api_calls
+
+    lock.teardown_push_subscription()
+
+    assert lock._api_base is None
+    assert lock._api_response_topic is None
+    assert lock._pending_api_calls == {}
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+
+    # Idempotent, as the base class requires.
+    lock.teardown_push_subscription()

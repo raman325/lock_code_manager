@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
 import re
@@ -19,7 +20,7 @@ from homeassistant.components.mqtt import (
 )
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
-from homeassistant.core import callback
+from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import HomeAssistantError
 
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
@@ -77,6 +78,9 @@ def _unwrap_mqtt_value(raw: bytes | str) -> Any:
     valueId object (which also carries ``value`` among other keys). All dict
     shapes therefore carry the value under ``value``; a payload that is not
     JSON at all IS the raw value (for example a bare PIN string).
+
+    An empty payload is a fourth case and not a value at all: it is how MQTT
+    clears a retained message, so it unwraps to None rather than to ``""``.
     """
     if isinstance(raw, bytes):
         raw = raw.decode(errors="replace")
@@ -124,6 +128,15 @@ class ZWaveJSUILock(BaseLock):
     """Lock bridged through zwave-js-ui's MQTT gateway (api-driven)."""
 
     _api_base: str | None = field(init=False, default=None)
+    # Topic of the live api response subscription, or None when there is
+    # none. Mirrors zigbee2mqtt's ``_subscribed_topic``: the unsub itself is
+    # held by the base registry, and this records what it covers.
+    _api_response_topic: str | None = field(init=False, default=None)
+    # Outstanding api calls by nonce. The single response handler resolves
+    # whichever future the gateway's echoed nonce names.
+    _pending_api_calls: dict[str, asyncio.Future[dict[str, Any]]] = field(
+        init=False, default_factory=dict
+    )
 
     @property
     def domain(self) -> str:
@@ -224,6 +237,52 @@ class ZWaveJSUILock(BaseLock):
         state = self.hass.states.get(self.lock.entity_id)
         return not (state is None or state.state == "unavailable")
 
+    async def _async_subscribe(
+        self, topic: str, handler: Callable[[ReceiveMessage], None]
+    ) -> CALLBACK_TYPE:
+        """
+        Subscribe, routing a refusal onto the reconnect path.
+
+        Home Assistant raises HomeAssistantError when MQTT is unloaded,
+        reloading, or disabled. The BaseLock contract forbids a bare
+        HomeAssistantError escaping a provider, and this failure is exactly
+        a lost connection, so it becomes LockDisconnected.
+        """
+        try:
+            return await async_subscribe(self.hass, topic, handler)
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Failed to subscribe to {topic} for {self.lock.entity_id}: {err}"
+            ) from err
+
+    @callback
+    def _api_response_received(self, msg: ReceiveMessage) -> None:
+        """
+        Resolve whichever pending call the response's echoed nonce names.
+
+        The ``@callback`` decorator is load-bearing: it keeps dispatch on the
+        event loop, so touching the future here is safe. Without it Home
+        Assistant runs the handler in a worker thread and ``set_result``
+        races the loop.
+        """
+        if not self._pending_api_calls:
+            # These topics carry every client's api traffic, and some
+            # responses (getNodes) are large. With nothing outstanding there
+            # is nothing to correlate, so skip the parse entirely.
+            return
+        try:
+            payload = json.loads(msg.payload)
+        except ValueError:
+            LOGGER.debug("Ignoring non-JSON payload on %s", msg.topic)
+            return
+        origin = payload.get("origin") if isinstance(payload, dict) else None
+        nonce = origin.get(REQUEST_ID_KEY) if isinstance(origin, dict) else None
+        if not isinstance(nonce, str):
+            return
+        future = self._pending_api_calls.get(nonce)
+        if future is not None and not future.done():
+            future.set_result(payload)
+
     async def _async_resolve_api_base(self) -> str:
         """
         Resolve and cache ``<prefix>/_CLIENTS/ZWAVE_GATEWAY-<name>``.
@@ -232,6 +291,16 @@ class ZWaveJSUILock(BaseLock):
         is applied client-side on the received topic segment. Retained
         statuses arrive immediately after subscribing; the window exists only
         to collect them all before deciding.
+
+        The api response subscription is established here, before the window,
+        rather than per call. Home Assistant registers a subscription locally
+        straight away but defers the wire SUBSCRIBE through a ~0.1s debouncer,
+        while a publish goes out immediately -- so a subscribe/publish pair in
+        one breath loses every api response the gateway sends before the
+        broker has been told to route it, and it sends them unretained. The
+        discovery window is the one place already long enough to outlast that
+        debounce, so every later call publishes into a subscription that has
+        been live for seconds.
         """
         if self._api_base:
             return self._api_base
@@ -240,6 +309,15 @@ class ZWaveJSUILock(BaseLock):
         if (resolved := self._prefix_and_node_topic()) is None:
             raise LockDisconnected("Cannot resolve gateway prefix from discovery data")
         prefix = resolved[0]
+
+        if self._api_response_topic is None:
+            # One wildcard covers every gateway on the prefix, so the
+            # disambiguation getInfo calls below are already correlated too.
+            response_topic = f"{prefix}/_CLIENTS/+/api/+"
+            self._register_push_unsub(
+                await self._async_subscribe(response_topic, self._api_response_received)
+            )
+            self._api_response_topic = response_topic
 
         gateways: set[str] = set()
 
@@ -250,8 +328,8 @@ class ZWaveJSUILock(BaseLock):
             if client.startswith(GATEWAY_CLIENT_PREFIX):
                 gateways.add(client)
 
-        unsub = await async_subscribe(
-            self.hass, f"{prefix}/_CLIENTS/+/status", _status_received
+        unsub = await self._async_subscribe(
+            f"{prefix}/_CLIENTS/+/status", _status_received
         )
         try:
             await asyncio.sleep(GATEWAY_DISCOVERY_TIMEOUT)
@@ -281,7 +359,13 @@ class ZWaveJSUILock(BaseLock):
                 LOGGER.debug("Gateway %s did not answer getInfo: %s", api_base, err)
                 continue
             result = response.get("result")
-            if isinstance(result, dict) and result.get("homeid") == home_id:
+            homeid = result.get("homeid") if isinstance(result, dict) else None
+            # ``True == 1`` in Python, so a JSON boolean would otherwise be
+            # able to match a home id of 1. Same guard as
+            # ``_project_user_code_result`` applies to userIdStatus.
+            if isinstance(homeid, bool) or not isinstance(homeid, int):
+                continue
+            if homeid == home_id:
                 matches.append(api_base)
 
         if len(matches) != 1:
@@ -306,28 +390,23 @@ class ZWaveJSUILock(BaseLock):
         the nonce keeps concurrent api users (the UI, other automations) from
         crossing wires. Timeout routes to LockDisconnected so the reconnect
         path runs; an explicit success=false is a per-operation failure.
+
+        Requires the response subscription ``_async_resolve_api_base`` sets
+        up. Subscribing here instead would publish into a subscription the
+        broker has not been told about yet and lose the answer.
         """
+        if self._api_response_topic is None:
+            raise LockDisconnected(
+                f"No zwave-js-ui api response subscription for {self.lock.entity_id}; "
+                f"cannot call {api_name}"
+            )
+
         nonce = uuid4().hex
         response_topic = f"{api_base}/api/{api_name}"
         future: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
-
-        @callback
-        def _response_received(msg: ReceiveMessage) -> None:
-            """Resolve the pending call when a response echoes our nonce back."""
-            try:
-                payload = json.loads(msg.payload)
-            except ValueError:
-                LOGGER.debug("Ignoring non-JSON payload on %s", msg.topic)
-                return
-            origin = payload.get("origin") if isinstance(payload, dict) else None
-            if not isinstance(origin, dict) or origin.get(REQUEST_ID_KEY) != nonce:
-                return
-            if not future.done():
-                future.set_result(payload)
-
-        unsub = await async_subscribe(self.hass, response_topic, _response_received)
+        self._pending_api_calls[nonce] = future
         try:
             try:
                 await async_publish(
@@ -354,7 +433,7 @@ class ZWaveJSUILock(BaseLock):
                     f"{self.lock.entity_id}"
                 ) from err
         finally:
-            unsub()
+            self._pending_api_calls.pop(nonce, None)
 
         if not response.get("success"):
             raise LockOperationFailed(
@@ -364,10 +443,20 @@ class ZWaveJSUILock(BaseLock):
         return response
 
     async def _async_api_call(self, api_name: str, args: list[Any]) -> dict[str, Any]:
-        """Call an api on this lock's resolved gateway."""
-        return await self._async_api_call_at(
-            await self._async_resolve_api_base(), api_name, args
-        )
+        """
+        Call an api on this lock's resolved gateway.
+
+        A disconnect against the cached base drops it, so the next attempt
+        rediscovers. The gateway can be renamed, replaced, or moved to
+        another broker, and without this a base that nobody answers on any
+        more would stick until the integration reloads.
+        """
+        api_base = await self._async_resolve_api_base()
+        try:
+            return await self._async_api_call_at(api_base, api_name, args)
+        except LockDisconnected:
+            self._api_base = None
+            raise
 
     async def _async_user_code_command(self, method: str, args: list[Any]) -> Any:
         """Invoke a User Code CC API method on this node and return its result."""
@@ -383,3 +472,21 @@ class ZWaveJSUILock(BaseLock):
             ],
         )
         return response.get("result")
+
+    @callback
+    def teardown_push_subscription(self) -> None:
+        """
+        Drop the api response subscription and everything that depended on it.
+
+        The resolved gateway goes too: a reconnect can bring back a renamed
+        gateway, a different broker, or a rebuilt topology, so the next api
+        call rediscovers rather than publishing at a base nobody listens on.
+        Idempotent, as the base class requires.
+        """
+        self._clear_push_unsubs()
+        self._api_response_topic = None
+        self._api_base = None
+        for future in self._pending_api_calls.values():
+            if not future.done():
+                future.cancel()
+        self._pending_api_calls.clear()
