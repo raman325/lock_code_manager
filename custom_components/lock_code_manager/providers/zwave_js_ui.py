@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from zwave_js_server.const import CommandClass
+
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 
 from ._base import BaseLock
@@ -15,8 +17,8 @@ ZWAVE_JS_UI_IDENTIFIER_RE = re.compile(
     r"^zwavejs2mqtt_(?P<home_hex>0x[0-9a-fA-F]+)_node(?P<node_id>\d+)$"
 )
 
-CC_USER_CODE = 99
-CC_NOTIFICATION = 113
+CC_USER_CODE = CommandClass.USER_CODE
+CC_NOTIFICATION = CommandClass.NOTIFICATION
 # zwave-js UserIDStatus enum (UserCodeCC).
 USER_ID_STATUS_AVAILABLE = 0
 USER_ID_STATUS_ENABLED = 1
