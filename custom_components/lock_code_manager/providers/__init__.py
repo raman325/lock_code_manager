@@ -23,9 +23,9 @@ INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "zwave_js": ZWaveJSLock,
 }
 
-# Platform allowlist for the config-flow entity selector and membership checks.
-# Wider than what resolves to a provider: an mqtt lock is only selectable if
-# its device identifier names a bridge some provider speaks.
+# Platform allowlist for the config-flow entity selector. Wider than what
+# resolves to a provider: an mqtt lock is only selectable if its device
+# identifier names a bridge some provider speaks.
 SUPPORTED_PLATFORMS: tuple[str, ...] = (*INTEGRATIONS_CLASS_MAP, "mqtt")
 
 

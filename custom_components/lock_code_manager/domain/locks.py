@@ -39,9 +39,8 @@ def async_create_lock_instance(
     )
     lock_cls = resolve_provider_class(lock_entry.platform, device_entry)
     if lock_cls is None:
-        # Config flow validation rejects unclaimed locks at selection time;
-        # reaching here means the device changed after selection. Never guess
-        # a provider for it.
+        # Selection-time validation and this guard share one rule: never
+        # guess a provider for an unclaimed lock.
         raise HomeAssistantError(
             f"No Lock Code Manager provider claims {lock_entity_id} "
             f"(platform {lock_entry.platform})"
