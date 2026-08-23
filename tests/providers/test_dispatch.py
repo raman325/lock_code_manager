@@ -59,6 +59,24 @@ async def test_mqtt_dispatches_on_identifier(hass: HomeAssistant) -> None:
     assert resolve_provider_class("mqtt", None) is None
 
 
+async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> None:
+    """A malformed short identifier tuple is skipped, not treated as a crash."""
+    mqtt_entry = MockConfigEntry(domain="mqtt")
+    mqtt_entry.add_to_hass(hass)
+    mqtt_entry._async_set_state(hass, mqtt_entry.state, None)
+
+    dev_reg = dr.async_get(hass)
+
+    device = dev_reg.async_get_or_create(
+        config_entry_id=mqtt_entry.entry_id,
+        connections=set(),
+        identifiers={("mqtt",), ("mqtt", "zwavejs2mqtt_0xd4ee5a7a_node20")},
+        name="MalformedIdentifierLock",
+    )
+
+    assert resolve_provider_class("mqtt", device) is ZWaveJSUILock
+
+
 def test_supported_platforms():
     """SUPPORTED_PLATFORMS covers every map key plus mqtt exactly once."""
     assert "mqtt" in SUPPORTED_PLATFORMS

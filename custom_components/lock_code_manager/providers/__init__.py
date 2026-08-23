@@ -24,6 +24,7 @@ INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "zwave_js": ZWaveJSLock,
 }
 
+# Platform allowlist for the config-flow entity selector and membership checks.
 SUPPORTED_PLATFORMS: tuple[str, ...] = tuple(INTEGRATIONS_CLASS_MAP)
 
 
