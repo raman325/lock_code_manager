@@ -1,0 +1,9 @@
+look at the mqtt topic shape for zwave-js-ui MQTT and see if we can add support for those locks as well
+
+---
+
+"Anything beyond one zwave-js-ui gateway owning a given lock" there's no reason why we can't support multiple zwave-js-ui gateways right? They could be multiple via MQTT and multiple via WS and it shouldn't matter
+
+---
+
+proceed
