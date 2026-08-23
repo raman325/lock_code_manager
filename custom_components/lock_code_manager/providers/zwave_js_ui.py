@@ -128,9 +128,12 @@ class ZWaveJSUILock(BaseLock):
     """Lock bridged through zwave-js-ui's MQTT gateway (api-driven)."""
 
     _api_base: str | None = field(init=False, default=None)
-    # Topic of the live api response subscription, or None when there is
-    # none. Mirrors zigbee2mqtt's ``_subscribed_topic``: the unsub itself is
-    # held by the base registry, and this records what it covers.
+    # The api response subscription is deliberately NOT in the base's
+    # push-unsub registry: that bucket is released only when supports_push
+    # is true, and this subscription is the api transport, alive for the
+    # provider's whole lifetime rather than the push lifecycle.
+    _api_response_unsub: Callable[[], None] | None = field(init=False, default=None)
+    # Topic the live subscription covers, or None when there is none.
     _api_response_topic: str | None = field(init=False, default=None)
     # Outstanding api calls by nonce. The single response handler resolves
     # whichever future the gateway's echoed nonce names.
@@ -314,8 +317,8 @@ class ZWaveJSUILock(BaseLock):
             # One wildcard covers every gateway on the prefix, so the
             # disambiguation getInfo calls below are already correlated too.
             response_topic = f"{prefix}/_CLIENTS/+/api/+"
-            self._register_push_unsub(
-                await self._async_subscribe(response_topic, self._api_response_received)
+            self._api_response_unsub = await self._async_subscribe(
+                response_topic, self._api_response_received
             )
             self._api_response_topic = response_topic
 
@@ -350,7 +353,7 @@ class ZWaveJSUILock(BaseLock):
         # Several gateways share the prefix, so ask each one which network it
         # runs and keep the one whose home id matches this lock's identifier.
         home_id = int(home_hex, 16)
-        matches = []
+        matches: list[str] = []
         for client in candidates:
             api_base = f"{prefix}/_CLIENTS/{client}"
             try:
@@ -474,19 +477,53 @@ class ZWaveJSUILock(BaseLock):
         return response.get("result")
 
     @callback
-    def teardown_push_subscription(self) -> None:
+    def _release_api_subscription(self) -> None:
         """
         Drop the api response subscription and everything that depended on it.
 
-        The resolved gateway goes too: a reconnect can bring back a renamed
-        gateway, a different broker, or a rebuilt topology, so the next api
-        call rediscovers rather than publishing at a base nobody listens on.
-        Idempotent, as the base class requires.
+        The resolved gateway goes too: whatever brought us here (a reconnect,
+        an unload) can be followed by a renamed gateway, a different broker,
+        or a rebuilt topology, so the next api call rediscovers rather than
+        publishing at a base nobody listens on. Idempotent.
         """
-        self._clear_push_unsubs()
+        if (unsub := self._api_response_unsub) is not None:
+            self._api_response_unsub = None
+            try:
+                unsub()
+            except HomeAssistantError as err:
+                # MQTT torn down ahead of us already dropped the
+                # subscription. Same log-and-continue the base registry
+                # applies, so one bad unsub cannot abort teardown.
+                LOGGER.debug(
+                    "Lock %s: api unsubscribe raised, continuing: %s",
+                    self.lock.entity_id,
+                    err,
+                )
         self._api_response_topic = None
         self._api_base = None
         for future in self._pending_api_calls.values():
             if not future.done():
                 future.cancel()
         self._pending_api_calls.clear()
+
+    @callback
+    def teardown_push_subscription(self) -> None:
+        """
+        Release the api transport when the connection goes down.
+
+        Kept even though ``supports_push`` is still false: the base only
+        calls this on a connection-down transition today, and the unload path
+        is covered by ``async_unload`` instead.
+        """
+        self._release_api_subscription()
+
+    async def async_unload(self, remove_permanently: bool) -> None:
+        """
+        Unload lock, releasing the provider-lifetime api subscription.
+
+        The base only releases push subscriptions when ``supports_push`` is
+        true, so this one has to be released here or every reload orphans a
+        wildcard subscription holding a dead provider.
+        """
+        await super().async_unload(remove_permanently)
+        self._release_api_subscription()

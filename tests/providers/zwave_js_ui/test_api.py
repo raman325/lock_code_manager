@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Callable
 import json
 from typing import Any
-from unittest.mock import DEFAULT, AsyncMock, patch
+from unittest.mock import DEFAULT, AsyncMock, Mock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
@@ -519,9 +519,85 @@ async def test_teardown_releases_the_response_subscription(
 
     assert lock._api_base is None
     assert lock._api_response_topic is None
+    assert lock._api_response_unsub is None
     assert lock._pending_api_calls == {}
     with pytest.raises(asyncio.CancelledError):
         await pending
 
     # Idempotent, as the base class requires.
     lock.teardown_push_subscription()
+
+
+async def test_response_subscription_predates_the_discovery_window(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    The api response subscription is live before the discovery window opens.
+
+    This is the entire reason it lives in resolution rather than in each call.
+    Home Assistant registers a subscription locally at once but defers the
+    wire SUBSCRIBE behind a debouncer, and the window is the only stretch
+    long enough to outlast it. Established after the window -- or per call --
+    a publish would go out before the broker had been told to route the
+    reply, and zwave-js-ui sends api responses unretained, so it would be
+    lost outright.
+    """
+    lock = zui_lock_provider
+    assert lock._api_response_topic is None
+
+    task = await async_start_gateway_resolution(hass, lock)
+
+    # Execution is parked inside the window right now -- the status fired
+    # below is collected by it -- and the subscription is already up.
+    assert lock._api_response_topic == f"{ZUI_PREFIX}/_CLIENTS/+/api/+"
+    assert lock._api_response_unsub is not None
+
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+
+
+async def test_unload_releases_the_api_subscription(
+    zui_gateway_resolved: ZWaveJSUILock,
+) -> None:
+    """
+    Unloading releases the api subscription, which no push gate covers.
+
+    ``supports_push`` is false, so the base class skips its push teardown
+    entirely. Without this override every reload would orphan a wildcard
+    subscription holding a dead provider.
+    """
+    lock = zui_gateway_resolved
+    assert lock._api_response_unsub is not None
+
+    await lock.async_unload(False)
+
+    assert lock._api_response_unsub is None
+    assert lock._api_response_topic is None
+    assert lock._api_base is None
+    # Observable through behaviour, not just fields: calls refuse again.
+    with pytest.raises(LockDisconnected, match="No zwave-js-ui api response"):
+        await lock._async_api_call_at(ZUI_API_BASE, "getInfo", [])
+
+    # Idempotent, as teardown must be.
+    lock._release_api_subscription()
+
+
+async def test_release_survives_an_unsubscribe_refusal(
+    zui_gateway_resolved: ZWaveJSUILock,
+) -> None:
+    """
+    MQTT torn down ahead of us must not abort the rest of the release.
+
+    Home Assistant raises when a subscription is dropped twice, and the
+    cached base and pending calls still have to be cleared.
+    """
+    lock = zui_gateway_resolved
+    real_unsub = lock._api_response_unsub
+    assert real_unsub is not None
+    lock._api_response_unsub = Mock(side_effect=HomeAssistantError("already gone"))
+
+    lock._release_api_subscription()
+
+    assert lock._api_response_topic is None
+    assert lock._api_base is None
+    real_unsub()
