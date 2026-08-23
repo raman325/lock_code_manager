@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 import json
 import re
 from typing import Any
+from uuid import uuid4
 
 from zwave_js_server.const import CommandClass
 
 from homeassistant.components.mqtt import (
     DOMAIN as MQTT_DOMAIN,
+    async_publish,
+    async_subscribe,
     debug_info as mqtt_debug_info,
 )
+from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
+from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 
+from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 from .const import LOGGER
@@ -33,11 +41,24 @@ USER_ID_STATUS_ENABLED = 1
 API_CALL_TIMEOUT = 10.0
 GATEWAY_DISCOVERY_TIMEOUT = 3.0
 
+# Every zwave-js-ui gateway publishes its retained client status under
+# ``<prefix>/_CLIENTS/ZWAVE_GATEWAY-<name>/status``. Other clients share the
+# ``_CLIENTS`` level, so the gateway prefix is what tells them apart.
+GATEWAY_CLIENT_PREFIX = "ZWAVE_GATEWAY-"
+# Key added to every api request payload. zwave-js-ui echoes the request
+# verbatim under the response's ``origin``, so an extra key of our own comes
+# back untouched and correlates the reply.
+REQUEST_ID_KEY = "lcmRequestId"
+
 # A zwave-js-ui value topic ends with ``<cc>/<endpoint>/<property>`` and, for
 # values that have one, a fourth ``<propertyKey>`` segment. Door Lock state
 # values have no propertyKey, so a lock's state topic always ends with exactly
 # these three segments and everything before them is the node topic.
 VALUE_TOPIC_SEGMENTS = 3
+# The shortest topic a gateway can build is ``<prefix>/<node>/<cc>/<endpoint>/
+# <property>``: the three value segments plus a prefix and a one-segment node
+# topic. Anything shorter was not built by the gateway's naming scheme.
+MIN_VALUE_TOPIC_SEGMENTS = VALUE_TOPIC_SEGMENTS + 2
 
 
 def parse_zwave_js_ui_identifier(identifier: str) -> tuple[str, int] | None:
@@ -102,6 +123,8 @@ def _project_user_code_result(result: Any) -> SlotCredential:
 class ZWaveJSUILock(BaseLock):
     """Lock bridged through zwave-js-ui's MQTT gateway (api-driven)."""
 
+    _api_base: str | None = field(init=False, default=None)
+
     @property
     def domain(self) -> str:
         """Return integration domain."""
@@ -163,16 +186,32 @@ class ZWaveJSUILock(BaseLock):
         Split the state topic into ``(gateway prefix, node topic)``.
 
         The first segment is always the gateway's own topic prefix, and the
-        last three are the value's ``<cc>/<endpoint>/<property>``. A topic too
-        short to hold both is a MANUAL-gateway custom topic, whose shape says
-        nothing about the node — unresolvable, never guessed.
+        last three are the value's ``<cc>/<endpoint>/<property>``. A topic with
+        fewer than five segments leaves no room for both plus a node topic, so
+        it can only be a MANUAL-gateway custom topic, whose shape says nothing
+        about the node — unresolvable, never guessed.
         """
         if not (state_topic := self._resolve_state_topic()):
             return None
         parts = state_topic.split("/")
-        if len(parts) < VALUE_TOPIC_SEGMENTS + 1:
+        if len(parts) < MIN_VALUE_TOPIC_SEGMENTS:
             return None
         return parts[0], "/".join(parts[:-VALUE_TOPIC_SEGMENTS])
+
+    def _require_node(self) -> tuple[str, int]:
+        """
+        Return ``(home_hex, node_id)``, refusing a lock that has neither.
+
+        Both halves are addresses: the home id picks this lock's gateway out
+        of several on one broker, and the node id picks the lock out of that
+        gateway's network. Neither can be inferred from anything else, so a
+        lock missing them is not reachable at all.
+        """
+        if (parsed := self._parsed_identifier()) is None:
+            raise LockDisconnected(
+                f"{self.lock.entity_id} carries no zwave-js-ui device identifier"
+            )
+        return parsed
 
     async def async_is_integration_connected(self) -> bool:
         """Return whether MQTT is usable and this lock maps to a zwave-js-ui node."""
@@ -184,3 +223,163 @@ class ZWaveJSUILock(BaseLock):
         """Return whether the lock entity reports an operational state."""
         state = self.hass.states.get(self.lock.entity_id)
         return not (state is None or state.state == "unavailable")
+
+    async def _async_resolve_api_base(self) -> str:
+        """
+        Resolve and cache ``<prefix>/_CLIENTS/ZWAVE_GATEWAY-<name>``.
+
+        MQTT ``+`` matches a whole level, so the ZWAVE_GATEWAY- prefix filter
+        is applied client-side on the received topic segment. Retained
+        statuses arrive immediately after subscribing; the window exists only
+        to collect them all before deciding.
+        """
+        if self._api_base:
+            return self._api_base
+
+        home_hex, _ = self._require_node()
+        if (resolved := self._prefix_and_node_topic()) is None:
+            raise LockDisconnected("Cannot resolve gateway prefix from discovery data")
+        prefix = resolved[0]
+
+        gateways: set[str] = set()
+
+        @callback
+        def _status_received(msg: ReceiveMessage) -> None:
+            """Record the gateway that published a retained client status."""
+            client = msg.topic.split("/")[-2]
+            if client.startswith(GATEWAY_CLIENT_PREFIX):
+                gateways.add(client)
+
+        unsub = await async_subscribe(
+            self.hass, f"{prefix}/_CLIENTS/+/status", _status_received
+        )
+        try:
+            await asyncio.sleep(GATEWAY_DISCOVERY_TIMEOUT)
+        finally:
+            unsub()
+
+        if not gateways:
+            raise LockDisconnected(
+                f"No zwave-js-ui gateway published a client status under "
+                f"{prefix}/_CLIENTS"
+            )
+
+        candidates = sorted(gateways)
+        if len(candidates) == 1:
+            self._api_base = f"{prefix}/_CLIENTS/{candidates[0]}"
+            return self._api_base
+
+        # Several gateways share the prefix, so ask each one which network it
+        # runs and keep the one whose home id matches this lock's identifier.
+        home_id = int(home_hex, 16)
+        matches = []
+        for client in candidates:
+            api_base = f"{prefix}/_CLIENTS/{client}"
+            try:
+                response = await self._async_api_call_at(api_base, "getInfo", [])
+            except (LockDisconnected, LockOperationFailed) as err:
+                LOGGER.debug("Gateway %s did not answer getInfo: %s", api_base, err)
+                continue
+            result = response.get("result")
+            if isinstance(result, dict) and result.get("homeid") == home_id:
+                matches.append(api_base)
+
+        if len(matches) != 1:
+            # Two gateways answering for the same home id are a primary and a
+            # secondary controller on one network. Writing through the wrong
+            # one silently programs a lock we were not asked about, so this
+            # never tiebreaks.
+            raise LockDisconnected(
+                f"Could not identify which zwave-js-ui gateway serves "
+                f"{self.lock.entity_id} among {', '.join(candidates)}"
+            )
+        self._api_base = matches[0]
+        return self._api_base
+
+    async def _async_api_call_at(
+        self, api_base: str, api_name: str, args: list[Any]
+    ) -> dict[str, Any]:
+        """
+        Call a zwave-js-ui MQTT api and return the correlated response payload.
+
+        The gateway echoes the request payload in the response's ``origin``;
+        the nonce keeps concurrent api users (the UI, other automations) from
+        crossing wires. Timeout routes to LockDisconnected so the reconnect
+        path runs; an explicit success=false is a per-operation failure.
+        """
+        nonce = uuid4().hex
+        response_topic = f"{api_base}/api/{api_name}"
+        future: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+
+        @callback
+        def _response_received(msg: ReceiveMessage) -> None:
+            """Resolve the pending call when a response echoes our nonce back."""
+            try:
+                payload = json.loads(msg.payload)
+            except ValueError:
+                LOGGER.debug("Ignoring non-JSON payload on %s", msg.topic)
+                return
+            origin = payload.get("origin") if isinstance(payload, dict) else None
+            if not isinstance(origin, dict) or origin.get(REQUEST_ID_KEY) != nonce:
+                return
+            if not future.done():
+                future.set_result(payload)
+
+        unsub = await async_subscribe(self.hass, response_topic, _response_received)
+        try:
+            try:
+                await async_publish(
+                    self.hass,
+                    f"{response_topic}/set",
+                    json.dumps({"args": args, REQUEST_ID_KEY: nonce}),
+                )
+            except OSError as err:
+                # Broker unreachable: route to disconnect so the reconnect
+                # path runs instead of failing this one operation.
+                raise LockDisconnected(
+                    f"Failed to publish {api_name} for {self.lock.entity_id}: {err}"
+                ) from err
+            except HomeAssistantError as err:
+                raise LockOperationFailed(
+                    f"Failed to publish {api_name} for {self.lock.entity_id}: {err}"
+                ) from err
+
+            try:
+                response = await asyncio.wait_for(future, timeout=API_CALL_TIMEOUT)
+            except TimeoutError as err:
+                raise LockDisconnected(
+                    f"Timed out waiting for zwave-js-ui {api_name} response for "
+                    f"{self.lock.entity_id}"
+                ) from err
+        finally:
+            unsub()
+
+        if not response.get("success"):
+            raise LockOperationFailed(
+                f"zwave-js-ui {api_name} failed for {self.lock.entity_id}: "
+                f"{response.get('message')}"
+            )
+        return response
+
+    async def _async_api_call(self, api_name: str, args: list[Any]) -> dict[str, Any]:
+        """Call an api on this lock's resolved gateway."""
+        return await self._async_api_call_at(
+            await self._async_resolve_api_base(), api_name, args
+        )
+
+    async def _async_user_code_command(self, method: str, args: list[Any]) -> Any:
+        """Invoke a User Code CC API method on this node and return its result."""
+        _, node_id = self._require_node()
+        response = await self._async_api_call(
+            "sendCommand",
+            [
+                # CC_USER_CODE is an IntEnum, which json.dumps would serialize
+                # anyway; the cast keeps the wire payload's shape obvious.
+                {"nodeId": node_id, "commandClass": int(CC_USER_CODE), "endpoint": 0},
+                method,
+                args,
+            ],
+        )
+        return response.get("result")

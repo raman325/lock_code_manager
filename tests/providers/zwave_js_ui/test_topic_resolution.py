@@ -121,20 +121,32 @@ async def test_prefix_and_node_topic_derivation(
     assert build_zui_lock(hass, entity)._prefix_and_node_topic() == expected
 
 
+@pytest.mark.parametrize(
+    "state_topic",
+    [
+        pytest.param("zwave/custom_lock_state", id="two-segments"),
+        # Five segments is the shortest a gateway can build: prefix, a
+        # one-segment node topic, and the three value segments. Four leaves no
+        # room for a node topic, so this is a custom topic that happens to end
+        # in something value-shaped, not a node this provider can address.
+        pytest.param("zwave/98/0/currentMode", id="four-segments"),
+    ],
+)
 async def test_manual_gateway_custom_topic_is_unresolvable(
-    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown, state_topic: str
 ) -> None:
     """
-    A custom topic too short to hold a value path resolves to nothing.
+    A custom topic too short to hold a prefix, a node, and a value path resolves
+    to nothing.
 
     MANUAL gateways let the user point a discovery entry at any topic at all,
     and such a topic carries no node address to recover. Splitting it anyway
     would hand the API client a prefix invented from a user's naming choice.
     """
-    entity = await async_discover_zui_lock(hass, state_topic="zwave/custom_lock_state")
+    entity = await async_discover_zui_lock(hass, state_topic=state_topic)
     lock = build_zui_lock(hass, entity)
 
-    assert lock._resolve_state_topic() == "zwave/custom_lock_state"
+    assert lock._resolve_state_topic() == state_topic
     assert lock._prefix_and_node_topic() is None
     assert await lock.async_is_integration_connected() is False
 

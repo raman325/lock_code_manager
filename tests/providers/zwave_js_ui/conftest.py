@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Generator
+import asyncio
+from collections.abc import AsyncGenerator, Callable, Generator
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import DEFAULT, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -129,14 +130,138 @@ def _minimal_lock() -> ZWaveJSUILock:
 
 
 @pytest.fixture(autouse=True)
-def fast_gateway_discovery() -> Generator[None]:
-    """Keep the gateway discovery wait from costing every test whole seconds."""
-    with patch(
-        "custom_components.lock_code_manager.providers.zwave_js_ui."
-        "GATEWAY_DISCOVERY_TIMEOUT",
-        0.05,
+def fast_zui_timeouts() -> Generator[None]:
+    """Keep the discovery window and api timeout from costing tests whole seconds."""
+    module = "custom_components.lock_code_manager.providers.zwave_js_ui"
+    with (
+        patch(f"{module}.GATEWAY_DISCOVERY_TIMEOUT", 0.05),
+        patch(f"{module}.API_CALL_TIMEOUT", 0.5),
     ):
         yield
+
+
+class ZWaveJSUIApiResponder:
+    """
+    Answer zwave-js-ui api requests the way the gateway would.
+
+    The mocked broker never echoes publishes back, so an api call that nobody
+    answers blocks until its timeout. Handlers are registered per api name and
+    receive ``(api_base, request payload)``; the api base is what lets one
+    instance stand in for several gateways at once. An api name with no
+    handler goes unanswered, the same as an api the gateway does not
+    implement.
+
+    The response is published on the request topic minus ``/set`` with the
+    request payload echoed verbatim under ``origin`` -- the correlation
+    channel the client matches its nonce on. Faking that echo would make the
+    client's own correlation untestable, so it is always the real request.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize with no handlers registered."""
+        self.hass = hass
+        self.handlers: dict[
+            str, Callable[[str, dict[str, Any]], dict[str, Any] | None]
+        ] = {}
+        # (api_base, api_name, args) per request seen, in publish order.
+        self.requests: list[tuple[str, str, list[Any]]] = []
+
+    def set_handler(
+        self,
+        api_name: str,
+        handler: Callable[[str, dict[str, Any]], dict[str, Any] | None],
+    ) -> None:
+        """Answer ``api_name`` with whatever the handler builds (None: silence)."""
+        self.handlers[api_name] = handler
+
+    def set_result(
+        self, api_name: str, result: Any, *, success: bool = True, message: str = ""
+    ) -> None:
+        """Answer ``api_name`` with one fixed response regardless of the request."""
+        self.set_handler(
+            api_name,
+            lambda _api_base, _request: {
+                "success": success,
+                "message": message,
+                "result": result,
+            },
+        )
+
+    def __call__(self, topic: str, payload: str, *args: Any, **kwargs: Any) -> Any:
+        """Intercept an outbound publish, answering it when it is an api request."""
+        if not topic.endswith("/set"):
+            return DEFAULT
+        response_topic = topic.removesuffix("/set")
+        api_base, separator, api_name = response_topic.rpartition("/api/")
+        if not separator:
+            return DEFAULT
+        try:
+            body = json.loads(payload)
+        except json.JSONDecodeError, TypeError:
+            return DEFAULT
+        self.requests.append((api_base, api_name, body.get("args", [])))
+        handler = self.handlers.get(api_name)
+        if handler is None:
+            return DEFAULT
+        if (response := handler(api_base, body)) is not None:
+            async_fire_mqtt_message(
+                self.hass, response_topic, json.dumps({**response, "origin": body})
+            )
+        return DEFAULT
+
+
+@pytest.fixture
+def zui_api_responder(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> Generator[ZWaveJSUIApiResponder]:
+    """
+    Attach a gateway stand-in to outbound publishes.
+
+    The hook lives on ``mqtt_mock.async_publish`` (the Home Assistant MQTT
+    client mock) rather than the paho layer, and returns
+    ``unittest.mock.DEFAULT`` so the wrapped real publish still runs.
+    """
+    responder = ZWaveJSUIApiResponder(hass)
+    mqtt_mock.async_publish.side_effect = responder
+    yield responder
+    mqtt_mock.async_publish.side_effect = None
+
+
+def fire_zui_gateway_status(
+    hass: HomeAssistant, client: str = ZUI_GATEWAY_NAME, prefix: str = ZUI_PREFIX
+) -> None:
+    """Publish a gateway's retained client status the way zwave-js-ui does."""
+    async_fire_mqtt_message(
+        hass, f"{prefix}/_CLIENTS/{client}/status", json.dumps({"value": True})
+    )
+
+
+async def async_start_gateway_resolution(
+    hass: HomeAssistant, lock: ZWaveJSUILock
+) -> asyncio.Task[str]:
+    """
+    Start gateway resolution and return once it is listening for statuses.
+
+    A real broker replays retained statuses on subscribe; the mocked one
+    cannot, so the caller fires them by hand. That only works if resolution
+    has already subscribed, hence the flush before the task is handed back.
+    """
+    task = asyncio.create_task(lock._async_resolve_api_base())
+    await hass.async_block_till_done()
+    return task
+
+
+@pytest.fixture
+async def zui_gateway_resolved(
+    hass: HomeAssistant,
+    zui_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> ZWaveJSUILock:
+    """Build a provider whose gateway is already resolved via the real discovery path."""
+    task = await async_start_gateway_resolution(hass, zui_lock_provider)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+    return zui_lock_provider
 
 
 @pytest.fixture
