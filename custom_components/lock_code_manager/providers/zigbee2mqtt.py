@@ -34,6 +34,10 @@ from ._base import BaseLock
 from ._util import parse_slot_num
 from .const import LOGGER
 
+# Device registry identifier prefix Zigbee2MQTT uses in its HA discovery
+# payloads; also consumed by providers.resolve_provider_class for dispatch.
+Z2M_IDENTIFIER_PREFIX = "zigbee2mqtt_"
+
 # Zigbee2MQTT action values for lock/unlock events triggered by PIN entry.
 # These come from the DoorLock cluster's OperatingEventNotification and
 # ProgrammingEventNotification via zigbee-herdsman-converters.
@@ -162,7 +166,8 @@ class Zigbee2MQTTLock(BaseLock):
         if not self.device_entry:
             return False
         return any(
-            len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_")
+            len(identifier) >= 2
+            and str(identifier[1]).startswith(Z2M_IDENTIFIER_PREFIX)
             for identifier in self.device_entry.identifiers
         )
 
