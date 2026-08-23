@@ -1398,10 +1398,13 @@ async def _async_setup_new_locks(
     added_locks: list[BaseLock] = []
     for lock_entity_id, result in zip(locks_to_add, setup_results, strict=True):
         if isinstance(result, BaseException):
-            # Only unexpected exceptions land here: transport failures
-            # degrade inside async_setup_internal and structural
-            # validation failures are logged there and kept degraded, so
-            # a popped lock indicates a genuine bug, not a lock state.
+            # Transport failures degrade inside async_setup_internal, and
+            # structural validation failures are logged there and kept
+            # degraded, so a popped lock is either a genuine bug or a lock
+            # whose provider stopped resolving between selection and setup --
+            # an mqtt device re-discovered under an unrecognized bridge. The
+            # config flow refuses that selection, so it cannot arrive here
+            # from the selection path.
             _LOGGER.error(
                 "%s (%s): Failed to set up lock %s: %s",
                 entry_id,

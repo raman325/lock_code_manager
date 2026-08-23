@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_mqtt_message,
-)
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -22,49 +17,15 @@ from custom_components.lock_code_manager.domain.allocation import (
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.providers import (
     CONFIG_FLOW_PLATFORMS,
+    INTEGRATIONS_CLASS_MAP,
     Zigbee2MQTTLock,
     ZWaveJSLock,
     ZWaveJSUILock,
     resolve_provider_class,
 )
 
-UNCLAIMED_IDENTIFIER = "somebridge_1"
-UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
-
-
-async def async_discover_unclaimed_mqtt_lock(
-    hass: HomeAssistant,
-) -> er.RegistryEntry:
-    """
-    Discover an mqtt lock whose device identifier no provider recognizes.
-
-    Going through real discovery is what puts the bridge's identifier on the
-    device registry entry -- the very field dispatch reads -- so a hand-built
-    registry row would be testing this test's idea of the payload.
-    """
-    async_fire_mqtt_message(
-        hass,
-        f"homeassistant/lock/{UNCLAIMED_IDENTIFIER}/lock/config",
-        json.dumps(
-            {
-                "name": None,
-                "command_topic": "somebridge/lock1/set",
-                "state_topic": "somebridge/lock1",
-                "unique_id": UNCLAIMED_UNIQUE_ID,
-                "device": {
-                    "identifiers": [UNCLAIMED_IDENTIFIER],
-                    "name": "Unclaimed Bridge Lock",
-                },
-            }
-        ),
-    )
-    await hass.async_block_till_done()
-    ent_reg = er.async_get(hass)
-    entity_id = ent_reg.async_get_entity_id("lock", "mqtt", UNCLAIMED_UNIQUE_ID)
-    assert entity_id is not None, "discovery did not create the lock entity"
-    lock_entry = ent_reg.async_get(entity_id)
-    assert lock_entry is not None
-    return lock_entry
+from ..common import async_discover_unclaimed_mqtt_lock
+from ..conftest import TEST_DOMAIN
 
 
 def test_single_provider_platform_ignores_device():
@@ -141,9 +102,12 @@ async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> 
 
 
 def test_config_flow_platforms():
-    """CONFIG_FLOW_PLATFORMS covers every map key plus mqtt exactly once."""
+    """CONFIG_FLOW_PLATFORMS covers every shipped map key plus mqtt exactly once."""
+    # The harness injects a mock provider into the map at runtime, while
+    # CONFIG_FLOW_PLATFORMS is a tuple built from it at import. Only the
+    # shipped platforms have to be selectable.
+    assert set(INTEGRATIONS_CLASS_MAP) - {TEST_DOMAIN} <= set(CONFIG_FLOW_PLATFORMS)
     assert "mqtt" in CONFIG_FLOW_PLATFORMS
-    assert "zwave_js" in CONFIG_FLOW_PLATFORMS
     assert len(CONFIG_FLOW_PLATFORMS) == len(set(CONFIG_FLOW_PLATFORMS))
 
 

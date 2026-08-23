@@ -41,7 +41,14 @@ from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, MockLCMLock
+from .common import (
+    BASE_CONFIG,
+    LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
+    MockLCMLock,
+    async_discover_unclaimed_mqtt_lock,
+)
+from .providers.zigbee2mqtt.conftest import async_discover_z2m_lock
 
 GET_ALL_CODES_PATCH = (
     "custom_components.lock_code_manager.config_flow._async_query_locks"
@@ -1971,3 +1978,124 @@ async def test_reauth_reports_a_lock_too_small_for_the_existing_slots(
     assert result["errors"] == {"base": "slot_out_of_range"}
     assert result["description_placeholders"]["num_slots"] == "1"
     assert result["description_placeholders"]["out_of_range_slots"] == "2"
+
+
+def _suggested_values(result) -> dict[str, object]:
+    """Read back what a re-shown form offers the user for each field."""
+    return {
+        str(key): key.description["suggested_value"]
+        for key in result["data_schema"].schema
+        if key.description and "suggested_value" in key.description
+    }
+
+
+async def test_user_step_rejects_unclaimed_mqtt_lock(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    Selecting an mqtt lock no provider claims is refused at submit time.
+
+    The entity selector can only filter by integration, so an mqtt lock from
+    an unsupported bridge is offered; nothing but this check stands between
+    picking it and a setup that fails after the entry exists.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id]},
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
+    assert result["description_placeholders"] == {"locks": unclaimed.entity_id}
+    # The refusal comes back holding the name, which means the check ran
+    # before the step consumed it.
+    assert _suggested_values(result) == {
+        CONF_NAME: "test",
+        CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+    }
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+
+    assert result["type"] == "menu"
+    assert result["step_id"] == "choose_path"
+
+
+async def test_user_step_accepts_claimed_mqtt_lock(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """A Zigbee2MQTT lock is an mqtt lock a provider does claim, so it passes."""
+    z2m_lock = await async_discover_z2m_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [z2m_lock.entity_id]}
+    )
+
+    assert result["type"] == "menu"
+    assert result["step_id"] == "choose_path"
+
+
+async def test_options_flow_rejects_unclaimed_mqtt_lock(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """Adding an unclaimed mqtt lock to an existing entry is refused too."""
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
+    entry.add_to_hass(hass)
+    users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    flow_id = started["flow_id"]
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+                CONF_USERS: users,
+            },
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
+    assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users},
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+
+async def test_reauth_rejects_unclaimed_mqtt_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    mqtt_mock,
+    mqtt_teardown,
+) -> None:
+    """Reauth is a lock-selection step too, so it applies the same rule."""
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    entry = lock_code_manager_config_entry
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [unclaimed.entity_id]}
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
+    assert result["description_placeholders"]["locks"] == unclaimed.entity_id
