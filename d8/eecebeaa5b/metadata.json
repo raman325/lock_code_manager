@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "d8eecebeaa5b",
+  "strategy": "manual-commit",
+  "branch": "zwave-js-ui-mqtt-provider",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d8/eecebeaa5b/0/metadata.json",
+      "transcript": "/d8/eecebeaa5b/0/full.jsonl",
+      "compact_transcript": "/d8/eecebeaa5b/0/transcript.jsonl",
+      "content_hash": "/d8/eecebeaa5b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 61,
+    "cache_creation_tokens": 28484,
+    "cache_read_tokens": 2973783,
+    "output_tokens": 11442,
+    "api_call_count": 11
+  }
+}
