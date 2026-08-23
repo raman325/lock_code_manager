@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
+from datetime import timedelta
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from zwave_js_server.const import CommandClass
@@ -23,6 +24,13 @@ from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
 from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import HomeAssistantError
 
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    User,
+    WriteResult,
+    user_from_slot,
+)
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._base import BaseLock
@@ -145,6 +153,22 @@ class ZWaveJSUILock(BaseLock):
     def domain(self) -> str:
         """Return integration domain."""
         return MQTT_DOMAIN
+
+    @property
+    def usercode_scan_interval(self) -> timedelta:
+        """
+        Return scan interval for usercodes.
+
+        Every slot costs its own api round trip through the gateway and the
+        mesh, so polling is spaced out and exists to catch drift rather than
+        to be the channel changes arrive on.
+        """
+        return timedelta(minutes=5)
+
+    @property
+    def hard_refresh_interval(self) -> timedelta | None:
+        """Return interval for hard refresh."""
+        return timedelta(hours=1)
 
     def _parsed_identifier(self) -> tuple[str, int] | None:
         """Return ``(home_hex, node_id)`` from the device registry entry."""
@@ -475,6 +499,126 @@ class ZWaveJSUILock(BaseLock):
             ],
         )
         return response.get("result")
+
+    async def _async_ensure_operational(self) -> None:
+        """
+        Refuse to address a lock whose transport, gateway, or entity is down.
+
+        Every public operation shares this preamble, and the order is what
+        makes the error useful: MQTT being off explains a missing gateway,
+        and a missing gateway explains an unavailable entity, so the
+        outermost cause is the one reported.
+        """
+        if not mqtt_config_entry_enabled(self.hass):
+            raise LockDisconnected("MQTT component not available")
+        if not await self.async_is_integration_connected():
+            raise LockDisconnected("Lock not connected")
+        if not await self.async_is_device_available():
+            raise LockDisconnected("Device not available")
+
+    async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
+        """
+        Read Personal Identification Number codes one index at a time.
+
+        Each slot is one api round trip, issued sequentially so the gateway
+        and the lock's firmware answer each GET before the next goes out. A
+        read that fails produces an unreadable credential rather than an
+        empty one, for the same reason Zigbee2MQTT's read does: a transient
+        failure taken for a confirmed-empty slot makes sync storm
+        reprogramming once the lock answers again.
+        """
+        await self._async_ensure_operational()
+
+        # One request per index, so the caller's scope bounds the work.
+        code_slots = self.managed_slots if slots is None else slots
+        if not code_slots:
+            return []
+
+        slot_states = {
+            slot_num: await self._async_read_slot(slot_num)
+            for slot_num in sorted(code_slots)
+        }
+        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
+
+    async def _async_read_slot(self, slot_num: int) -> SlotCredential:
+        """
+        Ask the lock what one slot holds.
+
+        An api-level refusal says nothing about the slot, so it becomes
+        unreadable -- never confirmed-empty. A disconnect is deliberately not
+        caught: it is a lost transport rather than a bad slot, and the
+        reconnect path only runs if it reaches the caller.
+        """
+        try:
+            result = await self._async_user_code_command("get", [slot_num])
+        except LockOperationFailed as err:
+            LOGGER.debug(
+                "Lock %s: slot %s read refused: %s", self.lock.entity_id, slot_num, err
+            )
+            return SlotCredential.unreadable()
+        return _project_user_code_result(result)
+
+    async def async_set_credential(
+        self,
+        user_id: int,
+        credential: Credential,
+        pin: str,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
+    ) -> WriteResult:
+        """
+        Set a Personal Identification Number credential on a code slot.
+
+        ``user_id`` is ignored; slot-only providers address the credential by
+        ``credential.slot``. A successful api response is taken as confirmed
+        because zwave-js-ui answers only once the driver's supervised set has
+        completed, so success here means the lock acknowledged the write.
+
+        Failures from the api client propagate untouched: the base and sync
+        layers decide what a refused or disconnected write means, and the
+        optimistic push below is skipped either way.
+        """
+        code_slot = credential.slot
+        await self._async_ensure_operational()
+        await self._async_user_code_command(
+            "set", [code_slot, USER_ID_STATUS_ENABLED, pin]
+        )
+        self._push_credential_update(code_slot, SlotCredential.known(pin))
+        return WriteResult.CONFIRMED
+
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
+        """
+        Clear a Personal Identification Number from a code slot.
+
+        Mirrors ``async_set_credential``: the api answers after the driver's
+        supervised clear, so a success pushes the slot empty and anything
+        else propagates without touching the coordinator.
+        """
+        await self._async_ensure_operational()
+        await self._async_user_code_command("clear", [ref.slot])
+        self._push_credential_update(ref.slot, SlotCredential.empty())
+        return True
+
+    async def async_get_max_slot(self) -> int | None:
+        """
+        Report the User Code capacity the lock advertises, if it advertises one.
+
+        ``getUsersCount`` is the User Code Command Class's own supported-users
+        report, so it is the lock's answer rather than a guess. Only a
+        positive integer is an answer: booleans are rejected first because
+        ``True == 1`` in Python would otherwise turn a JSON ``true`` into a
+        one-slot lock, the same trap this module guards on ``userIdStatus``
+        and ``homeid``.
+        """
+        result = await self._async_user_code_command("getUsersCount", [])
+        if isinstance(result, int) and not isinstance(result, bool) and result > 0:
+            return result
+        return None
+
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
+        """Perform hard refresh and return all codes."""
+        return await self.async_get_usercodes()
 
     @callback
     def _release_api_subscription(self) -> None:
