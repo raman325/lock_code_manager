@@ -648,14 +648,13 @@ def _capacity_probe(**capabilities_mock_kwargs):
     """
     Make the config flow able to probe the test lock's capacity.
 
-    The autouse ``auto_setup_mock_lock`` fixture only registers MockLCMLock in
-    the ``domain.locks`` provider map; allocation builds its throwaway provider
-    instance from its own map, so the test platform has to be registered there
-    too or every capacity check silently skips.
+    Allocation builds a throwaway provider instance to ask the lock how many
+    slots it has, so the test platform has to resolve to a provider class or
+    every capacity check silently skips.
     """
     return (
         patch.dict(
-            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
             {"test": MockLCMLock},
         ),
         patch.object(
@@ -966,7 +965,7 @@ async def test_config_flow_capacity_check_skipped_when_lock_allocates_index(
     capabilities = AsyncMock(return_value=_capabilities_with_slots(30))
     with (
         patch.dict(
-            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
             {"test": MockLCMLock},
         ),
         patch.object(
@@ -1831,7 +1830,7 @@ async def test_a_lock_whose_config_entry_is_gone_is_skipped(
 
     with (
         patch.dict(
-            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
             {"test": MockLCMLock},
         ),
         pytest.raises(LockQuerySkipped) as raised,

@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+import json
+
+import pytest
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_mqtt_message,
+)
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.domain.allocation import (
+    LockQuerySkipped,
+    build_lock_instance,
+)
+from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.providers import (
     SUPPORTED_PLATFORMS,
     Zigbee2MQTTLock,
@@ -14,6 +27,44 @@ from custom_components.lock_code_manager.providers import (
     ZWaveJSUILock,
     resolve_provider_class,
 )
+
+UNCLAIMED_IDENTIFIER = "somebridge_1"
+UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
+
+
+async def async_discover_unclaimed_mqtt_lock(
+    hass: HomeAssistant,
+) -> er.RegistryEntry:
+    """
+    Discover an mqtt lock whose device identifier no provider recognizes.
+
+    Going through real discovery is what puts the bridge's identifier on the
+    device registry entry -- the very field dispatch reads -- so a hand-built
+    registry row would be testing this test's idea of the payload.
+    """
+    async_fire_mqtt_message(
+        hass,
+        f"homeassistant/lock/{UNCLAIMED_IDENTIFIER}/lock/config",
+        json.dumps(
+            {
+                "name": None,
+                "command_topic": "somebridge/lock1/set",
+                "state_topic": "somebridge/lock1",
+                "unique_id": UNCLAIMED_UNIQUE_ID,
+                "device": {
+                    "identifiers": [UNCLAIMED_IDENTIFIER],
+                    "name": "Unclaimed Bridge Lock",
+                },
+            }
+        ),
+    )
+    await hass.async_block_till_done()
+    ent_reg = er.async_get(hass)
+    entity_id = ent_reg.async_get_entity_id("lock", "mqtt", UNCLAIMED_UNIQUE_ID)
+    assert entity_id is not None, "discovery did not create the lock entity"
+    lock_entry = ent_reg.async_get(entity_id)
+    assert lock_entry is not None
+    return lock_entry
 
 
 def test_single_provider_platform_ignores_device():
@@ -73,8 +124,19 @@ async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> 
         identifiers={("mqtt",), ("mqtt", "zwavejs2mqtt_0xd4ee5a7a_node20")},
         name="MalformedIdentifierLock",
     )
+    # Identifiers are a set, so the well-formed one may be visited first and
+    # never exercise the guard. A device carrying only a malformed tuple has
+    # to walk through it. Its domain differs so the registry does not merge
+    # the two devices on the shared identifier.
+    malformed_only = dev_reg.async_get_or_create(
+        config_entry_id=mqtt_entry.entry_id,
+        connections=set(),
+        identifiers={("mqtt_bridge",)},
+        name="OnlyMalformedIdentifierLock",
+    )
 
     assert resolve_provider_class("mqtt", device) is ZWaveJSUILock
+    assert resolve_provider_class("mqtt", malformed_only) is None
 
 
 def test_supported_platforms():
@@ -82,3 +144,37 @@ def test_supported_platforms():
     assert "mqtt" in SUPPORTED_PLATFORMS
     assert "zwave_js" in SUPPORTED_PLATFORMS
     assert len(SUPPORTED_PLATFORMS) == len(set(SUPPORTED_PLATFORMS))
+
+
+async def test_factory_rejects_unclaimed_mqtt_lock(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """The lock factory refuses an mqtt lock no provider claims."""
+    lock_entry = await async_discover_unclaimed_mqtt_lock(hass)
+    lcm_entry = MockConfigEntry(domain=DOMAIN, unique_id="unclaimed-mqtt")
+    lcm_entry.add_to_hass(hass)
+
+    with pytest.raises(
+        HomeAssistantError, match="No Lock Code Manager provider claims"
+    ):
+        async_create_lock_instance(
+            hass,
+            dr.async_get(hass),
+            er.async_get(hass),
+            lcm_entry,
+            lock_entry.entity_id,
+        )
+
+
+async def test_allocation_skips_unclaimed_mqtt_lock(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """Allocation treats an unclaimed mqtt lock as one it will never write to."""
+    lock_entry = await async_discover_unclaimed_mqtt_lock(hass)
+
+    with pytest.raises(LockQuerySkipped) as raised:
+        build_lock_instance(
+            hass, dr.async_get(hass), er.async_get(hass), lock_entry.entity_id
+        )
+
+    assert raised.value.managed is False

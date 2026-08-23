@@ -9,14 +9,14 @@ from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, callback, split_entity_id
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
     entity_registry as er,
 )
 
-from ..providers import INTEGRATIONS_CLASS_MAP, BaseLock
+from ..providers import BaseLock, resolve_provider_class
 from .queries import iter_loaded_lcm_entries
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,9 +34,19 @@ def async_create_lock_instance(
     lock_entry = ent_reg.async_get(lock_entity_id)
     assert lock_entry
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
-    lock = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
-        hass, dev_reg, ent_reg, lock_config_entry, lock_entry
+    device_entry = (
+        dev_reg.async_get(lock_entry.device_id) if lock_entry.device_id else None
     )
+    lock_cls = resolve_provider_class(lock_entry.platform, device_entry)
+    if lock_cls is None:
+        # Config flow validation rejects unclaimed locks at selection time;
+        # reaching here means the device changed after selection. Never guess
+        # a provider for it.
+        raise HomeAssistantError(
+            f"No Lock Code Manager provider claims {lock_entity_id} "
+            f"(platform {lock_entry.platform})"
+        )
+    lock = lock_cls(hass, dev_reg, ent_reg, lock_config_entry, lock_entry)
     _LOGGER.debug(
         "%s (%s): Created lock instance %s",
         config_entry.entry_id,

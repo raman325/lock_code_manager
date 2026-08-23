@@ -39,7 +39,7 @@ from .domain.config import EntryConfig
 from .domain.names import name_error, normalize_name, validate_user_names
 from .domain.queries import get_entry_config
 from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
-from .providers import INTEGRATIONS_CLASS_MAP
+from .providers import SUPPORTED_PLATFORMS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ USERS_SCHEMA = vol.All(vol.Schema({cv.string: USER_SCHEMA}), enabled_requires_pi
 
 LOCKS_FILTER_CONFIG = [
     sel.EntityFilterSelectorConfig(integration=platform, domain=LOCK_DOMAIN)
-    for platform in INTEGRATIONS_CLASS_MAP
+    for platform in SUPPORTED_PLATFORMS
 ]
 LOCK_ENTITY_SELECTOR = sel.EntitySelector(
     sel.EntitySelectorConfig(filter=LOCKS_FILTER_CONFIG, multiple=True)

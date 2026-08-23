@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import MAX_SEARCHED_SLOT
-from ..providers import INTEGRATIONS_CLASS_MAP
+from ..providers import resolve_provider_class
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
 from .occupancy import LockOccupancy, Occupancy
@@ -73,7 +73,7 @@ def build_lock_instance(
     """
     Build a temporary lock provider instance for ``lock_entity_id``.
 
-    Performs setup-time checks (entity in registry, supported platform,
+    Performs setup-time checks (entity in registry, a provider claims it,
     parent config entry exists) and instantiates the provider class.
     Raises ``LockQuerySkipped`` if any setup-time check fails.
     """
@@ -84,9 +84,16 @@ def build_lock_instance(
             lock_entity_id,
         )
         raise LockQuerySkipped(lock_entity_id, managed=True)
-    if lock_entry.platform not in INTEGRATIONS_CLASS_MAP:
+    device_entry = (
+        dev_reg.async_get(lock_entry.device_id) if lock_entry.device_id else None
+    )
+    lock_cls = resolve_provider_class(lock_entry.platform, device_entry)
+    if lock_cls is None:
+        # Covers both an unsupported platform and an mqtt lock whose bridge
+        # no provider speaks: either way nothing is ever written there, so
+        # the lock constrains no numbering.
         _LOGGER.debug(
-            "Lock %s uses unsupported platform %s; skipping usercode check",
+            "No provider claims lock %s (platform %s); skipping usercode check",
             lock_entity_id,
             lock_entry.platform,
         )
@@ -99,9 +106,7 @@ def build_lock_instance(
         )
         raise LockQuerySkipped(lock_entity_id, managed=True)
 
-    return INTEGRATIONS_CLASS_MAP[lock_entry.platform](
-        hass, dev_reg, ent_reg, lock_config_entry, lock_entry
-    )
+    return lock_cls(hass, dev_reg, ent_reg, lock_config_entry, lock_entry)
 
 
 async def async_check_slot_capacity(

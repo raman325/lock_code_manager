@@ -17,7 +17,6 @@ from .zwave_js_ui import ZWaveJSUILock, parse_zwave_js_ui_identifier
 INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "local_akuvox": AkuvoxLock,
     "matter": MatterLock,
-    "mqtt": Zigbee2MQTTLock,
     "schlage": SchlageLock,
     "virtual": VirtualLock,
     "zha": ZHALock,
@@ -25,7 +24,9 @@ INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
 }
 
 # Platform allowlist for the config-flow entity selector and membership checks.
-SUPPORTED_PLATFORMS: tuple[str, ...] = tuple(INTEGRATIONS_CLASS_MAP)
+# Wider than what resolves to a provider: an mqtt lock is only selectable if
+# its device identifier names a bridge some provider speaks.
+SUPPORTED_PLATFORMS: tuple[str, ...] = (*INTEGRATIONS_CLASS_MAP, "mqtt")
 
 
 def resolve_provider_class(
