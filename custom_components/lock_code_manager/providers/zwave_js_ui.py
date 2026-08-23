@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
+from typing import Any
 
 from zwave_js_server.const import CommandClass
 
@@ -13,6 +15,7 @@ from homeassistant.components.mqtt import (
 )
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
 
+from ..domain.models import SlotCredential
 from ._base import BaseLock
 from .const import LOGGER
 
@@ -42,6 +45,57 @@ def parse_zwave_js_ui_identifier(identifier: str) -> tuple[str, int] | None:
     if match := ZWAVE_JS_UI_IDENTIFIER_RE.match(identifier):
         return match["home_hex"].lower(), int(match["node_id"])
     return None
+
+
+def _unwrap_mqtt_value(raw: bytes | str) -> Any:
+    """
+    Unwrap a zwave-js-ui value payload to the bare value.
+
+    The gateway's payload-type setting produces one of three shapes on a
+    value topic: the raw value, a ``{time, value}`` wrapper, or the entire
+    valueId object (which also carries ``value`` among other keys). All dict
+    shapes therefore carry the value under ``value``; a payload that is not
+    JSON at all IS the raw value (for example a bare PIN string).
+    """
+    if isinstance(raw, bytes):
+        raw = raw.decode(errors="replace")
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw
+    if isinstance(data, dict) and "value" in data:
+        return data["value"]
+    return data
+
+
+def _project_user_code_result(result: Any) -> SlotCredential:
+    """
+    Project a User Code CC ``get`` result to a SlotCredential.
+
+    Only Available means the slot holds nothing. Enabled without a usable
+    string code (withheld, or a serialized Buffer for a binary code) is
+    occupied-but-unreadable -- reporting it empty would make sync reprogram a
+    slot that already holds the right code. Every other status, and any
+    result shape that is not the expected dict, says nothing usable.
+
+    ``userIdStatus`` is compared with ``==`` against the int constants below,
+    which is unsafe for JSON ``true``/``false``: in Python ``True == 1``, so a
+    boolean status would otherwise masquerade as Enabled. Booleans are
+    therefore rejected up front.
+    """
+    if not isinstance(result, dict):
+        return SlotCredential.unreadable()
+    status = result.get("userIdStatus")
+    if isinstance(status, bool):
+        return SlotCredential.unreadable()
+    if status == USER_ID_STATUS_AVAILABLE:
+        return SlotCredential.empty()
+    code = result.get("userCode")
+    if status == USER_ID_STATUS_ENABLED and isinstance(code, str) and code.strip():
+        return SlotCredential.known(code)
+    return SlotCredential.unreadable()
 
 
 @dataclass(repr=False, eq=False)
