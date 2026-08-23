@@ -21,7 +21,7 @@ from custom_components.lock_code_manager.domain.allocation import (
 )
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.providers import (
-    SUPPORTED_PLATFORMS,
+    CONFIG_FLOW_PLATFORMS,
     Zigbee2MQTTLock,
     ZWaveJSLock,
     ZWaveJSUILock,
@@ -126,8 +126,9 @@ async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> 
     )
     # Identifiers are a set, so the well-formed one may be visited first and
     # never exercise the guard. A device carrying only a malformed tuple has
-    # to walk through it. Its domain differs so the registry does not merge
-    # the two devices on the shared identifier.
+    # to walk through it -- and that tuple must not collide with the first
+    # device's ("mqtt",), or the registry merges the two devices and the
+    # well-formed identifier leaks into this one.
     malformed_only = dev_reg.async_get_or_create(
         config_entry_id=mqtt_entry.entry_id,
         connections=set(),
@@ -139,11 +140,11 @@ async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> 
     assert resolve_provider_class("mqtt", malformed_only) is None
 
 
-def test_supported_platforms():
-    """SUPPORTED_PLATFORMS covers every map key plus mqtt exactly once."""
-    assert "mqtt" in SUPPORTED_PLATFORMS
-    assert "zwave_js" in SUPPORTED_PLATFORMS
-    assert len(SUPPORTED_PLATFORMS) == len(set(SUPPORTED_PLATFORMS))
+def test_config_flow_platforms():
+    """CONFIG_FLOW_PLATFORMS covers every map key plus mqtt exactly once."""
+    assert "mqtt" in CONFIG_FLOW_PLATFORMS
+    assert "zwave_js" in CONFIG_FLOW_PLATFORMS
+    assert len(CONFIG_FLOW_PLATFORMS) == len(set(CONFIG_FLOW_PLATFORMS))
 
 
 async def test_factory_rejects_unclaimed_mqtt_lock(

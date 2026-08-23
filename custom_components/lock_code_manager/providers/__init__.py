@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from homeassistant.helpers import device_registry as dr
+from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ._base import BaseLock
 from .akuvox import AkuvoxLock
@@ -23,10 +24,8 @@ INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "zwave_js": ZWaveJSLock,
 }
 
-# Platform allowlist for the config-flow entity selector. Wider than what
-# resolves to a provider: an mqtt lock is only selectable if its device
-# identifier names a bridge some provider speaks.
-SUPPORTED_PLATFORMS: tuple[str, ...] = (*INTEGRATIONS_CLASS_MAP, "mqtt")
+# Selector allowlist; wider than what resolves, because mqtt is per-device.
+CONFIG_FLOW_PLATFORMS: tuple[str, ...] = (*INTEGRATIONS_CLASS_MAP, MQTT_DOMAIN)
 
 
 def resolve_provider_class(
@@ -41,7 +40,7 @@ def resolve_provider_class(
     Unrecognized mqtt devices resolve to None — callers must reject them,
     never fall back to a guessed provider.
     """
-    if platform != "mqtt":
+    if platform != MQTT_DOMAIN:
         return INTEGRATIONS_CLASS_MAP.get(platform)
     if device_entry is None:
         return None
@@ -54,3 +53,13 @@ def resolve_provider_class(
         if parse_zwave_js_ui_identifier(value):
             return ZWaveJSUILock
     return None
+
+
+def resolve_provider_class_for_entity(
+    dev_reg: dr.DeviceRegistry, lock_entry: er.RegistryEntry
+) -> type[BaseLock] | None:
+    """Resolve a provider for an entity, looking up its device for mqtt dispatch."""
+    device_entry = (
+        dev_reg.async_get(lock_entry.device_id) if lock_entry.device_id else None
+    )
+    return resolve_provider_class(lock_entry.platform, device_entry)

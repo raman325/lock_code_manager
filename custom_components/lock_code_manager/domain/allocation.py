@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import MAX_SEARCHED_SLOT
-from ..providers import resolve_provider_class
+from ..providers import resolve_provider_class_for_entity
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
 from .occupancy import LockOccupancy, Occupancy
@@ -84,10 +84,7 @@ def build_lock_instance(
             lock_entity_id,
         )
         raise LockQuerySkipped(lock_entity_id, managed=True)
-    device_entry = (
-        dev_reg.async_get(lock_entry.device_id) if lock_entry.device_id else None
-    )
-    lock_cls = resolve_provider_class(lock_entry.platform, device_entry)
+    lock_cls = resolve_provider_class_for_entity(dev_reg, lock_entry)
     if lock_cls is None:
         # Covers both an unsupported platform and an mqtt lock whose bridge
         # no provider speaks: either way nothing is ever written there, so

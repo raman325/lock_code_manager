@@ -16,7 +16,7 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
-from ..providers import BaseLock, resolve_provider_class
+from ..providers import BaseLock, resolve_provider_class_for_entity
 from .queries import iter_loaded_lcm_entries
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,10 +34,7 @@ def async_create_lock_instance(
     lock_entry = ent_reg.async_get(lock_entity_id)
     assert lock_entry
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
-    device_entry = (
-        dev_reg.async_get(lock_entry.device_id) if lock_entry.device_id else None
-    )
-    lock_cls = resolve_provider_class(lock_entry.platform, device_entry)
+    lock_cls = resolve_provider_class_for_entity(dev_reg, lock_entry)
     if lock_cls is None:
         # Selection-time validation and this guard share one rule: never
         # guess a provider for an unclaimed lock.

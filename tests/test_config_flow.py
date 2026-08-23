@@ -682,8 +682,7 @@ async def test_config_flow_yaml_rejects_slot_beyond_lock_capacity(
     """More users than the lock can hold is caught before the entry exists."""
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(30))
-    with probe_capabilities:
+    with _capacity_probe(return_value=_capabilities_with_slots(30)):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {
@@ -706,8 +705,7 @@ async def test_config_flow_yaml_accepts_slot_within_capacity(
     """A slot inside the advertised range still creates the entry."""
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(30))
-    with probe_capabilities:
+    with _capacity_probe(return_value=_capabilities_with_slots(30)):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 30": {CONF_ENABLED: True, CONF_PIN: "2222"}}},
@@ -880,9 +878,11 @@ async def test_a_refused_count_reports_only_what_it_can_stand_behind(
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(10))
     # Nine of the ten slots are taken, well past the window the count asks for.
-    with probe_capabilities, _holding(*range(1, 10)):
+    with (
+        _capacity_probe(return_value=_capabilities_with_slots(10)),
+        _holding(*range(1, 10)),
+    ):
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 8}
         )
@@ -907,8 +907,7 @@ async def test_config_flow_capacity_check_skipped_when_lock_unreachable(
     """
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_capabilities = _capacity_probe(side_effect=LockDisconnected("lock asleep"))
-    with probe_capabilities:
+    with _capacity_probe(side_effect=LockDisconnected("lock asleep")):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 50": {CONF_ENABLED: True, CONF_PIN: "2222"}}},
@@ -923,8 +922,7 @@ async def test_config_flow_capacity_check_skipped_when_capacity_unknown(
     """``num_slots`` of 0 is "unknown", not "no slots", so it cannot reject."""
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(0))
-    with probe_capabilities:
+    with _capacity_probe(return_value=_capabilities_with_slots(0)):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 50": {CONF_ENABLED: True, CONF_PIN: "2222"}}},
@@ -975,8 +973,7 @@ async def test_config_flow_capacity_check_survives_unexpected_error(
     """
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_capabilities = _capacity_probe(side_effect=RuntimeError("provider blew up"))
-    with probe_capabilities:
+    with _capacity_probe(side_effect=RuntimeError("provider blew up")):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 50": {CONF_ENABLED: True, CONF_PIN: "2222"}}},
@@ -1292,13 +1289,12 @@ async def test_a_count_that_fits_can_still_need_numbers_that_do_not(
     around the two codes already there needs a fifth number, and that is
     where it is refused.
     """
-    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(4))
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
     # Three users fit in four slots; slots 1 and 2 are taken, so they would
     # land on 3, 4 and 5 -- and 5 does not exist.
-    with probe_capabilities, _holding(1, 2):
+    with _capacity_probe(return_value=_capabilities_with_slots(4)), _holding(1, 2):
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 3}
         )
@@ -1481,8 +1477,7 @@ async def test_a_refused_count_comes_back_in_the_box(
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(2))
-    with probe_capabilities, _holding():
+    with _capacity_probe(return_value=_capabilities_with_slots(2)), _holding():
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 8}
         )
@@ -1968,8 +1963,7 @@ async def test_reauth_reports_a_lock_too_small_for_the_existing_slots(
     await hass.async_block_till_done()
 
     [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(1))
-    with probe_capabilities:
+    with _capacity_probe(return_value=_capabilities_with_slots(1)):
         result = await hass.config_entries.flow.async_configure(
             flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
