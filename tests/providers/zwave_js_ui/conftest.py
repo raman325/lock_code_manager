@@ -44,6 +44,8 @@ def zui_lock_discovery_payload(
     state_topic: str | None = None,
     include_state_topic: bool = True,
     uid_prefix: str = "zwavejs2mqtt_",
+    gateway_name: str = ZUI_GATEWAY_NAME,
+    include_availability: bool = True,
 ) -> dict[str, Any]:
     """
     Build a zwave-js-ui-shaped Home Assistant discovery payload for a lock.
@@ -58,6 +60,13 @@ def zui_lock_discovery_payload(
     to express a MANUAL gateway's arbitrary custom topic. ``uid_prefix`` is the
     gateway's ``UID_DISCOVERY_PREFIX``, an environment variable whose default
     is the one spelled here.
+
+    The three-entry ``availability`` list mirrors ``setDiscoveryAvailability``
+    -- node status, the gateway's own client status (its last will), and the
+    driver's -- in the gateway's own order, since the provider is supposed to
+    find the middle one by shape rather than by index.
+    ``include_availability=False`` is the shape that has no such entry at all,
+    which is what the retained-status scan exists to handle.
     """
     node_topic = f"{prefix}/{node_segment or f'nodeID_{node_id}'}"
     payload: dict[str, Any] = {
@@ -80,6 +89,25 @@ def zui_lock_discovery_payload(
     }
     if include_state_topic:
         payload["state_topic"] = state_topic or f"{node_topic}/{value_path}"
+    if include_availability:
+        payload["availability_mode"] = "all"
+        payload["availability"] = [
+            {
+                "payload_available": "true",
+                "payload_not_available": "false",
+                "topic": f"{node_topic}/status",
+                "value_template": "{{'true' if value_json.value else 'false'}}",
+            },
+            {
+                "topic": f"{prefix}/_CLIENTS/{gateway_name}/status",
+                "value_template": "{{'online' if value_json.value else 'offline'}}",
+            },
+            {
+                "payload_available": "true",
+                "payload_not_available": "false",
+                "topic": f"{prefix}/driver/status",
+            },
+        ]
     return payload
 
 
@@ -96,11 +124,21 @@ async def async_discover_zui_lock(
     ent_reg = er.async_get(hass)
     entity_id = ent_reg.async_get_entity_id("lock", "mqtt", unique_id)
     assert entity_id is not None, "discovery did not create the lock entity"
+    # A payload that declares availability topics leaves the entity
+    # unavailable until every one of them reports in (``availability_mode:
+    # all``), so the gateway's own "everything is up" burst has to be replayed
+    # here or the entity never leaves ``unavailable`` and every operation
+    # refuses before it starts.
+    for entry in payload.get("availability", []):
+        # Only the templated entries carry the value envelope; the driver's is
+        # published as a bare ``true``.
+        available = json.dumps({"value": True}) if "value_template" in entry else "true"
+        async_fire_mqtt_message(hass, entry["topic"], available)
     # Seed a state so the entity is available. zwave-js-ui wraps every value
     # publication in a metadata envelope; the discovery value_template unwraps it.
     if state_topic := payload.get("state_topic"):
         async_fire_mqtt_message(hass, state_topic, json.dumps({"value": 255}))
-        await hass.async_block_till_done()
+    await hass.async_block_till_done()
     entry = ent_reg.async_get(entity_id)
     assert entry is not None
     return entry
@@ -264,10 +302,15 @@ async def async_start_gateway_resolution(
     """
     Start gateway resolution and return once it is listening for statuses.
 
+    The api response subscription is established first because that is where
+    production establishes it -- in ``async_setup``, long before anything
+    publishes -- and resolution refuses to run without it.
+
     A real broker replays retained statuses on subscribe; the mocked one
     cannot, so the caller fires them by hand. That only works if resolution
     has already subscribed, hence the flush before the task is handed back.
     """
+    await lock._async_ensure_api_response_subscription()
     task = asyncio.create_task(lock._async_resolve_api_base())
     await hass.async_block_till_done()
     return task
@@ -279,10 +322,15 @@ async def zui_gateway_resolved(
     zui_lock_provider: ZWaveJSUILock,
     zui_api_responder: ZWaveJSUIApiResponder,
 ) -> ZWaveJSUILock:
-    """Build a provider whose gateway is already resolved via the real discovery path."""
-    task = await async_start_gateway_resolution(hass, zui_lock_provider)
-    fire_zui_gateway_status(hass)
-    assert await task == ZUI_API_BASE
+    """
+    Build a provider whose gateway is bound the way a live one binds.
+
+    A real gateway names its own client status topic in every discovery
+    payload, so binding costs no traffic and no waiting -- the fixture runs
+    the real resolution rather than assigning ``_api_base``.
+    """
+    await zui_lock_provider._async_ensure_api_response_subscription()
+    assert await zui_lock_provider._async_resolve_api_base() == ZUI_API_BASE
     return zui_lock_provider
 
 
@@ -300,6 +348,22 @@ async def zui_lock_provider(
 ) -> ZWaveJSUILock:
     """Build a provider instance around the discovered lock, with no LCM entry."""
     return build_zui_lock(hass, zui_lock_discovered)
+
+
+@pytest.fixture
+async def zui_scan_lock_provider(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> ZWaveJSUILock:
+    """
+    Build a provider whose discovery payload names no gateway status topic.
+
+    Without that entry there is nothing to bind from, so this is the lock
+    that falls back to scanning the prefix's retained client statuses -- the
+    only shape those tests are about.
+    """
+    return build_zui_lock(
+        hass, await async_discover_zui_lock(hass, include_availability=False)
+    )
 
 
 @pytest.fixture

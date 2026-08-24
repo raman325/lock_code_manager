@@ -85,6 +85,16 @@ ZWAVE_JS_UI_OPERATION_DELAY = 5.0
 # ``<prefix>/_CLIENTS/ZWAVE_GATEWAY-<name>/status``. Other clients share the
 # ``_CLIENTS`` level, so the gateway prefix is what tells them apart.
 GATEWAY_CLIENT_PREFIX = "ZWAVE_GATEWAY-"
+# That same status topic is what the gateway puts in the ``availability`` list
+# of every entity it discovers (Gateway.ts ``setDiscoveryAvailability``), which
+# makes it a per-lock naming of the gateway that owns the lock -- no traffic,
+# no ambiguity between gateways sharing a prefix. The topic prefix comes from
+# here too, and deliberately not from the state topic: a MANUAL gateway's state
+# topic is whatever the user typed and its first segment means nothing.
+GATEWAY_STATUS_TOPIC_RE = re.compile(
+    rf"^(?P<api_base>(?P<prefix>.+)/_CLIENTS/{re.escape(GATEWAY_CLIENT_PREFIX)}[^/]+)"
+    r"/status$"
+)
 # Key added to every api request payload. zwave-js-ui echoes the request
 # verbatim under the response's ``origin``, so an extra key of our own comes
 # back untouched and correlates the reply.
@@ -295,7 +305,22 @@ class ZWaveJSUILock(BaseLock):
         return timedelta(hours=1)
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Subscribe to the node topic before the coordinator runs its first poll."""
+        """
+        Bring both subscriptions up before the coordinator runs its first poll.
+
+        The api response subscription is established here rather than inside
+        ``_async_resolve_api_base``, and the placement is the whole point.
+        Home Assistant registers a subscription locally at once but defers the
+        wire SUBSCRIBE behind a debouncer, while a publish goes out
+        immediately, so anything that subscribes and publishes in one breath
+        loses the answer -- and zwave-js-ui sends api responses unretained.
+        Resolution used to hold a multi-second discovery window that happened
+        to outlast that debounce; the availability fast path has no window at
+        all, so the settling has to come from setup running well before the
+        first poll publishes anything.
+
+        """
+        await self._async_ensure_api_response_subscription()
         await self._async_ensure_node_subscription()
 
     def _parsed_identifier(self) -> tuple[str, int] | None:
@@ -348,6 +373,51 @@ class ZWaveJSUILock(BaseLock):
         if len(parts) < MIN_VALUE_TOPIC_SEGMENTS:
             return None
         return parts[0], "/".join(parts[:-VALUE_TOPIC_SEGMENTS])
+
+    def _gateway_from_availability(self) -> tuple[str, str] | None:
+        """
+        Return ``(prefix, api base)`` named by the discovery availability list.
+
+        zwave-js-ui puts its own client status topic into the availability of
+        every entity it discovers, so the payload this lock arrived on already
+        says which gateway owns it -- per lock, with no traffic and no
+        ambiguity when several gateways share a broker. The list is scanned
+        for a topic of that shape rather than indexed: the other two entries
+        are the node's status and the driver's, and their order is the
+        gateway's business, not ours.
+
+        Single-availability payloads are expressible in Home Assistant as a
+        bare mapping, so that shape is accepted too.
+        """
+        payload = resolve_discovery_payload(self.hass, self.lock)
+        if payload is None:
+            return None
+        availability = payload.get("availability")
+        if isinstance(availability, dict):
+            availability = [availability]
+        if not isinstance(availability, list):
+            return None
+        for entry in availability:
+            topic = entry.get("topic") if isinstance(entry, dict) else None
+            if isinstance(topic, str) and (
+                match := GATEWAY_STATUS_TOPIC_RE.match(topic)
+            ):
+                return match["prefix"], match["api_base"]
+        return None
+
+    def _gateway_prefix(self) -> str | None:
+        """
+        Return the topic prefix this lock's gateway publishes under.
+
+        The availability topic names it outright. The state topic only yields
+        it by arithmetic that assumes the gateway built the topic, so it is
+        the fallback rather than the primary -- for a MANUAL gateway the first
+        segment is whatever the user typed and means nothing.
+        """
+        if (bound := self._gateway_from_availability()) is not None:
+            return bound[0]
+        resolved = self._prefix_and_node_topic()
+        return resolved[0] if resolved else None
 
     def _require_node(self) -> tuple[str, int]:
         """
@@ -614,41 +684,80 @@ class ZWaveJSUILock(BaseLock):
         if future is not None and not future.done():
             future.set_result(payload)
 
+    async def _async_ensure_api_response_subscription(self) -> None:
+        """
+        Subscribe to api responses from every gateway on this lock's prefix.
+
+        One wildcard covers them all, so the disambiguating getInfo calls
+        resolution may make are correlated by the same subscription that
+        carries ordinary traffic. Idempotent.
+
+        A prefix that cannot be resolved yet is an expected startup condition
+        -- Home Assistant's MQTT discovery data lands asynchronously -- so
+        this logs and returns. Refusing to publish without a live subscription
+        is ``_async_resolve_api_base``'s job.
+        """
+        if self._api_response_topic is not None:
+            return
+        if (prefix := self._gateway_prefix()) is None:
+            LOGGER.info(
+                "Lock %s: no zwave-js-ui topic prefix in discovery data yet; "
+                "the api response subscription will be established once it "
+                "arrives",
+                self.lock.entity_id,
+            )
+            return
+        response_topic = f"{prefix}/_CLIENTS/+/api/+"
+        self._api_response_unsub = await self._async_subscribe(
+            response_topic, self._api_response_received
+        )
+        self._api_response_topic = response_topic
+
     async def _async_resolve_api_base(self) -> str:
         """
         Resolve and cache ``<prefix>/_CLIENTS/ZWAVE_GATEWAY-<name>``.
 
-        MQTT ``+`` matches a whole level, so the ZWAVE_GATEWAY- prefix filter
-        is applied client-side on the received topic segment. Retained
-        statuses arrive immediately after subscribing; the window exists only
-        to collect them all before deciding.
+        Two paths. The gateway writes its own client status topic into the
+        availability list of every entity it discovers, so when that entry is
+        there it IS the answer: no traffic, no waiting, and it is per lock --
+        which the scan below can never be, since two gateways sharing a prefix
+        leave it having to interrogate each one.
 
-        The api response subscription is established here, before the window,
-        rather than per call. Home Assistant registers a subscription locally
-        straight away but defers the wire SUBSCRIBE through a ~0.1s debouncer,
-        while a publish goes out immediately -- so a subscribe/publish pair in
-        one breath loses every api response the gateway sends before the
-        broker has been told to route it, and it sends them unretained. The
-        discovery window is the one place already long enough to outlast that
-        debounce, so every later call publishes into a subscription that has
-        been live for seconds.
+        The scan is the fallback for a discovery payload carrying no such
+        entry. MQTT ``+`` matches a whole level, so the ZWAVE_GATEWAY- filter
+        is applied client-side on the received topic segment; retained
+        statuses arrive immediately after subscribing and the window exists
+        only to collect them all before deciding.
         """
         if self._api_base:
             return self._api_base
 
         home_hex, _ = self._require_node()
-        if (resolved := self._prefix_and_node_topic()) is None:
+        if (prefix := self._gateway_prefix()) is None:
             raise LockDisconnected("Cannot resolve gateway prefix from discovery data")
-        prefix = resolved[0]
 
         if self._api_response_topic is None:
-            # One wildcard covers every gateway on the prefix, so the
-            # disambiguation getInfo calls below are already correlated too.
-            response_topic = f"{prefix}/_CLIENTS/+/api/+"
-            self._api_response_unsub = await self._async_subscribe(
-                response_topic, self._api_response_received
+            # Get it up for the next attempt, but refuse this one. Home
+            # Assistant defers the wire SUBSCRIBE behind a debouncer while a
+            # publish goes out immediately, so publishing into a subscription
+            # made in the same breath loses the answer -- and zwave-js-ui
+            # sends api responses unretained. The caller's failure is a
+            # disconnect, so the coordinator's backoff schedules the retry.
+            await self._async_ensure_api_response_subscription()
+            raise LockDisconnected(
+                f"No settled zwave-js-ui api response subscription for "
+                f"{self.lock.entity_id} yet"
             )
-            self._api_response_topic = response_topic
+
+        if (bound := self._gateway_from_availability()) is not None:
+            self._api_base = bound[1]
+            LOGGER.debug(
+                "Lock %s: bound to zwave-js-ui gateway %s from its discovery "
+                "availability topic",
+                self.lock.entity_id,
+                self._api_base,
+            )
+            return self._api_base
 
         gateways: set[str] = set()
 

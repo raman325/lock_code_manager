@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncGenerator
 import json
 from typing import Any
@@ -48,7 +47,6 @@ from .conftest import (
     ZUI_NODE_ID,
     ZUI_NODE_TOPIC,
     ZWaveJSUIApiResponder,
-    fire_zui_gateway_status,
 )
 
 # Door Lock is 98; User Code Command Class is 99.
@@ -59,11 +57,6 @@ STATUS_ENABLED = 1
 
 E2E_SLOT_PINS = {1: "1234", 2: "5678"}
 LOCK_CAPACITY = 20
-
-# How often the retained gateway status is republished. Short enough to land
-# inside the (test-shortened) discovery window, long enough not to spin the
-# event loop.
-GATEWAY_STATUS_REPLAY_INTERVAL = 0.005
 
 
 class UserCodeTable:
@@ -134,38 +127,11 @@ def user_code_table() -> UserCodeTable:
 
 
 @pytest.fixture
-async def zui_gateway_online(hass: HomeAssistant, mqtt_mock) -> AsyncGenerator[None]:
-    """
-    Keep the gateway's retained client status arriving for the whole test.
-
-    A real broker replays a retained status to every new subscriber, so a
-    gateway that is up is discoverable whenever anything looks for it. The
-    mocked broker retains nothing and no test can interleave a publish with
-    the awaits inside config entry setup, so the status is republished on a
-    short cadence instead.
-
-    It has to outlive setup: LCM's one-time unmanaged-code sweep builds a
-    throwaway provider that resolves the gateway of its own, and the real
-    provider's resolution happens in a task that setup does not wait for.
-    """
-
-    async def _replay() -> None:
-        while True:
-            fire_zui_gateway_status(hass)
-            await asyncio.sleep(GATEWAY_STATUS_REPLAY_INTERVAL)
-
-    task = asyncio.create_task(_replay())
-    yield
-    task.cancel()
-
-
-@pytest.fixture
 async def lcm_config_entry(
     hass: HomeAssistant,
     zui_lock_discovered,
     zui_api_responder: ZWaveJSUIApiResponder,
     user_code_table: UserCodeTable,
-    zui_gateway_online,
     mqtt_teardown,
 ) -> AsyncGenerator[MockConfigEntry]:
     """
@@ -241,11 +207,11 @@ class TestFullSetupLifecycle:
         self, hass: HomeAssistant, zui_lock: ZWaveJSUILock
     ) -> None:
         """
-        Setup resolved the gateway from its retained client status alone.
+        Setup bound the gateway out of the lock's own discovery payload.
 
-        Nothing hands the provider an api base: it subscribes, collects the
-        statuses published under the prefix, and keeps the one gateway it
-        finds. Everything below this point addresses that base.
+        Nothing hands the provider an api base: it reads the gateway status
+        topic zwave-js-ui wrote into this entity's availability list.
+        Everything below this point addresses that base.
         """
         assert zui_lock._api_base == ZUI_API_BASE
 

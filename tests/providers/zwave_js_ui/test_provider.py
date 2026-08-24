@@ -435,8 +435,8 @@ class TestOperationalGuards:
             "mqtt_disabled": patch(
                 f"{MODULE}.mqtt_config_entry_enabled", return_value=False
             ),
-            "no_gateway_topic": patch.object(
-                ZWaveJSUILock, "_resolve_state_topic", return_value=None
+            "no_gateway_topic": patch(
+                f"{MODULE}.resolve_discovery_payload", return_value=None
             ),
             "entity_unavailable": patch.object(
                 ZWaveJSUILock,
