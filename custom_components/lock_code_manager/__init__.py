@@ -1337,6 +1337,39 @@ async def async_remove_config_entry_device(
     return slot_nums.isdisjoint(get_entry_config(config_entry).slot_numbers)
 
 
+@callback
+def _async_report_dropped_lock(
+    hass: HomeAssistant, lock_entity_id: str, err: BaseException
+) -> None:
+    """
+    Raise a repair for a configured lock that could not be set up at all.
+
+    Distinct from ``lock_setup_failed``, which describes a lock that is
+    still in the entry with its entities present but unavailable. This
+    one is gone: no entities appear for it, nothing is written to it, and
+    its only trace was a line in the log.
+
+    Reaching it means the lock stopped resolving to a provider between
+    being chosen and being set up -- most likely an entry configured
+    before selection-time validation existed, holding an mqtt lock whose
+    bridge no provider speaks. Nobody ever told those users, so the
+    repair names the entity and quotes what refused it.
+    """
+    async_create_issue(
+        hass,
+        DOMAIN,
+        per_lock_issue_id("lock_dropped", lock_entity_id),
+        is_fixable=False,
+        is_persistent=True,
+        severity=IssueSeverity.ERROR,
+        translation_key="lock_dropped",
+        translation_placeholders={
+            "lock_entity_id": lock_entity_id,
+            "error": str(err),
+        },
+    )
+
+
 async def _async_setup_new_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -1414,9 +1447,13 @@ async def _async_setup_new_locks(
                 exc_info=result,
             )
             runtime_data.locks.pop(lock_entity_id, None)
+            _async_report_dropped_lock(hass, lock_entity_id, result)
             continue
 
         added_locks.append(result)
+        async_delete_issue(
+            hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
+        )
 
         if not await result.async_internal_is_reachable():
             _LOGGER.debug(
@@ -1605,7 +1642,13 @@ async def _async_apply_entry_update(
         )
     for lock_entity_id in locks_to_remove:
         callbacks.invoke_lock_removed_handlers(lock_entity_id)
-        lock: BaseLock = runtime_data.locks[lock_entity_id]
+        if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
+            # A lock that never got an instance has no teardown to clear its
+            # repair, and removing it from the entry is exactly what that
+            # repair asks the user to do.
+            async_delete_issue(
+                hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
+            )
         # LCM no longer adds its config entry to the lock's device (its
         # per-lock entities link to the device via ``device_entry``), so
         # there is no config-entry association to unmerge here; the per-lock

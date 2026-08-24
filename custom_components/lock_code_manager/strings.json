@@ -353,6 +353,10 @@
       "title": "Lock setup failed: {lock_entity_id}",
       "description": "Lock Code Manager could not set up `{lock_entity_id}`: {error}\n\nIts entities are created but unavailable, and code synchronization is paused for this lock. After addressing the cause, reload the lock's integration (or Lock Code Manager) to retry. This issue will be automatically dismissed when setup succeeds."
     },
+    "lock_dropped": {
+      "title": "Lock dropped: {lock_entity_id}",
+      "description": "Lock Code Manager could not create a provider for `{lock_entity_id}`, so it has been dropped from this configuration entry: {error}\n\nNo entities were created for that lock and no codes are written to it; every other lock in the entry is unaffected. This usually means the entity belongs to a bridge no Lock Code Manager provider supports, or that its integration has changed what it publishes about the device. Remove it from the entry, or fix the underlying cause and reload Lock Code Manager. This issue will be automatically dismissed once the lock sets up."
+    },
     "unmanaged_code": {
       "title": "Unmanaged code on {lock} in slot {slot}",
       "fix_flow": {
