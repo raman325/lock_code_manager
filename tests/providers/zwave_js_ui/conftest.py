@@ -129,13 +129,22 @@ def _minimal_lock() -> ZWaveJSUILock:
     )
 
 
+# Stand-ins for the production budgets, scaled so a whole suite of unanswered
+# calls costs a fraction of a second. Kept an order of magnitude apart for the
+# same reason the real ones are: a test that pins which budget an api uses can
+# only tell them apart if they differ.
+FAST_API_CALL_TIMEOUT = 0.5
+FAST_GATEWAY_LOCAL_TIMEOUT = 0.05
+
+
 @pytest.fixture(autouse=True)
 def fast_zui_timeouts() -> Generator[None]:
-    """Keep the discovery window and api timeout from costing tests whole seconds."""
+    """Keep the discovery window and api timeouts from costing tests whole seconds."""
     module = "custom_components.lock_code_manager.providers.zwave_js_ui"
     with (
         patch(f"{module}.GATEWAY_DISCOVERY_TIMEOUT", 0.05),
-        patch(f"{module}.API_CALL_TIMEOUT", 0.5),
+        patch(f"{module}.API_CALL_TIMEOUT", FAST_API_CALL_TIMEOUT),
+        patch(f"{module}.GATEWAY_LOCAL_TIMEOUT", FAST_GATEWAY_LOCAL_TIMEOUT),
     ):
         yield
 

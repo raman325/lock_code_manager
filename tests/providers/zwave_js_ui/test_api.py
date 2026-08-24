@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import fields
 import json
 from typing import Any
 from unittest.mock import DEFAULT, AsyncMock, Mock, patch
@@ -18,9 +20,15 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
+from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
+from custom_components.lock_code_manager.providers.zwave_js_ui import (
+    ZWAVE_JS_UI_OPERATION_DELAY,
+    ZWaveJSUILock,
+)
 
 from .conftest import (
+    FAST_API_CALL_TIMEOUT,
+    FAST_GATEWAY_LOCAL_TIMEOUT,
     ZUI_API_BASE,
     ZUI_GATEWAY_NAME,
     ZUI_HOME_HEX,
@@ -409,6 +417,95 @@ async def test_gateway_that_never_answers_is_skipped(
     fire_zui_gateway_status(hass, client=OTHER_GATEWAY_NAME)
 
     assert await task == ZUI_API_BASE
+
+
+@contextmanager
+def record_wait_budgets() -> Iterator[list[float | None]]:
+    """
+    Record every ``asyncio.wait_for`` budget spent inside the block.
+
+    Which constant bounds an api call is only observable at the wait itself;
+    asserting on the argument the provider hands its own helper would pin the
+    plumbing and pass even if the wait ignored it. Home Assistant's own waits
+    land in the list too, so callers test for membership of the two provider
+    budgets -- which the fixture keeps an order of magnitude apart -- rather
+    than for the list's exact contents.
+    """
+    seen: list[float | None] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _spy(awaitable: Any, timeout: float | None = None) -> Any:
+        seen.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    with patch.object(asyncio, "wait_for", _spy):
+        yield seen
+
+
+async def test_gateway_probe_waits_on_the_gateway_local_budget(
+    hass: HomeAssistant,
+    zui_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A silent gateway is abandoned on the local budget, not the mesh one.
+
+    zwave-js-ui answers getInfo out of its own cached driver state without
+    touching the mesh, so silence there means the client is gone rather than
+    busy. Waiting the mesh-sized budget on each dead candidate would stall
+    every lock behind one decommissioned gateway for a minute apiece.
+    """
+    zui_api_responder.set_handler("getInfo", lambda _api_base, _request: None)
+
+    task = await async_start_gateway_resolution(hass, zui_lock_provider)
+    fire_zui_gateway_status(hass)
+    fire_zui_gateway_status(hass, client=OTHER_GATEWAY_NAME)
+
+    with record_wait_budgets() as budgets, pytest.raises(LockDisconnected):
+        await task
+
+    assert FAST_GATEWAY_LOCAL_TIMEOUT in budgets
+    assert FAST_API_CALL_TIMEOUT not in budgets
+
+
+@pytest.mark.parametrize("method", ["get", "getUsersCount"])
+async def test_node_commands_wait_on_the_mesh_budget(
+    zui_gateway_resolved: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+    method: str,
+) -> None:
+    """
+    Anything sent to the node waits the full mesh budget, ``getUsersCount`` included.
+
+    Its name reads gateway-local but it is a User Code Command Class
+    UsersNumberGet addressed to the lock (node-zwave-js
+    ``UserCodeCCAPI.getUsersCount``), so it queues behind the same wake
+    schedule as a code read and must not be cut short.
+    """
+    with record_wait_budgets() as budgets, pytest.raises(LockDisconnected):
+        await zui_gateway_resolved._async_user_code_command(method, [])
+
+    assert FAST_API_CALL_TIMEOUT in budgets
+    assert FAST_GATEWAY_LOCAL_TIMEOUT not in budgets
+
+
+def test_operations_are_paced_wider_than_the_base_default() -> None:
+    """
+    This provider paces its own operations wider than BaseLock's default.
+
+    Asserting the delay by waiting one out would cost the suite real seconds
+    (and the suite-wide fixture zeroes the delay on every instance anyway),
+    so the field default is where the pacing is observable. What it buys:
+    every api call lands on zwave-js-ui's single command queue, shared with
+    its own UI and every other MQTT client, and a FLiRS lock drains that
+    queue at wake speed.
+    """
+    delay = next(
+        f for f in fields(ZWaveJSUILock) if f.name == "_min_operation_delay"
+    ).default
+
+    assert delay == ZWAVE_JS_UI_OPERATION_DELAY
+    assert delay > MIN_OPERATION_DELAY
 
 
 async def test_boolean_home_id_never_matches(

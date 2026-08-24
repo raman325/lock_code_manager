@@ -48,8 +48,31 @@ CC_NOTIFICATION = CommandClass.NOTIFICATION
 # zwave-js UserIDStatus enum (UserCodeCC).
 USER_ID_STATUS_AVAILABLE = 0
 USER_ID_STATUS_ENABLED = 1
-API_CALL_TIMEOUT = 10.0
+# A FLiRS (battery) lock answers on its own wake schedule, so one command can
+# legitimately take the better part of a minute. Giving up early does not
+# cancel anything: zwave-js-ui keeps working the queued command, and the retry
+# stacks a duplicate behind it, so a short budget turns a slow mesh into a
+# gateway queue that jams and drains slower than the lock can answer. Verified
+# on live Kwikset FLiRS meshes, where 15 seconds was already too tight.
+API_CALL_TIMEOUT = 60.0
+# ``getInfo`` is assembled from the gateway's own cached driver state and puts
+# nothing on the mesh (zwave-js-ui ``ZwaveClient.getInfo``), so a client that
+# has not answered in five seconds is not busy, it is gone. Bounding it apart
+# from the mesh budget is what keeps one dead gateway from stalling every
+# lock's resolution for a minute per candidate.
+#
+# Deliberately NOT used for ``getUsersCount``: despite the name, that is a
+# User Code Command Class UsersNumberGet sent to the node
+# (node-zwave-js ``UserCodeCCAPI.getUsersCount``), so it waits on the same
+# wake schedule as every other lock command and keeps the mesh budget.
+GATEWAY_LOCAL_TIMEOUT = 5.0
 GATEWAY_DISCOVERY_TIMEOUT = 3.0
+# Inter-operation pacing, widened from the base default. Every api call this
+# provider makes is serialized onto zwave-js-ui's single command queue, which
+# it also shares with its own UI and any other MQTT client, and a FLiRS lock
+# drains that queue at wake speed. Pacing our own operations wider costs
+# nothing on a healthy mesh and keeps LCM from being the client that fills it.
+ZWAVE_JS_UI_OPERATION_DELAY = 5.0
 
 # Every zwave-js-ui gateway publishes its retained client status under
 # ``<prefix>/_CLIENTS/ZWAVE_GATEWAY-<name>/status``. Other clients share the
@@ -200,6 +223,7 @@ class ZWaveJSUILock(BaseLock):
     # none. Unlike the api subscription above, this one IS the push lifecycle,
     # so its unsub goes in the base's push-unsub registry.
     _subscribed_node_topic: str | None = field(init=False, default=None)
+    _min_operation_delay: float = field(init=False, default=ZWAVE_JS_UI_OPERATION_DELAY)
 
     @property
     def domain(self) -> str:
@@ -626,7 +650,9 @@ class ZWaveJSUILock(BaseLock):
         for client in candidates:
             api_base = f"{prefix}/_CLIENTS/{client}"
             try:
-                response = await self._async_api_call_at(api_base, "getInfo", [])
+                response = await self._async_api_call_at(
+                    api_base, "getInfo", [], timeout=GATEWAY_LOCAL_TIMEOUT
+                )
             except (LockDisconnected, LockOperationFailed) as err:
                 LOGGER.debug("Gateway %s did not answer getInfo: %s", api_base, err)
                 continue
@@ -653,7 +679,12 @@ class ZWaveJSUILock(BaseLock):
         return self._api_base
 
     async def _async_api_call_at(
-        self, api_base: str, api_name: str, args: list[Any]
+        self,
+        api_base: str,
+        api_name: str,
+        args: list[Any],
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """
         Call a zwave-js-ui MQTT api and return the correlated response payload.
@@ -662,6 +693,10 @@ class ZWaveJSUILock(BaseLock):
         the nonce keeps concurrent api users (the UI, other automations) from
         crossing wires. Timeout routes to LockDisconnected so the reconnect
         path runs; an explicit success=false is a per-operation failure.
+
+        ``timeout`` overrides the mesh-sized default for an api the gateway
+        answers out of its own memory; it is resolved here rather than in the
+        signature so the module constant stays the single source of truth.
 
         Requires the response subscription ``_async_resolve_api_base`` sets
         up. Subscribing here instead would publish into a subscription the
@@ -698,7 +733,9 @@ class ZWaveJSUILock(BaseLock):
                 ) from err
 
             try:
-                response = await asyncio.wait_for(future, timeout=API_CALL_TIMEOUT)
+                response = await asyncio.wait_for(
+                    future, API_CALL_TIMEOUT if timeout is None else timeout
+                )
             except TimeoutError as err:
                 raise LockDisconnected(
                     f"Timed out waiting for zwave-js-ui {api_name} response for "
