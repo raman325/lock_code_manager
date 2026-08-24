@@ -79,6 +79,13 @@ class BaseMqttLock(BaseLock):
         for a sleeping device. Where a write is instead a round trip the
         device itself has to answer, leaving it on makes that fail up front
         as a disconnect instead of ten seconds later as a timeout.
+
+        Two of the three checks repeat what ``_execute_rate_limited`` asked a
+        moment earlier, and the repetition is load-bearing rather than
+        leftover: the unmanaged-code sweep and slot allocation call the
+        provider's operations directly, without that wrapper, so a helper
+        trimmed to what the wrapper does not cover would leave those two paths
+        addressing a lock that is not there.
         """
         if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")

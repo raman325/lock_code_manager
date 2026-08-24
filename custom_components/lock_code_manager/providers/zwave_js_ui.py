@@ -140,6 +140,56 @@ def _is_endpoint_zero(segment: str) -> bool:
     return segment in ("0", "endpoint_0")
 
 
+def _state_topic_from_payload(payload: dict[str, Any]) -> str | None:
+    """Read a discovery payload's ``state_topic``, or None when it names none."""
+    state_topic = payload.get("state_topic")
+    return state_topic if isinstance(state_topic, str) and state_topic else None
+
+
+def _split_state_topic(state_topic: str) -> tuple[str, str] | None:
+    """
+    Split a gateway-built value topic into ``(gateway prefix, node topic)``.
+
+    The first segment is always the gateway's own topic prefix, and the last
+    three are the value's ``<cc>/<endpoint>/<property>``. A topic with fewer
+    than five segments leaves no room for both plus a node topic, so it can
+    only be a MANUAL-gateway custom topic, whose shape says nothing about the
+    node — unresolvable, never guessed.
+    """
+    parts = state_topic.split("/")
+    if len(parts) < MIN_VALUE_TOPIC_SEGMENTS:
+        return None
+    return parts[0], "/".join(parts[:-VALUE_TOPIC_SEGMENTS])
+
+
+def _gateway_from_payload(payload: dict[str, Any]) -> tuple[str, str] | None:
+    """
+    Return ``(prefix, api base)`` named by a discovery payload's availability list.
+
+    The list is scanned for a topic of the gateway-status shape rather than
+    indexed: the other entries are the node's status and the driver's, and
+    their order is the gateway's business, not ours.
+
+    Single-availability payloads are expressible in Home Assistant as a bare
+    mapping, so that shape is accepted too.
+    """
+    availability = payload.get("availability")
+    if isinstance(availability, dict):
+        availability = [availability]
+    if not isinstance(availability, list):
+        return None
+    return next(
+        (
+            (match["prefix"], match["api_base"])
+            for entry in availability
+            if isinstance(entry, dict)
+            and isinstance(topic := entry.get("topic"), str)
+            and (match := GATEWAY_STATUS_TOPIC_RE.match(topic))
+        ),
+        None,
+    )
+
+
 def parse_zwave_js_ui_identifier(identifier: str) -> tuple[str, int] | None:
     """
     Parse ``(home_hex, node_id)`` out of a zwave-js-ui device identifier.
@@ -363,28 +413,17 @@ class ZWaveJSUILock(BaseMqttLock):
         payload = resolve_discovery_payload(self.hass, self.lock)
         if payload is None:
             return None
-        state_topic = payload.get("state_topic")
-        if isinstance(state_topic, str) and state_topic:
-            return state_topic
-        LOGGER.debug("Discovery payload for %s has no state topic", self.lock.entity_id)
-        return None
+        if (state_topic := _state_topic_from_payload(payload)) is None:
+            LOGGER.debug(
+                "Discovery payload for %s has no state topic", self.lock.entity_id
+            )
+        return state_topic
 
     def _prefix_and_node_topic(self) -> tuple[str, str] | None:
-        """
-        Split the state topic into ``(gateway prefix, node topic)``.
-
-        The first segment is always the gateway's own topic prefix, and the
-        last three are the value's ``<cc>/<endpoint>/<property>``. A topic with
-        fewer than five segments leaves no room for both plus a node topic, so
-        it can only be a MANUAL-gateway custom topic, whose shape says nothing
-        about the node — unresolvable, never guessed.
-        """
+        """Split this lock's state topic into ``(gateway prefix, node topic)``."""
         if not (state_topic := self._resolve_state_topic()):
             return None
-        parts = state_topic.split("/")
-        if len(parts) < MIN_VALUE_TOPIC_SEGMENTS:
-            return None
-        return parts[0], "/".join(parts[:-VALUE_TOPIC_SEGMENTS])
+        return _split_state_topic(state_topic)
 
     def _gateway_from_availability(self) -> tuple[str, str] | None:
         """
@@ -393,29 +432,10 @@ class ZWaveJSUILock(BaseMqttLock):
         zwave-js-ui puts its own client status topic into the availability of
         every entity it discovers, so the payload this lock arrived on already
         says which gateway owns it -- per lock, with no traffic and no
-        ambiguity when several gateways share a broker. The list is scanned
-        for a topic of that shape rather than indexed: the other two entries
-        are the node's status and the driver's, and their order is the
-        gateway's business, not ours.
-
-        Single-availability payloads are expressible in Home Assistant as a
-        bare mapping, so that shape is accepted too.
+        ambiguity when several gateways share a broker.
         """
         payload = resolve_discovery_payload(self.hass, self.lock)
-        if payload is None:
-            return None
-        availability = payload.get("availability")
-        if isinstance(availability, dict):
-            availability = [availability]
-        if not isinstance(availability, list):
-            return None
-        for entry in availability:
-            topic = entry.get("topic") if isinstance(entry, dict) else None
-            if isinstance(topic, str) and (
-                match := GATEWAY_STATUS_TOPIC_RE.match(topic)
-            ):
-                return match["prefix"], match["api_base"]
-        return None
+        return None if payload is None else _gateway_from_payload(payload)
 
     def _gateway_prefix(self) -> str | None:
         """
@@ -425,10 +445,21 @@ class ZWaveJSUILock(BaseMqttLock):
         it by arithmetic that assumes the gateway built the topic, so it is
         the fallback rather than the primary -- for a MANUAL gateway the first
         segment is whatever the user typed and means nothing.
+
+        Both answers come out of one discovery payload, read once. Asking the
+        two accessors in turn costs a second walk of Home Assistant's MQTT
+        debug data, which rebuilds the debug state of every MQTT entity on the
+        device -- and this runs on every connectivity check, several times per
+        operation.
         """
-        if (bound := self._gateway_from_availability()) is not None:
+        payload = resolve_discovery_payload(self.hass, self.lock)
+        if payload is None:
+            return None
+        if (bound := _gateway_from_payload(payload)) is not None:
             return bound[0]
-        resolved = self._prefix_and_node_topic()
+        if (state_topic := _state_topic_from_payload(payload)) is None:
+            return None
+        resolved = _split_state_topic(state_topic)
         return resolved[0] if resolved else None
 
     def _require_node(self) -> tuple[str, int]:
