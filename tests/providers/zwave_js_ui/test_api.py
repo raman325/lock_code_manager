@@ -595,10 +595,10 @@ async def test_a_gateway_that_stops_answering_sends_the_scan_round_again(
     zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
-    A dropped binding drops the shared scan result with it.
+    A gateway that has stopped answering anything drops the shared scan result.
 
-    Keeping the scan's answer past the disconnect that invalidated the
-    instance's would hand the very next call the address nobody answered on,
+    Keeping the scan's answer past a disconnect the gateway itself could not
+    contradict would hand the very next call the address nobody answered on,
     and no lock behind that gateway could ever rediscover it.
     """
     lock = zui_scan_lock_provider
@@ -607,8 +607,9 @@ async def test_a_gateway_that_stops_answering_sends_the_scan_round_again(
     fire_zui_gateway_status(hass)
     assert await task == ZUI_API_BASE
 
-    # The gateway goes quiet: an api call times out, which is what drops the
-    # binding on the real path.
+    # The gateway goes quiet altogether: neither the node command nor the
+    # gateway-local probe that follows it comes back.
+    zui_api_responder.handlers.clear()
     with pytest.raises(LockDisconnected, match="Timed out waiting"):
         await lock.async_get_max_slot()
 
@@ -616,6 +617,90 @@ async def test_a_gateway_that_stops_answering_sends_the_scan_round_again(
     # nothing to find -- which is the proof that it did reopen.
     with pytest.raises(LockDisconnected, match="published a client status"):
         await lock._async_resolve_api_base()
+
+
+async def test_a_slow_node_behind_a_live_gateway_keeps_the_shared_binding(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A node timing out says nothing about the gateway that relayed the command.
+
+    ``sendCommand`` waits on the mesh, so a FLiRS lock that misses its wake
+    window times it out routinely. Treating that as a stale gateway binding
+    threw away the scan every lock on the broker shares and sent them all
+    rescanning into the same queue that was already too slow to answer. The
+    gateway is asked directly instead, out of its own memory, and a gateway
+    that answers keeps its binding.
+    """
+    lock = zui_scan_lock_provider
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    task = await async_start_gateway_resolution(hass, lock)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+
+    with pytest.raises(LockDisconnected, match="Timed out waiting"):
+        await lock.async_get_max_slot()
+
+    # No status is published now, so re-resolving would fail outright if the
+    # shared scan result had been thrown away.
+    assert await lock._async_resolve_api_base() == ZUI_API_BASE
+
+
+async def test_a_released_transport_leaves_the_shared_scan_alone(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    Releasing one instance's transport is not evidence about the gateway.
+
+    Every borrowed provider -- a config flow read, the unmanaged sweep --
+    releases on the way out, and a connection blip releases too. Wiping the
+    cross-lock scan on each of those made a sweep of N locks pay N full
+    three-second scan windows instead of one.
+    """
+    lock = zui_scan_lock_provider
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    task = await async_start_gateway_resolution(hass, lock)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+
+    lock.teardown_push_subscription()
+    assert lock._api_base is None
+
+    # Nothing publishes a status, so binding at all proves the scan survived.
+    await lock._async_ensure_api_response_subscription()
+    assert await lock._async_resolve_api_base() == ZUI_API_BASE
+
+
+async def test_a_disconnect_with_no_transport_left_invalidates_nothing_shared(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    With the response channel gone there is no probe, and so no evidence.
+
+    A call whose transport is released under it fails as a disconnect, and
+    the gateway cannot be asked about it -- so the shared answer is left for
+    whoever can ask.
+    """
+    lock = zui_scan_lock_provider
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    task = await async_start_gateway_resolution(hass, lock)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+
+    pending = asyncio.create_task(lock._async_api_call("getUsersCount", []))
+    await hass.async_block_till_done()
+    lock._release_api_subscription()
+    with pytest.raises(LockDisconnected, match="transport released"):
+        await pending
+
+    await lock._async_ensure_api_response_subscription()
+    assert await lock._async_resolve_api_base() == ZUI_API_BASE
 
 
 async def test_lock_without_an_identifier_cannot_be_resolved() -> None:
@@ -890,12 +975,18 @@ async def test_node_commands_wait_on_the_mesh_budget(
     UsersNumberGet addressed to the lock (node-zwave-js
     ``UserCodeCCAPI.getUsersCount``), so it queues behind the same wake
     schedule as a code read and must not be cut short.
+
+    Asserted as an ordering rather than as an absence: the timeout is
+    followed by the gateway-local probe that decides whether the binding or
+    only the node is at fault, so both budgets are spent and which came first
+    is what says the node command got the mesh one.
     """
     with record_wait_budgets() as budgets, pytest.raises(LockDisconnected):
         await zui_gateway_resolved._async_user_code_command(method, [])
 
-    assert FAST_API_CALL_TIMEOUT in budgets
-    assert FAST_GATEWAY_LOCAL_TIMEOUT not in budgets
+    assert budgets.index(FAST_API_CALL_TIMEOUT) < budgets.index(
+        FAST_GATEWAY_LOCAL_TIMEOUT
+    )
 
 
 def test_operations_are_paced_wider_than_the_base_default() -> None:

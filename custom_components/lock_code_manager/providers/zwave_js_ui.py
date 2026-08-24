@@ -1152,17 +1152,66 @@ class ZWaveJSUILock(BaseMqttLock):
         try:
             return await self._async_api_call_at(api_base, api_name, args)
         except LockDisconnected:
-            self._forget_api_base()
+            await self._async_reappraise_binding(api_base)
             raise
+
+    async def _async_reappraise_binding(self, api_base: str) -> None:
+        """
+        Decide how much of a failed call's binding to throw away.
+
+        Every api this provider makes for a lock is a ``sendCommand`` that
+        waits on the mesh, so a FLiRS lock missing its wake window times one
+        out routinely -- the very reason the budget is a minute. That is a
+        slow node, not a gateway at the wrong address, and the two were
+        indistinguishable here: any disconnect dropped the SHARED scan result
+        every lock on the prefix binds from, sending all of them rescanning
+        into the same command queue that was already too slow to answer.
+
+        So the gateway is asked directly. ``getInfo`` is served from its own
+        cached driver state on the local budget, puts nothing on the mesh, and
+        a gateway that answers with this lock's network is exactly the gateway
+        the binding names -- it keeps it. An answer from some other network
+        means the address now belongs to somebody else, which is as stale as
+        no answer at all.
+
+        The instance's own base goes either way. Re-resolving it is a
+        dictionary read while the shared answer stands, and the correct thing
+        to do when it does not.
+
+        With no response subscription there is nothing to probe with, and a
+        transport released out from under a call says nothing about the
+        gateway, so nothing shared is touched.
+        """
+        self._forget_api_base()
+        if self._api_response_topic is None:
+            return
+        home_hex, _ = self._require_node()
+        if await self._async_probe_home_id(api_base) == int(home_hex, 16):
+            LOGGER.debug(
+                "Lock %s: gateway %s still answers for network %s, so the call "
+                "failed on the node rather than the binding",
+                self.lock.entity_id,
+                api_base,
+                home_hex,
+            )
+            return
+        self._invalidate_gateway_scan()
 
     @callback
     def _forget_api_base(self) -> None:
-        """
-        Drop the resolved gateway, and any scan result that produced it.
+        """Drop this instance's resolved gateway, leaving any shared scan intact."""
+        self._api_base = None
 
-        A binding that stopped answering is stale for every lock that shares
-        it: they were all told the same gateway sits at the same address, and
-        the scan that said so has to run again rather than be replayed.
+    @callback
+    def _invalidate_gateway_scan(self) -> None:
+        """
+        Drop the scan result that produced this binding, for every lock sharing it.
+
+        Reserved for evidence about the GATEWAY rather than about one call:
+        they were all told the same gateway sits at the same address, so once
+        that stops being true the scan has to run again rather than be
+        replayed. Anything short of that leaves it alone -- a wiped scan costs
+        every lock behind the gateway a fresh discovery window.
         """
         self._api_base = None
         if (key := self._scan_key) is None:
@@ -1309,10 +1358,18 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         Drop the api response subscription and everything that depended on it.
 
-        The resolved gateway goes too: whatever brought us here (a reconnect,
-        an unload) can be followed by a renamed gateway, a different broker,
-        or a rebuilt topology, so the next api call rediscovers rather than
-        publishing at a base nobody listens on. Idempotent.
+        This instance's resolved gateway goes too: whatever brought us here (a
+        reconnect, an unload) can be followed by a renamed gateway, a
+        different broker, or a rebuilt topology, so the next api call
+        re-resolves rather than publishing at a base nobody listens on.
+
+        The SHARED scan result deliberately does not. Releasing a transport
+        is something this instance did, not something the gateway did, and
+        every borrowed provider does it on the way out -- so wiping the
+        cross-lock answer here made an unmanaged sweep of N locks pay N full
+        discovery windows instead of one, and made a connection blip cost the
+        same. Only ``_async_reappraise_binding``, which has actually asked the
+        gateway, invalidates that. Idempotent.
         """
         if (unsub := self._api_response_unsub) is not None:
             self._api_response_unsub = None
