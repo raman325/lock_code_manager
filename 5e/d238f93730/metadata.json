@@ -3,7 +3,7 @@
   "checkpoint_id": "5ed238f93730",
   "strategy": "manual-commit",
   "branch": "feat/unmanaged-clear-link-health",
-  "checkpoints_count": 1,
+  "checkpoints_count": 18,
   "files_touched": [
     "custom_components/lock_code_manager/providers/_base.py",
     "custom_components/lock_code_manager/repairs.py"
@@ -14,6 +14,13 @@
       "transcript": "/5e/d238f93730/0/full.jsonl",
       "compact_transcript": "/5e/d238f93730/0/transcript.jsonl",
       "content_hash": "/5e/d238f93730/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/5e/d238f93730/1/metadata.json",
+      "transcript": "/5e/d238f93730/1/full.jsonl",
+      "compact_transcript": "/5e/d238f93730/1/transcript.jsonl",
+      "content_hash": "/5e/d238f93730/1/content_hash.txt",
       "prompt": ""
     }
   ],
