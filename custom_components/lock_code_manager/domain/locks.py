@@ -11,7 +11,7 @@ from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, callback, split_entity_id
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -19,6 +19,7 @@ from homeassistant.helpers import (
 )
 
 from ..providers import BaseLock, resolve_provider_class_for_entity
+from .exceptions import UnclaimedLockError
 from .queries import iter_loaded_lcm_entries
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ def async_create_lock_instance(
     if lock_cls is None:
         # Selection-time validation and this guard share one rule: never
         # guess a provider for an unclaimed lock.
-        raise HomeAssistantError(
+        raise UnclaimedLockError(
             f"No Lock Code Manager provider claims {lock_entity_id} "
             f"(platform {lock_entry.platform})"
         )

@@ -100,7 +100,11 @@ from .domain.config import (
     parse_slot_device_identifier,
     parse_slot_unique_id,
 )
-from .domain.exceptions import LockDisconnected, LockOperationFailed
+from .domain.exceptions import (
+    LockDisconnected,
+    LockOperationFailed,
+    UnclaimedLockError,
+)
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
@@ -1339,10 +1343,10 @@ async def async_remove_config_entry_device(
 
 @callback
 def _async_report_dropped_lock(
-    hass: HomeAssistant, lock_entity_id: str, err: BaseException
+    hass: HomeAssistant, lock_entity_id: str, err: UnclaimedLockError
 ) -> None:
     """
-    Raise a repair for a configured lock that could not be set up at all.
+    Raise a repair for a configured lock no provider claims.
 
     Distinct from ``lock_setup_failed``, which describes a lock that is
     still in the entry with its entities present but unavailable. This
@@ -1354,6 +1358,11 @@ def _async_report_dropped_lock(
     before selection-time validation existed, holding an mqtt lock whose
     bridge no provider speaks. Nobody ever told those users, so the
     repair names the entity and quotes what refused it.
+
+    Narrowly typed on purpose. The text diagnoses an unsupported bridge and
+    asks the user to remove the entity, which is only the right advice for
+    that one failure; raised on any exception that escaped setup it told
+    users with a perfectly good lock and a provider bug to throw the lock out.
     """
     async_create_issue(
         hass,
@@ -1430,6 +1439,14 @@ async def _async_setup_new_locks(
 
     added_locks: list[BaseLock] = []
     for lock_entity_id, result in zip(locks_to_add, setup_results, strict=True):
+        if isinstance(result, asyncio.CancelledError):
+            # ``return_exceptions=True`` aggregates a cancelled child rather
+            # than propagating it, so cancellation has to be re-raised by hand
+            # or Home Assistant shutting down looks exactly like a lock that
+            # could not be set up -- and left a persistent repair blaming an
+            # unsupported bridge, surviving the restart that cleared the
+            # actual condition.
+            raise result
         if isinstance(result, BaseException):
             # Transport failures degrade inside async_setup_internal, and
             # structural validation failures are logged there and kept
@@ -1447,7 +1464,12 @@ async def _async_setup_new_locks(
                 exc_info=result,
             )
             runtime_data.locks.pop(lock_entity_id, None)
-            _async_report_dropped_lock(hass, lock_entity_id, result)
+            if isinstance(result, UnclaimedLockError):
+                # Only this failure has a diagnosis and an action to offer.
+                # Any other exception is a bug in a provider LCM does speak,
+                # and a repair telling that user their bridge is unsupported
+                # sends them to remove a lock that works.
+                _async_report_dropped_lock(hass, lock_entity_id, result)
             continue
 
         added_locks.append(result)
