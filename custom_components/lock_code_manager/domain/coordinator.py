@@ -384,6 +384,28 @@ class LockUsercodeUpdateCoordinator(
                     self._lock.lock.entity_id,
                     new_interval.total_seconds(),
                 )
+        elif self._original_update_interval is None and not self._reached_once:
+            # A push provider polls on no timer, so the recovery probe above
+            # can never start from a cold start: tripping the breaker takes
+            # repeated polls and nothing is scheduling them. One failed first
+            # load would strand every entity unavailable until a reload, which
+            # re-runs the same first load into the same wall. Poll on the base
+            # backoff cadence until the coordinator is seeded once -- a lock
+            # that was merely asleep at startup (a FLiRS battery lock, say)
+            # then recovers on its own. Second-guessing a poll provider's own
+            # cadence is not this arm's business, hence the interval check.
+            # ``_reset_backoff`` restores the push cadence on first success,
+            # and the breaker's escalating delay takes over above once it
+            # trips.
+            retry_interval = timedelta(seconds=BACKOFF_INITIAL_SECONDS)
+            if self.update_interval != retry_interval:
+                self.update_interval = retry_interval
+                _LOGGER.debug(
+                    "Initial load for %s has not succeeded yet; retrying every "
+                    "%ds until the lock answers",
+                    self._lock.lock.entity_id,
+                    BACKOFF_INITIAL_SECONDS,
+                )
 
         # Only a lock that was reached at least once can go "offline". A lock
         # that has never been reached is still coming up (e.g. its integration

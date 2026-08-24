@@ -729,6 +729,135 @@ async def test_backoff_push_provider_polls_to_probe_recovery(
     assert push_coordinator.update_interval is None
 
 
+async def test_push_initial_load_failure_schedules_retry(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """
+    A push provider's failed initial load retries before the breaker trips.
+
+    A push provider polls on no timer at all, so the recovery probe above can
+    never start from a cold start: tripping the breaker takes repeated polls,
+    and there is nothing scheduling them. One failed first load would strand
+    every entity unavailable until a reload -- which re-runs the same first
+    load and hits the same wall. Until the coordinator has been seeded once,
+    a failure schedules a retry at the base backoff cadence.
+    """
+    assert push_coordinator.update_interval is None
+    assert push_coordinator._reached_once is False
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("asleep at boot"))
+    with (
+        patch.object(push_lock, "async_internal_get_usercodes", mock_get),
+        pytest.raises(UpdateFailed),
+    ):
+        await push_coordinator.async_get_usercodes()
+
+    # One failure is far below the trip threshold, yet a retry is scheduled
+    # because the lock has never been reached.
+    assert push_coordinator._lock_breaker.failure_count == 1
+    assert push_coordinator.unreachable is False
+    assert push_coordinator.update_interval == timedelta(
+        seconds=BACKOFF_INITIAL_SECONDS
+    )
+
+    mock_ok = AsyncMock(return_value={1: SlotCredential.known("1234")})
+    with patch.object(push_lock, "async_internal_get_usercodes", mock_ok):
+        await push_coordinator.async_get_usercodes()
+
+    # Reached at last: push cadence (no timer) resumes.
+    assert push_coordinator._reached_once is True
+    assert push_coordinator.update_interval is None
+
+
+async def test_poll_initial_load_failure_keeps_poll_cadence(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """
+    A poll provider's failed initial load leaves its own cadence alone.
+
+    The retry arm exists only because a push provider has no timer; a poll
+    provider already has one, and overriding it with the backoff cadence
+    would re-pace a lock its provider paced deliberately. The scan interval
+    here is chosen to differ from that cadence -- at the base default the two
+    coincide and the assertion below would hold either way.
+    """
+    scan_interval = timedelta(seconds=BACKOFF_INITIAL_SECONDS * 7)
+    with patch.object(type(poll_lock), "usercode_scan_interval", scan_interval):
+        coordinator = _make_coordinator(hass, poll_lock, lcm_config_entry)
+        assert coordinator.update_interval == scan_interval
+
+        mock_get = AsyncMock(side_effect=LockDisconnected("asleep at boot"))
+        with (
+            patch.object(poll_lock, "async_internal_get_usercodes", mock_get),
+            pytest.raises(UpdateFailed),
+        ):
+            await coordinator.async_get_usercodes()
+
+    assert coordinator.unreachable is False
+    assert coordinator.update_interval == scan_interval
+
+
+async def test_push_failure_after_first_success_does_not_start_polling(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """
+    Once seeded, a push provider's stray failure leaves it on no timer.
+
+    The retry arm only exists to get the coordinator its first data; after
+    that the entities have values to show and the breaker owns escalation.
+    Polling on every blip would give a push provider a poll cadence it never
+    asked for and never sheds until a success.
+    """
+    mock_ok = AsyncMock(return_value={1: SlotCredential.known("1234")})
+    with patch.object(push_lock, "async_internal_get_usercodes", mock_ok):
+        await push_coordinator.async_get_usercodes()
+    assert push_coordinator._reached_once is True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("one bad poll"))
+    with (
+        patch.object(push_lock, "async_internal_get_usercodes", mock_get),
+        pytest.raises(UpdateFailed),
+    ):
+        await push_coordinator.async_get_usercodes()
+
+    assert push_coordinator.unreachable is False
+    assert push_coordinator.update_interval is None
+
+
+async def test_push_retry_yields_to_the_breaker_once_it_trips(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """
+    The initial-load retry composes with the breaker instead of fighting it.
+
+    Both arms want to set an update interval on a lock that normally has
+    none. The breaker's backoff grows with each failure and is the one that
+    has to win, or a lock that is genuinely down would be probed forever at
+    the initial cadence.
+    """
+    mock_get = AsyncMock(side_effect=LockDisconnected("still asleep"))
+    with patch.object(push_lock, "async_internal_get_usercodes", mock_get):
+        # Two failures past the threshold, so the escalated delay is distinct
+        # from the initial cadence the retry arm would set.
+        for _ in range(BACKOFF_FAILURE_THRESHOLD + 2):
+            with pytest.raises(UpdateFailed):
+                await push_coordinator.async_get_usercodes()
+
+    assert push_coordinator._reached_once is False
+    assert push_coordinator.unreachable is True
+    assert push_coordinator.update_interval == timedelta(
+        seconds=BACKOFF_INITIAL_SECONDS * 4
+    )
+    assert (
+        push_coordinator.update_interval == push_coordinator._lock_breaker.backoff_delay
+    )
+
+
 async def test_note_connectivity_failure_kicks_probe_for_push(
     hass: HomeAssistant,
     push_coordinator: LockUsercodeUpdateCoordinator,
