@@ -2077,6 +2077,38 @@ async def test_options_flow_rejects_unclaimed_mqtt_lock(
     assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID]
 
 
+async def test_options_flow_renders_lock_and_users_errors_together(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    One submission that is wrong in two ways comes back complaining about both.
+
+    The lock check accumulates into the same error dict the users validation
+    writes to, under a different key, instead of short-circuiting it. Without
+    that, fixing the lock would only reveal the next complaint, so the user
+    pays a round trip per mistake.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    flow_id, _ = await _start_options_flow(hass)
+
+    result = await hass.config_entries.options.async_configure(
+        flow_id,
+        {
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+            # Enabled with no PIN is invalid per schema.
+            CONF_USERS: {"Raman": {CONF_ENABLED: True}},
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    assert result["errors"] == {
+        CONF_LOCKS: "unsupported_mqtt_lock",
+        "base": "invalid_config",
+    }
+    assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+
+
 async def test_reauth_rejects_unclaimed_mqtt_lock(
     hass: HomeAssistant,
     mock_lock_config_entry,

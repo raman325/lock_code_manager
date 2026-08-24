@@ -674,16 +674,17 @@ class TestNodeSubscriptionLifecycle:
         assert lock._subscribed_node_topic is None
 
 
-async def test_a_poll_re_ensures_the_subscription(
+async def test_a_scheduled_read_re_ensures_the_subscription(
     hass: HomeAssistant,
     zui_gateway_resolved: ZWaveJSUILock,
     zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
-    The scheduled poll is what heals a subscription that drifted silently.
+    A scheduled read is what heals a subscription that drifted silently.
 
-    A rename produces no disconnect, so nothing else would notice; the poll
-    is the only recurring visit the provider makes.
+    A rename produces no disconnect, so nothing else would notice. With push
+    supported the coordinator schedules no poll, which leaves the hourly hard
+    refresh -- routed through this same read -- as the only recurring visit.
     """
     lock = zui_gateway_resolved
     zui_api_responder.set_result("sendCommand", {"userIdStatus": 0})

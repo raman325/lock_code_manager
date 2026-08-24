@@ -181,52 +181,63 @@ async def test_state_topic_without_mqtt_debug_info(
     assert zui_lock_with_device._resolve_state_topic() is None
 
 
-@pytest.mark.parametrize(
-    ("entities", "reason"),
-    [
-        pytest.param(
-            [{"entity_id": "lock.other", "discovery_data": {}}],
-            "the device carries no entry for this entity",
-            id="entity-absent",
-        ),
-        pytest.param(None, "discovery data with no payload at all", id="no-payload"),
-        pytest.param(
-            "zwave/nodeID_20/98/0/currentMode",
-            "a payload that is not a mapping",
-            id="payload-not-a-mapping",
-        ),
-        pytest.param({}, "a payload carrying no state topic", id="payload-empty"),
-        pytest.param(
-            {"state_topic": ""}, "an empty state topic", id="state-topic-empty"
-        ),
-    ],
-)
-async def test_unusable_discovery_data_resolves_nothing(
-    hass: HomeAssistant,
-    zui_lock_discovered: er.RegistryEntry,
-    entities: object,
-    reason: str,
+async def test_discovery_data_for_other_entities_only_resolves_nothing(
+    hass: HomeAssistant, zui_lock_discovered: er.RegistryEntry
 ) -> None:
     """
-    Unusable discovery data resolves to nothing rather than a guessed topic.
+    A device whose discovery data carries no entry for this entity resolves nothing.
 
     Callers read None as disconnected, which is the safe reading: the
     alternative is reconstructing a node topic from the device name, and a
     gateway with a location or a renamed node publishes nowhere near it.
     """
     lock = build_zui_lock(hass, zui_lock_discovered)
-    if isinstance(entities, list):
-        info = {"entities": entities}
-    else:
-        discovery_data = {} if entities is None else {"payload": entities}
-        info = {
-            "entities": [
-                {
-                    "entity_id": zui_lock_discovered.entity_id,
-                    "discovery_data": discovery_data,
-                }
-            ]
-        }
+    info = {"entities": [{"entity_id": "lock.other", "discovery_data": {}}]}
+
+    with patch.object(mqtt_debug_info, "info_for_device", return_value=info):
+        assert lock._resolve_state_topic() is None
+
+
+@pytest.mark.parametrize(
+    ("discovery_data_override", "reason"),
+    [
+        pytest.param({}, "discovery data with no payload at all", id="no-payload"),
+        pytest.param(
+            {"payload": "zwave/nodeID_20/98/0/currentMode"},
+            "a payload that is not a mapping",
+            id="payload-not-a-mapping",
+        ),
+        pytest.param(
+            {"payload": {}}, "a payload carrying no state topic", id="payload-empty"
+        ),
+        pytest.param(
+            {"payload": {"state_topic": ""}},
+            "an empty state topic",
+            id="state-topic-empty",
+        ),
+    ],
+)
+async def test_unusable_discovery_payload_resolves_nothing(
+    hass: HomeAssistant,
+    zui_lock_discovered: er.RegistryEntry,
+    discovery_data_override: dict,
+    reason: str,
+) -> None:
+    """
+    An entry this entity does own, but whose payload is unusable, resolves nothing.
+
+    Same safe reading as an absent entry: None means disconnected, never a
+    topic guessed from the device name.
+    """
+    lock = build_zui_lock(hass, zui_lock_discovered)
+    info = {
+        "entities": [
+            {
+                "entity_id": zui_lock_discovered.entity_id,
+                "discovery_data": discovery_data_override,
+            }
+        ]
+    }
 
     with patch.object(mqtt_debug_info, "info_for_device", return_value=info):
         assert lock._resolve_state_topic() is None
