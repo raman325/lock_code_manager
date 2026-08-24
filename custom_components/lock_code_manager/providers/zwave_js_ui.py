@@ -724,24 +724,44 @@ class ZWaveJSUILock(BaseLock):
 
         One wildcard covers them all, so the disambiguating getInfo calls
         resolution may make are correlated by the same subscription that
-        carries ordinary traffic. Idempotent.
+        carries ordinary traffic. Idempotent and drift-aware, for the same
+        reason ``_node_subscription_current`` is.
+
+        Idempotence is on the topic, not on "is one set". Publishes follow
+        whatever prefix resolves now, so an operator who changes the
+        gateway's prefix -- discovery republishes, the new prefix resolves --
+        would otherwise leave this on the old one: every call times out,
+        which drops the cached base and re-resolves it to the same new
+        prefix, and a set-or-not guard passes again. That loop sustains
+        itself, and an api-only lock cannot fall out of it the way a push
+        lock eventually does, because the connection-transition teardown that
+        releases this subscription is gated on ``supports_push``.
 
         A prefix that cannot be resolved yet is an expected startup condition
         -- Home Assistant's MQTT discovery data lands asynchronously -- so
-        this logs and returns. Refusing to publish without a live subscription
-        is ``_async_resolve_api_base``'s job.
+        this logs and returns, leaving any live subscription alone: discovery
+        data going transiently missing is not a prefix that moved. Refusing
+        to publish without a settled subscription is
+        ``_async_resolve_api_base``'s job.
         """
-        if self._api_response_topic is not None:
-            return
         if (prefix := self._gateway_prefix()) is None:
-            LOGGER.info(
-                "Lock %s: no zwave-js-ui topic prefix in discovery data yet; "
-                "the api response subscription will be established once it "
-                "arrives",
-                self.lock.entity_id,
-            )
+            if self._api_response_topic is None:
+                LOGGER.info(
+                    "Lock %s: no zwave-js-ui topic prefix in discovery data yet; "
+                    "the api response subscription will be established once it "
+                    "arrives",
+                    self.lock.entity_id,
+                )
             return
         response_topic = f"{prefix}/_CLIENTS/+/api/+"
+        if self._api_response_topic == response_topic:
+            return
+
+        # Moved, or first subscribe. The release drops the cached base along
+        # with the subscription, which is what a new prefix requires: the old
+        # base named a gateway at an address that no longer carries this
+        # lock's traffic.
+        self._release_api_subscription()
         self._api_response_unsub = await self._async_subscribe(
             response_topic, self._api_response_received
         )
@@ -770,14 +790,19 @@ class ZWaveJSUILock(BaseLock):
         if (prefix := self._gateway_prefix()) is None:
             raise LockDisconnected("Cannot resolve gateway prefix from discovery data")
 
-        if self._api_response_topic is None:
-            # Get it up for the next attempt, but refuse this one. Home
-            # Assistant defers the wire SUBSCRIBE behind a debouncer while a
-            # publish goes out immediately, so publishing into a subscription
-            # made in the same breath loses the answer -- and zwave-js-ui
-            # sends api responses unretained. The caller's failure is a
-            # disconnect, so the coordinator's backoff schedules the retry.
-            await self._async_ensure_api_response_subscription()
+        # Ensure rather than merely check: this is where an api-only lock
+        # passes often enough to notice that the prefix moved under it, and
+        # the only place a lock with no push lifecycle ever resubscribes.
+        settled_topic = self._api_response_topic
+        await self._async_ensure_api_response_subscription()
+        if settled_topic is None or settled_topic != self._api_response_topic:
+            # The subscription carrying this call is brand new, so get it up
+            # for the next attempt but refuse this one. Home Assistant defers
+            # the wire SUBSCRIBE behind a debouncer while a publish goes out
+            # immediately, so publishing into a subscription made in the same
+            # breath loses the answer -- and zwave-js-ui sends api responses
+            # unretained. The caller's failure is a disconnect, so the
+            # coordinator's backoff schedules the retry.
             raise LockDisconnected(
                 f"No settled zwave-js-ui api response subscription for "
                 f"{self.lock.entity_id} yet"

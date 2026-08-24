@@ -955,6 +955,96 @@ async def test_resolution_refuses_to_publish_into_an_unsettled_subscription(
     assert await lock._async_resolve_api_base() == ZUI_API_BASE
 
 
+async def test_a_changed_gateway_prefix_moves_the_api_subscription(
+    hass: HomeAssistant,
+    mqtt_mock,
+    mqtt_teardown,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    An operator who changes the gateway's prefix must not strand the lock.
+
+    Publishes follow the prefix that resolves now, so a subscription kept on
+    "is one set" rather than "does it cover this" stays on the old one: every
+    call times out, which drops the cached base and re-resolves it to the
+    same new prefix, and the guard passes again. That loop sustains itself.
+    An api-only lock cannot even fall out of it the way a push lock
+    eventually does, because the connection-transition teardown that would
+    release the subscription is gated on ``supports_push``.
+
+    The lock here is api-only for exactly that reason: a MANUAL gateway's
+    custom state topic carries no node address, so there is no push
+    subscription and no teardown to be rescued by.
+    """
+    manual_topic = "custom/lock/state"
+    new_prefix = "zwave2"
+    lock = build_zui_lock(
+        hass, await async_discover_zui_lock(hass, state_topic=manual_topic)
+    )
+    assert lock.supports_push is False
+
+    await lock.async_setup(MagicMock())
+    assert lock._api_response_topic == f"{ZUI_PREFIX}/_CLIENTS/+/api/+"
+
+    # Working on the original prefix, with the gateway bound and cached.
+    zui_api_responder.set_result("sendCommand", 30)
+    assert await lock.async_get_max_slot() == 30
+    assert lock._api_base == ZUI_API_BASE
+
+    def _only_the_moved_gateway(
+        api_base: str, _request: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Answer as a gateway that now lives under the new prefix only."""
+        if not api_base.startswith(f"{new_prefix}/"):
+            return None
+        return {"success": True, "result": 30}
+
+    zui_api_responder.set_handler("sendCommand", _only_the_moved_gateway)
+
+    # The gateway moved and republished its discovery payload.
+    await async_discover_zui_lock(hass, prefix=new_prefix, state_topic=manual_topic)
+
+    # The cached base still names the old prefix, where nothing answers now.
+    with pytest.raises(LockDisconnected, match="Timed out waiting"):
+        await lock.async_get_max_slot()
+
+    # Resolution now finds the new prefix, and the subscription has to follow
+    # it. Refusing this attempt is the same debounce-settling rule a first
+    # subscription obeys -- the answer to a call published now would arrive
+    # before the broker knew to route it.
+    with pytest.raises(LockDisconnected, match="No settled zwave-js-ui api response"):
+        await lock.async_get_max_slot()
+    assert lock._api_response_topic == f"{new_prefix}/_CLIENTS/+/api/+"
+
+    # Healed: the next attempt reaches the gateway at its new address.
+    assert await lock.async_get_max_slot() == 30
+
+
+async def test_a_transiently_unresolvable_prefix_keeps_the_subscription(
+    hass: HomeAssistant, zui_gateway_resolved: ZWaveJSUILock
+) -> None:
+    """
+    Discovery data going missing is not a prefix that moved.
+
+    Tearing a working subscription down because a lookup came back empty
+    would drop api traffic for a lock that never changed address, and the
+    resubscribe would race the next publish.
+    """
+    lock = zui_gateway_resolved
+    settled = lock._api_response_topic
+    unsub = lock._api_response_unsub
+
+    with (
+        patch.object(lock, "_gateway_prefix", return_value=None),
+        record_subscribed_topics() as topics,
+    ):
+        await lock._async_ensure_api_response_subscription()
+
+    assert topics == []
+    assert lock._api_response_topic == settled
+    assert lock._api_response_unsub is unsub
+
+
 async def test_unload_releases_the_api_subscription(
     zui_gateway_resolved: ZWaveJSUILock,
 ) -> None:
