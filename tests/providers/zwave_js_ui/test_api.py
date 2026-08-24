@@ -560,11 +560,12 @@ async def test_unload_releases_the_api_subscription(
     zui_gateway_resolved: ZWaveJSUILock,
 ) -> None:
     """
-    Unloading releases the api subscription, which no push gate covers.
+    Unloading releases the api subscription along with the push one.
 
-    ``supports_push`` is false, so the base class skips its push teardown
-    entirely. Without this override every reload would orphan a wildcard
-    subscription holding a dead provider.
+    The api transport has its own lifetime and is deliberately not in the
+    push-unsub registry, so it is only released because teardown reaches for
+    it by name. Miss that and every reload orphans a wildcard subscription
+    holding a dead provider.
     """
     lock = zui_gateway_resolved
     assert lock._api_response_unsub is not None

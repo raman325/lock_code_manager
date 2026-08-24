@@ -21,6 +21,7 @@ from homeassistant.components.mqtt import (
 )
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import HomeAssistantError
 
@@ -34,6 +35,7 @@ from ..domain.credentials import (
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._base import BaseLock
+from ._util import parse_slot_num
 from .const import LOGGER
 
 # HA discovery device identifier published by zwave-js-ui
@@ -69,6 +71,30 @@ VALUE_TOPIC_SEGMENTS = 3
 # topic. Anything shorter was not built by the gateway's naming scheme.
 MIN_VALUE_TOPIC_SEGMENTS = VALUE_TOPIC_SEGMENTS + 2
 
+# Slot values and keypad notifications both publish under
+# ``<cc>/<endpoint>/<property>/<propertyKey>``.
+NODE_VALUE_SEGMENTS = 4
+# Topic segments the two gateway naming styles spell these command classes
+# with: VALUEID uses the numeric id, NAMED the zwave-js command class name.
+# The literals are the enum values imported above, written out because they
+# are compared against topic text.
+_USER_CODE_CC_SEGMENTS = frozenset({str(int(CC_USER_CODE)), "user_code"})
+_NOTIFICATION_CC_SEGMENTS = frozenset({str(int(CC_NOTIFICATION)), "notification"})
+# Notification CC label for lock operations, sanitized into a topic segment
+# (whitespace becomes ``_``); compared case-insensitively.
+NOTIFICATION_ACCESS_CONTROL = "access_control"
+# The two Access Control events that name the code slot that operated the
+# lock. Everything else under the label (manual, RF, jams) names no slot.
+_KEYPAD_EVENT_TO_LOCKED = {
+    "keypad_lock_operation": True,
+    "keypad_unlock_operation": False,
+}
+
+
+def _is_endpoint_zero(segment: str) -> bool:
+    """Return whether a topic segment addresses endpoint 0 in either naming style."""
+    return segment in ("0", "endpoint_0")
+
 
 def parse_zwave_js_ui_identifier(identifier: str) -> tuple[str, int] | None:
     """Parse ``(home_hex, node_id)`` out of a zwave-js-ui device identifier."""
@@ -101,6 +127,29 @@ def _unwrap_mqtt_value(raw: bytes | str) -> Any:
     if isinstance(data, dict) and "value" in data:
         return data["value"]
     return data
+
+
+def _published_code(value: Any) -> str | None:
+    """
+    Read a published ``userCode`` value as a Personal Identification Number.
+
+    A raw-payload gateway publishes the bare value, so an all-digit code
+    arrives as a JSON number and unwraps to an int. ``str`` recovers the
+    digits it was published with exactly: JSON has no number form with a
+    leading zero, so a code that starts with one never parses as a number
+    and reaches here as the string it was written as.
+
+    Booleans are not codes (and ``True`` would otherwise stringify to a
+    PIN of ``"True"``), and neither is an empty or blank string -- which is
+    also how a withheld code and a cleared slot both look, indistinguishably.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
 
 def _project_user_code_result(result: Any) -> SlotCredential:
@@ -148,11 +197,25 @@ class ZWaveJSUILock(BaseLock):
     _pending_api_calls: dict[str, asyncio.Future[dict[str, Any]]] = field(
         init=False, default_factory=dict
     )
+    # Node topic the live wildcard subscription covers, or None when there is
+    # none. Unlike the api subscription above, this one IS the push lifecycle,
+    # so its unsub goes in the base's push-unsub registry.
+    _subscribed_node_topic: str | None = field(init=False, default=None)
 
     @property
     def domain(self) -> str:
         """Return integration domain."""
         return MQTT_DOMAIN
+
+    @property
+    def supports_push(self) -> bool:
+        """Return whether this lock supports push-based updates."""
+        return True
+
+    @property
+    def supports_code_slot_events(self) -> bool:
+        """Return whether this lock supports code slot events."""
+        return True
 
     @property
     def usercode_scan_interval(self) -> timedelta:
@@ -169,6 +232,10 @@ class ZWaveJSUILock(BaseLock):
     def hard_refresh_interval(self) -> timedelta | None:
         """Return interval for hard refresh."""
         return timedelta(hours=1)
+
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """Subscribe to the node topic before the coordinator runs its first poll."""
+        await self._async_ensure_node_subscription()
 
     def _parsed_identifier(self) -> tuple[str, int] | None:
         """Return ``(home_hex, node_id)`` from the device registry entry."""
@@ -281,6 +348,194 @@ class ZWaveJSUILock(BaseLock):
             raise LockDisconnected(
                 f"Failed to subscribe to {topic} for {self.lock.entity_id}: {err}"
             ) from err
+
+    @callback
+    def _process_node_message(self, topic: str, payload: bytes | str) -> None:
+        """
+        Classify one message from the node's wildcard subscription.
+
+        The subscription covers everything the node publishes, so most
+        messages here belong to other command classes and are dropped without
+        comment. The node-topic guard is per-instance rather than global:
+        Home Assistant hands a message to every matching subscription, and
+        two locks on one broker would otherwise read each other's values.
+
+        The ``@callback`` decorator is load-bearing, for the same reason it
+        is on ``_api_response_received``: it keeps dispatch on the event
+        loop, so the coordinator pushes and event fires below happen where
+        Home Assistant expects them.
+        """
+        node_topic = self._subscribed_node_topic
+        if node_topic is None or not topic.startswith(f"{node_topic}/"):
+            return
+        segments = topic.removeprefix(f"{node_topic}/").split("/")
+        if len(segments) != NODE_VALUE_SEGMENTS:
+            return
+        command_class, endpoint, property_name, property_key = segments
+        if not _is_endpoint_zero(endpoint):
+            return
+        if command_class in _USER_CODE_CC_SEGMENTS:
+            self._process_user_code_value(property_name, property_key, payload)
+        elif command_class in _NOTIFICATION_CC_SEGMENTS:
+            self._process_notification(topic, property_name, property_key, payload)
+
+    @callback
+    def _process_user_code_value(
+        self, property_name: str, slot_segment: str, payload: bytes | str
+    ) -> None:
+        """
+        Confirm a slot from a User Code Command Class value publication.
+
+        The two properties are published separately, so each has to stand on
+        its own. A ``userCode`` carrying no usable code says nothing at all:
+        empty is how the gateway spells both a withheld code and a cleared
+        slot, and reading it as cleared would tell sync the code is gone.
+        ``userIdStatus`` is what carries occupancy, and only Available means
+        the slot holds nothing -- any other status leaves the code unknown.
+        """
+        if (slot_num := parse_slot_num(slot_segment)) is None:
+            return
+        value = _unwrap_mqtt_value(payload)
+        if property_name == "userCode" and (code := _published_code(value)) is not None:
+            self._confirm_slot(slot_num, SlotCredential.known(code))
+        elif (
+            property_name == "userIdStatus"
+            # ``True == 1`` and ``False == 0`` in Python, so a JSON boolean
+            # would otherwise report an occupied slot as Available. Same
+            # guard ``_project_user_code_result`` and ``homeid`` apply.
+            and not isinstance(value, bool)
+            and value == USER_ID_STATUS_AVAILABLE
+        ):
+            self._confirm_slot(slot_num, SlotCredential.empty())
+
+    @callback
+    def _process_notification(
+        self,
+        topic: str,
+        label: str,
+        event_label: str,
+        payload: bytes | str,
+    ) -> None:
+        """
+        Fire a code slot event for a keypad lock or unlock operation.
+
+        The value is the notification's parsed User Code Report, whose
+        ``userId`` is the slot that operated the lock. Raw-buffer parameters
+        arrive as a hex string instead and name nobody, so anything that is
+        not a dict with a numeric user id is dropped rather than guessed at.
+        """
+        if label.lower() != NOTIFICATION_ACCESS_CONTROL:
+            return
+        # ``False`` is a valid mapping value (an unlock), so this compares
+        # against None -- a truthiness test would drop every unlock event.
+        if (to_locked := _KEYPAD_EVENT_TO_LOCKED.get(event_label.lower())) is None:
+            return
+        value = _unwrap_mqtt_value(payload)
+        user_id = value.get("userId") if isinstance(value, dict) else None
+        if (code_slot := parse_slot_num(user_id)) is None:
+            LOGGER.debug(
+                "Lock %s: ignoring %s notification naming no code slot: %r",
+                self.lock.entity_id,
+                event_label,
+                value,
+            )
+            return
+        self.async_fire_code_slot_event(
+            code_slot=code_slot,
+            to_locked=to_locked,
+            action_text=event_label,
+            source_data={"topic": topic, "value": value},
+        )
+
+    async def _async_ensure_node_subscription(self) -> None:
+        """Subscribe to the node's value tree; idempotent and drift-aware."""
+        if not mqtt_config_entry_enabled(self.hass):
+            raise LockDisconnected("MQTT component not available")
+
+        resolved = self._prefix_and_node_topic()
+        if resolved is None:
+            if self._push_unsubs:
+                # Resolution is transiently unavailable; keep the existing
+                # subscription rather than tearing down a working one.
+                return
+            raise LockDisconnected(
+                f"Cannot subscribe for {self.lock.entity_id} — node topic not "
+                "resolvable from MQTT discovery data"
+            )
+        node_topic = resolved[1]
+
+        if self._push_unsubs and self._subscribed_node_topic == node_topic:
+            return
+
+        # Topic changed (a node rename republishes discovery) or first
+        # subscribe. The node subscription is the only thing this provider
+        # puts in the push-unsub registry -- the api transport is tracked
+        # separately -- so clearing all of them clears exactly this one.
+        self._clear_push_unsubs()
+        self._subscribed_node_topic = None
+
+        @callback
+        def message_received(msg: ReceiveMessage) -> None:
+            """Hand a node message to the classifier on the event loop."""
+            self._process_node_message(msg.topic, msg.payload)
+
+        unsub = await self._async_subscribe(f"{node_topic}/#", message_received)
+        self._register_push_unsub(unsub)
+        self._subscribed_node_topic = node_topic
+        LOGGER.debug(
+            "Subscribed to zwave-js-ui node topic %s for %s",
+            node_topic,
+            self.lock.entity_id,
+        )
+
+    @callback
+    def setup_push_subscription(self) -> None:
+        """
+        Subscribe via background task when still unsubscribed (e.g. reconnect).
+
+        Primary subscribe is ``await`` in ``async_setup``.
+        """
+        resolved = self._prefix_and_node_topic()
+        node_topic = resolved[1] if resolved else None
+        if self._push_unsubs and (
+            node_topic is None or self._subscribed_node_topic == node_topic
+        ):
+            return
+
+        if not node_topic:
+            raise LockDisconnected(
+                f"Cannot subscribe to push updates for {self.lock.entity_id} - "
+                "no node topic"
+            )
+
+        if not mqtt_config_entry_enabled(self.hass):
+            LOGGER.debug(
+                "Deferring MQTT push subscribe for %s — MQTT integration disabled",
+                self.lock.entity_id,
+            )
+            return
+
+        async def _subscribe_or_log() -> None:
+            """
+            Run ``_async_ensure_node_subscription`` from the reconnect task path.
+
+            Log errors only; sync ``setup_push_subscription`` cannot raise.
+            """
+            try:
+                await self._async_ensure_node_subscription()
+            except LockDisconnected as err:
+                LOGGER.debug(
+                    "Lock %s: push subscription deferred (disconnected): %s",
+                    self.lock.entity_id,
+                    err,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Lock %s: MQTT subscribe failed unexpectedly",
+                    self.lock.entity_id,
+                )
+
+        self.hass.async_create_task(_subscribe_or_log())
 
     @callback
     def _api_response_received(self, msg: ReceiveMessage) -> None:
@@ -529,6 +784,18 @@ class ZWaveJSUILock(BaseLock):
         """
         await self._async_ensure_operational()
 
+        # Node renames and gateway migrations produce no disconnect, so the
+        # poll is the only recurring visit that can notice the subscription
+        # has drifted off the topic discovery now points at.
+        try:
+            await self._async_ensure_node_subscription()
+        except LockDisconnected as err:
+            LOGGER.debug(
+                "Lock %s: could not refresh push subscription before poll: %s",
+                self.lock.entity_id,
+                err,
+            )
+
         # One request per index, so the caller's scope bounds the work.
         code_slots = self.managed_slots if slots is None else slots
         if not code_slots:
@@ -653,21 +920,13 @@ class ZWaveJSUILock(BaseLock):
     @callback
     def teardown_push_subscription(self) -> None:
         """
-        Release the api transport when the connection goes down.
+        Drop the node subscription and the api transport together.
 
-        Kept even though ``supports_push`` is still false: the base only
-        calls this on a connection-down transition today, and the unload path
-        is covered by ``async_unload`` instead.
+        The api subscription is not part of the push lifecycle, but it is
+        dead in exactly the circumstances that end the push one -- a
+        connection-down transition, an unload -- and nothing else runs on
+        both paths, so teardown owns both. Idempotent.
         """
-        self._release_api_subscription()
-
-    async def async_unload(self, remove_permanently: bool) -> None:
-        """
-        Unload lock, releasing the provider-lifetime api subscription.
-
-        The base only releases push subscriptions when ``supports_push`` is
-        true, so this one has to be released here or every reload orphans a
-        wildcard subscription holding a dead provider.
-        """
-        await super().async_unload(remove_permanently)
+        self._clear_push_unsubs()
+        self._subscribed_node_topic = None
         self._release_api_subscription()
