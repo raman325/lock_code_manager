@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
-from datetime import timedelta
 import json
 import re
 from typing import Any, Literal
@@ -359,25 +358,6 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         return self.supports_push
 
-    @property
-    def usercode_scan_interval(self) -> timedelta:
-        """
-        Return scan interval for usercodes.
-
-        Inert while ``supports_push`` is true: the coordinator leaves its
-        update interval unset for a push provider, so nothing schedules a poll
-        at this cadence and drift is caught by the hourly hard refresh instead.
-        This is the cadence an api-only lock actually runs at, spaced out
-        because every slot costs its own api round trip through the gateway
-        and the mesh.
-        """
-        return timedelta(minutes=5)
-
-    @property
-    def hard_refresh_interval(self) -> timedelta | None:
-        """Return interval for hard refresh."""
-        return timedelta(hours=1)
-
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Bring both subscriptions up before the coordinator runs its first poll.
@@ -686,44 +666,11 @@ class ZWaveJSUILock(BaseMqttLock):
         Primary subscribe is ``await`` in ``async_setup``.
         """
         resolved = self._prefix_and_node_topic()
-        node_topic = resolved[1] if resolved else None
-        if self._node_subscription_current(node_topic):
-            return
-
-        if node_topic is None:
-            raise LockDisconnected(
-                f"Cannot subscribe to push updates for {self.lock.entity_id} - "
-                "no node topic"
-            )
-
-        if not mqtt_config_entry_enabled(self.hass):
-            LOGGER.debug(
-                "Deferring MQTT push subscribe for %s — MQTT integration disabled",
-                self.lock.entity_id,
-            )
-            return
-
-        async def _subscribe_or_log() -> None:
-            """
-            Run ``_async_ensure_node_subscription`` from the reconnect task path.
-
-            Log errors only; sync ``setup_push_subscription`` cannot raise.
-            """
-            try:
-                await self._async_ensure_node_subscription()
-            except LockDisconnected as err:
-                LOGGER.debug(
-                    "Lock %s: push subscription deferred (disconnected): %s",
-                    self.lock.entity_id,
-                    err,
-                )
-            except Exception:
-                LOGGER.exception(
-                    "Lock %s: MQTT subscribe failed unexpectedly",
-                    self.lock.entity_id,
-                )
-
-        self.hass.async_create_task(_subscribe_or_log())
+        self._schedule_push_subscription(
+            resolved[1] if resolved else None,
+            self._async_ensure_node_subscription,
+            "node topic",
+        )
 
     @callback
     def _api_response_received(self, msg: ReceiveMessage) -> None:
@@ -1245,10 +1192,6 @@ class ZWaveJSUILock(BaseMqttLock):
         if isinstance(result, int) and not isinstance(result, bool) and result > 0:
             return result
         return None
-
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Perform hard refresh and return all codes."""
-        return await self.async_get_usercodes()
 
     @callback
     def _release_api_subscription(self) -> None:

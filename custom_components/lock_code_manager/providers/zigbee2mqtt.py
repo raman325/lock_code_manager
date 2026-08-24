@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from datetime import timedelta
 from functools import partial
 import json
 from typing import Any, Literal, NoReturn
@@ -138,24 +137,6 @@ class Zigbee2MQTTLock(BaseMqttLock):
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
         return True
-
-    @property
-    def usercode_scan_interval(self) -> timedelta:
-        """
-        Return scan interval for usercodes.
-
-        Inert as long as ``supports_push`` is true: the coordinator leaves its
-        update interval unset for a push provider, so nothing schedules a poll
-        at this cadence and drift is caught by the hourly hard refresh instead.
-        This is the fallback the coordinator would use if push were ever
-        unsupported or disabled.
-        """
-        return timedelta(minutes=5)
-
-    @property
-    def hard_refresh_interval(self) -> timedelta | None:
-        """Return interval for hard refresh."""
-        return timedelta(hours=1)
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Subscribe to the device topic before the coordinator runs its first poll."""
@@ -447,47 +428,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
 
         Primary subscribe is ``await`` in ``async_setup``.
         """
-        topic = self._get_topic()
-        if self._push_unsubs and (topic is None or self._subscribed_topic == topic):
-            return
-
-        if not topic:
-            LOGGER.debug(
-                "Cannot subscribe to push updates for %s - no topic",
-                self.lock.entity_id,
-            )
-            raise LockDisconnected(
-                f"Cannot subscribe to push updates for {self.lock.entity_id} - no topic"
-            )
-
-        if not mqtt_config_entry_enabled(self.hass):
-            LOGGER.debug(
-                "Deferring MQTT push subscribe for %s — MQTT integration disabled",
-                self.lock.entity_id,
-            )
-            return
-
-        async def _subscribe_or_log() -> None:
-            """
-            Run ``_async_ensure_device_subscription`` from the reconnect task path.
-
-            Log errors only; sync ``setup_push_subscription`` cannot raise.
-            """
-            try:
-                await self._async_ensure_device_subscription()
-            except LockDisconnected as err:
-                LOGGER.debug(
-                    "Lock %s: push subscription deferred (disconnected): %s",
-                    self.lock.entity_id,
-                    err,
-                )
-            except Exception:
-                LOGGER.exception(
-                    "Lock %s: MQTT subscribe failed unexpectedly",
-                    self.lock.entity_id,
-                )
-
-        self.hass.async_create_task(_subscribe_or_log())
+        self._schedule_push_subscription(
+            self._get_topic(), self._async_ensure_device_subscription, "topic"
+        )
 
     @callback
     def teardown_push_subscription(self) -> None:
@@ -740,7 +683,3 @@ class Zigbee2MQTTLock(BaseMqttLock):
         real bridge payload to work from rather than a guessed shape.
         """
         return None
-
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Perform hard refresh and return all codes."""
-        return await self.async_get_usercodes()

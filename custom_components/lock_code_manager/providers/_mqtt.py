@@ -17,30 +17,37 @@ than about the protocol:
   lock described and a slot nothing came back for -- a read where every slot
   failed at the transport is not data and must not be reported as any;
 * the entity availability check, which defers to the lock entity's own state
-  rather than re-deriving the bridge's internals.
+  rather than re-deriving the bridge's internals;
+* the policy a resubscribe attempt follows -- keep, refuse, defer, or run it
+  in the background -- which is about how a sync caller reaches an async
+  subscribe, not about what is being subscribed to;
+* the poll cadences, which are set by what a read costs here: one round trip
+  per slot, on either bridge, with the hard refresh doing the drift detection
+  a push provider's suppressed poll otherwise would.
 
 What it deliberately does NOT host is anything whose semantics differ between
-the two: subscription lifecycles (one bridge has a per-node value tree, the
-other a per-device topic, and zwave-js-ui also runs an api transport with its
-own lifetime), the payload projections, the api client, and the poll cadences
--- whose intervals happen to coincide today for reasons that have nothing to
-do with each other.
+the two: the subscriptions themselves (one bridge has a per-node value tree,
+the other a per-device topic, and zwave-js-ui also runs an api transport with
+its own lifetime), the payload projections, and the api client.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
-from typing import NoReturn
+from datetime import timedelta
+from typing import NoReturn, final
 
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
+from homeassistant.core import callback
 
 from ..domain.credentials import User, user_from_slot
 from ..domain.exceptions import LockDisconnected
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import entity_state_is_available
+from .const import LOGGER
 
 
 @dataclass(repr=False, eq=False)
@@ -51,6 +58,41 @@ class BaseMqttLock(BaseLock):
     def domain(self) -> str:
         """Return integration domain."""
         return MQTT_DOMAIN
+
+    @property
+    def usercode_scan_interval(self) -> timedelta:
+        """
+        Return scan interval for usercodes.
+
+        Inert while ``supports_push`` is true: the coordinator leaves its
+        update interval unset for a push provider, so nothing schedules a poll
+        at this cadence and drift is caught by the hard refresh instead. This
+        is the cadence a lock running without push actually polls at, and it
+        is spaced well out because a read here costs a round trip per slot
+        rather than one for the whole lock -- see ``_async_read_slots``.
+        """
+        return timedelta(minutes=5)
+
+    @property
+    def hard_refresh_interval(self) -> timedelta | None:
+        """
+        Return interval for hard refresh.
+
+        The only recurring read a push provider makes, so it is also what
+        notices a subscription that has drifted off the topic discovery now
+        points at.
+        """
+        return timedelta(hours=1)
+
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
+        """
+        Perform hard refresh and return all codes.
+
+        There is no cached layer here for a hard refresh to go behind: an
+        ordinary read already puts a request on the bridge and waits for the
+        lock's own answer, so the two are the same operation.
+        """
+        return await self.async_get_usercodes()
 
     async def async_is_device_available(self) -> bool:
         """Return whether the lock entity reports an operational state."""
@@ -93,6 +135,65 @@ class BaseMqttLock(BaseLock):
             self._raise_not_connected()
         if require_device and not await self.async_is_device_available():
             raise LockDisconnected("Device not available")
+
+    @final
+    @callback
+    def _schedule_push_subscription(
+        self,
+        topic: str | None,
+        ensure: Callable[[], Awaitable[None]],
+        topic_label: str,
+    ) -> None:
+        """
+        Bring a push subscription up in the background, from a sync caller.
+
+        The whole policy for a resubscribe attempt, which both bridges reach
+        the same three ways: the reconnect transition, the coordinator's
+        first load, and a poll noticing the topic moved.
+
+        A topic that cannot be resolved right now leaves a working
+        subscription alone -- discovery data going transiently missing is not
+        a lock that moved -- but with nothing to fall back on there is no
+        push channel at all, and that is a disconnect the caller must hear
+        about.
+
+        ``ensure`` is the provider's own idempotent subscribe, run in a task
+        because ``setup_push_subscription`` is synchronous. Nothing it raises
+        can reach a caller from there, so everything it raises is logged --
+        a lost connection quietly, since the reconnect path is already
+        handling it, and anything else loudly. A disabled MQTT integration
+        arrives that way too, from the ensure's own gate, which is why there
+        is no second check for it here.
+
+        ``topic_label`` names what could not be resolved: the bridges address
+        different things -- one a device topic, the other a node's whole
+        value tree -- and the message is what tells the reader which.
+        """
+        if topic is None:
+            if self._push_unsubs:
+                return
+            raise LockDisconnected(
+                f"Cannot subscribe to push updates for {self.lock.entity_id} - "
+                f"no {topic_label}"
+            )
+
+        async def _subscribe_or_log() -> None:
+            """Run the provider's subscribe, logging whatever it raises."""
+            try:
+                await ensure()
+            except LockDisconnected as err:
+                LOGGER.debug(
+                    "Lock %s: push subscription deferred (disconnected): %s",
+                    self.lock.entity_id,
+                    err,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Lock %s: MQTT subscribe failed unexpectedly",
+                    self.lock.entity_id,
+                )
+
+        self.hass.async_create_task(_subscribe_or_log())
 
     async def _async_read_slots(
         self,
