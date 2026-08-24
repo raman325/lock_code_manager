@@ -76,17 +76,12 @@ class LockUsercodeUpdateCoordinator(
         # Disable periodic polling when push updates are supported.
         # Polling is still used for initial load.
         #
-        # Read once, and a bridged provider may not know the answer yet: it
-        # derives push support from discovery data that arrives on the
-        # broker's schedule. A lock that gains push after this therefore
-        # keeps the poll cadence chosen for a lock without it. That is
-        # redundant rather than wrong -- push updates do arrive, because the
-        # deferred-setup retry re-runs the provider's own subscribe -- and it
-        # lasts until the next reload. Re-deriving it live means reaching
-        # into the interval state machine below, whose three arms (breaker
-        # backoff, cold-start probe, restore-on-recovery) all own this value
-        # at different times.
-        update_interval = None if lock.supports_push else lock.usercode_scan_interval
+        # A bridged provider may not know the answer yet: it derives push
+        # support from discovery data that arrives on the broker's schedule,
+        # so a lock constructed before that lands looks like a poll lock.
+        # ``note_push_capability`` is the one place that answer is revisited.
+        self._is_push = lock.supports_push
+        update_interval = None if self._is_push else lock.usercode_scan_interval
         super().__init__(
             hass,
             _LOGGER,
@@ -395,7 +390,7 @@ class LockUsercodeUpdateCoordinator(
                     self._lock.lock.entity_id,
                     new_interval.total_seconds(),
                 )
-        elif self._original_update_interval is None and not self._reached_once:
+        elif self._is_push and not self._reached_once:
             # A push provider polls on no timer, so the recovery probe above
             # can never start from a cold start: tripping the breaker takes
             # repeated polls and nothing is scheduling them. One failed first
@@ -439,6 +434,42 @@ class LockUsercodeUpdateCoordinator(
                     "lock_entity_id": self._lock.lock.entity_id,
                 },
             )
+
+    @callback
+    def note_push_capability(self) -> None:
+        """
+        Re-read whether the lock pushes, once its provider setup has succeeded.
+
+        A bridged provider derives push support from discovery data that
+        arrives on the broker's schedule, so a lock whose setup was deferred
+        was very likely constructed before the answer existed -- and kept the
+        poll cadence chosen for a lock that has none. That polled a lock which
+        does push, indefinitely, at one api round trip per slot per five
+        minutes on a mesh this provider goes out of its way not to fill.
+
+        Only the gaining direction is acted on, and only once. Losing push is
+        not a transition worth chasing: discovery data going transiently
+        missing is not a lock that stopped pushing, and the poll cadence would
+        thrash with it.
+
+        The live interval is left alone while a probe arm owns it -- the
+        breaker's backoff, or the cold-start retry for a lock that has never
+        been reached. Both restore ``_original_update_interval`` when they let
+        go, which is what has just been updated.
+        """
+        if self._is_push or not self._lock.supports_push:
+            return
+        self._is_push = True
+        self._original_update_interval = None
+        if not self._lock_breaker.tripped and self._reached_once:
+            # Same narrowing the restore-on-recovery arm needs: the base
+            # class annotates this as ``timedelta`` while treating None as
+            # "do not poll", which is exactly the state being entered.
+            self.update_interval = self._original_update_interval  # type: ignore[assignment]
+        _LOGGER.debug(
+            "Lock %s pushes after all; polling disabled",
+            self._lock.lock.entity_id,
+        )
 
     @property
     def unreachable(self) -> bool:

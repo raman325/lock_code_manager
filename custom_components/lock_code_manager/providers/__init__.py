@@ -44,19 +44,28 @@ def resolve_provider_class(
         return INTEGRATIONS_CLASS_MAP.get(platform)
     if device_entry is None:
         return None
-    for identifier in device_entry.identifiers:
-        if len(identifier) < 2:
-            continue
-        value = str(identifier[1])
-        # Zigbee2MQTT is tested first, and has to be: its own prefix is
-        # fixed, while the zwave-js-ui identifier is recognized by its tail
-        # alone (the head is operator-configurable), so a Zigbee2MQTT device
-        # whose address happened to end ``0x<hex>_node<n>`` would be claimed
-        # by the wrong provider if the order were reversed.
-        if value.startswith(Z2M_IDENTIFIER_PREFIX):
-            return Zigbee2MQTTLock
-        if parse_zwave_js_ui_identifier(value):
-            return ZWaveJSUILock
+    values = [
+        str(identifier[1])
+        for identifier in device_entry.identifiers
+        if len(identifier) >= 2
+    ]
+    # Zigbee2MQTT is tested first, and has to be: its own prefix is fixed,
+    # while the zwave-js-ui identifier is recognized by its tail alone (the
+    # head is operator-configurable), so a device whose address happened to
+    # end ``0x<hex>_node<n>`` would be claimed by the wrong provider if the
+    # order were reversed.
+    #
+    # Two passes over the whole set, rather than both rules per identifier,
+    # because ``identifiers`` is a SET and its iteration order is arbitrary.
+    # A device carrying both shapes -- which is what a stale registry row
+    # from a re-paired device looks like -- resolved to whichever one the
+    # hash happened to yield first, so the same device could dispatch
+    # differently across restarts. The precedence has to hold over the
+    # device, not over one identifier at a time.
+    if any(value.startswith(Z2M_IDENTIFIER_PREFIX) for value in values):
+        return Zigbee2MQTTLock
+    if any(parse_zwave_js_ui_identifier(value) for value in values):
+        return ZWaveJSUILock
     return None
 
 

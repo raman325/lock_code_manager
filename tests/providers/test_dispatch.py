@@ -123,6 +123,37 @@ async def test_mqtt_dispatch_prefers_zigbee2mqtt_over_the_zui_tail(
     assert resolve_provider_class("mqtt", device) is Zigbee2MQTTLock
 
 
+async def test_precedence_holds_across_separate_identifiers(
+    hass: HomeAssistant,
+) -> None:
+    """
+    The order is over the device, not over one identifier at a time.
+
+    A device can carry both shapes in separate identifiers -- a stale
+    registry row left by a re-paired device, or a bridge that publishes more
+    than one address. ``identifiers`` is a SET, so testing both rules against
+    each entry in turn resolved to whichever the hash happened to yield
+    first, and the same device could dispatch differently across restarts.
+    Two passes over the whole set is what makes the documented precedence
+    mean anything.
+    """
+    mqtt_entry = MockConfigEntry(domain="mqtt")
+    mqtt_entry.add_to_hass(hass)
+    mqtt_entry._async_set_state(hass, mqtt_entry.state, None)
+
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=mqtt_entry.entry_id,
+        connections=set(),
+        identifiers={
+            ("mqtt", "zwavejs2mqtt_0xd4ee5a7a_node20"),
+            ("mqtt", "zigbee2mqtt_0x00124b0021fb1234"),
+        },
+        name="BothShapesLock",
+    )
+
+    assert resolve_provider_class("mqtt", device) is Zigbee2MQTTLock
+
+
 async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> None:
     """A malformed short identifier tuple is skipped, not treated as a crash."""
     mqtt_entry = MockConfigEntry(domain="mqtt")

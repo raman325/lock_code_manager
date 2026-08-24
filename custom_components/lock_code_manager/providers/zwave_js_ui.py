@@ -368,6 +368,11 @@ class ZWaveJSUILock(BaseMqttLock):
     _api_subscription_lock: asyncio.Lock = field(
         init=False, default_factory=asyncio.Lock
     )
+    # Event-loop time the live subscription is settled enough to publish
+    # into, or 0.0 when nothing is pending. Recorded rather than slept
+    # through, so the cost lands on the first caller that actually publishes
+    # and on nobody else.
+    _settle_deadline: float = field(init=False, default=0.0)
     # Outstanding api calls by nonce. The single response handler resolves
     # whichever future the gateway's echoed nonce names.
     _pending_api_calls: dict[str, asyncio.Future[dict[str, Any]]] = field(
@@ -821,8 +826,19 @@ class ZWaveJSUILock(BaseMqttLock):
             # responses (getNodes) are large. With nothing outstanding there
             # is nothing to correlate, so skip the parse entirely.
             return
+        raw = msg.payload
+        # The key only exists because this provider adds it to its own
+        # requests, and it comes back only in the echo of one. A substring
+        # scan of the undecoded payload rejects every other client's traffic
+        # -- the gateway's own user interface polls getNodes, which can run
+        # to megabytes -- without building a dict out of it first. Whatever
+        # survives is still parsed and correlated properly: the scan can only
+        # let too much through, and the nonce lookup below rejects that.
+        marker = REQUEST_ID_KEY.encode() if isinstance(raw, bytes) else REQUEST_ID_KEY
+        if marker not in raw:
+            return
         try:
-            payload = json.loads(msg.payload)
+            payload = json.loads(raw)
         except ValueError:
             LOGGER.debug("Ignoring non-JSON payload on %s", msg.topic)
             return
@@ -858,10 +874,14 @@ class ZWaveJSUILock(BaseMqttLock):
         this logs and returns, leaving any live subscription alone: discovery
         data going transiently missing is not a prefix that moved.
 
-        Every subscribe is followed by ``SUBSCRIBE_SETTLE_DELAY``, so a
-        subscription is settled by the time this returns and no caller has to
-        remember whether it made one. That is what lets the same call publish
-        into it safely.
+        Every subscribe records a settle deadline rather than sleeping to it.
+        What has to be true is that nothing is published into a subscription
+        the broker has not been told about yet, and that is the publisher's
+        constraint, not the subscriber's: ``_async_api_call_at`` waits out
+        whatever remains before its first publish. Sleeping here instead
+        charged the whole delay to every caller that only wanted a
+        subscription -- setup, and every borrowed instance that turns out to
+        need no call at all -- while buying them nothing.
 
         Serialized on its own lock, because the idempotence guard reads a
         field the subscribe below sets and there is an await in between. Two
@@ -894,7 +914,29 @@ class ZWaveJSUILock(BaseMqttLock):
                 response_topic, self._api_response_received
             )
             self._api_response_topic = response_topic
-            await asyncio.sleep(SUBSCRIBE_SETTLE_DELAY)
+            self._settle_deadline = (
+                asyncio.get_running_loop().time() + SUBSCRIBE_SETTLE_DELAY
+            )
+
+    async def _async_await_settle(self) -> None:
+        """
+        Wait out whatever remains of a fresh subscription's settling window.
+
+        Called immediately before a publish, which is the only operation the
+        window protects. Time already spent elsewhere -- resolving a gateway,
+        waiting on the operation pacing lock -- counts towards it, so a call
+        that took the slow road pays nothing here.
+
+        The deadline is cleared once reached, so it is spent once per
+        subscription rather than consulted forever. A caller that arrives
+        while another is still waiting sees it still set and waits too, which
+        is correct: the window has not elapsed for either of them.
+        """
+        if not (deadline := self._settle_deadline):
+            return
+        if (remaining := deadline - asyncio.get_running_loop().time()) > 0:
+            await asyncio.sleep(remaining)
+        self._settle_deadline = 0.0
 
     async def _async_resolve_api_base(self) -> str:
         """
@@ -1140,6 +1182,7 @@ class ZWaveJSUILock(BaseMqttLock):
         self._pending_api_calls[nonce] = future
         try:
             try:
+                await self._async_await_settle()
                 await async_publish(
                     self.hass,
                     f"{response_topic}/set",

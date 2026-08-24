@@ -947,6 +947,11 @@ class BaseLock:
                 )
             self._setup_succeeded = True
             self._clear_setup_validation_issue()
+            if self.coordinator:
+                # A bridged provider only learns it can push once its
+                # discovery data lands, which for a deferred setup is after
+                # the coordinator picked its cadence.
+                self.coordinator.note_push_capability()
         finally:
             self._setup_running = False
 

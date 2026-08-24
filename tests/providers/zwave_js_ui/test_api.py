@@ -14,6 +14,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
 from homeassistant.components.mqtt import debug_info as mqtt_debug_info
+from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -25,6 +26,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
 from custom_components.lock_code_manager.providers import zwave_js_ui
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
+    REQUEST_ID_KEY,
     ZWAVE_JS_UI_OPERATION_DELAY,
     ZWaveJSUILock,
 )
@@ -84,10 +86,13 @@ def record_transport_events(settle_delay: float) -> Iterator[list[str]]:
     """
     Record subscribes, settle waits, and publishes in the order they happen.
 
-    The settle wait is recognized by its exact duration: ``asyncio.sleep`` is
-    patched process-wide for the block, so Home Assistant's own sleeps would
-    otherwise be indistinguishable from it. ``settle_delay`` therefore has to
-    be a value nothing else passes.
+    The settle wait is recognized by its duration falling in ``(0,
+    settle_delay]``: ``asyncio.sleep`` is patched process-wide for the block,
+    so Home Assistant's own sleeps would otherwise be indistinguishable from
+    it. ``settle_delay`` therefore has to be a value nothing else sleeps at or
+    below. A range rather than an exact match because the provider sleeps out
+    the REMAINDER of a recorded deadline, so whatever it spent between
+    subscribing and publishing has already come off.
     """
     module = "custom_components.lock_code_manager.providers.zwave_js_ui"
     events: list[str] = []
@@ -104,7 +109,7 @@ def record_transport_events(settle_delay: float) -> Iterator[list[str]]:
         return await real_publish(hass, topic, *args, **kw)
 
     async def _sleep(delay: float, *args: Any, **kw: Any) -> Any:
-        if delay == settle_delay:
+        if 0 < delay <= settle_delay:
             events.append("settle")
         return await real_sleep(delay, *args, **kw)
 
@@ -781,21 +786,36 @@ async def test_responses_for_other_callers_are_ignored(
     zwave-js-ui UI and other automations publish their own answers onto it.
     The trailing duplicate is the gateway retransmitting an answer already
     delivered, which must not disturb the settled call.
+
+    Every decoy carries the request id somewhere, because the bytes prefilter
+    would otherwise drop it before any of these guards ran -- and a decoy
+    that never reaches the guard it is aimed at proves nothing about it.
     """
     topic = f"{ZUI_API_BASE}/api/getInfo"
 
     def _handler(_api_base: str, request: dict[str, Any]) -> dict[str, Any]:
         answer = {"success": True, "result": "ours", "origin": request}
         for payload in (
-            "not json at all",
-            json.dumps([1, 2, 3]),
-            json.dumps({"success": True, "result": "no origin at all"}),
-            json.dumps({"success": True, "result": "origin with no id", "origin": {}}),
+            f"not json at all, but mentions {REQUEST_ID_KEY}",
+            json.dumps([REQUEST_ID_KEY, 2, 3]),
+            json.dumps(
+                {"success": True, "result": f"no origin, only {REQUEST_ID_KEY}"}
+            ),
+            json.dumps(
+                {"success": True, "result": REQUEST_ID_KEY, "origin": {}},
+            ),
+            json.dumps(
+                {
+                    "success": True,
+                    "result": "a nonce that is not a string",
+                    "origin": {REQUEST_ID_KEY: 7},
+                }
+            ),
             json.dumps(
                 {
                     "success": True,
                     "result": "somebody else's",
-                    "origin": {"lcmRequestId": "not-our-nonce"},
+                    "origin": {REQUEST_ID_KEY: "not-our-nonce"},
                 }
             ),
             json.dumps(answer),
@@ -1346,6 +1366,119 @@ async def test_a_fresh_subscription_settles_before_anything_is_published(
         assert await lock.async_get_max_slot() == 30
 
     assert events.index("subscribe") < events.index("settle") < events.index("publish")
+
+
+async def test_a_subscription_nobody_publishes_into_costs_no_settle(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    The settling window is the publisher's cost, so a non-publisher pays none.
+
+    Setup subscribes and returns, and every borrowed instance -- a config
+    flow allocation read, the unmanaged sweep -- may turn out to need no call
+    at all. Sleeping the whole window at subscribe time charged all of them
+    for a guarantee only a publish needs.
+    """
+    lock = zui_lock_provider
+
+    with record_transport_events(0.0123) as events:
+        await lock.async_setup(MagicMock())
+
+    assert "subscribe" in events
+    assert "settle" not in events
+    assert "publish" not in events
+
+
+async def test_time_already_spent_counts_towards_the_settle(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    A deadline already in the past is nothing left to wait for.
+
+    Resolution can spend a whole discovery window between subscribing and
+    the first publish, and re-sleeping the full delay on top of that is time
+    the broker did not need.
+    """
+    lock = zui_lock_provider
+    await lock._async_ensure_api_response_subscription()
+    lock._settle_deadline = asyncio.get_running_loop().time() - 1
+
+    with record_transport_events(0.0123) as events:
+        await lock._async_await_settle()
+
+    assert events == []
+    # Spent, so a second call does not reconsider it.
+    assert lock._settle_deadline == 0.0
+
+
+async def test_other_clients_traffic_is_rejected_before_it_is_parsed(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    The api topics carry every client's traffic, and some of it is enormous.
+
+    The gateway's own user interface polls ``getNodes``, whose response can
+    run to megabytes, on the same wildcard this correlates its calls on.
+    Building a dict out of each one to discover it was never ours is work
+    proportional to somebody else's payload; the request id only ever appears
+    in the echo of one of our own requests, so a substring scan settles it.
+    """
+    lock = zui_lock_provider
+    await lock._async_ensure_api_response_subscription()
+    loop = asyncio.get_running_loop()
+    lock._pending_api_calls["nonce"] = loop.create_future()
+
+    with patch.object(zwave_js_ui.json, "loads", side_effect=AssertionError) as parse:
+        async_fire_mqtt_message(
+            hass,
+            f"{ZUI_API_BASE}/api/getNodes",
+            json.dumps({"success": True, "result": [{"id": 20}]}),
+        )
+        await hass.async_block_till_done()
+
+    parse.assert_not_called()
+
+    # And an echo of one of our own still gets through to correlation.
+    async_fire_mqtt_message(
+        hass,
+        f"{ZUI_API_BASE}/api/getInfo",
+        json.dumps({"success": True, "origin": {REQUEST_ID_KEY: "nonce"}}),
+    )
+    await hass.async_block_till_done()
+
+    assert lock._pending_api_calls["nonce"].done()
+
+
+@pytest.mark.parametrize("encode", [False, True], ids=["text", "bytes"])
+async def test_the_prefilter_reads_either_payload_type(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock, encode: bool
+) -> None:
+    """
+    Home Assistant hands a subscriber either text or raw bytes.
+
+    Which one depends on the subscription's encoding, and a marker compared
+    against the wrong type never matches -- so a provider that assumed one
+    would silently correlate nothing on a broker serving the other. Delivered
+    straight to the handler, because the type is exactly what the mocked
+    broker normalizes away.
+    """
+    lock = zui_lock_provider
+    loop = asyncio.get_running_loop()
+    lock._pending_api_calls["nonce"] = loop.create_future()
+    body = json.dumps({"success": True, "origin": {REQUEST_ID_KEY: "nonce"}})
+
+    lock._api_response_received(
+        ReceiveMessage(
+            topic=f"{ZUI_API_BASE}/api/getInfo",
+            payload=body.encode() if encode else body,
+            qos=0,
+            retain=False,
+            subscribed_topic=f"{ZUI_PREFIX}/_CLIENTS/+/api/+",
+            timestamp=0.0,
+        )
+    )
+
+    assert lock._pending_api_calls["nonce"].done()
 
 
 async def test_resolution_fails_loud_when_no_subscription_can_be_established(
