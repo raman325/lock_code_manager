@@ -64,10 +64,20 @@ def keypad_payload(user_id: Any) -> str:
 async def zui_lock_subscribed(
     hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
 ) -> ZWaveJSUILock:
-    """A provider subscribed to its node topic through the real setup path."""
+    """
+    A provider subscribed to its node topic through the real setup path.
+
+    ``desired_credential`` is seeded empty because that is what a lock with no
+    Lock Code Manager configuration wants everywhere, and a bare MagicMock
+    would answer every ``is_present`` truthily -- silently arming the
+    stale-AVAILABLE guard in every test that never mentions it.
+    """
     await zui_lock_provider.async_setup(MagicMock())
     await hass.async_block_till_done()
     zui_lock_provider.coordinator = MagicMock()
+    zui_lock_provider.coordinator.desired_credential.return_value = (
+        SlotCredential.empty()
+    )
     return zui_lock_provider
 
 
@@ -256,6 +266,178 @@ class TestUserCodeValues:
         await hass.async_block_till_done()
 
         lock.coordinator.push_update.assert_not_called()
+
+
+class TestStaleAvailable:
+    """The AVAILABLE status a lock re-sends after a code was written."""
+
+    async def test_available_is_ignored_when_a_pin_is_expected(
+        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
+    ) -> None:
+        """
+        A slot Lock Code Manager wants a code on never reads empty from a push.
+
+        Some locks re-announce AVAILABLE after a successful write. Taken at
+        face value it tells sync the slot was cleared, sync rewrites it, the
+        lock re-announces, and the loop never ends. Same hardware signal, same
+        guard as the zwave_js provider applies.
+        """
+        lock = zui_lock_subscribed
+        lock.coordinator.desired_credential.return_value = SlotCredential.known("1234")
+
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_not_called()
+
+    async def test_available_confirms_empty_when_no_pin_is_expected(
+        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
+    ) -> None:
+        """The guard is about a contradicted clear, not about clears at all."""
+        lock = zui_lock_subscribed
+        lock.coordinator.desired_credential.return_value = SlotCredential.empty()
+
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_called_once_with(
+            {4: SlotCredential.empty()}
+        )
+
+    async def test_available_confirms_empty_without_a_coordinator(
+        self, hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+    ) -> None:
+        """
+        With nothing to ask, the observation stands rather than being dropped.
+
+        A provider answering queries outside an entry has no coordinator, so a
+        guard that treated "cannot ask" as "a PIN is expected" would suppress
+        every clear it ever saw.
+        """
+        lock = zui_lock_provider
+        await lock.async_setup(MagicMock())
+        await hass.async_block_till_done()
+        assert lock.coordinator is None
+
+        with patch.object(ZWaveJSUILock, "_confirm_slot") as confirm:
+            fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
+            await hass.async_block_till_done()
+
+        confirm.assert_called_once_with(4, SlotCredential.empty())
+
+
+class TestStatusGatedCodes:
+    """A published code is only a confirmation when the slot is enabled."""
+
+    async def test_a_code_after_a_disabled_status_confirms_nothing(
+        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
+    ) -> None:
+        """
+        A Disabled slot keeps its digits, and they are not an active code.
+
+        The poll projection already requires ENABLED before it reports a code,
+        so a push that confirmed one regardless would make the same slot read
+        in-sync or unreadable depending on which transport spoke last.
+        """
+        lock = zui_lock_subscribed
+
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/3", wrapped(2))
+        fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_not_called()
+
+    async def test_a_code_before_any_status_confirms_the_slot(
+        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
+    ) -> None:
+        """
+        Never having heard a status is not the same as having heard a bad one.
+
+        A gateway that publishes a slot's code and never its status would
+        otherwise go permanently unconfirmed, so the unknown case keeps the
+        pre-existing behaviour and the poll corrects it if it was wrong.
+        """
+        lock = zui_lock_subscribed
+
+        fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_called_once_with(
+            {3: SlotCredential.known("1234")}
+        )
+
+    async def test_a_disabled_slot_does_not_gate_another_slot(
+        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
+    ) -> None:
+        """Statuses are per slot; one disabled user must not mute the rest."""
+        lock = zui_lock_subscribed
+
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/3", wrapped(2))
+        fire_node_value(hass, f"{USER_CODE_VALUEID}/4", wrapped("5678"))
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_called_once_with(
+            {4: SlotCredential.known("5678")}
+        )
+
+    async def test_re_enabling_a_slot_re_admits_its_code(
+        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
+    ) -> None:
+        """The gate follows the latest status, not the first one seen."""
+        lock = zui_lock_subscribed
+
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/3", wrapped(2))
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/3", wrapped(1))
+        fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_called_once_with(
+            {3: SlotCredential.known("1234")}
+        )
+
+    async def test_an_uninterpretable_status_does_not_gate(
+        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
+    ) -> None:
+        """
+        A status nobody can read tells us nothing, including "not enabled".
+
+        Recording it would mute the slot's codes until the gateway happened to
+        republish a real status, which for a retained topic may be never.
+        """
+        lock = zui_lock_subscribed
+
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/3", wrapped(True))
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/3", wrapped("nonsense"))
+        fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_called_once_with(
+            {3: SlotCredential.known("1234")}
+        )
+
+    async def test_teardown_forgets_the_tracked_statuses(
+        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
+    ) -> None:
+        """
+        A released subscription's statuses describe a node we stopped watching.
+
+        Keeping them across a teardown would let a status seen before an
+        unload gate codes published after the resubscribe, with nothing in
+        between to correct it.
+        """
+        lock = zui_lock_subscribed
+
+        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/3", wrapped(2))
+        await hass.async_block_till_done()
+        lock.teardown_push_subscription()
+        await lock._async_ensure_node_subscription()
+
+        fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_called_once_with(
+            {3: SlotCredential.known("1234")}
+        )
 
 
 class TestKeypadEvents:

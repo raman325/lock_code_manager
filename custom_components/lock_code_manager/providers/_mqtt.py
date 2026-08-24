@@ -34,7 +34,7 @@ its own lifetime), the payload projections, and the api client.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import NoReturn, final
 
@@ -52,6 +52,12 @@ from .const import LOGGER
 @dataclass(repr=False, eq=False)
 class BaseMqttLock(BaseLock):
     """Base class for a lock addressed through an MQTT bridge."""
+
+    # Whether any slot read on this instance has ever come back with something
+    # the lock said, rather than silence. Latched on, never cleared: what it
+    # records is a property of the bridge and the lock's firmware, and neither
+    # stops being able to answer reads because a poll went badly.
+    _reads_have_succeeded: bool = field(init=False, default=False)
 
     @property
     def domain(self) -> str:
@@ -224,7 +230,7 @@ class BaseMqttLock(BaseLock):
         -- but only the silences decide whether the read was worth anything.
 
         Every slot failing at the transport is a different thing from every
-        slot reading unreadable, and only the first raises. An all-unreadable
+        slot reading unreadable, and only the first can raise. An all-unreadable
         return is a successful poll as far as the coordinator is concerned:
         it resets the connectivity breaker, un-suspends the slots, and lets
         them re-fail on the next tick -- an oscillation on the order of
@@ -237,14 +243,36 @@ class BaseMqttLock(BaseLock):
         lost transport, and the caller's ``transport_failure`` phrase names
         what silence means on its own bridge.
 
-        Which is why two slots is the smallest read this can judge. Asking
-        about one and hearing nothing is a single lost reply, and on a lossy
-        mesh that is routine -- issue #1397 had a node dropping roughly half
-        its responses. Raising there would trip the connectivity breaker on
+        Silence is only evidence of an outage against a transport that has
+        been shown capable of the opposite, so two conditions both have to
+        hold before this raises.
+
+        Two slots is the smallest read it can judge. Asking about one and
+        hearing nothing is a single lost reply, and on a lossy mesh that is
+        routine -- issue #1397 had a node dropping roughly half its
+        responses. Raising there would trip the connectivity breaker on
         ordinary noise for an entry with one user, while an entry with two on
-        the same lock, losing replies at the same rate, polled on
-        untroubled. How many people a household has must not decide whether
-        its lock is reported unreachable.
+        the same lock, losing replies at the same rate, polled on untroubled.
+        How many people a household has must not decide whether its lock is
+        reported unreachable.
+
+        This instance must also have read something successfully at least
+        once. Some bridges cannot answer a read at all and never could: a
+        Zigbee2MQTT converter that exposes the PIN as write-only, a node whose
+        firmware implements User Code Set without Get. Those locks worked --
+        every poll came back all-unreadable and every write landed -- until an
+        all-silent rule that did not ask whether reading was ever possible
+        started declaring them gone, tripping the breaker and suspending the
+        writes along with the reads that were never going to work. Until the
+        lock proves it can be read, silence is the answer rather than the
+        absence of one, and a lock that can never prove it is left exactly as
+        it was before this rule existed.
+
+        One silent poll is not by itself an outage, and does not need to be
+        one here: raising records a single connectivity failure, and the
+        coordinator's breaker takes three in a row before it suspends
+        anything. A #1397-class link that loses both replies of one poll is
+        absorbed there, by the mechanism that already exists for it.
 
         Nothing about a transport that is genuinely gone rests on this
         signal. Every public operation runs ``_async_ensure_operational``
@@ -258,7 +286,9 @@ class BaseMqttLock(BaseLock):
             return []
 
         reads = {slot_num: await read_slot(slot_num) for slot_num in sorted(code_slots)}
-        if len(reads) > 1 and all(state is None for state in reads.values()):
+        if any(state is not None for state in reads.values()):
+            self._reads_have_succeeded = True
+        elif len(reads) > 1 and self._reads_have_succeeded:
             raise LockDisconnected(
                 f"{self.lock.entity_id}: every one of the {len(reads)} requested "
                 f"slot reads {transport_failure}"

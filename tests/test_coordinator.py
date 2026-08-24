@@ -901,6 +901,95 @@ async def test_backoff_init_push_stores_none_interval(
     assert push_coordinator._lock_breaker.failure_count == 0
 
 
+class TestLatePushCapability:
+    """A bridged lock that only learns it can push after the coordinator exists."""
+
+    @staticmethod
+    def _coordinator_for_a_lock_that_gains_push(
+        hass: HomeAssistant,
+        push_lock: MockLCMPushLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> LockUsercodeUpdateCoordinator:
+        """
+        Build a coordinator that picked a poll cadence, then grant push.
+
+        A push provider that does not know it yet, which is exactly the
+        bridged case: the capability is derived from discovery data that has
+        not landed at construction time.
+        """
+        push_lock._supports_push = False
+        coordinator = _make_coordinator(hass, push_lock, lcm_config_entry)
+        assert coordinator.update_interval == push_lock.usercode_scan_interval
+        push_lock._supports_push = True
+        return coordinator
+
+    async def test_polling_stops_once_the_lock_turns_out_to_push(
+        self,
+        hass: HomeAssistant,
+        push_lock: MockLCMPushLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """
+        A bridged provider derives push from discovery data that lands late.
+
+        A lock whose setup was deferred was very likely built before that
+        answer existed, so it kept the cadence chosen for a lock with no push
+        -- and then polled forever, at one api round trip per slot every five
+        minutes, on a mesh this provider goes out of its way not to fill.
+        """
+        coordinator = self._coordinator_for_a_lock_that_gains_push(
+            hass, push_lock, lcm_config_entry
+        )
+        coordinator._reached_once = True
+
+        coordinator.note_push_capability()
+
+        assert coordinator.update_interval is None
+        assert coordinator._original_update_interval is None
+
+    async def test_a_probe_arm_keeps_the_interval_it_owns(
+        self,
+        hass: HomeAssistant,
+        push_lock: MockLCMPushLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """
+        The cadence is only applied when nothing else is currently driving it.
+
+        A lock that has never been reached is being probed on the cold-start
+        retry, and clearing the interval out from under that leaves it with
+        nothing scheduling the poll that would seed it. The arm restores
+        ``_original_update_interval`` when it lets go, and that is what has
+        just been updated.
+        """
+        coordinator = self._coordinator_for_a_lock_that_gains_push(
+            hass, push_lock, lcm_config_entry
+        )
+        coordinator._apply_backoff()
+        probe_interval = coordinator.update_interval
+
+        coordinator.note_push_capability()
+
+        assert coordinator.update_interval == probe_interval
+        assert coordinator._original_update_interval is None
+
+    async def test_losing_push_is_not_chased(
+        self, push_coordinator: LockUsercodeUpdateCoordinator, push_lock
+    ) -> None:
+        """
+        Discovery data going transiently missing is not a lock that stopped pushing.
+
+        Acting on it would restore a poll cadence, and the next publication
+        would take it away again -- so the cadence thrashes with the broker.
+        """
+        push_lock._supports_push = False
+
+        push_coordinator.note_push_capability()
+
+        assert push_coordinator.update_interval is None
+        assert push_coordinator._original_update_interval is None
+
+
 async def test_push_update_resets_backoff(
     push_coordinator: LockUsercodeUpdateCoordinator,
     push_lock: MockLCMPushLock,

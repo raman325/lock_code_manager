@@ -3,7 +3,7 @@
 import asyncio
 import copy
 import logging
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -40,6 +40,7 @@ from homeassistant.util import slugify
 
 from custom_components.lock_code_manager import (
     _async_reclaim_entities_from_foreign_devices,
+    _async_setup_new_locks,
     _setup_entry_after_start,
     async_remove_config_entry_device,
     async_remove_entry,
@@ -74,6 +75,7 @@ from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 from custom_components.lock_code_manager.domain.user_migration import migrate_to_users
+from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,
@@ -3112,6 +3114,82 @@ async def test_a_lock_no_provider_claims_raises_its_own_repair(
     assert unclaimed.entity_id in issue.translation_placeholders["error"]
     # The rest of the entry is untouched: one bad lock is not a failed setup.
     assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_a_provider_bug_during_setup_raises_no_repair(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Only an unclaimed lock gets the repair that says the bridge is unsupported.
+
+    Every other exception escaping setup is a bug in a provider LCM does
+    speak, and that repair is persistent, survives restarts, and tells the
+    user to remove a lock that works. The log line it already had is the
+    right amount of noise for a bug.
+    """
+    config = {CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_SLOTS: BASE_CONFIG[CONF_SLOTS]}
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="provider_bug")
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        BaseLock, "async_setup_internal", side_effect=ValueError("provider bug")
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"lock_dropped_{LOCK_1_ENTITY_ID}")
+        is None
+    )
+    assert list(entry.runtime_data.locks) == []
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_cancellation_during_setup_is_never_swallowed(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Shutting Home Assistant down must not look like a lock that could not load.
+
+    ``asyncio.gather(return_exceptions=True)`` hands a cancelled child back as
+    a result rather than propagating it, so cancellation reached the same
+    branch as a real failure: the lock was dropped and a persistent repair
+    blamed an unsupported bridge -- outliving the restart that ended the
+    condition, on a lock that was never unsupported at all.
+    """
+    config = {CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_SLOTS: BASE_CONFIG[CONF_SLOTS]}
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="cancelled")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Driven through the setup pass directly: Home Assistant's own config
+    # entry machinery absorbs whatever a setup raises, so going through it
+    # would assert on that absorption rather than on this loop.
+    with (
+        patch.object(
+            BaseLock, "async_setup_internal", side_effect=asyncio.CancelledError
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _async_setup_new_locks(
+            hass,
+            entry,
+            [LOCK_2_ENTITY_ID],
+            get_entry_config(entry),
+            MagicMock(),
+            er.async_get(hass),
+        )
+
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"lock_dropped_{LOCK_2_ENTITY_ID}")
+        is None
+    )
 
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

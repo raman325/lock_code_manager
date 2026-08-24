@@ -368,13 +368,47 @@ class TestPushUpdates:
         synced_lcm_config_entry: MockConfigEntry,
         zui_lock: ZWaveJSUILock,
     ) -> None:
-        """Available is the one status that confirms the slot holds nothing."""
+        """
+        Available is the one status that confirms the slot holds nothing.
+
+        Asserted on a slot the entry configures nothing for, because a slot it
+        does expect a code on is the stale-AVAILABLE case below.
+        """
+        unconfigured_slot = max(E2E_SLOT_PINS) + 1
+        fire_zui_node_value(
+            hass,
+            f"user_code/endpoint_0/userIdStatus/{unconfigured_slot}",
+            STATUS_AVAILABLE,
+        )
+        await hass.async_block_till_done()
+
+        assert (
+            zui_lock.coordinator.data.get(pin_address(unconfigured_slot))
+            is SlotCredential.empty()
+        )
+
+    async def test_stale_available_does_not_unwind_a_synced_slot(
+        self,
+        hass: HomeAssistant,
+        synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+    ) -> None:
+        """
+        A lock re-announcing AVAILABLE after a write must not restart sync.
+
+        Some locks send a stale AVAILABLE once a code lands. Believed, it
+        marks the slot cleared, sync rewrites it, the lock re-announces, and
+        the entry never settles -- so the assertion is that a fully synced
+        slot survives one.
+        """
         fire_zui_node_value(
             hass, "user_code/endpoint_0/userIdStatus/2", STATUS_AVAILABLE
         )
         await hass.async_block_till_done()
 
-        assert zui_lock.coordinator.data.get(pin_address(2)) is SlotCredential.empty()
+        assert zui_lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
+            E2E_SLOT_PINS[2]
+        )
 
 
 class TestKeypadEvents:

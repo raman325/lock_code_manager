@@ -2301,6 +2301,44 @@ async def test_deferred_setup_is_retried_once_the_lock_becomes_reachable(
     await lock.async_unload(False)
 
 
+async def test_a_deferred_retry_that_hits_a_blip_gets_another_one(
+    hass: HomeAssistant,
+):
+    """
+    One transient failure during the retry must not consume the only retry.
+
+    The deferred flag was cleared before the retried setup ran, so a
+    LockDisconnected on the way through spent it: nothing armed another
+    attempt, and the lock stayed un-set-up -- sync gated off it, no writes --
+    until the whole integration was reloaded by hand. A connectivity failure
+    is precisely the condition this retry exists for, so it re-arms.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_blip_during_retry")
+    lock.set_connected(False)
+    await lock.async_setup_internal(lock.lock_config_entry)
+    assert lock.provider_setup_succeeded is False
+
+    lock.set_connected(True)
+    loaded_entry = MagicMock()
+    loaded_entry.state = ConfigEntryState.LOADED
+    lock.lock_config_entry = loaded_entry
+
+    with patch.object(
+        lock, "async_setup", AsyncMock(side_effect=LockDisconnected("blip"))
+    ):
+        assert await lock.async_internal_is_reachable() is True
+        await hass.async_block_till_done()
+    assert lock.provider_setup_succeeded is False
+
+    assert await lock.async_internal_is_reachable() is True
+    await hass.async_block_till_done()
+
+    assert lock.provider_setup_succeeded is True
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
+
+
 async def test_a_lock_that_was_set_up_is_not_set_up_again_on_every_check(
     hass: HomeAssistant,
 ):

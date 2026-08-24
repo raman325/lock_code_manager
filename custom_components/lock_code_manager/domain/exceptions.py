@@ -14,6 +14,21 @@ class LockCodeManagerError(HomeAssistantError):
     """Base class for lock_code_manager exceptions."""
 
 
+class UnclaimedLockError(LockCodeManagerError):
+    """
+    Raised when no provider recognizes a configured lock entity.
+
+    Deliberately its own type rather than a message on the generic error:
+    dropping a lock raises a repair that tells the user their bridge is
+    unsupported and to remove the entity, and that diagnosis is only true for
+    this one failure. Matching on the text instead would put it on every
+    unrelated provider bug that happened to escape setup.
+
+    Not a ``LockCodeManagerProviderError``: there is no provider here to have
+    failed. That is the whole condition.
+    """
+
+
 class LockCodeManagerProviderError(LockCodeManagerError):
     """
     Base class for exceptions raised by lock providers.

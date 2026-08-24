@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Container, Iterable, Mapping, Sequence
 import logging
 from typing import Any
 
@@ -98,21 +98,33 @@ POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
 
 def _check_unclaimed_mqtt_locks(
-    hass: HomeAssistant, lock_entity_ids: Iterable[str]
+    hass: HomeAssistant,
+    lock_entity_ids: Iterable[str],
+    already_configured: Container[str] = (),
 ) -> tuple[dict[str, str], dict[str, Any]]:
     """
-    Turn any unclaimed mqtt selection into the form error that names it.
+    Turn any newly selected unclaimed mqtt lock into the form error that names it.
 
     The entity selector filter can only express integration+domain, so
     per-device dispatch has to be enforced here at submit time -- otherwise
     an unclaimed mqtt lock is accepted and only refused at setup.
+
+    ``already_configured`` is what the entry holds now, and locks in it are
+    waved through. An entry configured before this check existed can be
+    carrying an unclaimed lock, and every options and reauth submission
+    re-renders that entry's whole lock list -- so validating all of it made
+    one grandfathered lock refuse every subsequent edit: no PIN could be
+    changed and no reauth could complete, for a lock the form was not being
+    asked to add. That lock is not silently accepted either; it is dropped at
+    setup and says so in its own repair.
     """
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
     unclaimed = [
         entity_id
         for entity_id in lock_entity_ids
-        if (entry := ent_reg.async_get(entity_id)) is not None
+        if entity_id not in already_configured
+        and (entry := ent_reg.async_get(entity_id)) is not None
         and entry.platform == MQTT_DOMAIN
         and resolve_provider_class_for_entity(dev_reg, entry) is None
     ]
@@ -510,9 +522,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             # selector from the entry's current config either way.
             user_input = {CONF_LOCKS: list(get_entry_config(config_entry).locks)}
         else:
-            existing_slots = get_entry_config(config_entry).slot_numbers
+            entry_config = get_entry_config(config_entry)
+            existing_slots = entry_config.slot_numbers
             additional_errors, additional_placeholders = _check_unclaimed_mqtt_locks(
-                self.hass, user_input[CONF_LOCKS]
+                self.hass, user_input[CONF_LOCKS], entry_config.locks
             )
             if not additional_errors:
                 additional_errors, additional_placeholders = _check_common_slots(
@@ -595,7 +608,9 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             # short-circuiting it: both refusals render together, so one round
             # trip shows everything wrong with the submission.
             lock_errors, lock_placeholders = _check_unclaimed_mqtt_locks(
-                self.hass, user_input[CONF_LOCKS]
+                self.hass,
+                user_input[CONF_LOCKS],
+                get_entry_config(self.config_entry).locks,
             )
             errors.update(lock_errors)
             description_placeholders.update(lock_placeholders)
