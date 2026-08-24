@@ -23,7 +23,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import Credential, CredentialRef, User, WriteResult
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    User,
+    WriteResult,
+    pin_address,
+)
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._mqtt import BaseMqttLock
@@ -265,6 +271,27 @@ def _published_code(value: Any) -> str | None:
     return None
 
 
+def _interpret_user_id_status(value: Any) -> CodeSlotStatus | None:
+    """
+    Read a published ``userIdStatus`` value as a slot status; None when it is not one.
+
+    Booleans are rejected before anything else: ``CodeSlotStatus`` members are
+    ints and ``True == 1`` in Python, so a JSON ``true`` would otherwise be
+    admitted as Enabled and a ``false`` as Available. Same guard
+    ``_project_user_code_result`` and ``homeid`` apply.
+
+    A value that names no member -- a manufacturer-specific status, a string,
+    a float -- is not "some status we do not act on", it is no reading at all,
+    and the caller must not record it as one.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        return CodeSlotStatus(value)
+    except ValueError:
+        return None
+
+
 def _project_user_code_result(result: Any) -> SlotCredential:
     """
     Project a User Code CC ``get`` result to a SlotCredential.
@@ -324,6 +351,13 @@ class ZWaveJSUILock(BaseMqttLock):
     # none. Unlike the api subscription above, this one IS the push lifecycle,
     # so its unsub goes in the base's push-unsub registry.
     _subscribed_node_topic: str | None = field(init=False, default=None)
+    # Last ``userIdStatus`` seen per slot on the node subscription. The two
+    # User Code CC properties are published as separate retained topics, so a
+    # code publication has to be read against whatever the status topic last
+    # said. Lives and dies with the node subscription it was observed on.
+    _last_user_id_status: dict[int, CodeSlotStatus] = field(
+        init=False, default_factory=dict
+    )
     _min_operation_delay: float = field(init=False, default=ZWAVE_JS_UI_OPERATION_DELAY)
 
     @property
@@ -547,26 +581,88 @@ class ZWaveJSUILock(BaseMqttLock):
         Confirm a slot from a User Code Command Class value publication.
 
         The two properties are published separately, so each has to stand on
-        its own. A ``userCode`` carrying no usable code says nothing at all:
-        empty is how the gateway spells both a withheld code and a cleared
-        slot, and reading it as cleared would tell sync the code is gone.
-        ``userIdStatus`` is what carries occupancy, and only Available means
-        the slot holds nothing -- any other status leaves the code unknown.
+        its own -- and neither means anything without the other, which is what
+        ``_last_user_id_status`` is for.
         """
         if (slot_num := parse_slot_num(slot_segment)) is None:
             return
         value = _unwrap_mqtt_value(payload)
-        if property_name == "userCode" and (code := _published_code(value)) is not None:
-            self._confirm_slot(slot_num, SlotCredential.known(code))
-        elif (
-            property_name == "userIdStatus"
-            # ``True == 1`` and ``False == 0`` in Python, so a JSON boolean
-            # would otherwise report an occupied slot as Available. Same
-            # guard ``_project_user_code_result`` and ``homeid`` apply.
-            and not isinstance(value, bool)
-            and value == CodeSlotStatus.AVAILABLE
+        if property_name == "userCode":
+            self._process_published_code(slot_num, value)
+        elif property_name == "userIdStatus":
+            self._process_published_status(slot_num, value)
+
+    @callback
+    def _process_published_code(self, slot_num: int, value: Any) -> None:
+        """
+        Confirm a slot from a published ``userCode``, if its status admits one.
+
+        A ``userCode`` carrying no usable code says nothing at all: empty is
+        how the gateway spells both a withheld code and a cleared slot, and
+        reading it as cleared would tell sync the code is gone.
+
+        A code is only an active credential on an Enabled slot. A Disabled
+        slot keeps its digits, and the poll projection
+        (``_project_user_code_result``) already refuses to report them, so
+        confirming them here would make the same slot read in sync over push
+        and unreadable over poll -- decided by which transport spoke last, and
+        for retained messages that is arrival order rather than lock state.
+
+        Never having heard a status is deliberately NOT treated as "not
+        Enabled". A gateway that publishes a slot's code and never its status
+        would otherwise leave that slot permanently unconfirmed, so the
+        unknown case keeps the code, which is what this did before there was
+        any tracking at all. If the slot turns out to be Disabled, the next
+        poll reads it unreadable and corrects the record; the reverse -- muting
+        a real code until some future republication of a retained topic -- has
+        no such correction.
+        """
+        if (code := _published_code(value)) is None:
+            return
+        status = self._last_user_id_status.get(slot_num)
+        if status is not None and status is not CodeSlotStatus.ENABLED:
+            LOGGER.debug(
+                "Lock %s: ignoring published code for slot %s; its last status "
+                "was %s rather than Enabled",
+                self.lock.entity_id,
+                slot_num,
+                status.name,
+            )
+            return
+        self._confirm_slot(slot_num, SlotCredential.known(code))
+
+    @callback
+    def _process_published_status(self, slot_num: int, value: Any) -> None:
+        """
+        Record a published ``userIdStatus`` and act on it when it is Available.
+
+        ``userIdStatus`` is what carries occupancy, and only Available means
+        the slot holds nothing -- any other status leaves the code to the
+        paired ``userCode`` publication. A value that is not a status at all is
+        recorded as nothing, because "unreadable status" must not gate codes
+        the way a genuine Disabled does.
+
+        Available is ignored when Lock Code Manager expects a PIN on this
+        slot. Some locks send stale AVAILABLE events after a code was set,
+        which would cause infinite sync loops.
+        """
+        if (status := _interpret_user_id_status(value)) is None:
+            return
+        self._last_user_id_status[slot_num] = status
+        if status is not CodeSlotStatus.AVAILABLE:
+            return
+        if (
+            self.coordinator is not None
+            and self.coordinator.desired_credential(pin_address(slot_num)).is_present
         ):
-            self._confirm_slot(slot_num, SlotCredential.empty())
+            LOGGER.debug(
+                "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
+                "(LCM expects PIN on this slot)",
+                self.lock.entity_id,
+                slot_num,
+            )
+            return
+        self._confirm_slot(slot_num, SlotCredential.empty())
 
     @callback
     def _process_notification(
@@ -608,6 +704,20 @@ class ZWaveJSUILock(BaseMqttLock):
         )
 
     @callback
+    def _forget_node_subscription_state(self) -> None:
+        """
+        Drop everything that was only true while the node subscription was live.
+
+        The tracked slot statuses go with it: they describe the node that
+        subscription covered, and after a rename or a teardown that is either
+        a different node or one nobody is watching. Keeping them would let a
+        status observed before an unload gate codes published after the
+        resubscribe, with nothing in between to correct it.
+        """
+        self._subscribed_node_topic = None
+        self._last_user_id_status.clear()
+
+    @callback
     def _node_subscription_current(self, node_topic: str | None) -> bool:
         """
         Return whether the live subscription already covers what is wanted.
@@ -640,7 +750,7 @@ class ZWaveJSUILock(BaseMqttLock):
         # puts in the push-unsub registry -- the api transport is tracked
         # separately -- so clearing all of them clears exactly this one.
         self._clear_push_unsubs()
-        self._subscribed_node_topic = None
+        self._forget_node_subscription_state()
 
         @callback
         def message_received(msg: ReceiveMessage) -> None:
@@ -1235,7 +1345,7 @@ class ZWaveJSUILock(BaseMqttLock):
         both paths, so teardown owns both. Idempotent.
         """
         self._clear_push_unsubs()
-        self._subscribed_node_topic = None
+        self._forget_node_subscription_state()
         self._release_api_subscription()
 
     async def async_unload(self, remove_permanently: bool) -> None:

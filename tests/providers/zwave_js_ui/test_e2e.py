@@ -61,6 +61,7 @@ CC_USER_CODE_ID = 99
 # zwave-js UserIDStatus: 0 Available, 1 Enabled.
 STATUS_AVAILABLE = 0
 STATUS_ENABLED = 1
+STATUS_DISABLED = 2
 
 E2E_SLOT_PINS = {1: "1234", 2: "5678"}
 LOCK_CAPACITY = 20
@@ -368,13 +369,70 @@ class TestPushUpdates:
         synced_lcm_config_entry: MockConfigEntry,
         zui_lock: ZWaveJSUILock,
     ) -> None:
-        """Available is the one status that confirms the slot holds nothing."""
+        """
+        Available is the one status that confirms the slot holds nothing.
+
+        Asserted on a slot the entry configures nothing for, because a slot it
+        does expect a code on is the stale-AVAILABLE case below.
+        """
+        unconfigured_slot = max(E2E_SLOT_PINS) + 1
+        fire_zui_node_value(
+            hass,
+            f"user_code/endpoint_0/userIdStatus/{unconfigured_slot}",
+            STATUS_AVAILABLE,
+        )
+        await hass.async_block_till_done()
+
+        assert (
+            zui_lock.coordinator.data.get(pin_address(unconfigured_slot))
+            is SlotCredential.empty()
+        )
+
+    async def test_stale_available_does_not_unwind_a_synced_slot(
+        self,
+        hass: HomeAssistant,
+        synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+    ) -> None:
+        """
+        A lock re-announcing AVAILABLE after a write must not restart sync.
+
+        Some locks send a stale AVAILABLE once a code lands. Believed, it
+        marks the slot cleared, sync rewrites it, the lock re-announces, and
+        the entry never settles -- so the assertion is that a fully synced
+        slot survives one.
+        """
         fire_zui_node_value(
             hass, "user_code/endpoint_0/userIdStatus/2", STATUS_AVAILABLE
         )
         await hass.async_block_till_done()
 
-        assert zui_lock.coordinator.data.get(pin_address(2)) is SlotCredential.empty()
+        assert zui_lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
+            E2E_SLOT_PINS[2]
+        )
+
+    async def test_a_disabled_slots_code_is_not_a_confirmation(
+        self,
+        hass: HomeAssistant,
+        synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+    ) -> None:
+        """
+        A Disabled slot keeps its digits, and they are not an active code.
+
+        The status and the code are separate retained topics, so the push path
+        has to read one against the other or it reports the same slot in sync
+        while a poll of it reads unreadable.
+        """
+        fire_zui_node_value(
+            hass, "user_code/endpoint_0/userIdStatus/1", STATUS_DISABLED
+        )
+        fire_zui_node_value(hass, "user_code/endpoint_0/userCode/1", "9999")
+        await hass.async_block_till_done()
+
+        assert zui_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
+            E2E_SLOT_PINS[1]
+        )
 
 
 class TestKeypadEvents:
