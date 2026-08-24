@@ -794,6 +794,11 @@ class ZWaveJSUILock(BaseMqttLock):
             )
 
         if (bound := self._gateway_from_availability()) is not None:
+            # No home id check, and deliberately: this topic came out of the
+            # discovery payload that created this very lock entity, so the
+            # gateway named it about itself. The scan below needs the check
+            # precisely because it has no such attribution -- it finds whoever
+            # happens to be publishing on the prefix.
             self._api_base = bound[1]
             LOGGER.debug(
                 "Lock %s: bound to zwave-js-ui gateway %s from its discovery "
@@ -844,13 +849,15 @@ class ZWaveJSUILock(BaseMqttLock):
                 f"{prefix}/_CLIENTS"
             )
 
+        # Ask each candidate which network it runs and keep the one whose home
+        # id matches this lock's identifier. A sole candidate is asked too:
+        # once dead gateways are filtered out at the status, "the only gateway
+        # answering on this prefix" is not the same claim as "this lock's
+        # gateway". Someone whose controller is down, sharing a broker with a
+        # neighbouring network, would otherwise bind to it -- and every
+        # Personal Identification Number would be written into that network's
+        # node of the same number.
         candidates = sorted(gateways)
-        if len(candidates) == 1:
-            self._api_base = f"{prefix}/_CLIENTS/{candidates[0]}"
-            return self._api_base
-
-        # Several gateways share the prefix, so ask each one which network it
-        # runs and keep the one whose home id matches this lock's identifier.
         home_id = int(home_hex, 16)
         matches: list[str] = []
         for client in candidates:
@@ -878,8 +885,9 @@ class ZWaveJSUILock(BaseMqttLock):
             # one silently programs a lock we were not asked about, so this
             # never tiebreaks.
             raise LockDisconnected(
-                f"Could not identify which zwave-js-ui gateway serves "
-                f"{self.lock.entity_id} among {', '.join(candidates)}"
+                f"Could not identify which zwave-js-ui gateway runs network "
+                f"{home_hex} for {self.lock.entity_id} among "
+                f"{', '.join(candidates)}"
             )
         self._api_base = matches[0]
         return self._api_base

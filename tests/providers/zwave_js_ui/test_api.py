@@ -290,26 +290,69 @@ async def test_binding_without_discovery_data_falls_through(
     assert zui_lock_with_device._gateway_prefix() is None
 
 
-async def test_single_gateway_resolves_without_asking_it_anything(
+async def test_a_sole_candidate_is_asked_which_network_it_runs(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """Being the only gateway answering on the prefix earns no exemption."""
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+
+    task = await async_start_gateway_resolution(hass, zui_scan_lock_provider)
+    fire_zui_gateway_status(hass)
+
+    assert await task == ZUI_API_BASE
+    assert [base for base, _, _ in zui_api_responder.requests] == [ZUI_API_BASE]
+
+
+async def test_a_sole_candidate_running_another_network_is_refused(
     hass: HomeAssistant,
     zui_scan_lock_provider: ZWaveJSUILock,
     zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
-    One gateway on the prefix is the answer; no api round trip is spent.
+    The last gateway standing can belong to somebody else's network.
 
-    getInfo exists to break a tie, so a broker running a single gateway must
-    resolve even when that gateway is too busy (or too old) to answer it.
+    Offline gateways are dropped at the status, so a user whose own
+    controller is down and whose broker is shared with a neighbouring network
+    leaves that network's gateway as the only candidate. Binding it writes
+    this lock's Personal Identification Numbers into whatever the other
+    network calls node 20.
+    """
+    zui_api_responder.set_result("getInfo", {"homeid": 0x11111111})
+
+    task = await async_start_gateway_resolution(hass, zui_scan_lock_provider)
+    fire_zui_gateway_status(hass)
+
+    with pytest.raises(LockDisconnected, match=f"{ZUI_HOME_HEX}.*{ZUI_GATEWAY_NAME}"):
+        await task
+
+    assert zui_scan_lock_provider._api_base is None
+
+
+async def test_a_sole_candidate_that_will_not_say_is_refused(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    Silence is not a match either, however local the question is.
+
+    getInfo is assembled from the gateway's own cached driver state and puts
+    nothing on the mesh, so a gateway that will not answer it inside the
+    local budget is not busy -- it is in no state to be trusted with a write.
     """
     task = await async_start_gateway_resolution(hass, zui_scan_lock_provider)
     fire_zui_gateway_status(hass)
 
-    assert await task == ZUI_API_BASE
-    assert zui_api_responder.requests == []
+    with pytest.raises(LockDisconnected, match=ZUI_HOME_HEX):
+        await task
 
 
 async def test_resolution_is_cached_after_the_first_window(
-    hass: HomeAssistant, zui_scan_lock_provider: ZWaveJSUILock
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
     The second call answers from the cache rather than reopening the window.
@@ -317,6 +360,7 @@ async def test_resolution_is_cached_after_the_first_window(
     Nothing is published this time, so an uncached implementation would find
     no gateway at all and raise instead of returning the same base.
     """
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
     task = await async_start_gateway_resolution(hass, zui_scan_lock_provider)
     fire_zui_gateway_status(hass)
     assert await task == ZUI_API_BASE
@@ -378,17 +422,16 @@ async def test_gateway_whose_retained_status_is_offline_is_never_bound(
     assert zui_api_responder.requests == []
 
 
-async def test_a_live_gateway_wins_over_a_dead_one_without_a_probe(
+async def test_a_dead_gateway_is_never_even_asked(
     hass: HomeAssistant,
     zui_scan_lock_provider: ZWaveJSUILock,
     zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
-    An offline sibling does not make resolution ambiguous.
+    An offline sibling is dropped at the status, before any probe is spent.
 
-    Dropping it at the status leaves exactly one candidate, so the lock binds
-    on the cheap path rather than paying a getInfo round trip -- and cannot
-    bind to the dead one even if it happens to sort first.
+    It cannot be bound even if it happens to sort first, and probing it would
+    cost the local budget waiting on a client that is not there.
     """
     zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
 
@@ -397,7 +440,7 @@ async def test_a_live_gateway_wins_over_a_dead_one_without_a_probe(
     fire_zui_gateway_status(hass)
 
     assert await task == ZUI_API_BASE
-    assert zui_api_responder.requests == []
+    assert [base for base, _, _ in zui_api_responder.requests] == [ZUI_API_BASE]
 
 
 async def test_two_gateways_are_told_apart_by_home_id(
