@@ -13,7 +13,6 @@ from homeassistant.components.mqtt import (
     DOMAIN as MQTT_DOMAIN,
     async_publish,
     async_subscribe,
-    debug_info as mqtt_debug_info,
 )
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
@@ -31,7 +30,7 @@ from ..domain.credentials import (
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import parse_slot_num
+from ._util import entity_state_is_available, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER
 
 # Device registry identifier prefix Zigbee2MQTT uses in its HA discovery
@@ -148,7 +147,11 @@ class Zigbee2MQTTLock(BaseLock):
         """
         Return scan interval for usercodes.
 
-        With push updates, we only need polling as a fallback.
+        Inert as long as ``supports_push`` is true: the coordinator leaves its
+        update interval unset for a push provider, so nothing schedules a poll
+        at this cadence and drift is caught by the hourly hard refresh instead.
+        This is the fallback the coordinator would use if push were ever
+        unsupported or disabled.
         """
         return timedelta(minutes=5)
 
@@ -183,34 +186,21 @@ class Zigbee2MQTTLock(BaseLock):
         """
         if not self._is_z2m_device():
             return None
-        device_id = self.lock.device_id
-        if not device_id:
+        payload = resolve_discovery_payload(self.hass, self.lock)
+        if payload is None:
             return None
-        try:
-            info = mqtt_debug_info.info_for_device(self.hass, device_id)
-        except KeyError:
-            # MQTT integration data not loaded.
-            LOGGER.debug("MQTT debug info unavailable for %s", self.lock.entity_id)
-            return None
-        for entity_info in info.get("entities", []):
-            if entity_info.get("entity_id") != self.lock.entity_id:
-                continue
-            discovery_data = entity_info.get("discovery_data") or {}
-            payload = discovery_data.get("payload")
-            if not isinstance(payload, dict):
-                LOGGER.debug("No discovery payload for %s", self.lock.entity_id)
-                return None
-            state_topic = payload.get("state_topic")
-            if isinstance(state_topic, str) and state_topic:
-                return state_topic
-            command_topic = payload.get("command_topic")
-            if isinstance(command_topic, str) and command_topic.endswith("/set"):
-                return command_topic.removesuffix("/set")
-            LOGGER.debug(
-                "Discovery payload for %s has no usable topic",
-                self.lock.entity_id,
-            )
-            return None
+        state_topic = payload.get("state_topic")
+        if isinstance(state_topic, str) and state_topic:
+            return state_topic
+        # Zigbee2MQTT's command topic is the device topic plus ``/set``, so
+        # stripping the suffix names the same device the state topic would.
+        command_topic = payload.get("command_topic")
+        if isinstance(command_topic, str) and command_topic.endswith("/set"):
+            return command_topic.removesuffix("/set")
+        LOGGER.debug(
+            "Discovery payload for %s has no usable topic",
+            self.lock.entity_id,
+        )
         return None
 
     def _get_topic(self, suffix: str = "") -> str | None:
@@ -241,8 +231,7 @@ class Zigbee2MQTTLock(BaseLock):
 
     async def async_is_device_available(self) -> bool:
         """Return whether the lock entity reports an operational state."""
-        state = self.hass.states.get(self.lock.entity_id)
-        return not (state is None or state.state == "unavailable")
+        return entity_state_is_available(self.hass, self.lock.entity_id)
 
     @callback
     def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
@@ -672,8 +661,8 @@ class Zigbee2MQTTLock(BaseLock):
             raise LockDisconnected("Device not available")
 
         # Renames/bridge migrations with no disconnect self-heal here: the
-        # 5-minute poll re-checks that the push subscription still matches
-        # the currently resolved topic.
+        # hourly hard refresh lands on this read and re-checks that the push
+        # subscription still matches the currently resolved topic.
         try:
             await self._async_ensure_device_subscription()
         except LockDisconnected as err:

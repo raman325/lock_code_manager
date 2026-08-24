@@ -17,7 +17,6 @@ from homeassistant.components.mqtt import (
     DOMAIN as MQTT_DOMAIN,
     async_publish,
     async_subscribe,
-    debug_info as mqtt_debug_info,
 )
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
@@ -35,7 +34,7 @@ from ..domain.credentials import (
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import parse_slot_num
+from ._util import entity_state_is_available, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER
 
 # HA discovery device identifier published by zwave-js-ui
@@ -222,9 +221,12 @@ class ZWaveJSUILock(BaseLock):
         """
         Return scan interval for usercodes.
 
-        Every slot costs its own api round trip through the gateway and the
-        mesh, so polling is spaced out and exists to catch drift rather than
-        to be the channel changes arrive on.
+        Inert as long as ``supports_push`` is true: the coordinator leaves its
+        update interval unset for a push provider, so nothing schedules a poll
+        at this cadence and drift is caught by the hourly hard refresh instead.
+        This is the fallback the coordinator would use if push were ever
+        unsupported or disabled, spaced out because every slot costs its own
+        api round trip through the gateway and the mesh.
         """
         return timedelta(minutes=5)
 
@@ -262,30 +264,13 @@ class ZWaveJSUILock(BaseLock):
         its shape would double-count the ``/set`` suffix and leave a topic that
         points at the wrong value.
         """
-        device_id = self.lock.device_id
-        if not device_id:
+        payload = resolve_discovery_payload(self.hass, self.lock)
+        if payload is None:
             return None
-        try:
-            info = mqtt_debug_info.info_for_device(self.hass, device_id)
-        except KeyError:
-            # MQTT integration data not loaded.
-            LOGGER.debug("MQTT debug info unavailable for %s", self.lock.entity_id)
-            return None
-        for entity_info in info.get("entities", []):
-            if entity_info.get("entity_id") != self.lock.entity_id:
-                continue
-            discovery_data = entity_info.get("discovery_data") or {}
-            payload = discovery_data.get("payload")
-            if not isinstance(payload, dict):
-                LOGGER.debug("No discovery payload for %s", self.lock.entity_id)
-                return None
-            state_topic = payload.get("state_topic")
-            if isinstance(state_topic, str) and state_topic:
-                return state_topic
-            LOGGER.debug(
-                "Discovery payload for %s has no state topic", self.lock.entity_id
-            )
-            return None
+        state_topic = payload.get("state_topic")
+        if isinstance(state_topic, str) and state_topic:
+            return state_topic
+        LOGGER.debug("Discovery payload for %s has no state topic", self.lock.entity_id)
         return None
 
     def _prefix_and_node_topic(self) -> tuple[str, str] | None:
@@ -328,8 +313,7 @@ class ZWaveJSUILock(BaseLock):
 
     async def async_is_device_available(self) -> bool:
         """Return whether the lock entity reports an operational state."""
-        state = self.hass.states.get(self.lock.entity_id)
-        return not (state is None or state.state == "unavailable")
+        return entity_state_is_available(self.hass, self.lock.entity_id)
 
     async def _async_subscribe(
         self, topic: str, handler: Callable[[ReceiveMessage], None]
@@ -791,8 +775,9 @@ class ZWaveJSUILock(BaseLock):
         await self._async_ensure_operational()
 
         # Node renames and gateway migrations produce no disconnect, so the
-        # poll is the only recurring visit that can notice the subscription
-        # has drifted off the topic discovery now points at.
+        # hourly hard refresh -- which lands here, and is the only recurring
+        # read a push provider makes -- is what notices the subscription has
+        # drifted off the topic discovery now points at.
         try:
             await self._async_ensure_node_subscription()
         except LockDisconnected as err:
