@@ -173,5 +173,44 @@ async def test_a_clear_that_fails_leaves_the_repair_standing(
 
     assert result["type"] == "abort"
     assert result["reason"] == "unmanaged_code_clear_failed"
+    assert result["description_placeholders"]["link_health"] == ""
     assert (await lock.async_get_usercodes())[STRANDED_SLOT].pin == STRANDED_PIN
     assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+
+async def test_a_failed_clear_quotes_the_lock_link_health(
+    hass: HomeAssistant, stranded
+) -> None:
+    """
+    A failed clear carries the provider's transport counters.
+
+    The failure message alone cannot distinguish a lock that rejected the
+    clear from a link that dropped the reply; whatever the provider can
+    measure about its transport goes in so the reader can settle it.
+    """
+    lock = stranded.runtime_data.locks[LOCK_1_ENTITY_ID]
+    issue_id = unmanaged_issue_id(LOCK_1_ENTITY_ID, STRANDED_SLOT)
+    flow = await async_create_fix_flow(
+        hass, issue_id, {"lock_entity_id": LOCK_1_ENTITY_ID, "slot": STRANDED_SLOT}
+    )
+    flow.hass = hass
+    with (
+        patch.object(
+            lock,
+            "async_internal_clear_usercode",
+            AsyncMock(side_effect=LockDisconnected("lock is asleep")),
+        ),
+        patch.object(
+            lock,
+            "describe_link_health",
+            return_value="39 read requests went unanswered",
+        ),
+    ):
+        result = await flow.async_step_clear()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "unmanaged_code_clear_failed"
+    assert (
+        result["description_placeholders"]["link_health"]
+        == "\n\n39 read requests went unanswered"
+    )
