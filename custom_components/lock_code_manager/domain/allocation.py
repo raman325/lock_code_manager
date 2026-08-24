@@ -22,6 +22,7 @@ from ..const import MAX_SEARCHED_SLOT
 from ..providers import resolve_provider_class_for_entity
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
+from .locks import borrowed_lock_instance
 from .occupancy import LockOccupancy, Occupancy
 from .queries import get_managed_slots
 
@@ -130,10 +131,12 @@ async def async_check_slot_capacity(
     slots = sorted({int(slot) for slot in slots_list})
     for lock_entity_id in locks:
         try:
-            lock_instance = build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
-            if not lock_instance.credential_index_follows_slot:
-                continue
-            capabilities = await lock_instance.async_get_capabilities()
+            async with borrowed_lock_instance(
+                build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
+            ) as lock_instance:
+                if not lock_instance.credential_index_follows_slot:
+                    continue
+                capabilities = await lock_instance.async_get_capabilities()
         except LockQuerySkipped:
             continue
         except LockCodeManagerError as err:
@@ -221,23 +224,24 @@ async def async_read_occupancy(
             )
             continue
 
-        follows_slot = lock_instance.credential_index_follows_slot
-        occupied: frozenset[int] | None = None
-        if follows_slot:
-            # A lock that allocates its own credential index cannot
-            # constrain the numbering, so asking it spends a round trip
-            # -- one per index on some providers -- on an answer that
-            # nothing reads.
-            try:
-                occupied = await lock_instance.async_internal_get_occupied_indices(
-                    indices
-                )
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to read the contents of %s; treating them as unknown",
-                    lock_entity_id,
-                    exc_info=True,
-                )
+        async with borrowed_lock_instance(lock_instance):
+            follows_slot = lock_instance.credential_index_follows_slot
+            occupied: frozenset[int] | None = None
+            if follows_slot:
+                # A lock that allocates its own credential index cannot
+                # constrain the numbering, so asking it spends a round trip
+                # -- one per index on some providers -- on an answer that
+                # nothing reads.
+                try:
+                    occupied = await lock_instance.async_internal_get_occupied_indices(
+                        indices
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Failed to read the contents of %s; treating them as unknown",
+                        lock_entity_id,
+                        exc_info=True,
+                    )
         lock_occupancies.append(
             LockOccupancy(
                 lock_entity_id=lock_entity_id,
@@ -321,14 +325,16 @@ async def async_max_slot(
     limits: dict[str, int] = {}
     for lock_entity_id in locks:
         try:
-            lock_instance = build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
-            if not lock_instance.credential_index_follows_slot:
-                continue
-            # None is a lock with no opinion, not a lock with no slots.
-            # Only a real answer earns a name, because the name is what
-            # the refusal blames.
-            if (bound := await lock_instance.async_get_max_slot()) is not None:
-                limits[lock_entity_id] = bound
+            async with borrowed_lock_instance(
+                build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
+            ) as lock_instance:
+                if not lock_instance.credential_index_follows_slot:
+                    continue
+                # None is a lock with no opinion, not a lock with no slots.
+                # Only a real answer earns a name, because the name is what
+                # the refusal blames.
+                if (bound := await lock_instance.async_get_max_slot()) is not None:
+                    limits[lock_entity_id] = bound
         except Exception:
             _LOGGER.warning(
                 "Could not ask %s how far its slot numbers go; "

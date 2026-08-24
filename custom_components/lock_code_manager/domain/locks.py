@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import logging
 from typing import Any
 
@@ -50,6 +52,30 @@ def async_create_lock_instance(
         lock,
     )
     return lock
+
+
+@asynccontextmanager
+async def borrowed_lock_instance(lock: BaseLock) -> AsyncIterator[BaseLock]:
+    """
+    Yield a provider built for one query and release its transport afterwards.
+
+    Answering a question about a lock can leave transport behind: an MQTT
+    provider subscribes to its lock's topics on the way to answering, and a
+    zwave-js-ui one also opens its gateway's api channel. Nothing else ever
+    tears a throwaway down, so every leftover subscription outlives the query
+    and goes on firing code slot events alongside the entry's real provider --
+    one more ghost per config flow attempt, per keypad press.
+
+    Releasing the transport is the whole of what a borrowed instance
+    acquired, which is why this is not ``async_unload``. Unload means "this
+    lock is leaving the entry", and providers act on that: the virtual lock
+    writes its store back, which from an instance that never read one would
+    erase every code in it.
+    """
+    try:
+        yield lock
+    finally:
+        lock.unsubscribe_push_updates()
 
 
 def get_managed_locks(hass: HomeAssistant) -> dict[str, BaseLock]:

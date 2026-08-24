@@ -50,6 +50,7 @@ from .conftest import (
     ZUI_PREFIX,
     ZWaveJSUIApiResponder,
     async_discover_zui_lock,
+    fire_zui_node_value,
 )
 
 # Door Lock is 98; User Code Command Class is 99.
@@ -131,15 +132,6 @@ def user_code_call(method: str, args: list[Any]) -> list[Any]:
         method,
         args,
     ]
-
-
-def fire_node_value(hass: HomeAssistant, suffix: str, value: Any) -> None:
-    """Publish a value under this lock's node topic in the gateway's envelope."""
-    async_fire_mqtt_message(
-        hass,
-        f"{ZUI_NODE_TOPIC}/{suffix}",
-        json.dumps({"time": 1700000000000, "value": value}),
-    )
 
 
 @pytest.fixture
@@ -355,7 +347,7 @@ class TestPushUpdates:
         zui_lock: ZWaveJSUILock,
     ) -> None:
         """A userCode publication is a confirmed code, no api round trip needed."""
-        fire_node_value(hass, "99/0/userCode/1", "4321")
+        fire_zui_node_value(hass, "99/0/userCode/1", "4321")
         await hass.async_block_till_done()
 
         assert zui_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
@@ -374,7 +366,9 @@ class TestPushUpdates:
         zui_lock: ZWaveJSUILock,
     ) -> None:
         """Available is the one status that confirms the slot holds nothing."""
-        fire_node_value(hass, "user_code/endpoint_0/userIdStatus/2", STATUS_AVAILABLE)
+        fire_zui_node_value(
+            hass, "user_code/endpoint_0/userIdStatus/2", STATUS_AVAILABLE
+        )
         await hass.async_block_till_done()
 
         assert zui_lock.coordinator.data.get(pin_address(2)) is SlotCredential.empty()
@@ -402,7 +396,7 @@ class TestKeypadEvents:
         events: list[Event] = []
         hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
 
-        fire_node_value(
+        fire_zui_node_value(
             hass,
             "notification/endpoint_0/Access_Control/Keypad_unlock_operation",
             {"userId": 1},

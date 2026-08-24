@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import contextmanager
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -19,6 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 
 ZUI_PREFIX = "zwave"
@@ -279,6 +281,68 @@ def zui_api_responder(
     mqtt_mock.async_publish.side_effect = responder
     yield responder
     mqtt_mock.async_publish.side_effect = None
+
+
+def fire_zui_node_value(hass: HomeAssistant, suffix: str, value: Any) -> None:
+    """Publish a value under this lock's node topic in the gateway's envelope."""
+    async_fire_mqtt_message(
+        hass,
+        f"{ZUI_NODE_TOPIC}/{suffix}",
+        json.dumps({"time": 1700000000000, "value": value}),
+    )
+
+
+class TransportLedger:
+    """
+    What a block of code did to a provider's transport.
+
+    ``opened`` is what makes an emptiness assertion mean something: a block
+    that subscribed to nothing at all leaks nothing either, and would pass a
+    ``live == []`` check while proving none of it. ``disposed`` names the
+    locks whose transport was released, which is the assertion that still
+    holds for a query that happens to open nothing today.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing opened and nothing disposed."""
+        self.opened: list[str] = []
+        self.live: list[str] = []
+        self.disposed: list[str] = []
+
+
+@contextmanager
+def track_zui_transport() -> Generator[TransportLedger]:
+    """
+    Track the provider's MQTT subscriptions and the disposal of its instances.
+
+    Wrapping the returned unsub is what makes releasing observable at all:
+    Home Assistant hands the subscriber an opaque callable and keeps no
+    registry a test can read back.
+    """
+    ledger = TransportLedger()
+    real_subscribe = ZWaveJSUILock._async_subscribe
+    real_dispose = BaseLock.unsubscribe_push_updates
+
+    async def _spy(self: ZWaveJSUILock, topic: str, *args: Any, **kwargs: Any) -> Any:
+        unsub = await real_subscribe(self, topic, *args, **kwargs)
+
+        def _release() -> None:
+            ledger.live.remove(topic)
+            unsub()
+
+        ledger.opened.append(topic)
+        ledger.live.append(topic)
+        return _release
+
+    def _dispose(self: BaseLock) -> None:
+        ledger.disposed.append(self.lock.entity_id)
+        real_dispose(self)
+
+    with (
+        patch.object(ZWaveJSUILock, "_async_subscribe", _spy),
+        patch.object(BaseLock, "unsubscribe_push_updates", _dispose),
+    ):
+        yield ledger
 
 
 def fire_zui_gateway_status(
