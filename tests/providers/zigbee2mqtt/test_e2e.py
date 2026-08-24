@@ -9,8 +9,15 @@ from unittest.mock import DEFAULT
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
+from homeassistant.config_entries import SOURCE_USER
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_NUM_USERS,
+    DOMAIN,
+)
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
@@ -278,3 +285,40 @@ class TestGetUsercodes:
 
         assert result[1] == SlotCredential.known("PIN1")
         assert result[2] == SlotCredential.known("PIN2")
+
+
+class TestAddingThroughTheUserInterface:
+    """The config flow has to read the lock before it can number anybody."""
+
+    async def test_the_flow_gets_as_far_as_naming_the_first_user(
+        self,
+        hass: HomeAssistant,
+        mqtt_lock_discovered,
+        auto_get_responder,
+    ) -> None:
+        """
+        Choosing a Zigbee2MQTT lock and a user count reaches the naming step.
+
+        Between those two submissions the flow builds a provider of its own
+        and reads the lock, to find numbers nothing is already using. That
+        provider never runs ``async_setup``, gets exactly one call, and is
+        dropped, so a read that defers to a later attempt has none: the flow
+        refuses with occupancy_unknown and the lock cannot be added at all.
+        """
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        flow_id = result["flow_id"]
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_NAME: "z2m", CONF_LOCKS: [mqtt_lock_discovered.entity_id]},
+        )
+        assert result["step_id"] == "choose_path"
+
+        await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+
+        assert result["step_id"] == "code_slot"
+        assert result["description_placeholders"]["user_num"] == 1
