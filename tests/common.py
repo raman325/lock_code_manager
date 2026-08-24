@@ -58,7 +58,7 @@ UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
 
 
 async def async_discover_unclaimed_mqtt_lock(
-    hass: HomeAssistant,
+    hass: HomeAssistant, suffix: str = ""
 ) -> er.RegistryEntry:
     """
     Discover an mqtt lock whose device identifier no provider recognizes.
@@ -66,26 +66,31 @@ async def async_discover_unclaimed_mqtt_lock(
     Going through real discovery is what puts the bridge's identifier on the
     device registry entry -- the very field dispatch reads -- so a hand-built
     registry row would be testing this test's idea of the payload.
+
+    ``suffix`` distinguishes a second such lock from the first, for the tests
+    that need to tell one the entry already holds from one being added now.
     """
+    identifier = f"{UNCLAIMED_IDENTIFIER}{suffix}"
+    unique_id = f"{identifier}_lock"
     async_fire_mqtt_message(
         hass,
-        f"homeassistant/lock/{UNCLAIMED_IDENTIFIER}/lock/config",
+        f"homeassistant/lock/{identifier}/lock/config",
         json.dumps(
             {
                 "name": None,
-                "command_topic": "somebridge/lock1/set",
-                "state_topic": "somebridge/lock1",
-                "unique_id": UNCLAIMED_UNIQUE_ID,
+                "command_topic": f"somebridge/lock1{suffix}/set",
+                "state_topic": f"somebridge/lock1{suffix}",
+                "unique_id": unique_id,
                 "device": {
-                    "identifiers": [UNCLAIMED_IDENTIFIER],
-                    "name": "Unclaimed Bridge Lock",
+                    "identifiers": [identifier],
+                    "name": f"Unclaimed Bridge Lock{suffix}",
                 },
             }
         ),
     )
     await hass.async_block_till_done()
     ent_reg = er.async_get(hass)
-    entity_id = ent_reg.async_get_entity_id("lock", "mqtt", UNCLAIMED_UNIQUE_ID)
+    entity_id = ent_reg.async_get_entity_id("lock", "mqtt", unique_id)
     assert entity_id is not None, "discovery did not create the lock entity"
     lock_entry = ent_reg.async_get(entity_id)
     assert lock_entry is not None

@@ -2077,6 +2077,87 @@ async def test_options_flow_rejects_unclaimed_mqtt_lock(
     assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID]
 
 
+async def test_options_flow_saves_around_a_grandfathered_unclaimed_lock(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    An entry that already holds an unclaimed lock can still be edited.
+
+    Entries configured before selection-time validation existed can be
+    carrying one, and the options form re-renders the whole lock list every
+    time -- so validating all of it meant the entry could never be saved
+    again. Changing a PIN was refused because of a lock the user was not
+    touching, with no way out but hand-editing storage.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    locks = [LOCK_1_ENTITY_ID, unclaimed.entity_id]
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: locks,
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+        },
+    )
+    entry.add_to_hass(hass)
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: locks,
+                CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "9999"}},
+            },
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == locks
+    assert result["data"][CONF_USERS]["User 1"][CONF_PIN] == "9999"
+
+
+async def test_options_flow_still_refuses_a_newly_added_unclaimed_lock(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    Grandfathering is per lock, not per entry.
+
+    An entry already carrying one unclaimed lock must not become a place
+    where any other one can be added unchecked.
+    """
+    grandfathered = await async_discover_unclaimed_mqtt_lock(hass)
+    newcomer = await async_discover_unclaimed_mqtt_lock(hass, suffix="_two")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, grandfathered.entity_id],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+        },
+    )
+    entry.add_to_hass(hass)
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: [
+                    LOCK_1_ENTITY_ID,
+                    grandfathered.entity_id,
+                    newcomer.entity_id,
+                ],
+                CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            },
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
+    assert result["description_placeholders"]["locks"] == newcomer.entity_id
+
+
 async def test_options_flow_renders_lock_and_users_errors_together(
     hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
 ) -> None:
@@ -2131,3 +2212,39 @@ async def test_reauth_rejects_unclaimed_mqtt_lock(
     assert result["step_id"] == "reauth_confirm"
     assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
     assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+
+
+async def test_reauth_completes_around_a_grandfathered_unclaimed_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    mqtt_mock,
+    mqtt_teardown,
+) -> None:
+    """
+    Reauth is the recovery path, so an old unclaimed lock must not block it.
+
+    The form is pre-filled with the entry's whole lock list, so re-validating
+    all of it meant an entry carrying one unclaimed lock could never finish a
+    reauth -- the exact entry most likely to be in reauth, and the swap it is
+    asking for is on a different lock entirely.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            **BASE_CONFIG,
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+        },
+        unique_id="grandfathered_reauth",
+    )
+    entry.add_to_hass(hass)
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [LOCK_2_ENTITY_ID, unclaimed.entity_id]}
+    )
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
