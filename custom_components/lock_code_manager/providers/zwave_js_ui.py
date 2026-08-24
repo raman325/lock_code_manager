@@ -77,14 +77,14 @@ NODE_VALUE_SEGMENTS = 4
 # with: VALUEID uses the numeric id, NAMED the zwave-js command class name.
 # The literals are the enum values imported above, written out because they
 # are compared against topic text.
-_USER_CODE_CC_SEGMENTS = frozenset({str(int(CC_USER_CODE)), "user_code"})
-_NOTIFICATION_CC_SEGMENTS = frozenset({str(int(CC_NOTIFICATION)), "notification"})
+USER_CODE_CC_SEGMENTS = frozenset({str(int(CC_USER_CODE)), "user_code"})
+NOTIFICATION_CC_SEGMENTS = frozenset({str(int(CC_NOTIFICATION)), "notification"})
 # Notification CC label for lock operations, sanitized into a topic segment
 # (whitespace becomes ``_``); compared case-insensitively.
 NOTIFICATION_ACCESS_CONTROL = "access_control"
 # The two Access Control events that name the code slot that operated the
 # lock. Everything else under the label (manual, RF, jams) names no slot.
-_KEYPAD_EVENT_TO_LOCKED = {
+KEYPAD_EVENT_TO_LOCKED = {
     "keypad_lock_operation": True,
     "keypad_unlock_operation": False,
 }
@@ -139,7 +139,7 @@ def _published_code(value: Any) -> str | None:
     and reaches here as the string it was written as.
 
     Booleans are not codes (and ``True`` would otherwise stringify to a
-    PIN of ``"True"``), and neither is an empty or blank string -- which is
+    code of ``"True"``), and neither is an empty or blank string -- which is
     also how a withheld code and a cleared slot both look, indistinguishably.
     """
     if isinstance(value, bool):
@@ -358,9 +358,9 @@ class ZWaveJSUILock(BaseLock):
         command_class, endpoint, property_name, property_key = segments
         if not _is_endpoint_zero(endpoint):
             return
-        if command_class in _USER_CODE_CC_SEGMENTS:
+        if command_class in USER_CODE_CC_SEGMENTS:
             self._process_user_code_value(property_name, property_key, payload)
-        elif command_class in _NOTIFICATION_CC_SEGMENTS:
+        elif command_class in NOTIFICATION_CC_SEGMENTS:
             self._process_notification(topic, property_name, property_key, payload)
 
     @callback
@@ -412,7 +412,7 @@ class ZWaveJSUILock(BaseLock):
             return
         # ``False`` is a valid mapping value (an unlock), so this compares
         # against None -- a truthiness test would drop every unlock event.
-        if (to_locked := _KEYPAD_EVENT_TO_LOCKED.get(event_label.lower())) is None:
+        if (to_locked := KEYPAD_EVENT_TO_LOCKED.get(event_label.lower())) is None:
             return
         value = _unwrap_mqtt_value(payload)
         user_id = value.get("userId") if isinstance(value, dict) else None
@@ -431,25 +431,33 @@ class ZWaveJSUILock(BaseLock):
             source_data={"topic": topic, "value": value},
         )
 
+    @callback
+    def _node_subscription_current(self, node_topic: str | None) -> bool:
+        """
+        Return whether the live subscription already covers what is wanted.
+
+        A topic that cannot be resolved right now leaves a working
+        subscription in place rather than tearing it down: the discovery data
+        is transiently missing, not pointing somewhere new.
+        """
+        return bool(self._push_unsubs) and (
+            node_topic is None or self._subscribed_node_topic == node_topic
+        )
+
     async def _async_ensure_node_subscription(self) -> None:
         """Subscribe to the node's value tree; idempotent and drift-aware."""
         if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
 
         resolved = self._prefix_and_node_topic()
-        if resolved is None:
-            if self._push_unsubs:
-                # Resolution is transiently unavailable; keep the existing
-                # subscription rather than tearing down a working one.
-                return
+        node_topic = resolved[1] if resolved else None
+        if self._node_subscription_current(node_topic):
+            return
+        if node_topic is None:
             raise LockDisconnected(
                 f"Cannot subscribe for {self.lock.entity_id} — node topic not "
                 "resolvable from MQTT discovery data"
             )
-        node_topic = resolved[1]
-
-        if self._push_unsubs and self._subscribed_node_topic == node_topic:
-            return
 
         # Topic changed (a node rename republishes discovery) or first
         # subscribe. The node subscription is the only thing this provider
@@ -481,12 +489,10 @@ class ZWaveJSUILock(BaseLock):
         """
         resolved = self._prefix_and_node_topic()
         node_topic = resolved[1] if resolved else None
-        if self._push_unsubs and (
-            node_topic is None or self._subscribed_node_topic == node_topic
-        ):
+        if self._node_subscription_current(node_topic):
             return
 
-        if not node_topic:
+        if node_topic is None:
             raise LockDisconnected(
                 f"Cannot subscribe to push updates for {self.lock.entity_id} - "
                 "no node topic"
