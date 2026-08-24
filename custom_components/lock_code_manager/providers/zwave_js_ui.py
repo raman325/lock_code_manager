@@ -165,13 +165,31 @@ def _state_topic_from_payload(payload: dict[str, Any]) -> str | None:
 
 def _split_state_topic(state_topic: str) -> tuple[str, str] | None:
     """
-    Split a gateway-built value topic into ``(gateway prefix, node topic)``.
+    Split a gateway-built value topic into ``(first prefix segment, node topic)``.
 
-    The first segment is always the gateway's own topic prefix, and the last
-    three are the value's ``<cc>/<endpoint>/<property>``. A topic with fewer
-    than five segments leaves no room for both plus a node topic, so it can
-    only be a MANUAL-gateway custom topic, whose shape says nothing about the
-    node — unresolvable, never guessed.
+    The last three segments are the value's ``<cc>/<endpoint>/<property>``,
+    and everything before them is the node topic -- exactly, because the node
+    topic is whatever the gateway put there and this does not have to parse
+    it. A topic with fewer than five segments leaves no room for a prefix, a
+    node topic, and the value, so it can only be a MANUAL-gateway custom
+    topic, whose shape says nothing about the node -- unresolvable, never
+    guessed.
+
+    The prefix is the FIRST segment only, and that is a guess this cannot
+    improve on. zwave-js-ui permits ``/`` inside ``mqtt.prefix``: the settings
+    UI's ``validPrefix`` rule lists ``/`` among the allowed characters
+    (``src/views/Settings.vue``), ``sanitizeTopic`` keeps it unless a caller
+    asks for it to be stripped (``api/lib/utils.ts``), the settings POST
+    handler validates nothing at all (``api/app.ts``), and every topic is
+    built by plain concatenation (``api/lib/MqttClient.ts``). A prefix of
+    ``home/zwave`` therefore produces real multi-level topics, and in
+    ``home/zwave/nodeID_5/98/0/currentMode`` nothing distinguishes the
+    prefix's second segment from a NAMED gateway's location segment.
+
+    So a multi-level prefix is only recoverable from the availability list,
+    which names the gateway's client topic outright. Callers that fall back
+    to this must say so when they find nothing, rather than searching under
+    ``home`` and reporting an empty broker.
     """
     parts = state_topic.split("/")
     if len(parts) < MIN_VALUE_TOPIC_SEGMENTS:
@@ -945,6 +963,12 @@ class ZWaveJSUILock(BaseMqttLock):
         applied client-side on the received topic segment; retained statuses
         arrive immediately after subscribing and the window exists only to
         collect them all before deciding.
+
+        Reaching here at all means the discovery payload named no gateway, so
+        ``prefix`` is the first segment of the state topic -- which is only
+        the whole prefix if the gateway's is single-level. Finding nothing is
+        therefore two different diagnoses at once, and the one the operator
+        cannot guess is named in the refusal: see ``_split_state_topic``.
         """
         gateways: set[str] = set()
 
@@ -982,9 +1006,21 @@ class ZWaveJSUILock(BaseMqttLock):
             unsub()
 
         if not gateways:
+            LOGGER.debug(
+                "Lock %s: nothing answered under %s/_CLIENTS; that prefix was "
+                "derived from state topic %s",
+                self.lock.entity_id,
+                prefix,
+                self._resolve_state_topic(),
+            )
             raise LockDisconnected(
                 f"No zwave-js-ui gateway published a client status under "
-                f"{prefix}/_CLIENTS"
+                f"{prefix}/_CLIENTS. That prefix was taken from the first "
+                f"segment of {self.lock.entity_id}'s state topic, which is "
+                f"wrong if the gateway's mqtt prefix contains a '/': a "
+                f"multi-level prefix is only recoverable from the gateway's "
+                f"discovery availability entry, so enable Home Assistant "
+                f"discovery on the gateway if it is configured that way"
             )
 
         # Ask each candidate which network it runs and keep the one whose home

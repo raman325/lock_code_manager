@@ -399,6 +399,35 @@ async def test_silent_prefix_is_disconnected(
         await zui_scan_lock_provider._async_resolve_api_base()
 
 
+async def test_a_multi_level_prefix_fails_with_its_own_diagnosis(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    A prefix containing a slash cannot be recovered from the state topic.
+
+    zwave-js-ui permits one: its settings UI lists '/' among the allowed
+    prefix characters and its server validates the field not at all. In
+    ``home/zwave/nodeID_20/98/0/currentMode`` nothing distinguishes the
+    prefix's second segment from a NAMED gateway's location segment, so the
+    scan searches under ``home`` and finds an empty broker. That refusal is
+    indistinguishable from a gateway that is simply down, and the operator
+    cannot guess which -- so the message names the one they can act on.
+    """
+    lock = build_zui_lock(
+        hass,
+        await async_discover_zui_lock(
+            hass, prefix="home/zwave", include_availability=False
+        ),
+    )
+    await lock._async_ensure_api_response_subscription()
+
+    with pytest.raises(LockDisconnected, match="multi-level prefix") as caught:
+        await lock._async_resolve_api_base()
+
+    # The prefix it actually searched, so the wrong guess is visible.
+    assert "home/_CLIENTS" in str(caught.value)
+
+
 async def test_non_gateway_clients_on_the_prefix_are_ignored(
     hass: HomeAssistant, zui_scan_lock_provider: ZWaveJSUILock
 ) -> None:
