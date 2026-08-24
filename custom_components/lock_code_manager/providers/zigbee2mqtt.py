@@ -666,6 +666,18 @@ class Zigbee2MQTTLock(BaseLock):
         failures produce an unreadable credential so the coordinator does
         not treat a transient MQTT error as a confirmed-empty slot and storm
         reprogramming after recovery.
+
+        Every slot failing at the transport is a different thing from every
+        slot reading unreadable, and only the first raises. An all-unreadable
+        return is a successful poll as far as the coordinator is concerned:
+        it resets the connectivity breaker, un-suspends the slots, and lets
+        them re-fail on the next tick -- an oscillation on the order of
+        seconds, flipping every slot in and out of sync. A broker that has
+        stopped carrying traffic gets this far because every gate above
+        answers from Home Assistant's configuration rather than from the
+        wire. A slot the lock answered with a withheld, disabled, or masked
+        code is genuine data and must not count towards this, however
+        unreadable it is.
         """
         if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
@@ -699,25 +711,44 @@ class Zigbee2MQTTLock(BaseLock):
         if not code_slots:
             return []
 
-        slot_states = {
+        reads = {
             slot_num: await self._async_read_slot(slot_num, get_topic)
             for slot_num in sorted(code_slots)
         }
-        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
+        if all(state is None for state in reads.values()):
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: none of the {len(reads)} requested slot "
+                "reads reached the lock"
+            )
+        return [
+            user_from_slot(
+                slot_num, SlotCredential.unreadable() if state is None else state
+            )
+            for slot_num, state in reads.items()
+        ]
 
-    async def _async_read_slot(self, slot_num: int, get_topic: str) -> SlotCredential:
+    async def _async_read_slot(
+        self, slot_num: int, get_topic: str
+    ) -> SlotCredential | None:
         """
-        Ask the lock for one slot and wait for the answer.
+        Ask the lock for one slot and wait for the answer; None means silence.
 
-        A publish failure, a timeout, or an unusable reply all produce
-        ``unreadable`` rather than ``empty``: sync must not take a transient
-        MQTT problem for a confirmed-empty slot and storm reprogramming once
-        MQTT recovers.
+        The caller needs the two failures apart, so a request that never left
+        and a request nothing came back for are None rather than unreadable
+        credentials: a slot the bridge described as withheld, disabled, or
+        masked is data, and a slot that produced no reply at all is not. Both
+        reach the coordinator as unreadable -- calling either empty would
+        take a transient MQTT problem for a confirmed-empty slot and storm
+        reprogramming once MQTT recovers -- but only the silences decide
+        whether the whole read was worth anything.
 
-        Slots are queried one at a time so Zigbee2MQTT and the firmware can
-        answer each GET before the next. A parallel gather with per-slot
-        timeouts can fail an entire refresh and leave the coordinator with no
-        data, which makes sync skip every slot (see
+        One silent slot among answered ones stays merely unreadable, which is
+        why this is a per-slot verdict and not an exception. Slots are
+        queried one at a time so Zigbee2MQTT and the firmware can answer each
+        GET before the next, and a lock that answers most requests and drops
+        one is a weak link rather than a lost transport. A parallel gather
+        with per-slot timeouts can fail an entire refresh and leave the
+        coordinator with no data, which makes sync skip every slot (see
         ``SlotSyncManager._resolve_credential_snapshot``).
         """
         loop = asyncio.get_running_loop()
@@ -734,7 +765,7 @@ class Zigbee2MQTTLock(BaseLock):
                 err,
             )
             self._pending_codes.pop(slot_num, None)
-            return SlotCredential.unreadable()
+            return None
 
         try:
             result = await asyncio.wait_for(future, timeout=10.0)
@@ -744,12 +775,15 @@ class Zigbee2MQTTLock(BaseLock):
                 self.lock.entity_id,
                 slot_num,
             )
-            credential = SlotCredential.unreadable()
+            credential = None
         except Exception as err:
             # Broad catch is intentional: the future is resolved by the MQTT
             # callback, and any exception from resolution (InvalidStateError,
             # data processing errors) should not crash the entire refresh.
             # CancelledError is BaseException in Python 3.11+ and propagates.
+            # Only an arriving reply can resolve the future, so this is a
+            # reply that could not be made sense of rather than silence: it
+            # stays a credential and keeps the poll alive.
             LOGGER.warning(
                 "Unexpected error getting PIN for %s slot %s: %s",
                 self.lock.entity_id,

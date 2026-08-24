@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Coroutine
+from contextlib import AbstractContextManager
 from datetime import timedelta
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,6 +33,53 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import (
 from tests.providers.helpers import ProviderNativeTransportContractTests
 
 from .conftest import Z2M_FULL_TOPIC, _minimal_lock
+
+_PUBLISH = "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish"
+_WAIT_FOR = "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for"
+
+
+def _publish_never_leaves() -> AbstractContextManager[Any]:
+    """Make every GET fail on publish, the way an unreachable broker does."""
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise HomeAssistantError("broker unavailable")
+
+    return patch(_PUBLISH, side_effect=boom)
+
+
+def _no_reply_ever_arrives() -> AbstractContextManager[Any]:
+    """Let every GET out and answer none of them, the way a silent bridge does."""
+    return patch(_WAIT_FOR, new_callable=AsyncMock, side_effect=TimeoutError)
+
+
+def _answering_publish(
+    lock: Zigbee2MQTTLock, codes: dict[int, str]
+) -> Callable[..., Coroutine[Any, Any, None]]:
+    """
+    Stand in for a bridge that answers the GET for the named slots only.
+
+    Zigbee2MQTT replies on the device topic, which is what resolves the
+    pending read; a slot left out of ``codes`` is published and never
+    answered. The read future exists before the publish is awaited, so
+    answering from inside the publish is the same ordering the bridge gets.
+    """
+
+    async def _publish(
+        hass: HomeAssistant, topic: str, payload: str, **kwargs: object
+    ) -> None:
+        slot = json.loads(payload)["pin_code"]["user"]
+        if slot in codes:
+            lock._process_z2m_device_payload(
+                {
+                    "pin_code": {
+                        "user": slot,
+                        "user_enabled": True,
+                        "pin_code": codes[slot],
+                    }
+                }
+            )
+
+    return _publish
 
 
 @pytest.mark.skip(
@@ -289,7 +339,13 @@ class TestAsyncGetUsers:
         hass: HomeAssistant,
         zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
     ) -> None:
-        """If no pin_code reply arrives in time, that slot is UNREADABLE (transient read failure)."""
+        """
+        A slot with no reply in time is UNREADABLE, beside one that answered.
+
+        The answered slot is what keeps this a poll rather than a lost
+        transport: a lock that drops one request out of several is a weak
+        link, and the read still carries data.
+        """
         real_wait_for = asyncio.wait_for
 
         async def fast_pin_timeout(
@@ -303,11 +359,11 @@ class TestAsyncGetUsers:
         with (
             patch(
                 "custom_components.lock_code_manager.providers._base.get_managed_slots",
-                return_value={11},
+                return_value={11, 12},
             ),
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
-                new_callable=AsyncMock,
+                side_effect=_answering_publish(lock, {12: "1234"}),
             ),
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for",
@@ -318,6 +374,7 @@ class TestAsyncGetUsers:
 
         by_slot = {u.user_id: u for u in users}
         assert by_slot[11].pin_credentials[0].state is SlotCredential.unreadable()
+        assert by_slot[12].pin_credentials[0].state == SlotCredential.known("1234")
 
     async def test_a_scoped_read_asks_about_only_the_slots_asked_for(
         self,
@@ -340,13 +397,8 @@ class TestAsyncGetUsers:
             ),
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
-                new_callable=AsyncMock,
+                side_effect=_answering_publish(lock, {3: "1234"}),
             ) as publish,
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for",
-                new_callable=AsyncMock,
-                side_effect=TimeoutError,
-            ),
         ):
             await lock.async_get_users(slots={3})
 
@@ -361,16 +413,21 @@ class TestAsyncGetUsers:
         hass: HomeAssistant,
         zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
     ) -> None:
-        """MQTT GET publish failure yields UNREADABLE for that slot."""
+        """A GET that never left maps that slot to UNREADABLE, not to empty."""
         lock = zigbee2mqtt_lock_connected
+        answer = _answering_publish(lock, {8: "1234"})
 
-        async def boom(*_args: object, **_kwargs: object) -> None:
-            raise HomeAssistantError("broker unavailable")
+        async def boom(
+            hass_inner: HomeAssistant, topic: str, payload: str, **kwargs: object
+        ) -> None:
+            if json.loads(payload)["pin_code"]["user"] == 7:
+                raise HomeAssistantError("broker unavailable")
+            await answer(hass_inner, topic, payload, **kwargs)
 
         with (
             patch(
                 "custom_components.lock_code_manager.providers._base.get_managed_slots",
-                return_value={7},
+                return_value={7, 8},
             ),
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
@@ -381,6 +438,77 @@ class TestAsyncGetUsers:
 
         by_slot = {u.user_id: u for u in users}
         assert by_slot[7].pin_credentials[0].state is SlotCredential.unreadable()
+        assert by_slot[8].pin_credentials[0].state == SlotCredential.known("1234")
+
+    @pytest.mark.parametrize(
+        "silence",
+        [
+            pytest.param(_publish_never_leaves, id="no_get_left_home_assistant"),
+            pytest.param(_no_reply_ever_arrives, id="no_reply_came_back"),
+        ],
+    )
+    async def test_every_slot_silent_disconnects_rather_than_reporting_data(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+        silence: Callable[[], AbstractContextManager[Any]],
+    ) -> None:
+        """
+        A read where nothing was learned is not a successful poll.
+
+        Returning all-unreadable looks like data to the coordinator: it
+        resets the connectivity breaker, un-suspends every slot, and lets
+        them re-fail on the next tick, oscillating on a seconds-scale loop
+        that flips every slot in and out of sync. A broker that has stopped
+        carrying traffic reaches here with the MQTT integration still
+        enabled, so every gate above this read answers yes. Raising leaves
+        the lock unreachable so its backoff governs the next attempt.
+        """
+        lock = zigbee2mqtt_lock_connected
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                return_value={1, 2},
+            ),
+            silence(),
+            pytest.raises(LockDisconnected, match="none of the 2"),
+        ):
+            await lock.async_get_users()
+
+    async def test_every_slot_masked_is_a_healthy_poll(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+    ) -> None:
+        """
+        A lock that withholds every code is answering, not unreachable.
+
+        This is an ordinary ``expose_pin`` configuration, not a fault, so the
+        poll has to succeed even though every slot comes back unreadable --
+        the very shape the all-silent read raises on. Disconnecting here
+        would make such a lock permanently offline no matter how healthy the
+        network is.
+        """
+        lock = zigbee2mqtt_lock_connected
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                return_value={1, 2},
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                side_effect=_answering_publish(lock, {1: "****", 2: "****"}),
+            ),
+        ):
+            users = await lock.async_get_users()
+
+        assert [user.user_id for user in users] == [1, 2]
+        assert all(
+            user.pin_credentials[0].state is SlotCredential.unreadable()
+            for user in users
+        )
 
     async def test_async_get_users_raises_when_lock_not_connected(
         self,
@@ -868,21 +996,15 @@ class TestScopedRead:
                 "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value=set(),
             ),
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
-                new_callable=AsyncMock,
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for",
-                side_effect=fast_pin_timeout,
-            ),
+            patch(_PUBLISH, side_effect=_answering_publish(lock, {2: "1234"})),
+            patch(_WAIT_FOR, side_effect=fast_pin_timeout),
         ):
             # Nothing is managed, so the default read would ask about nothing.
             assert await lock.async_get_usercodes() == {}
             codes = await lock.async_get_usercodes(range(1, 3))
 
         assert codes[1] is SlotCredential.unreadable()
-        assert codes[2] is SlotCredential.unreadable()
+        assert codes[2] == SlotCredential.known("1234")
 
 
 class TestOccupiedIndices:
