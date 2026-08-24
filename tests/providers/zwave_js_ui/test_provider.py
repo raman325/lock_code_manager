@@ -186,6 +186,90 @@ class TestAsyncGetUsers:
         assert _slot_state(users, 1) == SlotCredential.known("1234")
         assert _slot_state(users, 3) == SlotCredential.known("1234")
 
+    async def test_every_slot_refused_disconnects_rather_than_reporting_data(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        A read where nothing was learned is not a successful poll.
+
+        Returning all-unreadable looks like data to the coordinator: it
+        resets the connectivity breaker, un-suspends every slot, and lets
+        them re-fail on the next tick, oscillating on a seconds-scale loop
+        that flips every slot in and out of sync. Raising leaves the lock
+        unreachable so its backoff governs the next attempt.
+        """
+        lock = zui_gateway_resolved
+        zui_api_responder.set_result(
+            "sendCommand", None, success=False, message="Node 20 is not alive"
+        )
+
+        with (
+            patch(MANAGED_SLOTS, return_value={1, 2}),
+            pytest.raises(LockDisconnected, match="every one of the 2"),
+        ):
+            await lock.async_get_users()
+
+    async def test_one_refusal_beside_one_real_read_is_still_data(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        A slot the lock described, however uselessly, keeps the poll alive.
+
+        Both slots reach the coordinator unreadable here, so the return is
+        indistinguishable from the all-refused case above -- the difference
+        is entirely in what the lock did, and reading a withheld code as a
+        refusal would disconnect a lock that is answering every request.
+        """
+        lock = zui_gateway_resolved
+
+        def _handler(_api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+            if request["args"][2][0] == 1:
+                return {"success": False, "message": "Command failed", "result": None}
+            return {
+                "success": True,
+                "result": {"userIdStatus": 1, "userCode": "****"},
+            }
+
+        zui_api_responder.set_handler("sendCommand", _handler)
+
+        with patch(MANAGED_SLOTS, return_value={1, 2}):
+            users = await lock.async_get_users()
+
+        assert _slot_state(users, 1) is SlotCredential.unreadable()
+        assert _slot_state(users, 2) is SlotCredential.unreadable()
+
+    async def test_every_slot_masked_is_a_healthy_poll(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        A lock that withholds every code is answering, not unreachable.
+
+        This is an ordinary configuration, not a fault, so the poll has to
+        succeed -- disconnecting here would make such a lock permanently
+        offline no matter how healthy the mesh is.
+        """
+        lock = zui_gateway_resolved
+        zui_api_responder.set_result(
+            "sendCommand", {"userIdStatus": 1, "userCode": "****"}
+        )
+
+        with patch(MANAGED_SLOTS, return_value={1, 2}):
+            users = await lock.async_get_users()
+
+        assert [user.user_id for user in users] == [1, 2]
+        assert all(
+            _slot_state(users, slot) is SlotCredential.unreadable() for slot in (1, 2)
+        )
+
     async def test_a_silent_gateway_disconnects_rather_than_degrading(
         self,
         hass: HomeAssistant,

@@ -867,6 +867,15 @@ class ZWaveJSUILock(BaseLock):
         empty one, for the same reason Zigbee2MQTT's read does: a transient
         failure taken for a confirmed-empty slot makes sync storm
         reprogramming once the lock answers again.
+
+        Every slot being refused is a different thing from every slot reading
+        unreadable, and only the first raises. An all-unreadable return is a
+        successful poll as far as the coordinator is concerned: it resets the
+        connectivity breaker, un-suspends the slots, and lets them re-fail on
+        the next tick -- an oscillation on the order of seconds, flipping
+        every slot in and out of sync. A read the lock answered with a
+        withheld or disabled code is genuine data and must not count towards
+        this, however unreadable it is.
         """
         await self._async_ensure_operational()
 
@@ -888,20 +897,36 @@ class ZWaveJSUILock(BaseLock):
         if not code_slots:
             return []
 
-        slot_states = {
+        reads = {
             slot_num: await self._async_read_slot(slot_num)
             for slot_num in sorted(code_slots)
         }
-        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
+        if all(state is None for state in reads.values()):
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: every one of the {len(reads)} requested "
+                "slot reads was refused"
+            )
+        return [
+            user_from_slot(
+                slot_num, SlotCredential.unreadable() if state is None else state
+            )
+            for slot_num, state in reads.items()
+        ]
 
-    async def _async_read_slot(self, slot_num: int) -> SlotCredential:
+    async def _async_read_slot(self, slot_num: int) -> SlotCredential | None:
         """
-        Ask the lock what one slot holds.
+        Ask the lock what one slot holds; None means it would not answer.
 
-        An api-level refusal says nothing about the slot, so it becomes
-        unreadable -- never confirmed-empty. A disconnect is deliberately not
-        caught: it is a lost transport rather than a bad slot, and the
-        reconnect path only runs if it reaches the caller.
+        The caller needs the two failures apart, so a refusal is None rather
+        than an unreadable credential: a slot the lock described as withheld
+        or disabled is data, and a slot it refused to describe is not. Both
+        reach the coordinator as unreadable -- calling a refusal empty would
+        tell sync the code is gone -- but only the refusals decide whether
+        the whole read was worth anything.
+
+        A disconnect is deliberately not caught: it is a lost transport
+        rather than a bad slot, and the reconnect path only runs if it
+        reaches the caller.
         """
         try:
             result = await self._async_user_code_command("get", [slot_num])
@@ -909,7 +934,7 @@ class ZWaveJSUILock(BaseLock):
             LOGGER.debug(
                 "Lock %s: slot %s read refused: %s", self.lock.entity_id, slot_num, err
             )
-            return SlotCredential.unreadable()
+            return None
         return _project_user_code_result(result)
 
     async def async_set_credential(
