@@ -1,0 +1,5 @@
+see https://github.com/raman325/lock_code_manager/issues/1307
+
+---
+
+Implement the link addition in a new or
