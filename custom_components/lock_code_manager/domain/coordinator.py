@@ -75,6 +75,17 @@ class LockUsercodeUpdateCoordinator(
         self._connection_unsub: Callable[[], None] | None = None
         # Disable periodic polling when push updates are supported.
         # Polling is still used for initial load.
+        #
+        # Read once, and a bridged provider may not know the answer yet: it
+        # derives push support from discovery data that arrives on the
+        # broker's schedule. A lock that gains push after this therefore
+        # keeps the poll cadence chosen for a lock without it. That is
+        # redundant rather than wrong -- push updates do arrive, because the
+        # deferred-setup retry re-runs the provider's own subscribe -- and it
+        # lasts until the next reload. Re-deriving it live means reaching
+        # into the interval state machine below, whose three arms (breaker
+        # backoff, cold-start probe, restore-on-recovery) all own this value
+        # at different times.
         update_interval = None if lock.supports_push else lock.usercode_scan_interval
         super().__init__(
             hass,

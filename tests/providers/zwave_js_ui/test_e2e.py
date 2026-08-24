@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from datetime import timedelta
 import json
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -801,3 +803,52 @@ class TestAddingThroughTheUserInterface:
 
         assert result["step_id"] == "code_slot"
         assert result["description_placeholders"]["user_num"] == 1
+
+
+class TestLateDiscoveryData:
+    """A cold boot where Lock Code Manager is ready before the broker replays."""
+
+    async def test_a_lock_whose_discovery_data_arrives_late_is_still_set_up(
+        self,
+        hass: HomeAssistant,
+        zui_lock_discovered,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        Setup deferred for want of discovery data has to be retried by something.
+
+        With no payload there is no topic prefix, so the lock reports its
+        integration as not connected and setup is skipped. The retry hung on
+        the mqtt entry reaching LOADED, which it did before Lock Code Manager
+        even started -- so nothing ever came back, the lock never validated,
+        and sync refused to write a code to it for the rest of the run.
+        """
+        module = "custom_components.lock_code_manager.providers.zwave_js_ui"
+        zui_api_responder.set_result("sendCommand", {"userIdStatus": STATUS_AVAILABLE})
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [zui_lock_discovered.entity_id],
+                CONF_SLOTS: {1: {CONF_NAME: "slot1", CONF_PIN: "1234"}},
+            },
+            unique_id="test_zui_cold_boot",
+        )
+        entry.add_to_hass(hass)
+
+        with patch(f"{module}.resolve_discovery_payload", return_value=None):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+
+            lock = next(iter(entry.runtime_data.locks.values()))
+            assert lock.provider_setup_succeeded is False
+
+        # The broker replays the discovery payload, which nothing announces:
+        # the periodic connection check is the only thing that can notice.
+        await async_advance_time(hass, timedelta(seconds=31))
+
+        assert lock.provider_setup_succeeded is True
+        assert lock._api_response_topic == f"{ZUI_PREFIX}/_CLIENTS/+/api/+"
+        assert lock._subscribed_node_topic == ZUI_NODE_TOPIC
+
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
