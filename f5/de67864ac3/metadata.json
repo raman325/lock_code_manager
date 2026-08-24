@@ -3,7 +3,7 @@
   "checkpoint_id": "f5de67864ac3",
   "strategy": "manual-commit",
   "branch": "feat/unmanaged-clear-link-health",
-  "checkpoints_count": 1,
+  "checkpoints_count": 18,
   "files_touched": [
     "custom_components/lock_code_manager/repairs.py",
     "custom_components/lock_code_manager/strings.json",
@@ -17,13 +17,27 @@
       "compact_transcript": "/f5/de67864ac3/0/transcript.jsonl",
       "content_hash": "/f5/de67864ac3/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/f5/de67864ac3/1/metadata.json",
+      "transcript": "/f5/de67864ac3/1/full.jsonl",
+      "compact_transcript": "/f5/de67864ac3/1/transcript.jsonl",
+      "content_hash": "/f5/de67864ac3/1/content_hash.txt",
+      "prompt": "/f5/de67864ac3/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1783,
-    "cache_creation_tokens": 183272,
-    "cache_read_tokens": 3014951,
-    "output_tokens": 23027,
-    "api_call_count": 31
+    "input_tokens": 1973,
+    "cache_creation_tokens": 1692273,
+    "cache_read_tokens": 42568925,
+    "output_tokens": 159712,
+    "api_call_count": 130,
+    "subagent_tokens": {
+      "input_tokens": 51743,
+      "cache_creation_tokens": 6154431,
+      "cache_read_tokens": 197518372,
+      "output_tokens": 958070,
+      "api_call_count": 1453
+    }
   }
 }
