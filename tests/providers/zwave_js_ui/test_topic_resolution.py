@@ -35,15 +35,44 @@ from .conftest import (
     [
         ("zwavejs2mqtt_0xd4ee5a7a_node20", ("0xd4ee5a7a", 20)),
         ("zwavejs2mqtt_0xABCD1234_node1", ("0xabcd1234", 1)),
+        # UID_DISCOVERY_PREFIX is an environment variable on the gateway
+        # (Gateway.ts) and only defaults to ``zwavejs2mqtt_``. Anchoring on
+        # that default would reject every lock behind a renamed gateway, at
+        # the config flow, with nothing to debug from.
+        ("myzwave_0xd4ee5a7a_node20", ("0xd4ee5a7a", 20)),
+        ("0xd4ee5a7a_node20", ("0xd4ee5a7a", 20)),
         ("zigbee2mqtt_0xc0ffee", None),
         ("zwavejs2mqtt_0xd4ee5a7a", None),
         ("zwavejs2mqtt_d4ee5a7a_node20", None),
         ("zwavejs2mqtt_0xd4ee5a7a_node20_extra", None),
+        # The loosened head is why the tail has to carry the whole burden of
+        # not over-claiming: these are the shapes a foreign bridge produces.
+        ("somebridge_1", None),
+        ("_node5", None),
+        ("somebridge_node5", None),
     ],
 )
 def test_parse_zwave_js_ui_identifier(identifier, expected):
     """Home hex is normalized to lowercase; malformed identifiers parse to None."""
     assert parse_zwave_js_ui_identifier(identifier) == expected
+
+
+async def test_a_custom_discovery_prefix_lock_knows_its_node(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    A gateway with a renamed UID_DISCOVERY_PREFIX is addressable end to end.
+
+    The prefix reaches the device registry, the entity's unique id, and the
+    discovery payload alike, so pinning it on the parse function alone would
+    leave the provider free to have hard-coded the default somewhere else.
+    """
+    entity = await async_discover_zui_lock(hass, uid_prefix="myzwave_")
+    lock = build_zui_lock(hass, entity)
+
+    assert lock._parsed_identifier() == (ZUI_HOME_HEX, ZUI_NODE_ID)
+    assert lock._prefix_and_node_topic() == ("zwave", ZUI_NODE_TOPIC)
+    assert await lock.async_is_integration_connected() is True
 
 
 async def test_debug_info_shape_pin(

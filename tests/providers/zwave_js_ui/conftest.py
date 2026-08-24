@@ -43,6 +43,7 @@ def zui_lock_discovery_payload(
     value_path: str = ZUI_VALUE_PATH,
     state_topic: str | None = None,
     include_state_topic: bool = True,
+    uid_prefix: str = "zwavejs2mqtt_",
 ) -> dict[str, Any]:
     """
     Build a zwave-js-ui-shaped Home Assistant discovery payload for a lock.
@@ -54,7 +55,9 @@ def zui_lock_discovery_payload(
     NAMED gateway with a location is expressible, and ``value_path`` carries
     that gateway's ``lock/endpoint_0/currentMode`` spelling of the same value.
     ``state_topic`` overrides the derived topic verbatim, which is the only way
-    to express a MANUAL gateway's arbitrary custom topic.
+    to express a MANUAL gateway's arbitrary custom topic. ``uid_prefix`` is the
+    gateway's ``UID_DISCOVERY_PREFIX``, an environment variable whose default
+    is the one spelled here.
     """
     node_topic = f"{prefix}/{node_segment or f'nodeID_{node_id}'}"
     payload: dict[str, Any] = {
@@ -67,9 +70,9 @@ def zui_lock_discovery_payload(
         "state_locked": "255",
         "state_unlocked": "0",
         "value_template": "{{ value_json.value }}",
-        "unique_id": f"zwavejs2mqtt_{home_hex}_{node_id}-98-0-currentMode",
+        "unique_id": f"{uid_prefix}{home_hex}_{node_id}-98-0-currentMode",
         "device": {
-            "identifiers": [f"zwavejs2mqtt_{home_hex}_node{node_id}"],
+            "identifiers": [f"{uid_prefix}{home_hex}_node{node_id}"],
             "name": f"nodeID_{node_id}",
             "manufacturer": "Test",
             "model": "Test lock",

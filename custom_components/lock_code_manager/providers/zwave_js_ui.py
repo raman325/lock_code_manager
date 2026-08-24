@@ -37,10 +37,17 @@ from ._base import BaseLock
 from ._util import entity_state_is_available, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER
 
-# HA discovery device identifier published by zwave-js-ui
-# (Gateway.ts UID_DISCOVERY_PREFIX): zwavejs2mqtt_<homeHex>_node<id>.
+# Tail of the HA discovery device identifier zwave-js-ui publishes
+# (Gateway.ts: ``UID_DISCOVERY_PREFIX + homeHex + '_node' + node.id``).
+#
+# Only the tail is pinned, because the head is not ours to predict: the prefix
+# is ``process.env.UID_DISCOVERY_PREFIX`` and only defaults to
+# ``zwavejs2mqtt_``, so anchoring on that default rejects every lock behind a
+# gateway whose operator renamed it -- at the config flow, before the user has
+# anything to debug with. The tail stays fully anchored so a bare ``_node5``,
+# or an identifier with anything trailing the node id, still fails to match.
 ZWAVE_JS_UI_IDENTIFIER_RE = re.compile(
-    r"^zwavejs2mqtt_(?P<home_hex>0x[0-9a-fA-F]+)_node(?P<node_id>\d+)$"
+    r"(?P<home_hex>0x[0-9a-fA-F]+)_node(?P<node_id>\d+)$"
 )
 
 CC_USER_CODE = CommandClass.USER_CODE
@@ -119,8 +126,15 @@ def _is_endpoint_zero(segment: str) -> bool:
 
 
 def parse_zwave_js_ui_identifier(identifier: str) -> tuple[str, int] | None:
-    """Parse ``(home_hex, node_id)`` out of a zwave-js-ui device identifier."""
-    if match := ZWAVE_JS_UI_IDENTIFIER_RE.match(identifier):
+    """
+    Parse ``(home_hex, node_id)`` out of a zwave-js-ui device identifier.
+
+    Searches rather than matches: the discovery prefix is operator-configurable
+    and only the ``<homeHex>_node<id>`` tail is guaranteed. What keeps that
+    from over-claiming is that the tail is specific -- a home id in hex plus a
+    numeric node id, with nothing after it.
+    """
+    if match := ZWAVE_JS_UI_IDENTIFIER_RE.search(identifier):
         return match["home_hex"].lower(), int(match["node_id"])
     return None
 

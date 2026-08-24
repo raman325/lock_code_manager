@@ -48,6 +48,11 @@ def resolve_provider_class(
         if len(identifier) < 2:
             continue
         value = str(identifier[1])
+        # Zigbee2MQTT is tested first, and has to be: its own prefix is
+        # fixed, while the zwave-js-ui identifier is recognized by its tail
+        # alone (the head is operator-configurable), so a Zigbee2MQTT device
+        # whose address happened to end ``0x<hex>_node<n>`` would be claimed
+        # by the wrong provider if the order were reversed.
         if value.startswith(Z2M_IDENTIFIER_PREFIX):
             return Zigbee2MQTTLock
         if parse_zwave_js_ui_identifier(value):

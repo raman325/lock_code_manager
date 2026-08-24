@@ -23,6 +23,9 @@ from custom_components.lock_code_manager.providers import (
     ZWaveJSUILock,
     resolve_provider_class,
 )
+from custom_components.lock_code_manager.providers.zwave_js_ui import (
+    parse_zwave_js_ui_identifier,
+)
 
 from ..common import async_discover_unclaimed_mqtt_lock
 from ..conftest import TEST_DOMAIN
@@ -69,6 +72,55 @@ async def test_mqtt_dispatches_on_identifier(hass: HomeAssistant) -> None:
     assert resolve_provider_class("mqtt", zui_device) is ZWaveJSUILock
     assert resolve_provider_class("mqtt", unclaimed_device) is None
     assert resolve_provider_class("mqtt", None) is None
+
+
+async def test_mqtt_dispatches_a_custom_zwave_js_ui_prefix(hass: HomeAssistant) -> None:
+    """
+    A gateway with a renamed UID_DISCOVERY_PREFIX still dispatches to its provider.
+
+    The prefix is an environment variable on the gateway and only defaults to
+    ``zwavejs2mqtt_``. An identifier that does not resolve here resolves to no
+    provider at all, and the config flow refuses the lock outright.
+    """
+    mqtt_entry = MockConfigEntry(domain="mqtt")
+    mqtt_entry.add_to_hass(hass)
+    mqtt_entry._async_set_state(hass, mqtt_entry.state, None)
+
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=mqtt_entry.entry_id,
+        connections=set(),
+        identifiers={("mqtt", "myzwave_0xd4ee5a7a_node20")},
+        name="RenamedGatewayLock",
+    )
+
+    assert resolve_provider_class("mqtt", device) is ZWaveJSUILock
+
+
+async def test_mqtt_dispatch_prefers_zigbee2mqtt_over_the_zui_tail(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Zigbee2MQTT is checked first, and the order became load-bearing.
+
+    Its prefix is fixed while zwave-js-ui is now recognized by its tail alone,
+    so a Zigbee2MQTT address ending in a zwave-js-ui-shaped tail matches both
+    rules; only the ordering keeps it with the provider that speaks Zigbee.
+    """
+    identifier = "zigbee2mqtt_0xd4ee5a7a_node20"
+    assert parse_zwave_js_ui_identifier(identifier) is not None
+
+    mqtt_entry = MockConfigEntry(domain="mqtt")
+    mqtt_entry.add_to_hass(hass)
+    mqtt_entry._async_set_state(hass, mqtt_entry.state, None)
+
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=mqtt_entry.entry_id,
+        connections=set(),
+        identifiers={("mqtt", identifier)},
+        name="AmbiguousLock",
+    )
+
+    assert resolve_provider_class("mqtt", device) is Zigbee2MQTTLock
 
 
 async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> None:
