@@ -237,11 +237,21 @@ def zui_api_responder(
 
 
 def fire_zui_gateway_status(
-    hass: HomeAssistant, client: str = ZUI_GATEWAY_NAME, prefix: str = ZUI_PREFIX
+    hass: HomeAssistant,
+    client: str = ZUI_GATEWAY_NAME,
+    prefix: str = ZUI_PREFIX,
+    *,
+    online: bool = True,
 ) -> None:
-    """Publish a gateway's retained client status the way zwave-js-ui does."""
+    """
+    Publish a gateway's retained client status the way zwave-js-ui does.
+
+    ``online=False`` is the exact payload the gateway registers as its last
+    will (MqttClient ``_init``), so a dead gateway's leftover status is
+    expressible without hand-rolling the shape.
+    """
     async_fire_mqtt_message(
-        hass, f"{prefix}/_CLIENTS/{client}/status", json.dumps({"value": True})
+        hass, f"{prefix}/_CLIENTS/{client}/status", json.dumps({"value": online})
     )
 
 

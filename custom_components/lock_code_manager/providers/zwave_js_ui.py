@@ -619,9 +619,27 @@ class ZWaveJSUILock(BaseLock):
 
         @callback
         def _status_received(msg: ReceiveMessage) -> None:
-            """Record the gateway that published a retained client status."""
+            """
+            Record a gateway whose retained client status says it is online.
+
+            The status topic is retained and the gateway's last will retains
+            ``{"value": false}`` on it, so a client that was decommissioned or
+            crashed leaves its status behind indefinitely. Binding one without
+            reading the payload picks a corpse -- and when it is the only
+            status on the prefix, it is bound outright, with no getInfo to
+            expose it, so every call times out and each rediscovery re-picks
+            the same dead client.
+
+            The payload is the usual value shape, so a ``{"value": true}``
+            wrapper and a bare ``true`` both unwrap to the same thing. This is
+            also the one place in this module that does NOT reject a boolean:
+            here ``True`` is not a JSON type confusion, it is the online
+            signal itself.
+            """
             client = msg.topic.split("/")[-2]
-            if client.startswith(GATEWAY_CLIENT_PREFIX):
+            if client.startswith(GATEWAY_CLIENT_PREFIX) and _unwrap_mqtt_value(
+                msg.payload
+            ):
                 gateways.add(client)
 
         unsub = await self._async_subscribe(

@@ -117,6 +117,55 @@ async def test_non_gateway_clients_on_the_prefix_are_ignored(
         await task
 
 
+async def test_gateway_whose_retained_status_is_offline_is_never_bound(
+    hass: HomeAssistant,
+    zui_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A decommissioned gateway's leftover status is not a gateway.
+
+    zwave-js-ui retains the status topic and its last will retains
+    ``{"value": false}`` on it, so a client that crashed or was removed leaves
+    a status behind indefinitely. Being the only status on the prefix is the
+    worst case: it would be bound on the single-candidate path, without even a
+    getInfo to expose that nobody is home, and every call would then time out
+    into a rediscovery that picks the same corpse again.
+    """
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+
+    task = await async_start_gateway_resolution(hass, zui_lock_provider)
+    fire_zui_gateway_status(hass, online=False)
+
+    with pytest.raises(LockDisconnected, match="No zwave-js-ui gateway"):
+        await task
+
+    assert zui_lock_provider._api_base is None
+    assert zui_api_responder.requests == []
+
+
+async def test_a_live_gateway_wins_over_a_dead_one_without_a_probe(
+    hass: HomeAssistant,
+    zui_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    An offline sibling does not make resolution ambiguous.
+
+    Dropping it at the status leaves exactly one candidate, so the lock binds
+    on the cheap path rather than paying a getInfo round trip -- and cannot
+    bind to the dead one even if it happens to sort first.
+    """
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+
+    task = await async_start_gateway_resolution(hass, zui_lock_provider)
+    fire_zui_gateway_status(hass, client=OTHER_GATEWAY_NAME, online=False)
+    fire_zui_gateway_status(hass)
+
+    assert await task == ZUI_API_BASE
+    assert zui_api_responder.requests == []
+
+
 async def test_two_gateways_are_told_apart_by_home_id(
     hass: HomeAssistant,
     zui_lock_provider: ZWaveJSUILock,
