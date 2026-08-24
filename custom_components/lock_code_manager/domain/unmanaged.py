@@ -65,6 +65,10 @@ async def async_sweep_unmanaged_codes(
     locks = config_entry.options.get(CONF_LOCKS, config_entry.data.get(CONF_LOCKS, []))
 
     for lock_entity_id in locks:
+        # Building the provider is itself allowed to fail (a lock entity that
+        # has gone away), so it stays inside the guarded block; the teardown
+        # below is what needs to know whether there is anything to tear down.
+        lock = None
         try:
             lock = async_create_lock_instance(
                 hass, dev_reg, ent_reg, config_entry, lock_entity_id
@@ -78,6 +82,14 @@ async def async_sweep_unmanaged_codes(
                 exc_info=True,
             )
             continue
+        finally:
+            if lock is not None:
+                # Reading can leave transport behind: an MQTT provider
+                # subscribes to its lock's topics on the way to answering.
+                # Nothing else ever tears a throwaway down, and a leftover
+                # subscription goes on firing code slot events alongside the
+                # entry's real provider.
+                lock.unsubscribe_push_updates()
 
         # Across every entry, not just this one: two entries sharing a lock
         # would otherwise each report the other's codes.
