@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "5ed238f93730",
+  "session_id": "34501e3d-6f04-430e-b66b-a27b8d27b0e2",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-24T12:16:28.560825Z",
+  "branch": "feat/unmanaged-clear-link-health",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/repairs.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "c74e56c0797c",
+  "checkpoint_transcript_start": 177,
+  "transcript_lines_at_start": 177,
+  "compact_transcript_start": 35,
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 8447,
+    "cache_read_tokens": 757985,
+    "output_tokens": 4288,
+    "api_call_count": 6
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015iuU1Pj8HT2mNtVUHgdpui",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c74e56c0797c",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 181,
+        "end": 182,
+        "entry_ids": [
+          "58402250-d6c6-40e5-bca5-2b62393cfa5f"
+        ],
+        "tool_use_id": "toolu_015iuU1Pj8HT2mNtVUHgdpui"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015iuU1Pj8HT2mNtVUHgdpui"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-24T12:16:28.519095Z",
+    "agent_lines": 6,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "total_lines_changed": 11,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

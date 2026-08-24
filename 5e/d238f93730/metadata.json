@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "5ed238f93730",
+  "strategy": "manual-commit",
+  "branch": "feat/unmanaged-clear-link-health",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/repairs.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5e/d238f93730/0/metadata.json",
+      "transcript": "/5e/d238f93730/0/full.jsonl",
+      "compact_transcript": "/5e/d238f93730/0/transcript.jsonl",
+      "content_hash": "/5e/d238f93730/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 8447,
+    "cache_read_tokens": 757985,
+    "output_tokens": 4288,
+    "api_call_count": 6
+  }
+}
