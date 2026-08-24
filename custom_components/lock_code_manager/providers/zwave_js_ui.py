@@ -67,6 +67,18 @@ API_CALL_TIMEOUT = 60.0
 # wake schedule as every other lock command and keeps the mesh budget.
 GATEWAY_LOCAL_TIMEOUT = 5.0
 GATEWAY_DISCOVERY_TIMEOUT = 3.0
+# Home Assistant registers a subscription locally at once but defers the wire
+# SUBSCRIBE behind a debouncer (``SUBSCRIBE_COOLDOWN`` 0.1s, and 0.5s for the
+# first batch after connecting), while a publish goes out immediately -- and
+# zwave-js-ui sends api responses unretained. A call published into a
+# subscription made in the same breath therefore loses its answer.
+#
+# One bounded wait, spent inside the call's own timeout budget, is what makes a
+# fresh subscription usable by the caller that created it. Refusing the call
+# instead only helps a caller that comes back: the config flow's allocation
+# reads and the unmanaged sweep build a provider, make exactly one call, and
+# drop it.
+SUBSCRIBE_SETTLE_DELAY = 1.0
 # Inter-operation pacing, widened from the base default. Every api call this
 # provider makes is serialized onto zwave-js-ui's single command queue, which
 # it also shares with its own UI and any other MQTT client, and a FLiRS lock
@@ -302,16 +314,11 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         Bring both subscriptions up before the coordinator runs its first poll.
 
-        The api response subscription is established here rather than inside
-        ``_async_resolve_api_base``, and the placement is the whole point.
-        Home Assistant registers a subscription locally at once but defers the
-        wire SUBSCRIBE behind a debouncer, while a publish goes out
-        immediately, so anything that subscribes and publishes in one breath
-        loses the answer -- and zwave-js-ui sends api responses unretained.
-        Resolution used to hold a multi-second discovery window that happened
-        to outlast that debounce; the availability fast path has no window at
-        all, so the settling has to come from setup running well before the
-        first poll publishes anything.
+        Establishing the api response subscription here rather than leaving it
+        to the first api call is what keeps the coordinator's polls off the
+        settling path: by the time one publishes, the wire SUBSCRIBE went out
+        long ago. Correctness does not depend on that -- every subscribe
+        settles itself -- only the latency does.
 
         An api-only lock skips the node subscription and nothing else. That is
         an ordinary configuration rather than a fault, so it is reported at
@@ -719,9 +726,12 @@ class ZWaveJSUILock(BaseMqttLock):
         A prefix that cannot be resolved yet is an expected startup condition
         -- Home Assistant's MQTT discovery data lands asynchronously -- so
         this logs and returns, leaving any live subscription alone: discovery
-        data going transiently missing is not a prefix that moved. Refusing
-        to publish without a settled subscription is
-        ``_async_resolve_api_base``'s job.
+        data going transiently missing is not a prefix that moved.
+
+        Every subscribe is followed by ``SUBSCRIBE_SETTLE_DELAY``, so a
+        subscription is settled by the time this returns and no caller has to
+        remember whether it made one. That is what lets the same call publish
+        into it safely.
         """
         if (prefix := self._gateway_prefix()) is None:
             if self._api_response_topic is None:
@@ -745,6 +755,7 @@ class ZWaveJSUILock(BaseMqttLock):
             response_topic, self._api_response_received
         )
         self._api_response_topic = response_topic
+        await asyncio.sleep(SUBSCRIBE_SETTLE_DELAY)
 
     async def _async_resolve_api_base(self) -> str:
         """
@@ -772,19 +783,14 @@ class ZWaveJSUILock(BaseMqttLock):
         # Ensure rather than merely check: this is where an api-only lock
         # passes often enough to notice that the prefix moved under it, and
         # the only place a lock with no push lifecycle ever resubscribes.
-        settled_topic = self._api_response_topic
         await self._async_ensure_api_response_subscription()
-        if settled_topic is None or settled_topic != self._api_response_topic:
-            # The subscription carrying this call is brand new, so get it up
-            # for the next attempt but refuse this one. Home Assistant defers
-            # the wire SUBSCRIBE behind a debouncer while a publish goes out
-            # immediately, so publishing into a subscription made in the same
-            # breath loses the answer -- and zwave-js-ui sends api responses
-            # unretained. The caller's failure is a disconnect, so the
-            # coordinator's backoff schedules the retry.
+        if self._api_response_topic is None:
+            # Nothing to publish into and nothing to hear back on. The prefix
+            # resolved a moment ago, so discovery data went away underneath
+            # this call rather than never having arrived.
             raise LockDisconnected(
-                f"No settled zwave-js-ui api response subscription for "
-                f"{self.lock.entity_id} yet"
+                f"No zwave-js-ui api response subscription could be established "
+                f"for {self.lock.entity_id}"
             )
 
         if (bound := self._gateway_from_availability()) is not None:

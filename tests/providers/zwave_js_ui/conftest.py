@@ -186,6 +186,10 @@ def fast_zui_timeouts() -> Generator[None]:
         patch(f"{module}.GATEWAY_DISCOVERY_TIMEOUT", 0.05),
         patch(f"{module}.API_CALL_TIMEOUT", FAST_API_CALL_TIMEOUT),
         patch(f"{module}.GATEWAY_LOCAL_TIMEOUT", FAST_GATEWAY_LOCAL_TIMEOUT),
+        # The mocked broker delivers to a subscription the instant it is
+        # registered, so there is no debounce window here to wait out; the
+        # wait still has to happen, hence zero rather than removing it.
+        patch(f"{module}.SUBSCRIBE_SETTLE_DELAY", 0),
     ):
         yield
 
@@ -304,7 +308,8 @@ async def async_start_gateway_resolution(
 
     The api response subscription is established first because that is where
     production establishes it -- in ``async_setup``, long before anything
-    publishes -- and resolution refuses to run without it.
+    publishes -- so that the resolution under test starts from the same state
+    a live provider's does.
 
     A real broker replays retained statuses on subscribe; the mocked one
     cannot, so the caller fires them by hand. That only works if resolution

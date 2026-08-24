@@ -79,6 +79,44 @@ def record_subscribed_topics() -> Iterator[list[str]]:
         yield seen
 
 
+@contextmanager
+def record_transport_events(settle_delay: float) -> Iterator[list[str]]:
+    """
+    Record subscribes, settle waits, and publishes in the order they happen.
+
+    The settle wait is recognized by its exact duration: ``asyncio.sleep`` is
+    patched process-wide for the block, so Home Assistant's own sleeps would
+    otherwise be indistinguishable from it. ``settle_delay`` therefore has to
+    be a value nothing else passes.
+    """
+    module = "custom_components.lock_code_manager.providers.zwave_js_ui"
+    events: list[str] = []
+    real_subscribe = zwave_js_ui.async_subscribe
+    real_publish = zwave_js_ui.async_publish
+    real_sleep = asyncio.sleep
+
+    async def _subscribe(hass: HomeAssistant, topic: str, *args: Any, **kw: Any) -> Any:
+        events.append("subscribe")
+        return await real_subscribe(hass, topic, *args, **kw)
+
+    async def _publish(hass: HomeAssistant, topic: str, *args: Any, **kw: Any) -> Any:
+        events.append("publish")
+        return await real_publish(hass, topic, *args, **kw)
+
+    async def _sleep(delay: float, *args: Any, **kw: Any) -> Any:
+        if delay == settle_delay:
+            events.append("settle")
+        return await real_sleep(delay, *args, **kw)
+
+    with (
+        patch(f"{module}.async_subscribe", _subscribe),
+        patch(f"{module}.async_publish", _publish),
+        patch(f"{module}.SUBSCRIBE_SETTLE_DELAY", settle_delay),
+        patch("asyncio.sleep", _sleep),
+    ):
+        yield events
+
+
 async def test_the_availability_topic_binds_the_gateway_outright(
     hass: HomeAssistant,
     zui_lock_provider: ZWaveJSUILock,
@@ -932,27 +970,70 @@ async def test_no_prefix_yet_defers_the_response_subscription(
     assert zui_lock_with_device._api_response_unsub is None
 
 
-async def test_resolution_refuses_to_publish_into_an_unsettled_subscription(
+async def test_the_first_call_on_a_lock_that_never_ran_setup_resolves(
     hass: HomeAssistant,
     zui_lock_provider: ZWaveJSUILock,
     zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
-    Resolution without a live subscription refuses, and arms the next attempt.
+    A provider whose ``async_setup`` never ran works on its very first call.
 
-    Setup normally establishes it, so reaching here means discovery data was
-    not loaded yet. Subscribing and continuing would publish into the
-    debounce window; refusing hands the retry to the coordinator's backoff,
-    by which time the subscription has settled.
+    Throwaway instances -- the config flow's allocation reads, the unmanaged
+    sweep -- build a provider, make exactly one call, and drop it. Refusing
+    that call in the hope that something retries made a zwave-js-ui lock
+    impossible to add through the user interface and skipped it in the sweep.
     """
     lock = zui_lock_provider
     assert lock._api_response_topic is None
 
-    with pytest.raises(LockDisconnected, match="No settled zwave-js-ui api response"):
-        await lock._async_resolve_api_base()
-
-    assert lock._api_response_topic == f"{ZUI_PREFIX}/_CLIENTS/+/api/+"
     assert await lock._async_resolve_api_base() == ZUI_API_BASE
+    assert lock._api_response_topic == f"{ZUI_PREFIX}/_CLIENTS/+/api/+"
+
+
+async def test_a_fresh_subscription_settles_before_anything_is_published(
+    hass: HomeAssistant,
+    zui_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    The settle wait falls between subscribing and the first publish.
+
+    Home Assistant defers the wire SUBSCRIBE behind a debouncer while a
+    publish goes out immediately, and zwave-js-ui answers unretained, so a
+    call published in the same breath as its own subscription loses the
+    answer. The mocked broker cannot reproduce that -- it delivers to a
+    subscription the instant it is registered -- so the ordering is what has
+    to be pinned.
+    """
+    lock = zui_lock_provider
+    zui_api_responder.set_result("sendCommand", 30)
+
+    # A duration nothing else in Home Assistant sleeps for, so the settle
+    # wait is identifiable among every other sleep in the block.
+    with record_transport_events(0.0123) as events:
+        assert await lock.async_get_max_slot() == 30
+
+    assert events.index("subscribe") < events.index("settle") < events.index("publish")
+
+
+async def test_resolution_fails_loud_when_no_subscription_can_be_established(
+    zui_lock_provider: ZWaveJSUILock,
+) -> None:
+    """
+    Discovery data vanishing mid-call leaves nothing to hear the answer on.
+
+    The prefix resolved on the way in, so this is not the "has not arrived
+    yet" case ``_async_ensure_api_response_subscription`` tolerates.
+    Publishing anyway would spend a whole mesh-sized budget on a call nobody
+    could deliver a reply for.
+    """
+    lock = zui_lock_provider
+
+    with (
+        patch.object(lock, "_gateway_prefix", side_effect=[ZUI_PREFIX, None]),
+        pytest.raises(LockDisconnected, match="could be established"),
+    ):
+        await lock._async_resolve_api_base()
 
 
 async def test_a_changed_gateway_prefix_moves_the_api_subscription(
@@ -1008,16 +1089,10 @@ async def test_a_changed_gateway_prefix_moves_the_api_subscription(
     with pytest.raises(LockDisconnected, match="Timed out waiting"):
         await lock.async_get_max_slot()
 
-    # Resolution now finds the new prefix, and the subscription has to follow
-    # it. Refusing this attempt is the same debounce-settling rule a first
-    # subscription obeys -- the answer to a call published now would arrive
-    # before the broker knew to route it.
-    with pytest.raises(LockDisconnected, match="No settled zwave-js-ui api response"):
-        await lock.async_get_max_slot()
-    assert lock._api_response_topic == f"{new_prefix}/_CLIENTS/+/api/+"
-
-    # Healed: the next attempt reaches the gateway at its new address.
+    # Healed in one attempt: resolution finds the new prefix, moves the
+    # subscription, and lets it settle before this same call publishes.
     assert await lock.async_get_max_slot() == 30
+    assert lock._api_response_topic == f"{new_prefix}/_CLIENTS/+/api/+"
 
 
 async def test_a_transiently_unresolvable_prefix_keeps_the_subscription(
