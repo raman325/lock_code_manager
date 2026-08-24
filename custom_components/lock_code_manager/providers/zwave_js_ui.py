@@ -955,6 +955,23 @@ class ZWaveJSUILock(BaseMqttLock):
                     f"Timed out waiting for zwave-js-ui {api_name} response for "
                     f"{self.lock.entity_id}"
                 ) from err
+            except asyncio.CancelledError as err:
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    # This task is being torn down -- Home Assistant shutting
+                    # down, the config entry unloading. That cancellation
+                    # belongs to whoever asked for it and is never converted
+                    # into anything, or the teardown driving it stalls.
+                    raise
+                # Otherwise ``_release_api_subscription`` cancelled this
+                # call's future: the transport it was waiting on is gone.
+                # CancelledError is a BaseException, so letting it out here
+                # would slip past every layer that knows what a lost
+                # connection means and surface as an unhandled cancellation.
+                raise LockDisconnected(
+                    f"zwave-js-ui api transport released while waiting for "
+                    f"{api_name} for {self.lock.entity_id}"
+                ) from err
         finally:
             self._pending_api_calls.pop(nonce, None)
 

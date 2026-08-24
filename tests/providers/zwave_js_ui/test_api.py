@@ -946,11 +946,50 @@ async def test_teardown_releases_the_response_subscription(
     assert lock._api_response_topic is None
     assert lock._api_response_unsub is None
     assert lock._pending_api_calls == {}
-    with pytest.raises(asyncio.CancelledError):
+    # A call whose transport is pulled out from under it lost its connection,
+    # and says so in the provider's own vocabulary. Letting the CancelledError
+    # out instead would reach the coordinator as an unhandled task
+    # cancellation, past everything that knows how to handle a disconnect.
+    with pytest.raises(LockDisconnected, match="transport released"):
         await pending
 
     # Idempotent, as the base class requires.
     lock.teardown_push_subscription()
+
+
+async def test_cancelling_the_caller_is_never_converted(
+    hass: HomeAssistant, zui_gateway_resolved: ZWaveJSUILock
+) -> None:
+    """
+    A task being torn down stays cancelled, however it was waiting.
+
+    A released transport and a shutdown both arrive as a CancelledError while
+    waiting for the reply, and swallowing the second would stall whatever
+    teardown asked for it.
+
+    The cancellation is timed off the publish returning, because that is the
+    only moment the call is provably waiting on a reply: cancelled any
+    earlier it is still inside ``async_publish``, where nothing of this
+    reaches and the test would pass on a code path it never ran.
+    """
+    lock = zui_gateway_resolved
+    published = asyncio.Event()
+    real_publish = zwave_js_ui.async_publish
+
+    async def _publish(*args: Any, **kwargs: Any) -> None:
+        await real_publish(*args, **kwargs)
+        published.set()
+
+    with patch.object(zwave_js_ui, "async_publish", _publish):
+        pending = asyncio.create_task(
+            lock._async_api_call_at(ZUI_API_BASE, "getInfo", [])
+        )
+        await published.wait()
+
+        pending.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await pending
 
 
 async def test_the_response_subscription_is_established_by_setup(
