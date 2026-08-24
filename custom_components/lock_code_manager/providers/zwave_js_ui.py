@@ -151,6 +151,20 @@ def _unwrap_mqtt_value(raw: bytes | str) -> Any:
     return data
 
 
+def _is_masked_code(code: str) -> bool:
+    """
+    Return whether a code is a lock's placeholder for a code it will not show.
+
+    Locks configured to withhold user codes answer reads with an asterisk per
+    digit instead of the digits. That is a refusal, not a value: read as one,
+    it never equals the configured Personal Identification Number, so sync
+    sees a permanent mismatch and reprograms the slot on every single tick,
+    forever. Withheld has to reach the coordinator as unreadable, which is
+    exactly the state that means "occupied, contents unknown".
+    """
+    return set(code) == {"*"}
+
+
 def _published_code(value: Any) -> str | None:
     """
     Read a published ``userCode`` value as a Personal Identification Number.
@@ -163,13 +177,14 @@ def _published_code(value: Any) -> str | None:
 
     Booleans are not codes (and ``True`` would otherwise stringify to a
     code of ``"True"``), and neither is an empty or blank string -- which is
-    also how a withheld code and a cleared slot both look, indistinguishably.
+    also how a withheld code and a cleared slot both look, indistinguishably
+    -- nor an all-asterisk mask.
     """
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
         return str(value)
-    if isinstance(value, str) and value.strip():
+    if isinstance(value, str) and value.strip() and not _is_masked_code(value):
         return value
     return None
 
@@ -179,10 +194,11 @@ def _project_user_code_result(result: Any) -> SlotCredential:
     Project a User Code CC ``get`` result to a SlotCredential.
 
     Only Available means the slot holds nothing. Enabled without a usable
-    string code (withheld, or a serialized Buffer for a binary code) is
-    occupied-but-unreadable -- reporting it empty would make sync reprogram a
-    slot that already holds the right code. Every other status, and any
-    result shape that is not the expected dict, says nothing usable.
+    string code (withheld, masked behind asterisks, or a serialized Buffer for
+    a binary code) is occupied-but-unreadable -- reporting it empty would make
+    sync reprogram a slot that already holds the right code. Every other
+    status, and any result shape that is not the expected dict, says nothing
+    usable.
 
     ``userIdStatus`` is compared with ``==`` against the int constants below,
     which is unsafe for JSON ``true``/``false``: in Python ``True == 1``, so a
@@ -197,7 +213,12 @@ def _project_user_code_result(result: Any) -> SlotCredential:
     if status == USER_ID_STATUS_AVAILABLE:
         return SlotCredential.empty()
     code = result.get("userCode")
-    if status == USER_ID_STATUS_ENABLED and isinstance(code, str) and code.strip():
+    if (
+        status == USER_ID_STATUS_ENABLED
+        and isinstance(code, str)
+        and code.strip()
+        and not _is_masked_code(code)
+    ):
         return SlotCredential.known(code)
     return SlotCredential.unreadable()
 

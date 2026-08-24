@@ -215,6 +215,11 @@ class TestUserCodeValues:
             # push a Personal Identification Number of ``"True"``.
             pytest.param(wrapped(True), id="boolean"),
             pytest.param(wrapped(12.5), id="float"),
+            # A lock withholding its codes publishes one asterisk per digit.
+            # Confirmed as the code, it never matches the configured PIN, so
+            # sync reprograms the slot on every tick forever.
+            pytest.param(wrapped("****"), id="masked"),
+            pytest.param("****", id="masked_raw"),
         ],
     )
     async def test_a_code_that_is_not_a_usable_string_confirms_nothing(

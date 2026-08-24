@@ -47,6 +47,15 @@ def test_unwrap_mqtt_value(raw, expected):
             {"userIdStatus": 1, "userCode": {"type": "Buffer", "data": [1, 2]}},
             SlotCredential.unreadable(),
         ),
+        # A lock configured to withhold codes answers with one asterisk per
+        # digit. Projected known, it never equals the configured PIN, so sync
+        # reprograms the slot on every tick forever.
+        ({"userIdStatus": 1, "userCode": "****"}, SlotCredential.unreadable()),
+        ({"userIdStatus": 1, "userCode": "*"}, SlotCredential.unreadable()),
+        # Only an all-asterisk code is a mask; asterisks mixed with digits are
+        # not a shape any lock produces, and guessing at partial masking would
+        # discard a code that is really there.
+        ({"userIdStatus": 1, "userCode": "12**"}, SlotCredential.known("12**")),
         ({"userIdStatus": 2, "userCode": "9999"}, SlotCredential.unreadable()),
         ({"userIdStatus": 254}, SlotCredential.unreadable()),
         # JSON ``true`` == 1 in Python; it must not masquerade as Enabled.
