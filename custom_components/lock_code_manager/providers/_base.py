@@ -226,6 +226,11 @@ class BaseLock:
     _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _setup_succeeded: bool = field(default=False, init=False)
     _setup_running: bool = field(default=False, init=False)
+    # Provider setup was skipped altogether because the integration was not
+    # connected yet, and has not run since. Distinct from
+    # ``_setup_succeeded``, which is also False for a lock whose setup ran
+    # and failed -- that one has a diagnosis, this one has never been asked.
+    _setup_deferred: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
     _rejected_code_slots: set[int] = field(default_factory=set, init=False)
     # Slots whose most recent write from this integration was a clear that
@@ -744,6 +749,7 @@ class BaseLock:
                     # Expected during a cold start (the provider integration
                     # simply hasn't finished loading); recovery is automatic,
                     # so this is informational, not a warning.
+                    self._setup_deferred = True
                     LOGGER.info(
                         "Provider integration for %s is not ready yet. "
                         "Provider setup is deferred until it finishes "
@@ -832,6 +838,7 @@ class BaseLock:
         lock whose integration was still loading at boot gets the same
         PIN-support validation once the integration comes up.
         """
+        self._setup_deferred = False
         if self.supports_native_users:
             caps = await self._get_cached_capabilities()
             if CredentialType.PIN not in caps.credential_types:
@@ -1013,21 +1020,7 @@ class BaseLock:
                 return
 
             if to_state == ConfigEntryState.LOADED:
-                # The provider transitioned through LOADED twice in quick
-                # succession (e.g. reload during reconnect). Cancel any
-                # prior in-flight reconnect; drain any pending exception
-                # on a prior task that already completed with an error so
-                # we do not leak an unretrieved exception at GC time.
-                if self._reconnect_task is not None:
-                    self._reconnect_task.add_done_callback(
-                        self._drain_superseded_reconnect
-                    )
-                    if not self._reconnect_task.done():
-                        self._reconnect_task.cancel()
-                self._reconnect_task = self.hass.async_create_task(
-                    self._async_on_integration_loaded(),
-                    f"Provider reconnect for {self.lock.entity_id}",
-                )
+                self._async_start_reconnect()
             elif (
                 self.supports_push and self._last_entry_state == ConfigEntryState.LOADED
             ):
@@ -1037,6 +1030,31 @@ class BaseLock:
 
         self._config_entry_state_unsub = lock_entry.async_on_state_change(
             _handle_state_change
+        )
+
+    @final
+    @callback
+    def _async_start_reconnect(self) -> None:
+        """
+        Run the integration-loaded path, superseding any reconnect in flight.
+
+        Two things ask for it -- the provider's config entry reaching LOADED,
+        and reachability returning for a lock whose setup never ran -- and
+        both land in the same task slot so ``async_unload`` can cancel
+        whichever one started it.
+
+        A provider can pass through LOADED twice in quick succession (a
+        reload during a reconnect), so a prior task is cancelled and its
+        exception drained: an already-failed task that nobody retrieves
+        leaks a warning at collection time.
+        """
+        if self._reconnect_task is not None:
+            self._reconnect_task.add_done_callback(self._drain_superseded_reconnect)
+            if not self._reconnect_task.done():
+                self._reconnect_task.cancel()
+        self._reconnect_task = self.hass.async_create_task(
+            self._async_on_integration_loaded(),
+            f"Provider reconnect for {self.lock.entity_id}",
         )
 
     def _drain_superseded_reconnect(self, task: asyncio.Task[None]) -> None:
@@ -1099,14 +1117,32 @@ class BaseLock:
     @final
     @callback
     def _handle_connection_transition(self, is_up: bool) -> None:
-        """Handle push subscribe/unsubscribe on connection state transitions."""
+        """Handle setup retry and push subscribe/unsubscribe on state transitions."""
         lock_entry = self.lock_config_entry
-        if not self.supports_push or not lock_entry:
+        if not lock_entry:
             return
         # Skip during SETUP_IN_PROGRESS: the setup path handles the initial
         # subscription, and a parallel subscribe here would race with
         # coordinator creation in async_setup_internal.
         if lock_entry.state != ConfigEntryState.LOADED:
+            return
+        if is_up and self._setup_deferred:
+            # Setup was skipped entirely because the provider integration was
+            # not ready, and the LOADED transition that would re-run it never
+            # comes for an integration that was already loaded -- an MQTT
+            # bridge whose discovery data simply had not been replayed yet at
+            # boot. Left alone the lock stays permanently un-set-up: no
+            # capability validation, no provider setup, and sync, gated on
+            # that, refusing to write anything ever again.
+            #
+            # Any reachable observation is the retry, not a transition up:
+            # the very first connection check can already find the lock
+            # reachable, and then there is no transition to wait for. Setup
+            # running is what clears the flag, so this fires once even if
+            # what it finds is a lock that fails validation.
+            self._async_start_reconnect()
+            return
+        if not self.supports_push:
             return
         if self._last_connection_up is False and is_up:
             if self.coordinator:

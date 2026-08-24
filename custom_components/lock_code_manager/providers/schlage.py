@@ -41,7 +41,11 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
+from ._util import (
+    is_masked_code,
+    make_tagged_name as _make_tagged_name,
+    parse_tag as _parse_tag,
+)
 from .const import LOGGER
 
 SCHLAGE_DOMAIN = "schlage"
@@ -209,7 +213,7 @@ class SchlageLock(BaseLock):
                 continue
 
             # Empty or all-asterisk (masked) PINs are untaggable.
-            if pin == "*" * len(pin):
+            if not pin or is_masked_code(pin):
                 LOGGER.debug(
                     "Lock %s: skipping untaggable code '%s' (PIN is masked or empty)",
                     self.lock.entity_id,

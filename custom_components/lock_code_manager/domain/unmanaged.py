@@ -34,7 +34,7 @@ from homeassistant.helpers import (
 )
 
 from ..const import CONF_LOCKS, DOMAIN
-from .locks import async_create_lock_instance
+from .locks import async_create_lock_instance, borrowed_lock_instance
 from .queries import get_managed_slots
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,11 +65,16 @@ async def async_sweep_unmanaged_codes(
     locks = config_entry.options.get(CONF_LOCKS, config_entry.data.get(CONF_LOCKS, []))
 
     for lock_entity_id in locks:
+        # Building the provider is itself allowed to fail (a lock entity that
+        # has gone away), and failing there means there is nothing to release:
+        # the borrowed-instance block is never entered.
         try:
-            lock = async_create_lock_instance(
-                hass, dev_reg, ent_reg, config_entry, lock_entity_id
-            )
-            credentials = await lock.async_get_usercodes()
+            async with borrowed_lock_instance(
+                async_create_lock_instance(
+                    hass, dev_reg, ent_reg, config_entry, lock_entity_id
+                )
+            ) as lock:
+                credentials = await lock.async_get_usercodes()
         except Exception:
             _LOGGER.warning(
                 "Could not read %s while checking for codes this integration does "

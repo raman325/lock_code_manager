@@ -120,6 +120,34 @@ def test_users_enabled_pin_null_clears_slot() -> None:
     lock.coordinator.push_update.assert_called_once_with({5: SlotCredential.empty()})
 
 
+@pytest.mark.parametrize(
+    ("pin_code", "expected"),
+    [
+        ("****", SlotCredential.unreadable()),
+        ("*", SlotCredential.unreadable()),
+        # Only an all-asterisk code is a mask; asterisks mixed with digits are
+        # not a shape any lock produces, and guessing at partial masking would
+        # discard a code that is really there.
+        ("12**", SlotCredential.known("12**")),
+    ],
+)
+def test_users_masked_code_is_unreadable_not_known(
+    pin_code: str, expected: SlotCredential
+) -> None:
+    """A lock that withholds its codes answers with a mask, not a value.
+
+    Taken as the code, the mask never equals the configured PIN, so sync
+    reprograms the slot on every tick forever and the lock answers with the
+    mask again.
+    """
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock._process_z2m_device_payload(
+        {"users": {"6": {"status": "enabled", "pin_code": pin_code}}}
+    )
+    lock.coordinator.push_update.assert_called_once_with({6: expected})
+
+
 def test_users_non_numeric_slot_key_skipped() -> None:
     """Invalid user slot keys in ``users`` are ignored."""
     lock = _minimal_lock()
@@ -431,3 +459,45 @@ async def test_pin_code_get_enabled_without_a_code_is_withheld_not_empty() -> No
     )
     assert explicit.done()
     assert explicit.result() is SlotCredential.empty()
+
+
+@pytest.mark.parametrize(
+    ("user_enabled", "pin_code", "expected"),
+    [
+        (True, "****", SlotCredential.unreadable()),
+        (True, "*", SlotCredential.unreadable()),
+        # Only an all-asterisk code is a mask; asterisks mixed with digits are
+        # not a shape any lock produces, and guessing at partial masking would
+        # discard a code that is really there.
+        (True, "12**", SlotCredential.known("12**")),
+        # Masking only decides anything where the code would otherwise be
+        # known: a user the lock is not accepting is already incomparable.
+        (False, "****", SlotCredential.unreadable()),
+    ],
+)
+async def test_pin_code_get_masked_code_is_unreadable_not_known(
+    user_enabled: bool, pin_code: str, expected: SlotCredential
+) -> None:
+    """A masked read answers the request without answering the question.
+
+    The reply arrives and the slot is plainly occupied, but the asterisks
+    can never equal the configured PIN -- confirming them as the code makes
+    sync reprogram the slot on every tick forever.
+    """
+    loop = asyncio.get_running_loop()
+    lock = _minimal_lock()
+
+    future = loop.create_future()
+    lock._pending_codes[13] = future
+    lock._process_z2m_device_payload(
+        {
+            "pin_code": {
+                "user": 13,
+                "user_enabled": user_enabled,
+                "pin_code": pin_code,
+            }
+        }
+    )
+
+    assert future.done()
+    assert future.result() == expected

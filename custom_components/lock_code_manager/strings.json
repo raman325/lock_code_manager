@@ -17,6 +17,7 @@
       "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
       "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
       "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true"
     },
     "step": {
@@ -135,7 +136,8 @@
       "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
       "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
       "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
-      "missing_pin_if_enabled": "PIN must be set if slot is enabled."
+      "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
+      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}"
     },
     "step": {
       "init": {
@@ -350,6 +352,10 @@
     "lock_setup_failed": {
       "title": "Lock setup failed: {lock_entity_id}",
       "description": "Lock Code Manager could not set up `{lock_entity_id}`: {error}\n\nIts entities are created but unavailable, and code synchronization is paused for this lock. After addressing the cause, reload the lock's integration (or Lock Code Manager) to retry. This issue will be automatically dismissed when setup succeeds."
+    },
+    "lock_dropped": {
+      "title": "Lock dropped: {lock_entity_id}",
+      "description": "Lock Code Manager could not create a provider for `{lock_entity_id}`, so it has been dropped from this configuration entry: {error}\n\nNo entities were created for that lock and no codes are written to it; every other lock in the entry is unaffected. This usually means the entity belongs to a bridge no Lock Code Manager provider supports, or that its integration has changed what it publishes about the device. Remove it from the entry, or fix the underlying cause and reload Lock Code Manager. This issue will be automatically dismissed once the lock sets up."
     },
     "unmanaged_code": {
       "title": "Unmanaged code on {lock} in slot {slot}",

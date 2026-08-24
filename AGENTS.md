@@ -55,11 +55,15 @@ entities.
 
 - Plugin-based architecture for supporting different lock integrations
 - `_base.py`: `BaseLock` abstract class defining the provider interface
+- `_mqtt.py`: `BaseMqttLock`, shared behaviour for locks reached through an MQTT bridge
+  (operational preamble, sequential per-slot read, resubscribe policy, poll cadences)
 - `zwave_js.py`: Z-Wave JS lock implementation
 - `matter.py`: Matter lock implementation
 - `schlage.py`: Schlage WiFi lock implementation
 - `akuvox.py`: Akuvox intercom/lock implementation
+- `zha.py`: Zigbee Home Automation lock implementation
 - `zigbee2mqtt.py`: Zigbee2MQTT lock implementation (via MQTT)
+- `zwave_js_ui.py`: zwave-js-ui lock implementation (via MQTT, api-driven)
 - `virtual.py`: Virtual lock implementation for testing
 - Each provider implements: `async_get_users()`, `async_set_credential()`, `async_delete_credential()`,
   `async_is_integration_connected()`, `async_hard_refresh_codes()`
@@ -344,7 +348,10 @@ with a comment citing the contract. Never silence one by rerunning.
 ## Adding Lock Provider Support
 
 1. Create new file in `providers/` (e.g., `my_provider.py`)
-2. Subclass `BaseLock` from `providers/_base.py`
+2. Subclass `BaseLock` from `providers/_base.py`. A lock reached through an MQTT
+   bridge subclasses `BaseMqttLock` from `providers/_mqtt.py` instead — it supplies
+   the MQTT domain, the operational preamble, the sequential per-slot read, the
+   resubscribe policy, and the poll cadences that transport implies.
 3. Implement required abstract methods:
    - `domain` property: return integration domain string
    - `async_is_integration_connected()`: check if integration is connected. Raises

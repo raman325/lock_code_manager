@@ -6,7 +6,10 @@ from collections import defaultdict
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import json
 from typing import Literal
+
+from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
@@ -48,6 +51,45 @@ BASE_CONFIG = {
         },
     },
 }
+
+
+UNCLAIMED_IDENTIFIER = "somebridge_1"
+UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
+
+
+async def async_discover_unclaimed_mqtt_lock(
+    hass: HomeAssistant,
+) -> er.RegistryEntry:
+    """
+    Discover an mqtt lock whose device identifier no provider recognizes.
+
+    Going through real discovery is what puts the bridge's identifier on the
+    device registry entry -- the very field dispatch reads -- so a hand-built
+    registry row would be testing this test's idea of the payload.
+    """
+    async_fire_mqtt_message(
+        hass,
+        f"homeassistant/lock/{UNCLAIMED_IDENTIFIER}/lock/config",
+        json.dumps(
+            {
+                "name": None,
+                "command_topic": "somebridge/lock1/set",
+                "state_topic": "somebridge/lock1",
+                "unique_id": UNCLAIMED_UNIQUE_ID,
+                "device": {
+                    "identifiers": [UNCLAIMED_IDENTIFIER],
+                    "name": "Unclaimed Bridge Lock",
+                },
+            }
+        ),
+    )
+    await hass.async_block_till_done()
+    ent_reg = er.async_get(hass)
+    entity_id = ent_reg.async_get_entity_id("lock", "mqtt", UNCLAIMED_UNIQUE_ID)
+    assert entity_id is not None, "discovery did not create the lock entity"
+    lock_entry = ent_reg.async_get(entity_id)
+    assert lock_entry is not None
+    return lock_entry
 
 
 def code_entity_id(

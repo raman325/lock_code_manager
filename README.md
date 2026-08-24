@@ -40,6 +40,7 @@ Supported lock integrations:
 | [Z-Wave][wiki-zwave] | Varies | ✅ | ✅ | Some locks mask PINs |
 | [ZHA][wiki-zha] | ✅ | ✅ | ✅ | Drift detection fallback if lock lacks programming events |
 | [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | ✅ | ✅ | Same broker as Z2M; PIN support depends on lock |
+| [Z-Wave JS UI][wiki-zwave-js-ui] (MQTT)³ | Varies | ✅ | ✅ | Locks bridged via zwave-js-ui's MQTT gateway; some locks mask PINs |
 | [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs write-only per spec |
 | [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | ✅ | ❌ | ❌ | Local API, polling-based |
@@ -60,9 +61,19 @@ configuration is needed. Locks must be added to Home Assistant via MQTT discover
 (Zigbee2MQTT’s default).
 During LCM setup, choose your `lock.*` entity from **MQTT**.
 
+³ **Z-Wave JS UI (MQTT)** — For Z-Wave locks exposed to Home Assistant through
+[zwave-js-ui][zwave-js-ui]'s MQTT discovery gateway rather than the official websocket
+integration (which the [Z-Wave][wiki-zwave] row covers, and which zwave-js-ui itself
+recommends — switching needs no re-pairing). Reads and writes go through zwave-js-ui's
+MQTT api; gateway type **Named** or **ValueID** gives full functionality including
+push updates and PIN-used events, while **Manual** runs polling-only. Configure Home
+Assistant’s **MQTT** integration on the same broker zwave-js-ui uses.
+
 [zigbee2mqtt]: https://www.zigbee2mqtt.io/
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
 [wiki-zigbee2mqtt]: https://github.com/raman325/lock_code_manager/wiki/Zigbee2MQTT-integration
+[wiki-zwave-js-ui]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-JS-UI-(MQTT)
+[zwave-js-ui]: https://github.com/zwave-js/zwave-js-ui
 [wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration
 [wiki-schlage]: https://github.com/raman325/lock_code_manager/wiki/Schlage-integration
 [wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration

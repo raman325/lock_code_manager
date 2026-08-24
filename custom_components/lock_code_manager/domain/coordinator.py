@@ -75,6 +75,17 @@ class LockUsercodeUpdateCoordinator(
         self._connection_unsub: Callable[[], None] | None = None
         # Disable periodic polling when push updates are supported.
         # Polling is still used for initial load.
+        #
+        # Read once, and a bridged provider may not know the answer yet: it
+        # derives push support from discovery data that arrives on the
+        # broker's schedule. A lock that gains push after this therefore
+        # keeps the poll cadence chosen for a lock without it. That is
+        # redundant rather than wrong -- push updates do arrive, because the
+        # deferred-setup retry re-runs the provider's own subscribe -- and it
+        # lasts until the next reload. Re-deriving it live means reaching
+        # into the interval state machine below, whose three arms (breaker
+        # backoff, cold-start probe, restore-on-recovery) all own this value
+        # at different times.
         update_interval = None if lock.supports_push else lock.usercode_scan_interval
         super().__init__(
             hass,
@@ -383,6 +394,28 @@ class LockUsercodeUpdateCoordinator(
                     self._lock_breaker.failure_count,
                     self._lock.lock.entity_id,
                     new_interval.total_seconds(),
+                )
+        elif self._original_update_interval is None and not self._reached_once:
+            # A push provider polls on no timer, so the recovery probe above
+            # can never start from a cold start: tripping the breaker takes
+            # repeated polls and nothing is scheduling them. One failed first
+            # load would strand every entity unavailable until a reload, which
+            # re-runs the same first load into the same wall. Poll on the base
+            # backoff cadence until the coordinator is seeded once -- a lock
+            # that was merely asleep at startup (a FLiRS battery lock, say)
+            # then recovers on its own. Second-guessing a poll provider's own
+            # cadence is not this arm's business, hence the interval check.
+            # ``_reset_backoff`` restores the push cadence on first success,
+            # and the breaker's escalating delay takes over above once it
+            # trips.
+            retry_interval = timedelta(seconds=BACKOFF_INITIAL_SECONDS)
+            if self.update_interval != retry_interval:
+                self.update_interval = retry_interval
+                _LOGGER.debug(
+                    "Initial load for %s has not succeeded yet; retrying every "
+                    "%ds until the lock answers",
+                    self._lock.lock.entity_id,
+                    BACKOFF_INITIAL_SECONDS,
                 )
 
         # Only a lock that was reached at least once can go "offline". A lock

@@ -41,7 +41,14 @@ from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, MockLCMLock
+from .common import (
+    BASE_CONFIG,
+    LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
+    MockLCMLock,
+    async_discover_unclaimed_mqtt_lock,
+)
+from .providers.zigbee2mqtt.conftest import async_discover_z2m_lock
 
 GET_ALL_CODES_PATCH = (
     "custom_components.lock_code_manager.config_flow._async_query_locks"
@@ -646,24 +653,17 @@ async def test_options_flow_invalid_yaml_shows_error(
 
 def _capacity_probe(**capabilities_mock_kwargs):
     """
-    Make the config flow able to probe the test lock's capacity.
+    Decide what the test lock answers when the flow probes its capacity.
 
-    The autouse ``auto_setup_mock_lock`` fixture only registers MockLCMLock in
-    the ``domain.locks`` provider map; allocation builds its throwaway provider
-    instance from its own map, so the test platform has to be registered there
-    too or every capacity check silently skips.
+    Allocation builds a throwaway provider instance to ask the lock how many
+    slots it has; ``auto_setup_mock_lock`` is what makes the test platform
+    resolve to MockLCMLock in the first place.
     """
-    return (
-        patch.dict(
-            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
-            {"test": MockLCMLock},
-        ),
-        patch.object(
-            MockLCMLock,
-            "async_get_capabilities",
-            new_callable=AsyncMock,
-            **capabilities_mock_kwargs,
-        ),
+    return patch.object(
+        MockLCMLock,
+        "async_get_capabilities",
+        new_callable=AsyncMock,
+        **capabilities_mock_kwargs,
     )
 
 
@@ -689,10 +689,7 @@ async def test_config_flow_yaml_rejects_slot_beyond_lock_capacity(
     """More users than the lock can hold is caught before the entry exists."""
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(30)
-    )
-    with probe_registered, probe_capabilities:
+    with _capacity_probe(return_value=_capabilities_with_slots(30)):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {
@@ -715,10 +712,7 @@ async def test_config_flow_yaml_accepts_slot_within_capacity(
     """A slot inside the advertised range still creates the entry."""
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(30)
-    )
-    with probe_registered, probe_capabilities:
+    with _capacity_probe(return_value=_capabilities_with_slots(30)):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 30": {CONF_ENABLED: True, CONF_PIN: "2222"}}},
@@ -852,10 +846,8 @@ async def test_config_flow_ui_rejects_more_users_than_the_lock_holds(
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(2)
-    )
-    with probe_registered, probe_capabilities, _holding():
+    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(2))
+    with probe_capabilities, _holding():
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 3}
         )
@@ -867,7 +859,7 @@ async def test_config_flow_ui_rejects_more_users_than_the_lock_holds(
     assert result["description_placeholders"]["num_users"] == "3"
     assert result["description_placeholders"]["num_slots"] == "2"
 
-    with probe_registered, probe_capabilities, _holding():
+    with probe_capabilities, _holding():
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 2}
         )
@@ -893,11 +885,11 @@ async def test_a_refused_count_reports_only_what_it_can_stand_behind(
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(10)
-    )
     # Nine of the ten slots are taken, well past the window the count asks for.
-    with probe_registered, probe_capabilities, _holding(*range(1, 10)):
+    with (
+        _capacity_probe(return_value=_capabilities_with_slots(10)),
+        _holding(*range(1, 10)),
+    ):
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 8}
         )
@@ -922,10 +914,7 @@ async def test_config_flow_capacity_check_skipped_when_lock_unreachable(
     """
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        side_effect=LockDisconnected("lock asleep")
-    )
-    with probe_registered, probe_capabilities:
+    with _capacity_probe(side_effect=LockDisconnected("lock asleep")):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 50": {CONF_ENABLED: True, CONF_PIN: "2222"}}},
@@ -940,10 +929,7 @@ async def test_config_flow_capacity_check_skipped_when_capacity_unknown(
     """``num_slots`` of 0 is "unknown", not "no slots", so it cannot reject."""
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(0)
-    )
-    with probe_registered, probe_capabilities:
+    with _capacity_probe(return_value=_capabilities_with_slots(0)):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 50": {CONF_ENABLED: True, CONF_PIN: "2222"}}},
@@ -965,10 +951,6 @@ async def test_config_flow_capacity_check_skipped_when_lock_allocates_index(
 
     capabilities = AsyncMock(return_value=_capabilities_with_slots(30))
     with (
-        patch.dict(
-            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
-            {"test": MockLCMLock},
-        ),
         patch.object(
             MockLCMLock,
             "credential_index_follows_slot",
@@ -998,10 +980,7 @@ async def test_config_flow_capacity_check_survives_unexpected_error(
     """
     flow_id = await _start_yaml_config_flow(hass)
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        side_effect=RuntimeError("provider blew up")
-    )
-    with probe_registered, probe_capabilities:
+    with _capacity_probe(side_effect=RuntimeError("provider blew up")):
         result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 50": {CONF_ENABLED: True, CONF_PIN: "2222"}}},
@@ -1185,11 +1164,8 @@ async def test_an_impossible_count_is_refused_without_asking_a_lock(
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(3)
-    )
+    probe_capabilities = _capacity_probe(return_value=_capabilities_with_slots(3))
     with (
-        probe_registered,
         probe_capabilities,
         patch.object(MockLCMLock, "async_get_usercodes", _read),
     ):
@@ -1320,15 +1296,12 @@ async def test_a_count_that_fits_can_still_need_numbers_that_do_not(
     around the two codes already there needs a fifth number, and that is
     where it is refused.
     """
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(4)
-    )
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
     # Three users fit in four slots; slots 1 and 2 are taken, so they would
     # land on 3, 4 and 5 -- and 5 does not exist.
-    with probe_registered, probe_capabilities, _holding(1, 2):
+    with _capacity_probe(return_value=_capabilities_with_slots(4)), _holding(1, 2):
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 3}
         )
@@ -1511,10 +1484,7 @@ async def test_a_refused_count_comes_back_in_the_box(
     flow_id = await _start_config_flow(hass)
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(2)
-    )
-    with probe_registered, probe_capabilities, _holding():
+    with _capacity_probe(return_value=_capabilities_with_slots(2)), _holding():
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 8}
         )
@@ -1829,13 +1799,7 @@ async def test_a_lock_whose_config_entry_is_gone_is_skipped(
     )
     ent_reg.async_update_entity(orphan.entity_id, config_entry_id=None)
 
-    with (
-        patch.dict(
-            "custom_components.lock_code_manager.domain.allocation.INTEGRATIONS_CLASS_MAP",
-            {"test": MockLCMLock},
-        ),
-        pytest.raises(LockQuerySkipped) as raised,
-    ):
+    with pytest.raises(LockQuerySkipped) as raised:
         build_lock_instance(hass, dr.async_get(hass), ent_reg, orphan.entity_id)
 
     # Ours, so it still bounds the numbers even unread.
@@ -2006,10 +1970,7 @@ async def test_reauth_reports_a_lock_too_small_for_the_existing_slots(
     await hass.async_block_till_done()
 
     [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-    probe_registered, probe_capabilities = _capacity_probe(
-        return_value=_capabilities_with_slots(1)
-    )
-    with probe_registered, probe_capabilities:
+    with _capacity_probe(return_value=_capabilities_with_slots(1)):
         result = await hass.config_entries.flow.async_configure(
             flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
@@ -2017,3 +1978,156 @@ async def test_reauth_reports_a_lock_too_small_for_the_existing_slots(
     assert result["errors"] == {"base": "slot_out_of_range"}
     assert result["description_placeholders"]["num_slots"] == "1"
     assert result["description_placeholders"]["out_of_range_slots"] == "2"
+
+
+def _suggested_values(result) -> dict[str, object]:
+    """Read back what a re-shown form offers the user for each field."""
+    return {
+        str(key): key.description["suggested_value"]
+        for key in result["data_schema"].schema
+        if key.description and "suggested_value" in key.description
+    }
+
+
+async def test_user_step_rejects_unclaimed_mqtt_lock(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    Selecting an mqtt lock no provider claims is refused at submit time.
+
+    The entity selector can only filter by integration, so an mqtt lock from
+    an unsupported bridge is offered; nothing but this check stands between
+    picking it and a setup that fails after the entry exists.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id]},
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
+    assert result["description_placeholders"] == {"locks": unclaimed.entity_id}
+    # The refusal comes back holding the name, which means the check ran
+    # before the step consumed it.
+    assert _suggested_values(result) == {
+        CONF_NAME: "test",
+        CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+    }
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+
+    assert result["type"] == "menu"
+    assert result["step_id"] == "choose_path"
+
+
+async def test_user_step_accepts_claimed_mqtt_lock(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """A Zigbee2MQTT lock is an mqtt lock a provider does claim, so it passes."""
+    z2m_lock = await async_discover_z2m_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [z2m_lock.entity_id]}
+    )
+
+    assert result["type"] == "menu"
+    assert result["step_id"] == "choose_path"
+
+
+async def test_options_flow_rejects_unclaimed_mqtt_lock(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """Adding an unclaimed mqtt lock to an existing entry is refused too."""
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
+    entry.add_to_hass(hass)
+    users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    flow_id = started["flow_id"]
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+                CONF_USERS: users,
+            },
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
+    assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users},
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+
+async def test_options_flow_renders_lock_and_users_errors_together(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    One submission that is wrong in two ways comes back complaining about both.
+
+    The lock check accumulates into the same error dict the users validation
+    writes to, under a different key, instead of short-circuiting it. Without
+    that, fixing the lock would only reveal the next complaint, so the user
+    pays a round trip per mistake.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    flow_id, _ = await _start_options_flow(hass)
+
+    result = await hass.config_entries.options.async_configure(
+        flow_id,
+        {
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+            # Enabled with no PIN is invalid per schema.
+            CONF_USERS: {"Raman": {CONF_ENABLED: True}},
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    assert result["errors"] == {
+        CONF_LOCKS: "unsupported_mqtt_lock",
+        "base": "invalid_config",
+    }
+    assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+
+
+async def test_reauth_rejects_unclaimed_mqtt_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    mqtt_mock,
+    mqtt_teardown,
+) -> None:
+    """Reauth is a lock-selection step too, so it applies the same rule."""
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    entry = lock_code_manager_config_entry
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [unclaimed.entity_id]}
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
+    assert result["description_placeholders"]["locks"] == unclaimed.entity_id

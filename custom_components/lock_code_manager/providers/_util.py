@@ -2,10 +2,14 @@
 Shared helpers for provider implementations.
 
 Provider-internal utilities that don't belong in the integration-wide
-``util.py``. Currently: slot-tagging used by providers whose lock APIs
-identify codes by user-name rather than by slot number (Schlage, Akuvox,
-and -- once the unified-user migration lands -- Matter and Z-Wave User
-Credential CC).
+``util.py``: withheld-code recognition, and MQTT discovery lookups shared
+by the providers that reach their locks through an MQTT bridge, plus the
+slot-tagging used by providers whose lock APIs identify codes by user-name
+rather than by slot number (Schlage, Akuvox, and -- once the unified-user
+migration lands -- Matter and Z-Wave User Credential CC).
+
+Slot tag formats
+----------------
 
 Three formats are emitted today; a fourth (legacy) is still tolerated on
 read for locks whose names were written by older releases.
@@ -38,6 +42,13 @@ read for locks whose names were written by older releases.
 from __future__ import annotations
 
 import re
+from typing import Any
+
+from homeassistant.components.mqtt import debug_info as mqtt_debug_info
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+
+from .const import LOGGER
 
 _LEGACY_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")
 _TAG_RE = re.compile(r"^lcm:(\d+):\s*(.*)")
@@ -110,3 +121,65 @@ def parse_slot_num(value: object) -> int | None:
         return int(value)  # type: ignore[call-overload]
     except TypeError, ValueError, OverflowError:
         return None
+
+
+def is_masked_code(code: str) -> bool:
+    """
+    Return whether a code is a lock's placeholder for a code it will not show.
+
+    Locks configured to withhold user codes answer reads with an asterisk per
+    digit instead of the digits. That is a refusal, not a value: read as one,
+    it never equals the configured Personal Identification Number, so sync
+    sees a permanent mismatch and reprograms the slot on every single tick,
+    forever. Withheld has to reach the coordinator as unreadable, which is
+    exactly the state that means "occupied, contents unknown".
+
+    Only an all-asterisk code counts; asterisks mixed with digits are not a
+    shape any lock produces, and guessing at partial masking would discard a
+    code that is really there.
+    """
+    return set(code) == {"*"}
+
+
+def resolve_discovery_payload(
+    hass: HomeAssistant, lock: er.RegistryEntry
+) -> dict[str, Any] | None:
+    """
+    Return the MQTT discovery payload Home Assistant holds for a lock entity.
+
+    An MQTT bridge publishes the exact topics it uses in its discovery
+    payload, so reading them back is what lets a provider address custom,
+    multi-level, and per-bridge base topics verbatim instead of rebuilding
+    them from a device name. Which field to read is the caller's business --
+    the bridges disagree about what a ``command_topic`` names -- but the walk
+    down to the payload is the same for all of them.
+
+    Returns None whenever no payload can be read: no device link, MQTT's
+    debug data not loaded, the device carrying no entry for this entity, or
+    a payload that is not a mapping. Callers must read that as disconnected
+    rather than guess a topic.
+    """
+    device_id = lock.device_id
+    if not device_id:
+        return None
+    try:
+        info = mqtt_debug_info.info_for_device(hass, device_id)
+    except KeyError:
+        # MQTT integration data not loaded.
+        LOGGER.debug("MQTT debug info unavailable for %s", lock.entity_id)
+        return None
+    entity_info = next(
+        (
+            candidate
+            for candidate in info.get("entities", [])
+            if candidate.get("entity_id") == lock.entity_id
+        ),
+        None,
+    )
+    if entity_info is None:
+        return None
+    payload = (entity_info.get("discovery_data") or {}).get("payload")
+    if not isinstance(payload, dict):
+        LOGGER.debug("No discovery payload for %s", lock.entity_id)
+        return None
+    return payload

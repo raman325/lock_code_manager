@@ -87,6 +87,7 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_NAME_ENTITY,
     MockLCMLock,
+    async_discover_unclaimed_mqtt_lock,
     in_sync_entity_id,
 )
 from .conftest import (
@@ -3080,3 +3081,83 @@ async def test_a_slot_with_a_pin_but_no_name_survives_being_migrated(
     assert config.slot(2)[CONF_PIN] == "2222"
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_lock_no_provider_claims_raises_its_own_repair(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    A lock dropped during setup says so in the repairs panel, not just the log.
+
+    Selection-time validation refuses an unclaimed mqtt lock today, so an
+    entry holding one was configured before that check existed. Nothing ever
+    re-validates it: its entities simply never appear and its codes are never
+    written, and the only trace was a line in the log nobody reads.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+        CONF_SLOTS: BASE_CONFIG[CONF_SLOTS],
+    }
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="pre_upgrade")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"lock_dropped_{unclaimed.entity_id}"
+    )
+    assert issue is not None
+    assert issue.translation_placeholders["lock_entity_id"] == unclaimed.entity_id
+    assert unclaimed.entity_id in issue.translation_placeholders["error"]
+    # The rest of the entry is untouched: one bad lock is not a failed setup.
+    assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_removing_a_dropped_lock_clears_its_repair(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    Taking the lock out of the entry is what the repair asks for, so it works.
+
+    Nothing else can clear that repair: the lock never got an instance, so
+    there is no teardown to do it. The rest of the update has to survive the
+    removal too, which is why a slot is added in the same breath -- the
+    removal used to reach into runtime data for the instance that is not
+    there, and everything after it in the update never ran.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+        CONF_SLOTS: BASE_CONFIG[CONF_SLOTS],
+    }
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="pre_upgrade")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                **BASE_CONFIG[CONF_SLOTS],
+                3: {CONF_NAME: "test3", CONF_PIN: "9012", CONF_ENABLED: True},
+            },
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, f"lock_dropped_{unclaimed.entity_id}"
+        )
+        is None
+    )
+    assert 3 in entry.runtime_data.slot_coordinators
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()

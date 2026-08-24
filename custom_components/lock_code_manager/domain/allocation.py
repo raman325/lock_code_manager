@@ -19,9 +19,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import MAX_SEARCHED_SLOT
-from ..providers import INTEGRATIONS_CLASS_MAP
+from ..providers import resolve_provider_class_for_entity
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
+from .locks import borrowed_lock_instance
 from .occupancy import LockOccupancy, Occupancy
 from .queries import get_managed_slots
 
@@ -73,7 +74,7 @@ def build_lock_instance(
     """
     Build a temporary lock provider instance for ``lock_entity_id``.
 
-    Performs setup-time checks (entity in registry, supported platform,
+    Performs setup-time checks (entity in registry, a provider claims it,
     parent config entry exists) and instantiates the provider class.
     Raises ``LockQuerySkipped`` if any setup-time check fails.
     """
@@ -84,9 +85,13 @@ def build_lock_instance(
             lock_entity_id,
         )
         raise LockQuerySkipped(lock_entity_id, managed=True)
-    if lock_entry.platform not in INTEGRATIONS_CLASS_MAP:
+    lock_cls = resolve_provider_class_for_entity(dev_reg, lock_entry)
+    if lock_cls is None:
+        # Covers both an unsupported platform and an mqtt lock whose bridge
+        # no provider speaks: either way nothing is ever written there, so
+        # the lock constrains no numbering.
         _LOGGER.debug(
-            "Lock %s uses unsupported platform %s; skipping usercode check",
+            "No provider claims lock %s (platform %s); skipping usercode check",
             lock_entity_id,
             lock_entry.platform,
         )
@@ -99,9 +104,7 @@ def build_lock_instance(
         )
         raise LockQuerySkipped(lock_entity_id, managed=True)
 
-    return INTEGRATIONS_CLASS_MAP[lock_entry.platform](
-        hass, dev_reg, ent_reg, lock_config_entry, lock_entry
-    )
+    return lock_cls(hass, dev_reg, ent_reg, lock_config_entry, lock_entry)
 
 
 async def async_check_slot_capacity(
@@ -128,10 +131,12 @@ async def async_check_slot_capacity(
     slots = sorted({int(slot) for slot in slots_list})
     for lock_entity_id in locks:
         try:
-            lock_instance = build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
-            if not lock_instance.credential_index_follows_slot:
-                continue
-            capabilities = await lock_instance.async_get_capabilities()
+            async with borrowed_lock_instance(
+                build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
+            ) as lock_instance:
+                if not lock_instance.credential_index_follows_slot:
+                    continue
+                capabilities = await lock_instance.async_get_capabilities()
         except LockQuerySkipped:
             continue
         except LockCodeManagerError as err:
@@ -219,23 +224,24 @@ async def async_read_occupancy(
             )
             continue
 
-        follows_slot = lock_instance.credential_index_follows_slot
-        occupied: frozenset[int] | None = None
-        if follows_slot:
-            # A lock that allocates its own credential index cannot
-            # constrain the numbering, so asking it spends a round trip
-            # -- one per index on some providers -- on an answer that
-            # nothing reads.
-            try:
-                occupied = await lock_instance.async_internal_get_occupied_indices(
-                    indices
-                )
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to read the contents of %s; treating them as unknown",
-                    lock_entity_id,
-                    exc_info=True,
-                )
+        async with borrowed_lock_instance(lock_instance):
+            follows_slot = lock_instance.credential_index_follows_slot
+            occupied: frozenset[int] | None = None
+            if follows_slot:
+                # A lock that allocates its own credential index cannot
+                # constrain the numbering, so asking it spends a round trip
+                # -- one per index on some providers -- on an answer that
+                # nothing reads.
+                try:
+                    occupied = await lock_instance.async_internal_get_occupied_indices(
+                        indices
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Failed to read the contents of %s; treating them as unknown",
+                        lock_entity_id,
+                        exc_info=True,
+                    )
         lock_occupancies.append(
             LockOccupancy(
                 lock_entity_id=lock_entity_id,
@@ -319,14 +325,16 @@ async def async_max_slot(
     limits: dict[str, int] = {}
     for lock_entity_id in locks:
         try:
-            lock_instance = build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
-            if not lock_instance.credential_index_follows_slot:
-                continue
-            # None is a lock with no opinion, not a lock with no slots.
-            # Only a real answer earns a name, because the name is what
-            # the refusal blames.
-            if (bound := await lock_instance.async_get_max_slot()) is not None:
-                limits[lock_entity_id] = bound
+            async with borrowed_lock_instance(
+                build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
+            ) as lock_instance:
+                if not lock_instance.credential_index_follows_slot:
+                    continue
+                # None is a lock with no opinion, not a lock with no slots.
+                # Only a real answer earns a name, because the name is what
+                # the refusal blames.
+                if (bound := await lock_instance.async_get_max_slot()) is not None:
+                    limits[lock_entity_id] = bound
         except Exception:
             _LOGGER.warning(
                 "Could not ask %s how far its slot numbers go; "

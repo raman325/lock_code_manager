@@ -5,15 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from datetime import timedelta
+from functools import partial
 import json
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from homeassistant.components.mqtt import (
-    DOMAIN as MQTT_DOMAIN,
     async_publish,
     async_subscribe,
-    debug_info as mqtt_debug_info,
 )
 from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
@@ -21,18 +19,16 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import (
-    Credential,
-    CredentialRef,
-    User,
-    WriteResult,
-    user_from_slot,
-)
+from ..domain.credentials import Credential, CredentialRef, User, WriteResult
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
-from ._base import BaseLock
-from ._util import parse_slot_num
+from ._mqtt import BaseMqttLock
+from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER
+
+# Device registry identifier prefix Zigbee2MQTT uses in its HA discovery
+# payloads; also consumed by providers.resolve_provider_class for dispatch.
+Z2M_IDENTIFIER_PREFIX = "zigbee2mqtt_"
 
 # Zigbee2MQTT action values for lock/unlock events triggered by PIN entry.
 # These come from the DoorLock cluster's OperatingEventNotification and
@@ -87,6 +83,9 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
     - The one exception: an explicit ``pin_code: null`` on an enabled user
       means the broker exposes the field and the device reports no code,
       so that projects to empty.
+    - A lock that masks its codes publishes a usable-looking value that is
+      all asterisks. That is the withheld state wearing a code's shape, so
+      it lands in the same place -- see ``is_masked_code``.
     - ``available`` is the only status that means the slot holds nothing.
       ``disabled`` is a user the lock is refusing, and unrecognized statuses
       (``not_supported_*``) say nothing at all, so both project to
@@ -97,7 +96,12 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
     pin_raw = user_info.get("pin_code")
     if status == "enabled":
         if _mqtt_payload_pin_has_code_value(pin_raw):
-            return SlotCredential.known(str(pin_raw))
+            code = str(pin_raw)
+            return (
+                SlotCredential.unreadable()
+                if is_masked_code(code)
+                else SlotCredential.known(code)
+            )
         if "pin_code" in user_info:
             return SlotCredential.empty()
         return SlotCredential.unreadable()
@@ -110,7 +114,7 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
 
 
 @dataclass(repr=False, eq=False)
-class Zigbee2MQTTLock(BaseLock):
+class Zigbee2MQTTLock(BaseMqttLock):
     """Class to represent Zigbee2MQTT lock."""
 
     _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
@@ -125,11 +129,6 @@ class Zigbee2MQTTLock(BaseLock):
     _subscribed_topic: str | None = field(init=False, default=None)
 
     @property
-    def domain(self) -> str:
-        """Return integration domain."""
-        return MQTT_DOMAIN
-
-    @property
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
         return True
@@ -138,20 +137,6 @@ class Zigbee2MQTTLock(BaseLock):
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
         return True
-
-    @property
-    def usercode_scan_interval(self) -> timedelta:
-        """
-        Return scan interval for usercodes.
-
-        With push updates, we only need polling as a fallback.
-        """
-        return timedelta(minutes=5)
-
-    @property
-    def hard_refresh_interval(self) -> timedelta | None:
-        """Return interval for hard refresh."""
-        return timedelta(hours=1)
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Subscribe to the device topic before the coordinator runs its first poll."""
@@ -162,7 +147,8 @@ class Zigbee2MQTTLock(BaseLock):
         if not self.device_entry:
             return False
         return any(
-            len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_")
+            len(identifier) >= 2
+            and str(identifier[1]).startswith(Z2M_IDENTIFIER_PREFIX)
             for identifier in self.device_entry.identifiers
         )
 
@@ -178,34 +164,21 @@ class Zigbee2MQTTLock(BaseLock):
         """
         if not self._is_z2m_device():
             return None
-        device_id = self.lock.device_id
-        if not device_id:
+        payload = resolve_discovery_payload(self.hass, self.lock)
+        if payload is None:
             return None
-        try:
-            info = mqtt_debug_info.info_for_device(self.hass, device_id)
-        except KeyError:
-            # MQTT integration data not loaded.
-            LOGGER.debug("MQTT debug info unavailable for %s", self.lock.entity_id)
-            return None
-        for entity_info in info.get("entities", []):
-            if entity_info.get("entity_id") != self.lock.entity_id:
-                continue
-            discovery_data = entity_info.get("discovery_data") or {}
-            payload = discovery_data.get("payload")
-            if not isinstance(payload, dict):
-                LOGGER.debug("No discovery payload for %s", self.lock.entity_id)
-                return None
-            state_topic = payload.get("state_topic")
-            if isinstance(state_topic, str) and state_topic:
-                return state_topic
-            command_topic = payload.get("command_topic")
-            if isinstance(command_topic, str) and command_topic.endswith("/set"):
-                return command_topic.removesuffix("/set")
-            LOGGER.debug(
-                "Discovery payload for %s has no usable topic",
-                self.lock.entity_id,
-            )
-            return None
+        state_topic = payload.get("state_topic")
+        if isinstance(state_topic, str) and state_topic:
+            return state_topic
+        # Zigbee2MQTT's command topic is the device topic plus ``/set``, so
+        # stripping the suffix names the same device the state topic would.
+        command_topic = payload.get("command_topic")
+        if isinstance(command_topic, str) and command_topic.endswith("/set"):
+            return command_topic.removesuffix("/set")
+        LOGGER.debug(
+            "Discovery payload for %s has no usable topic",
+            self.lock.entity_id,
+        )
         return None
 
     def _get_topic(self, suffix: str = "") -> str | None:
@@ -228,16 +201,16 @@ class Zigbee2MQTTLock(BaseLock):
             "zigbee2mqtt_* identifier)."
         )
 
+    def _raise_not_connected(self) -> NoReturn:
+        """Name the wrong-bridge misconfiguration before the generic reason."""
+        self._maybe_raise_wrong_bridge_disconnect()
+        super()._raise_not_connected()
+
     async def async_is_integration_connected(self) -> bool:
         """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
             return False
         return bool(self._resolve_device_topic())
-
-    async def async_is_device_available(self) -> bool:
-        """Return whether the lock entity reports an operational state."""
-        state = self.hass.states.get(self.lock.entity_id)
-        return not (state is None or state.state == "unavailable")
 
     @callback
     def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
@@ -374,12 +347,16 @@ class Zigbee2MQTTLock(BaseLock):
                     pin_code = pin_code_data.get("pin_code")
                     if _mqtt_payload_pin_has_code_value(pin_code):
                         # A code is plainly here. Whether the lock is
-                        # currently accepting it decides only whether the
-                        # value can be compared, not whether the index is
-                        # taken.
+                        # currently accepting it, and whether what it sent is
+                        # the digits or a mask standing in for them, decide
+                        # only whether the value can be compared -- not
+                        # whether the index is taken. A disabled user whose
+                        # code is also masked is doubly incomparable and
+                        # lands in the same place.
+                        code = str(pin_code)
                         future.set_result(
-                            SlotCredential.known(str(pin_code))
-                            if user_enabled
+                            SlotCredential.known(code)
+                            if user_enabled and not is_masked_code(code)
                             else SlotCredential.unreadable()
                         )
                     elif user_enabled and "pin_code" not in pin_code_data:
@@ -451,47 +428,9 @@ class Zigbee2MQTTLock(BaseLock):
 
         Primary subscribe is ``await`` in ``async_setup``.
         """
-        topic = self._get_topic()
-        if self._push_unsubs and (topic is None or self._subscribed_topic == topic):
-            return
-
-        if not topic:
-            LOGGER.debug(
-                "Cannot subscribe to push updates for %s - no topic",
-                self.lock.entity_id,
-            )
-            raise LockDisconnected(
-                f"Cannot subscribe to push updates for {self.lock.entity_id} - no topic"
-            )
-
-        if not mqtt_config_entry_enabled(self.hass):
-            LOGGER.debug(
-                "Deferring MQTT push subscribe for %s — MQTT integration disabled",
-                self.lock.entity_id,
-            )
-            return
-
-        async def _subscribe_or_log() -> None:
-            """
-            Run ``_async_ensure_device_subscription`` from the reconnect task path.
-
-            Log errors only; sync ``setup_push_subscription`` cannot raise.
-            """
-            try:
-                await self._async_ensure_device_subscription()
-            except LockDisconnected as err:
-                LOGGER.debug(
-                    "Lock %s: push subscription deferred (disconnected): %s",
-                    self.lock.entity_id,
-                    err,
-                )
-            except Exception:
-                LOGGER.exception(
-                    "Lock %s: MQTT subscribe failed unexpectedly",
-                    self.lock.entity_id,
-                )
-
-        self.hass.async_create_task(_subscribe_or_log())
+        self._schedule_push_subscription(
+            self._get_topic(), self._async_ensure_device_subscription, "topic"
+        )
 
     @callback
     def teardown_push_subscription(self) -> None:
@@ -527,12 +466,7 @@ class Zigbee2MQTTLock(BaseLock):
         """
         code_slot = credential.slot
 
-        if not mqtt_config_entry_enabled(self.hass):
-            raise LockDisconnected("MQTT component not available")
-
-        if not await self.async_is_integration_connected():
-            self._maybe_raise_wrong_bridge_disconnect()
-            raise LockDisconnected("Lock not connected")
+        await self._async_ensure_operational(require_device=False)
 
         set_topic = self._get_topic("set")
         if not set_topic:
@@ -593,12 +527,7 @@ class Zigbee2MQTTLock(BaseLock):
         """
         code_slot = ref.slot
 
-        if not mqtt_config_entry_enabled(self.hass):
-            raise LockDisconnected("MQTT component not available")
-
-        if not await self.async_is_integration_connected():
-            self._maybe_raise_wrong_bridge_disconnect()
-            raise LockDisconnected("Lock not connected")
+        await self._async_ensure_operational(require_device=False)
 
         set_topic = self._get_topic("set")
         if not set_topic:
@@ -650,25 +579,17 @@ class Zigbee2MQTTLock(BaseLock):
         """
         Read Personal Identification Number codes one index at a time.
 
-        Queries Zigbee2MQTT one slot at a time over MQTT so the bridge can
-        respond to each GET before the next. Transient publish/timeout/read
-        failures produce an unreadable credential so the coordinator does
-        not treat a transient MQTT error as a confirmed-empty slot and storm
-        reprogramming after recovery.
+        What sequencing the reads buys, and why a read that reached nothing
+        raises rather than reporting a lock full of unreadable slots, is
+        ``BaseMqttLock._async_read_slots``. A broker that has stopped
+        carrying traffic gets that far because every gate below answers from
+        Home Assistant's configuration rather than from the wire.
         """
-        if not mqtt_config_entry_enabled(self.hass):
-            raise LockDisconnected("MQTT component not available")
-
-        if not await self.async_is_integration_connected():
-            self._maybe_raise_wrong_bridge_disconnect()
-            raise LockDisconnected("Lock not connected")
-
-        if not await self.async_is_device_available():
-            raise LockDisconnected("Device not available")
+        await self._async_ensure_operational()
 
         # Renames/bridge migrations with no disconnect self-heal here: the
-        # 5-minute poll re-checks that the push subscription still matches
-        # the currently resolved topic.
+        # hourly hard refresh lands on this read and re-checks that the push
+        # subscription still matches the currently resolved topic.
         try:
             await self._async_ensure_device_subscription()
         except LockDisconnected as err:
@@ -682,32 +603,27 @@ class Zigbee2MQTTLock(BaseLock):
         if not get_topic:
             raise LockDisconnected("Could not determine MQTT topic")
 
-        # One request per index, so the caller's scope bounds the work.
-        code_slots = self.managed_slots if slots is None else slots
+        # One request per index, so the caller's scope bounds the work. The
+        # topic is resolved once for the whole read rather than per slot: it
+        # comes from a discovery-data walk, and one answer for one poll is
+        # also what keeps a mid-read rename from splitting it across topics.
+        return await self._async_read_slots(
+            self.managed_slots if slots is None else slots,
+            partial(self._async_read_slot, get_topic=get_topic),
+            transport_failure="failed to reach the lock",
+        )
 
-        if not code_slots:
-            return []
-
-        slot_states = {
-            slot_num: await self._async_read_slot(slot_num, get_topic)
-            for slot_num in sorted(code_slots)
-        }
-        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
-
-    async def _async_read_slot(self, slot_num: int, get_topic: str) -> SlotCredential:
+    async def _async_read_slot(
+        self, slot_num: int, get_topic: str
+    ) -> SlotCredential | None:
         """
-        Ask the lock for one slot and wait for the answer.
+        Ask the lock for one slot and wait for the answer; None means silence.
 
-        A publish failure, a timeout, or an unusable reply all produce
-        ``unreadable`` rather than ``empty``: sync must not take a transient
-        MQTT problem for a confirmed-empty slot and storm reprogramming once
-        MQTT recovers.
-
-        Slots are queried one at a time so Zigbee2MQTT and the firmware can
-        answer each GET before the next. A parallel gather with per-slot
-        timeouts can fail an entire refresh and leave the coordinator with no
-        data, which makes sync skip every slot (see
-        ``SlotSyncManager._resolve_credential_snapshot``).
+        A request that never left and a request nothing came back for are
+        both silence: a slot the bridge described as withheld, disabled, or
+        masked is data, and a slot that produced no reply at all is not.
+        That is the distinction ``BaseMqttLock._async_read_slots`` needs to
+        tell a poll from a read that reached nothing.
         """
         loop = asyncio.get_running_loop()
         future = loop.create_future()
@@ -723,7 +639,7 @@ class Zigbee2MQTTLock(BaseLock):
                 err,
             )
             self._pending_codes.pop(slot_num, None)
-            return SlotCredential.unreadable()
+            return None
 
         try:
             result = await asyncio.wait_for(future, timeout=10.0)
@@ -733,12 +649,15 @@ class Zigbee2MQTTLock(BaseLock):
                 self.lock.entity_id,
                 slot_num,
             )
-            credential = SlotCredential.unreadable()
+            credential = None
         except Exception as err:
             # Broad catch is intentional: the future is resolved by the MQTT
             # callback, and any exception from resolution (InvalidStateError,
             # data processing errors) should not crash the entire refresh.
             # CancelledError is BaseException in Python 3.11+ and propagates.
+            # Only an arriving reply can resolve the future, so this is a
+            # reply that could not be made sense of rather than silence: it
+            # stays a credential and keeps the poll alive.
             LOGGER.warning(
                 "Unexpected error getting PIN for %s slot %s: %s",
                 self.lock.entity_id,
@@ -764,7 +683,3 @@ class Zigbee2MQTTLock(BaseLock):
         real bridge payload to work from rather than a guessed shape.
         """
         return None
-
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Perform hard refresh and return all codes."""
-        return await self.async_get_usercodes()

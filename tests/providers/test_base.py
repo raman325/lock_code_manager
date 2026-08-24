@@ -420,7 +420,7 @@ async def test_config_entry_state_change_resubscribes(
 ):
     """Resubscribe and refresh when lock config entry reloads."""
     with patch(
-        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -453,7 +453,7 @@ async def test_connection_transition_resubscribes(
 ):
     """Resubscribe on reconnect and unsubscribe on disconnect."""
     with patch(
-        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -497,7 +497,7 @@ async def test_connection_transition_on_device_availability(
     (issue #1257 recovery latency).
     """
     with patch(
-        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -1598,7 +1598,7 @@ async def test_set_usercode_skips_refresh_for_push_provider(
 ):
     """Test that async_internal_set_usercode does NOT refresh coordinator for push providers."""
     with patch(
-        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -1635,7 +1635,7 @@ async def test_clear_usercode_skips_refresh_for_push_provider(
 ):
     """Test that async_internal_clear_usercode does NOT refresh coordinator for push providers."""
     with patch(
-        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -1672,7 +1672,7 @@ async def test_config_entry_state_listener_ignores_same_state(
 ):
     """Test that config entry state listener ignores transitions to same state."""
     with patch(
-        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -1932,7 +1932,7 @@ async def test_handle_state_change_supersedes_prior_reconnect_task(
 ):
     """A second LOADED transition cancels and replaces the prior reconnect task."""
     with patch(
-        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -1974,7 +1974,7 @@ async def test_supersede_drains_prior_reconnect_exception(
 ):
     """A superseded reconnect task that failed before cancellation is logged, not orphaned."""
     with patch(
-        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -2263,3 +2263,80 @@ async def test_max_slot_falls_back_when_capabilities_cannot_be_read(
         AsyncMock(side_effect=LockDisconnected("asleep")),
     ):
         assert await lock.async_get_max_slot() is None
+
+
+async def test_deferred_setup_is_retried_once_the_lock_becomes_reachable(
+    hass: HomeAssistant,
+):
+    """
+    An integration that was loaded all along sends no LOADED transition.
+
+    Setup defers when the provider integration is not connected, and the
+    only thing that re-ran it was that integration reaching LOADED. A bridge
+    whose entry was loaded before Lock Code Manager, and whose discovery data
+    merely had not been replayed yet, never transitions -- so the lock stayed
+    un-set-up for the rest of the run, and sync, which is gated on that,
+    never wrote a code to it again.
+
+    The connection check is what catches it, and the first reachable
+    observation is enough: there may be no transition to wait for either,
+    since that check can find the lock reachable the very first time it runs.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_late_discovery")
+    lock.set_connected(False)
+    await lock.async_setup_internal(lock.lock_config_entry)
+    assert lock.provider_setup_succeeded is False
+
+    lock.set_connected(True)
+    loaded_entry = MagicMock()
+    loaded_entry.state = ConfigEntryState.LOADED
+    lock.lock_config_entry = loaded_entry
+
+    assert await lock.async_internal_is_reachable() is True
+    await hass.async_block_till_done()
+
+    assert lock.provider_setup_succeeded is True
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
+
+
+async def test_a_lock_that_was_set_up_is_not_set_up_again_on_every_check(
+    hass: HomeAssistant,
+):
+    """
+    The retry is armed by setup being skipped, not by it having failed.
+
+    A lock whose setup ran and failed validation has a diagnosis and its own
+    revalidation path; re-probing it from every connection check would put a
+    capability read on the wire every thirty seconds for a lock that is known
+    to be degraded.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_validated", MockNativeUserLock)
+    lock.set_connected(False)
+
+    no_pin_caps = LockCapabilities(
+        supports_user_management=True, max_users=10, credential_types={}
+    )
+    with patch.object(
+        lock, "async_get_capabilities", AsyncMock(return_value=no_pin_caps)
+    ):
+        await lock.async_setup_internal(lock.lock_config_entry)
+
+        lock.set_connected(True)
+        loaded_entry = MagicMock()
+        loaded_entry.state = ConfigEntryState.LOADED
+        lock.lock_config_entry = loaded_entry
+        # The first reachable observation spends the one deferred retry.
+        assert await lock.async_internal_is_reachable() is True
+        await hass.async_block_till_done()
+
+        with patch.object(lock, "_async_start_reconnect") as retry:
+            assert await lock.async_internal_is_reachable() is True
+            await hass.async_block_till_done()
+
+    retry.assert_not_called()
+    assert lock.provider_setup_succeeded is False
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)

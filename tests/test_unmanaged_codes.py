@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
@@ -14,9 +15,10 @@ from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.unmanaged import unmanaged_issue_id
+from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
-from .common import LOCK_1_ENTITY_ID, MockLCMLock
+from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, MockLCMLock
 
 STRANDED_SLOT = 7
 STRANDED_PIN = "4242"
@@ -55,10 +57,59 @@ async def stranded_fixture(
     return entry
 
 
+@pytest.fixture(name="swept_teardowns")
+def swept_teardowns_fixture():
+    """Record the locks whose throwaway provider the sweep tears down."""
+    torn_down: list[str] = []
+    original = BaseLock.unsubscribe_push_updates
+
+    def _record(self) -> None:
+        torn_down.append(self.lock.entity_id)
+        original(self)
+
+    with patch.object(BaseLock, "unsubscribe_push_updates", _record):
+        yield torn_down
+
+
 def _issue(hass: HomeAssistant, slot: int = STRANDED_SLOT):
     return ir.async_get(hass).async_get_issue(
         DOMAIN, unmanaged_issue_id(LOCK_1_ENTITY_ID, slot)
     )
+
+
+async def test_the_sweep_tears_down_the_providers_it_builds(
+    hass: HomeAssistant, swept_teardowns: list[str], stranded
+) -> None:
+    """
+    Reading a lock can leave transport behind, and nobody else owns it.
+
+    An MQTT provider subscribes to its lock's topics on the way to answering
+    a read, so a throwaway that is never torn down goes on firing code slot
+    events next to the entry's real provider for the rest of the run.
+    """
+    assert swept_teardowns == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+
+
+async def test_a_lock_that_cannot_be_read_is_still_torn_down(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    swept_teardowns: list[str],
+) -> None:
+    """A read that raises is exactly when the leftover subscription is worst."""
+    with patch.object(
+        MockLCMLock,
+        "async_get_usercodes",
+        AsyncMock(side_effect=LockDisconnected("lock is asleep")),
+    ):
+        entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="swept")
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert swept_teardowns[:2] == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 async def test_an_unmanaged_code_raises_its_own_repair(
