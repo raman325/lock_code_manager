@@ -2,8 +2,9 @@
 Shared helpers for provider implementations.
 
 Provider-internal utilities that don't belong in the integration-wide
-``util.py``: entity availability and MQTT discovery lookups shared by the
-providers that reach their locks through an MQTT bridge, plus the
+``util.py``: entity availability, withheld-code recognition, and MQTT
+discovery lookups shared by the providers that reach their locks through
+an MQTT bridge, plus the
 slot-tagging used by providers whose lock APIs identify codes by user-name
 rather than by slot number (Schlage, Akuvox, and -- once the unified-user
 migration lands -- Matter and Z-Wave User Credential CC).
@@ -121,6 +122,24 @@ def parse_slot_num(value: object) -> int | None:
         return int(value)  # type: ignore[call-overload]
     except TypeError, ValueError, OverflowError:
         return None
+
+
+def is_masked_code(code: str) -> bool:
+    """
+    Return whether a code is a lock's placeholder for a code it will not show.
+
+    Locks configured to withhold user codes answer reads with an asterisk per
+    digit instead of the digits. That is a refusal, not a value: read as one,
+    it never equals the configured Personal Identification Number, so sync
+    sees a permanent mismatch and reprograms the slot on every single tick,
+    forever. Withheld has to reach the coordinator as unreadable, which is
+    exactly the state that means "occupied, contents unknown".
+
+    Only an all-asterisk code counts; asterisks mixed with digits are not a
+    shape any lock produces, and guessing at partial masking would discard a
+    code that is really there.
+    """
+    return set(code) == {"*"}
 
 
 def entity_state_is_available(hass: HomeAssistant, entity_id: str) -> bool:

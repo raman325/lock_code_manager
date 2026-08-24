@@ -34,7 +34,12 @@ from ..domain.credentials import (
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import entity_state_is_available, parse_slot_num, resolve_discovery_payload
+from ._util import (
+    entity_state_is_available,
+    is_masked_code,
+    parse_slot_num,
+    resolve_discovery_payload,
+)
 from .const import LOGGER
 
 # Tail of the HA discovery device identifier zwave-js-ui publishes
@@ -175,20 +180,6 @@ def _unwrap_mqtt_value(raw: bytes | str) -> Any:
     return data
 
 
-def _is_masked_code(code: str) -> bool:
-    """
-    Return whether a code is a lock's placeholder for a code it will not show.
-
-    Locks configured to withhold user codes answer reads with an asterisk per
-    digit instead of the digits. That is a refusal, not a value: read as one,
-    it never equals the configured Personal Identification Number, so sync
-    sees a permanent mismatch and reprograms the slot on every single tick,
-    forever. Withheld has to reach the coordinator as unreadable, which is
-    exactly the state that means "occupied, contents unknown".
-    """
-    return set(code) == {"*"}
-
-
 def _published_code(value: Any) -> str | None:
     """
     Read a published ``userCode`` value as a Personal Identification Number.
@@ -208,7 +199,7 @@ def _published_code(value: Any) -> str | None:
         return None
     if isinstance(value, int):
         return str(value)
-    if isinstance(value, str) and value.strip() and not _is_masked_code(value):
+    if isinstance(value, str) and value.strip() and not is_masked_code(value):
         return value
     return None
 
@@ -241,7 +232,7 @@ def _project_user_code_result(result: Any) -> SlotCredential:
         status == USER_ID_STATUS_ENABLED
         and isinstance(code, str)
         and code.strip()
-        and not _is_masked_code(code)
+        and not is_masked_code(code)
     ):
         return SlotCredential.known(code)
     return SlotCredential.unreadable()

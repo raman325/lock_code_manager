@@ -30,7 +30,12 @@ from ..domain.credentials import (
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import entity_state_is_available, parse_slot_num, resolve_discovery_payload
+from ._util import (
+    entity_state_is_available,
+    is_masked_code,
+    parse_slot_num,
+    resolve_discovery_payload,
+)
 from .const import LOGGER
 
 # Device registry identifier prefix Zigbee2MQTT uses in its HA discovery
@@ -90,6 +95,9 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
     - The one exception: an explicit ``pin_code: null`` on an enabled user
       means the broker exposes the field and the device reports no code,
       so that projects to empty.
+    - A lock that masks its codes publishes a usable-looking value that is
+      all asterisks. That is the withheld state wearing a code's shape, so
+      it lands in the same place -- see ``is_masked_code``.
     - ``available`` is the only status that means the slot holds nothing.
       ``disabled`` is a user the lock is refusing, and unrecognized statuses
       (``not_supported_*``) say nothing at all, so both project to
@@ -100,7 +108,12 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
     pin_raw = user_info.get("pin_code")
     if status == "enabled":
         if _mqtt_payload_pin_has_code_value(pin_raw):
-            return SlotCredential.known(str(pin_raw))
+            code = str(pin_raw)
+            return (
+                SlotCredential.unreadable()
+                if is_masked_code(code)
+                else SlotCredential.known(code)
+            )
         if "pin_code" in user_info:
             return SlotCredential.empty()
         return SlotCredential.unreadable()
@@ -368,12 +381,16 @@ class Zigbee2MQTTLock(BaseLock):
                     pin_code = pin_code_data.get("pin_code")
                     if _mqtt_payload_pin_has_code_value(pin_code):
                         # A code is plainly here. Whether the lock is
-                        # currently accepting it decides only whether the
-                        # value can be compared, not whether the index is
-                        # taken.
+                        # currently accepting it, and whether what it sent is
+                        # the digits or a mask standing in for them, decide
+                        # only whether the value can be compared -- not
+                        # whether the index is taken. A disabled user whose
+                        # code is also masked is doubly incomparable and
+                        # lands in the same place.
+                        code = str(pin_code)
                         future.set_result(
-                            SlotCredential.known(str(pin_code))
-                            if user_enabled
+                            SlotCredential.known(code)
+                            if user_enabled and not is_masked_code(code)
                             else SlotCredential.unreadable()
                         )
                     elif user_enabled and "pin_code" not in pin_code_data:
