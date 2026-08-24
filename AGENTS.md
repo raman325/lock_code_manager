@@ -305,28 +305,22 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
 
 Provider tests live in dedicated modules mirroring the integration's test patterns:
 
-Each provider has its own package with a `conftest.py`, a `test_provider.py`
-covering its credential operations, and a `test_e2e.py` driving it through a
-real LCM config entry. Anything further is split by what it is about, not by
-size — the MQTT bridges each carry a `test_topic_resolution.py` because
-addressing the device is a separate problem from talking to it.
+Each provider package has a `conftest.py`, a `test_provider.py`, and (except
+`zha`) a `test_e2e.py`; anything further is split by subject.
 
 ```text
 tests/providers/
   akuvox/          # conftest, test_provider, test_e2e
   matter/          # + helpers, fixtures/, test_sdk_exception_translation
-  schlage/         # conftest, test_provider, test_e2e
-  virtual/         # conftest, test_provider, test_e2e
+  schlage/
+  virtual/
   zha/             # conftest, test_provider
   zigbee2mqtt/     # + test_payload, test_topic_resolution
   zwave_js/        # + helpers, fixtures/, test_events
   zwave_js_ui/     # + test_api, test_borrowed, test_payload, test_push,
                    #   test_topic_resolution
   helpers.py       # Shared test mixins (ServiceProviderConnectionTests, etc.)
-  test_base.py     # BaseLock lifecycle, setup deferral, rate limiting
-  test_dispatch.py # Entity/device -> provider class resolution
-  test_seam.py     # The user/credential seam over the provider primitives
-  test_util.py     # Shared provider helpers (masked codes, discovery payloads)
+  test_base.py, test_dispatch.py, test_seam.py, test_util.py
 ```
 
 ### Test conventions
@@ -412,8 +406,8 @@ with a comment citing the contract. Never silence one by rerunning.
    integration connectivity and device availability.
 6. Override `async_setup()` to register event listeners
 7. Call `async_fire_code_slot_event()` when lock events indicate PIN usage
-8. Add tests in `tests/providers/<provider>/` — at minimum `conftest.py`,
-   `test_provider.py`, and `test_e2e.py`, matching the layout above
+8. Add tests in `tests/providers/<provider>/` (`conftest.py`,
+   `test_provider.py`, `test_e2e.py`)
 9. Use `self.managed_slots` (property) to get managed slot numbers
 10. Use `self.async_call_service()` for HA service calls — it wraps `HomeAssistantError`
    as `LockDisconnected` automatically

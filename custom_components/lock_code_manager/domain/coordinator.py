@@ -440,22 +440,17 @@ class LockUsercodeUpdateCoordinator(
         """
         Re-read whether the lock pushes, once its provider setup has succeeded.
 
-        A bridged provider derives push support from discovery data that
-        arrives on the broker's schedule, so a lock whose setup was deferred
-        was very likely constructed before the answer existed -- and kept the
-        poll cadence chosen for a lock that has none. That polled a lock which
-        does push, indefinitely, at one api round trip per slot per five
-        minutes on a mesh this provider goes out of its way not to fill.
+        A bridged provider derives push support from discovery data arriving
+        on the broker's schedule, so a lock whose setup was deferred was built
+        before the answer existed and kept the poll cadence chosen for a lock
+        that has none -- polling a pushing lock forever, one api round trip
+        per slot every five minutes.
 
-        Only the gaining direction is acted on, and only once. Losing push is
-        not a transition worth chasing: discovery data going transiently
-        missing is not a lock that stopped pushing, and the poll cadence would
-        thrash with it.
-
-        The live interval is left alone while a probe arm owns it -- the
-        breaker's backoff, or the cold-start retry for a lock that has never
-        been reached. Both restore ``_original_update_interval`` when they let
-        go, which is what has just been updated.
+        Only the gaining direction, and only once: discovery data going
+        transiently missing is not a lock that stopped pushing, and the
+        cadence would thrash with it. The live interval is left alone while a
+        probe arm owns it (breaker backoff, or the cold-start retry); both
+        restore ``_original_update_interval``, which has just been updated.
         """
         if self._is_push or not self._lock.supports_push:
             return

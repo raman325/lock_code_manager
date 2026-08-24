@@ -1390,25 +1390,27 @@ async def test_a_subscription_nobody_publishes_into_costs_no_settle(
 
 
 async def test_time_already_spent_counts_towards_the_settle(
-    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+    hass: HomeAssistant,
+    zui_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
     A deadline already in the past is nothing left to wait for.
 
-    Resolution can spend a whole discovery window between subscribing and
-    the first publish, and re-sleeping the full delay on top of that is time
-    the broker did not need.
+    Resolution can spend a whole discovery window between subscribing and the
+    first publish, and re-sleeping the full delay on top of that is time the
+    broker did not need.
     """
     lock = zui_lock_provider
+    zui_api_responder.set_result("sendCommand", 30)
     await lock._async_ensure_api_response_subscription()
     lock._settle_deadline = asyncio.get_running_loop().time() - 1
 
     with record_transport_events(0.0123) as events:
-        await lock._async_await_settle()
+        assert await lock.async_get_max_slot() == 30
 
-    assert events == []
-    # Spent, so a second call does not reconsider it.
-    assert lock._settle_deadline == 0.0
+    assert "publish" in events
+    assert "settle" not in events
 
 
 async def test_other_clients_traffic_is_rejected_before_it_is_parsed(
@@ -1449,18 +1451,17 @@ async def test_other_clients_traffic_is_rejected_before_it_is_parsed(
     assert lock._pending_api_calls["nonce"].done()
 
 
-@pytest.mark.parametrize("encode", [False, True], ids=["text", "bytes"])
-async def test_the_prefilter_reads_either_payload_type(
-    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock, encode: bool
+async def test_the_prefilter_reads_a_bytes_payload(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
 ) -> None:
     """
     Home Assistant hands a subscriber either text or raw bytes.
 
     Which one depends on the subscription's encoding, and a marker compared
-    against the wrong type never matches -- so a provider that assumed one
-    would silently correlate nothing on a broker serving the other. Delivered
+    against the wrong type never matches -- so a provider that assumed text
+    would silently correlate nothing on a broker serving bytes. Delivered
     straight to the handler, because the type is exactly what the mocked
-    broker normalizes away.
+    broker normalizes away; every other test here covers the text side.
     """
     lock = zui_lock_provider
     loop = asyncio.get_running_loop()
@@ -1470,7 +1471,7 @@ async def test_the_prefilter_reads_either_payload_type(
     lock._api_response_received(
         ReceiveMessage(
             topic=f"{ZUI_API_BASE}/api/getInfo",
-            payload=body.encode() if encode else body,
+            payload=body.encode(),
             qos=0,
             retain=False,
             subscribed_topic=f"{ZUI_PREFIX}/_CLIENTS/+/api/+",

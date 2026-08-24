@@ -475,16 +475,13 @@ class TestAsyncGetUsers:
         )
 
         # The rule only arms once this bridge has proven it answers reads at
-        # all, and only fires on the second consecutive silence, so the outage
-        # has to be preceded by a good poll and reached by two bad ones.
+        # all, so the outage has to be preceded by a poll that worked.
         with (
             managed,
             patch(
                 _PUBLISH, side_effect=_answering_publish(lock, {1: "1234", 2: "5678"})
             ),
         ):
-            await lock.async_get_users()
-        with managed, silence():
             await lock.async_get_users()
         with (
             managed,

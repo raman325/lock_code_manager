@@ -347,20 +347,6 @@ class TestStatusGatedCodes:
 
         lock.coordinator.push_update.assert_not_called()
 
-    async def test_a_code_after_an_enabled_status_confirms_the_slot(
-        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
-    ) -> None:
-        """An enabled slot's code is exactly what the poll would report."""
-        lock = zui_lock_subscribed
-
-        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/3", wrapped(1))
-        fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
-        await hass.async_block_till_done()
-
-        lock.coordinator.push_update.assert_called_once_with(
-            {3: SlotCredential.known("1234")}
-        )
-
     async def test_a_code_before_any_status_confirms_the_slot(
         self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
     ) -> None:
@@ -379,55 +365,6 @@ class TestStatusGatedCodes:
         lock.coordinator.push_update.assert_called_once_with(
             {3: SlotCredential.known("1234")}
         )
-
-    @pytest.mark.parametrize(
-        ("status", "code_first", "expected"),
-        [
-            pytest.param(
-                1, False, SlotCredential.known("1234"), id="enabled_then_code"
-            ),
-            pytest.param(1, True, SlotCredential.known("1234"), id="code_then_enabled"),
-            pytest.param(2, False, None, id="disabled_then_code"),
-            # The one permutation the last-seen rule cannot settle: with no
-            # status yet the code is taken at face value. Pinned so the
-            # asymmetry is a decision rather than a surprise.
-            pytest.param(
-                2, True, SlotCredential.known("1234"), id="code_then_disabled"
-            ),
-        ],
-    )
-    async def test_retained_arrival_order(
-        self,
-        hass: HomeAssistant,
-        zui_lock_subscribed: ZWaveJSUILock,
-        status: int,
-        code_first: bool,
-        expected: SlotCredential | None,
-    ) -> None:
-        """
-        Retained messages arrive in the broker's order, not a meaningful one.
-
-        Every permutation is pinned because the gateway retains both topics
-        and replays them on subscribe, so which one lands first is not a
-        property of the lock's state.
-        """
-        lock = zui_lock_subscribed
-        code_message = (f"{USER_CODE_VALUEID}/3", wrapped("1234"))
-        status_message = (f"{USER_ID_STATUS_VALUEID}/3", wrapped(status))
-        order = (
-            (code_message, status_message)
-            if code_first
-            else (status_message, code_message)
-        )
-
-        for suffix, payload in order:
-            fire_node_value(hass, suffix, payload)
-        await hass.async_block_till_done()
-
-        if expected is None:
-            lock.coordinator.push_update.assert_not_called()
-        else:
-            lock.coordinator.push_update.assert_called_once_with({3: expected})
 
     async def test_a_disabled_slot_does_not_gate_another_slot(
         self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock

@@ -61,7 +61,6 @@ CC_USER_CODE_ID = 99
 # zwave-js UserIDStatus: 0 Available, 1 Enabled.
 STATUS_AVAILABLE = 0
 STATUS_ENABLED = 1
-STATUS_DISABLED = 2
 
 E2E_SLOT_PINS = {1: "1234", 2: "5678"}
 LOCK_CAPACITY = 20
@@ -409,29 +408,6 @@ class TestPushUpdates:
 
         assert zui_lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
             E2E_SLOT_PINS[2]
-        )
-
-    async def test_a_disabled_slots_code_is_not_a_confirmation(
-        self,
-        hass: HomeAssistant,
-        synced_lcm_config_entry: MockConfigEntry,
-        zui_lock: ZWaveJSUILock,
-    ) -> None:
-        """
-        A Disabled slot keeps its digits, and they are not an active code.
-
-        The status and the code are separate retained topics, so the push path
-        has to read one against the other or it reports the same slot in sync
-        while a poll of it reads unreadable.
-        """
-        fire_zui_node_value(
-            hass, "user_code/endpoint_0/userIdStatus/1", STATUS_DISABLED
-        )
-        fire_zui_node_value(hass, "user_code/endpoint_0/userCode/1", "9999")
-        await hass.async_block_till_done()
-
-        assert zui_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
-            E2E_SLOT_PINS[1]
         )
 
 

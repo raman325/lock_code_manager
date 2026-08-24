@@ -289,27 +289,6 @@ def _published_code(value: Any) -> str | None:
     return None
 
 
-def _interpret_user_id_status(value: Any) -> CodeSlotStatus | None:
-    """
-    Read a published ``userIdStatus`` value as a slot status; None when it is not one.
-
-    Booleans are rejected before anything else: ``CodeSlotStatus`` members are
-    ints and ``True == 1`` in Python, so a JSON ``true`` would otherwise be
-    admitted as Enabled and a ``false`` as Available. Same guard
-    ``_project_user_code_result`` and ``homeid`` apply.
-
-    A value that names no member -- a manufacturer-specific status, a string,
-    a float -- is not "some status we do not act on", it is no reading at all,
-    and the caller must not record it as one.
-    """
-    if isinstance(value, bool):
-        return None
-    try:
-        return CodeSlotStatus(value)
-    except ValueError:
-        return None
-
-
 def _project_user_code_result(result: Any) -> SlotCredential:
     """
     Project a User Code CC ``get`` result to a SlotCredential.
@@ -361,17 +340,14 @@ class ZWaveJSUILock(BaseMqttLock):
     # Topic the live subscription covers, or None when there is none.
     _api_response_topic: str | None = field(init=False, default=None)
     # Serializes ``_async_ensure_api_response_subscription``. Deliberately not
-    # the base's ``_aio_lock``, which is held for the whole of every rate-
-    # limited provider operation -- and those operations resolve the api base,
-    # which ensures this subscription, so sharing it would deadlock on the
-    # first read.
+    # the base's ``_aio_lock``: that is held across every rate-limited
+    # operation, and those resolve the api base, which ensures this
+    # subscription -- sharing it would deadlock on the first read.
     _api_subscription_lock: asyncio.Lock = field(
         init=False, default_factory=asyncio.Lock
     )
     # Event-loop time the live subscription is settled enough to publish
-    # into, or 0.0 when nothing is pending. Recorded rather than slept
-    # through, so the cost lands on the first caller that actually publishes
-    # and on nobody else.
+    # into, or 0.0 when nothing is pending.
     _settle_deadline: float = field(init=False, default=0.0)
     # Outstanding api calls by nonce. The single response handler resolves
     # whichever future the gateway's echoed nonce names.
@@ -382,13 +358,13 @@ class ZWaveJSUILock(BaseMqttLock):
     # none. Unlike the api subscription above, this one IS the push lifecycle,
     # so its unsub goes in the base's push-unsub registry.
     _subscribed_node_topic: str | None = field(init=False, default=None)
-    # Last ``userIdStatus`` seen per slot on the node subscription. The two
-    # User Code CC properties are published as separate retained topics, so a
-    # code publication has to be read against whatever the status topic last
-    # said. Lives and dies with the node subscription it was observed on.
-    _last_user_id_status: dict[int, CodeSlotStatus] = field(
-        init=False, default_factory=dict
-    )
+    # Whether each slot's last published ``userIdStatus`` was Enabled. A
+    # missing entry means no usable status has been seen, which admits the
+    # slot's code -- see ``_process_user_code_value``. Cleared alongside
+    # ``_subscribed_node_topic`` because it describes the node that
+    # subscription covered: kept across a teardown, a status seen before an
+    # unload would gate codes published after the resubscribe.
+    _slot_enabled: dict[int, bool] = field(init=False, default_factory=dict)
     _min_operation_delay: float = field(init=False, default=ZWAVE_JS_UI_OPERATION_DELAY)
 
     @property
@@ -611,89 +587,60 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         Confirm a slot from a User Code Command Class value publication.
 
-        The two properties are published separately, so each has to stand on
-        its own -- and neither means anything without the other, which is what
-        ``_last_user_id_status`` is for.
+        The two properties are separate retained topics, so each arrives on
+        its own and neither means anything without the other.
+
+        A ``userCode`` carrying no usable code says nothing at all: empty is
+        how the gateway spells both a withheld code and a cleared slot, and
+        reading it as cleared would tell sync the code is gone. A code is only
+        an active credential on an Enabled slot -- a Disabled one keeps its
+        digits, and ``_project_user_code_result`` already refuses to report
+        them, so confirming one here would make the same slot read in sync
+        over push and unreadable over poll, decided by which retained topic
+        the broker replayed first. A slot no status has been seen for keeps
+        its code (hence the ``True`` default): a gateway that publishes codes
+        and never statuses would otherwise leave every slot permanently
+        unconfirmed, and an over-confirmed code is corrected by the next poll
+        while a muted one has nothing to correct it.
+
+        ``userIdStatus`` carries occupancy, and only Available means the slot
+        holds nothing. A value naming no status at all is recorded as nothing,
+        because "unreadable status" must not gate codes the way a real
+        Disabled does; booleans are rejected first, since ``True == 1`` in
+        Python would otherwise pass for Enabled and ``False`` for Available.
         """
         if (slot_num := parse_slot_num(slot_segment)) is None:
             return
         value = _unwrap_mqtt_value(payload)
         if property_name == "userCode":
-            self._process_published_code(slot_num, value)
-        elif property_name == "userIdStatus":
-            self._process_published_status(slot_num, value)
-
-    @callback
-    def _process_published_code(self, slot_num: int, value: Any) -> None:
-        """
-        Confirm a slot from a published ``userCode``, if its status admits one.
-
-        A ``userCode`` carrying no usable code says nothing at all: empty is
-        how the gateway spells both a withheld code and a cleared slot, and
-        reading it as cleared would tell sync the code is gone.
-
-        A code is only an active credential on an Enabled slot. A Disabled
-        slot keeps its digits, and the poll projection
-        (``_project_user_code_result``) already refuses to report them, so
-        confirming them here would make the same slot read in sync over push
-        and unreadable over poll -- decided by which transport spoke last, and
-        for retained messages that is arrival order rather than lock state.
-
-        Never having heard a status is deliberately NOT treated as "not
-        Enabled". A gateway that publishes a slot's code and never its status
-        would otherwise leave that slot permanently unconfirmed, so the
-        unknown case keeps the code, which is what this did before there was
-        any tracking at all. If the slot turns out to be Disabled, the next
-        poll reads it unreadable and corrects the record; the reverse -- muting
-        a real code until some future republication of a retained topic -- has
-        no such correction.
-        """
-        if (code := _published_code(value)) is None:
-            return
-        status = self._last_user_id_status.get(slot_num)
-        if status is not None and status is not CodeSlotStatus.ENABLED:
-            LOGGER.debug(
-                "Lock %s: ignoring published code for slot %s; its last status "
-                "was %s rather than Enabled",
-                self.lock.entity_id,
-                slot_num,
-                status.name,
-            )
-            return
-        self._confirm_slot(slot_num, SlotCredential.known(code))
-
-    @callback
-    def _process_published_status(self, slot_num: int, value: Any) -> None:
-        """
-        Record a published ``userIdStatus`` and act on it when it is Available.
-
-        ``userIdStatus`` is what carries occupancy, and only Available means
-        the slot holds nothing -- any other status leaves the code to the
-        paired ``userCode`` publication. A value that is not a status at all is
-        recorded as nothing, because "unreadable status" must not gate codes
-        the way a genuine Disabled does.
-
-        Available is ignored when Lock Code Manager expects a PIN on this
-        slot. Some locks send stale AVAILABLE events after a code was set,
-        which would cause infinite sync loops.
-        """
-        if (status := _interpret_user_id_status(value)) is None:
-            return
-        self._last_user_id_status[slot_num] = status
-        if status is not CodeSlotStatus.AVAILABLE:
-            return
-        if (
-            self.coordinator is not None
-            and self.coordinator.desired_credential(pin_address(slot_num)).is_present
-        ):
-            LOGGER.debug(
-                "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
-                "(LCM expects PIN on this slot)",
-                self.lock.entity_id,
-                slot_num,
-            )
-            return
-        self._confirm_slot(slot_num, SlotCredential.empty())
+            if (code := _published_code(value)) is not None and self._slot_enabled.get(
+                slot_num, True
+            ):
+                self._confirm_slot(slot_num, SlotCredential.known(code))
+        elif property_name == "userIdStatus" and not isinstance(value, bool):
+            if value == CodeSlotStatus.ENABLED:
+                self._slot_enabled[slot_num] = True
+            elif value == CodeSlotStatus.DISABLED:
+                self._slot_enabled[slot_num] = False
+            elif value == CodeSlotStatus.AVAILABLE:
+                self._slot_enabled[slot_num] = False
+                # Ignore AVAILABLE when Lock Code Manager expects a PIN on
+                # this slot. Some locks send stale AVAILABLE events after a
+                # code was set, which would cause infinite sync loops.
+                if (
+                    self.coordinator is not None
+                    and self.coordinator.desired_credential(
+                        pin_address(slot_num)
+                    ).is_present
+                ):
+                    LOGGER.debug(
+                        "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
+                        "(LCM expects PIN on this slot)",
+                        self.lock.entity_id,
+                        slot_num,
+                    )
+                else:
+                    self._confirm_slot(slot_num, SlotCredential.empty())
 
     @callback
     def _process_notification(
@@ -735,20 +682,6 @@ class ZWaveJSUILock(BaseMqttLock):
         )
 
     @callback
-    def _forget_node_subscription_state(self) -> None:
-        """
-        Drop everything that was only true while the node subscription was live.
-
-        The tracked slot statuses go with it: they describe the node that
-        subscription covered, and after a rename or a teardown that is either
-        a different node or one nobody is watching. Keeping them would let a
-        status observed before an unload gate codes published after the
-        resubscribe, with nothing in between to correct it.
-        """
-        self._subscribed_node_topic = None
-        self._last_user_id_status.clear()
-
-    @callback
     def _node_subscription_current(self, node_topic: str | None) -> bool:
         """
         Return whether the live subscription already covers what is wanted.
@@ -781,7 +714,8 @@ class ZWaveJSUILock(BaseMqttLock):
         # puts in the push-unsub registry -- the api transport is tracked
         # separately -- so clearing all of them clears exactly this one.
         self._clear_push_unsubs()
-        self._forget_node_subscription_state()
+        self._subscribed_node_topic = None
+        self._slot_enabled.clear()
 
         @callback
         def message_received(msg: ReceiveMessage) -> None:
@@ -875,21 +809,17 @@ class ZWaveJSUILock(BaseMqttLock):
         data going transiently missing is not a prefix that moved.
 
         Every subscribe records a settle deadline rather than sleeping to it.
-        What has to be true is that nothing is published into a subscription
-        the broker has not been told about yet, and that is the publisher's
-        constraint, not the subscriber's: ``_async_api_call_at`` waits out
-        whatever remains before its first publish. Sleeping here instead
-        charged the whole delay to every caller that only wanted a
-        subscription -- setup, and every borrowed instance that turns out to
-        need no call at all -- while buying them nothing.
+        Nothing may be published into a subscription the broker has not been
+        told about yet, but that is the publisher's constraint, not the
+        subscriber's, so ``_async_api_call_at`` waits out whatever remains
+        before its first publish. Sleeping here charged the whole delay to
+        setup and to every borrowed instance that turns out to need no call
+        at all.
 
-        Serialized on its own lock, because the idempotence guard reads a
-        field the subscribe below sets and there is an await in between. Two
-        callers that reach it together -- the deferred-setup retry task and an
-        in-flight poll, say -- both passed the guard and both subscribed, and
-        whichever finished second overwrote the other's unsub. Nothing else
-        held a reference to the loser, so the broker went on delivering into
-        it for the rest of the run.
+        Serialized on its own lock: the idempotence guard reads a field the
+        subscribe below sets, with an await in between, so two callers
+        reaching it together both subscribed and the loser's unsub was
+        overwritten and leaked.
         """
         async with self._api_subscription_lock:
             if (prefix := self._gateway_prefix()) is None:
@@ -917,26 +847,6 @@ class ZWaveJSUILock(BaseMqttLock):
             self._settle_deadline = (
                 asyncio.get_running_loop().time() + SUBSCRIBE_SETTLE_DELAY
             )
-
-    async def _async_await_settle(self) -> None:
-        """
-        Wait out whatever remains of a fresh subscription's settling window.
-
-        Called immediately before a publish, which is the only operation the
-        window protects. Time already spent elsewhere -- resolving a gateway,
-        waiting on the operation pacing lock -- counts towards it, so a call
-        that took the slow road pays nothing here.
-
-        The deadline is cleared once reached, so it is spent once per
-        subscription rather than consulted forever. A caller that arrives
-        while another is still waiting sees it still set and waits too, which
-        is correct: the window has not elapsed for either of them.
-        """
-        if not (deadline := self._settle_deadline):
-            return
-        if (remaining := deadline - asyncio.get_running_loop().time()) > 0:
-            await asyncio.sleep(remaining)
-        self._settle_deadline = 0.0
 
     async def _async_resolve_api_base(self) -> str:
         """
@@ -1182,7 +1092,17 @@ class ZWaveJSUILock(BaseMqttLock):
         self._pending_api_calls[nonce] = future
         try:
             try:
-                await self._async_await_settle()
+                # Wait out whatever remains of a fresh subscription's
+                # settling window before the first publish -- the only
+                # operation it protects. Time already spent resolving the
+                # gateway counts towards it, and a deadline of 0.0 (nothing
+                # pending) lands far in the past, so it costs nothing.
+                if (
+                    remaining := self._settle_deadline
+                    - asyncio.get_running_loop().time()
+                ) > 0:
+                    await asyncio.sleep(remaining)
+                self._settle_deadline = 0.0
                 await async_publish(
                     self.hass,
                     f"{response_topic}/set",
@@ -1239,75 +1159,44 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         Call an api on this lock's resolved gateway.
 
-        A disconnect against the cached base drops it, so the next attempt
-        rediscovers. The gateway can be renamed, replaced, or moved to
-        another broker, and without this a base that nobody answers on any
-        more would stick until the integration reloads.
+        A disconnect drops this instance's binding, so the next attempt
+        re-resolves: the gateway can be renamed, replaced, or moved to another
+        broker, and a base nobody answers on would otherwise stick until the
+        integration reloads.
+
+        Whether the SHARED scan result goes too is a separate question. Every
+        api sent to a lock is a ``sendCommand`` that waits on the mesh, so a
+        FLiRS lock missing its wake window times one out routinely -- a slow
+        node, not a gateway at the wrong address. Dropping the scan for that
+        sent every lock on the prefix rescanning into the same command queue
+        that was already too slow to answer. So the gateway is asked directly:
+        ``getInfo`` is served from its own cached driver state, off the mesh,
+        and one still answering for this lock's network keeps its binding. An
+        answer from another network is as stale as no answer -- that address
+        now belongs to somebody else, and writing there would program a
+        neighbouring network's node of the same number. With no response
+        subscription there is nothing to ask over, so nothing shared is
+        touched.
         """
+        home_hex, _ = self._require_node()
         api_base = await self._async_resolve_api_base()
         try:
             return await self._async_api_call_at(api_base, api_name, args)
         except LockDisconnected:
-            await self._async_reappraise_binding(api_base)
+            self._api_base = None
+            if self._api_response_topic is not None and await self._async_probe_home_id(
+                api_base
+            ) != int(home_hex, 16):
+                self._invalidate_gateway_scan()
             raise
-
-    async def _async_reappraise_binding(self, api_base: str) -> None:
-        """
-        Decide how much of a failed call's binding to throw away.
-
-        Every api this provider makes for a lock is a ``sendCommand`` that
-        waits on the mesh, so a FLiRS lock missing its wake window times one
-        out routinely -- the very reason the budget is a minute. That is a
-        slow node, not a gateway at the wrong address, and the two were
-        indistinguishable here: any disconnect dropped the SHARED scan result
-        every lock on the prefix binds from, sending all of them rescanning
-        into the same command queue that was already too slow to answer.
-
-        So the gateway is asked directly. ``getInfo`` is served from its own
-        cached driver state on the local budget, puts nothing on the mesh, and
-        a gateway that answers with this lock's network is exactly the gateway
-        the binding names -- it keeps it. An answer from some other network
-        means the address now belongs to somebody else, which is as stale as
-        no answer at all.
-
-        The instance's own base goes either way. Re-resolving it is a
-        dictionary read while the shared answer stands, and the correct thing
-        to do when it does not.
-
-        With no response subscription there is nothing to probe with, and a
-        transport released out from under a call says nothing about the
-        gateway, so nothing shared is touched.
-        """
-        self._forget_api_base()
-        if self._api_response_topic is None:
-            return
-        home_hex, _ = self._require_node()
-        if await self._async_probe_home_id(api_base) == int(home_hex, 16):
-            LOGGER.debug(
-                "Lock %s: gateway %s still answers for network %s, so the call "
-                "failed on the node rather than the binding",
-                self.lock.entity_id,
-                api_base,
-                home_hex,
-            )
-            return
-        self._invalidate_gateway_scan()
-
-    @callback
-    def _forget_api_base(self) -> None:
-        """Drop this instance's resolved gateway, leaving any shared scan intact."""
-        self._api_base = None
 
     @callback
     def _invalidate_gateway_scan(self) -> None:
         """
         Drop the scan result that produced this binding, for every lock sharing it.
 
-        Reserved for evidence about the GATEWAY rather than about one call:
-        they were all told the same gateway sits at the same address, so once
-        that stops being true the scan has to run again rather than be
-        replayed. Anything short of that leaves it alone -- a wiped scan costs
-        every lock behind the gateway a fresh discovery window.
+        Only ever called on evidence about the GATEWAY, never about one call:
+        a wiped scan costs every lock behind it a fresh discovery window.
         """
         self._api_base = None
         if (key := self._scan_key) is None:
@@ -1464,8 +1353,8 @@ class ZWaveJSUILock(BaseMqttLock):
         every borrowed provider does it on the way out -- so wiping the
         cross-lock answer here made an unmanaged sweep of N locks pay N full
         discovery windows instead of one, and made a connection blip cost the
-        same. Only ``_async_reappraise_binding``, which has actually asked the
-        gateway, invalidates that. Idempotent.
+        same. Only ``_async_api_call``, which has actually asked the gateway,
+        invalidates that. Idempotent.
         """
         if (unsub := self._api_response_unsub) is not None:
             self._api_response_unsub = None
@@ -1481,7 +1370,7 @@ class ZWaveJSUILock(BaseMqttLock):
                     err,
                 )
         self._api_response_topic = None
-        self._forget_api_base()
+        self._api_base = None
         for future in self._pending_api_calls.values():
             if not future.done():
                 future.cancel()
@@ -1498,7 +1387,8 @@ class ZWaveJSUILock(BaseMqttLock):
         both paths, so teardown owns both. Idempotent.
         """
         self._clear_push_unsubs()
-        self._forget_node_subscription_state()
+        self._subscribed_node_topic = None
+        self._slot_enabled.clear()
         self._release_api_subscription()
 
     async def async_unload(self, remove_permanently: bool) -> None:

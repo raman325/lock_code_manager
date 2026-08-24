@@ -48,14 +48,6 @@ from ..domain.models import SlotCredential
 from ._base import BaseLock
 from .const import LOGGER
 
-# How many all-silent multi-slot reads in a row are an outage rather than a
-# bad patch of mesh. Two, because the reads of one poll fail together far more
-# often than independently -- a node that drops half its replies loses both
-# ends of a two-slot poll about a quarter of the time -- while two whole polls
-# in a row silent, with the bridge's own status topic still reporting up, is
-# not a pattern a merely lossy link produces at any comparable rate.
-SILENT_READS_BEFORE_DISCONNECT = 2
-
 
 @dataclass(repr=False, eq=False)
 class BaseMqttLock(BaseLock):
@@ -66,8 +58,6 @@ class BaseMqttLock(BaseLock):
     # records is a property of the bridge and the lock's firmware, and neither
     # stops being able to answer reads because a poll went badly.
     _reads_have_succeeded: bool = field(init=False, default=False)
-    # Consecutive multi-slot reads where nothing at all came back.
-    _silent_reads: int = field(init=False, default=0)
 
     @property
     def domain(self) -> str:
@@ -254,7 +244,7 @@ class BaseMqttLock(BaseLock):
         what silence means on its own bridge.
 
         Silence is only evidence of an outage against a transport that has
-        been shown capable of the opposite, so three conditions all have to
+        been shown capable of the opposite, so two conditions both have to
         hold before this raises.
 
         Two slots is the smallest read it can judge. Asking about one and
@@ -278,12 +268,11 @@ class BaseMqttLock(BaseLock):
         absence of one, and a lock that can never prove it is left exactly as
         it was before this rule existed.
 
-        And the silence must be the second in a row. The reads of a single
-        poll fail together far more often than independently -- one node, one
-        route, one busy gateway queue -- so a two-slot poll on a #1397-class
-        link comes back entirely empty a good fraction of the time. Absorbing
-        the first costs one poll interval of delayed detection and buys not
-        suspending a lock that is merely slow.
+        One silent poll is not by itself an outage, and does not need to be
+        one here: raising records a single connectivity failure, and the
+        coordinator's breaker takes three in a row before it suspends
+        anything. A #1397-class link that loses both replies of one poll is
+        absorbed there, by the mechanism that already exists for it.
 
         Nothing about a transport that is genuinely gone rests on this
         signal. Every public operation runs ``_async_ensure_operational``
@@ -299,21 +288,10 @@ class BaseMqttLock(BaseLock):
         reads = {slot_num: await read_slot(slot_num) for slot_num in sorted(code_slots)}
         if any(state is not None for state in reads.values()):
             self._reads_have_succeeded = True
-            self._silent_reads = 0
         elif len(reads) > 1 and self._reads_have_succeeded:
-            self._silent_reads += 1
-            if self._silent_reads >= SILENT_READS_BEFORE_DISCONNECT:
-                raise LockDisconnected(
-                    f"{self.lock.entity_id}: every one of the {len(reads)} requested "
-                    f"slot reads {transport_failure}, on "
-                    f"{self._silent_reads} consecutive polls"
-                )
-            LOGGER.debug(
-                "Lock %s: every one of the %s requested slot reads %s; absorbing "
-                "one silent poll before treating it as an outage",
-                self.lock.entity_id,
-                len(reads),
-                transport_failure,
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: every one of the {len(reads)} requested "
+                f"slot reads {transport_failure}"
             )
         return [
             user_from_slot(
