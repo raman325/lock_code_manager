@@ -898,6 +898,17 @@ class BaseLock:
 
         Operations are chained sequentially so setup completes before
         the coordinator refresh or push subscription begins.
+
+        A connectivity failure here re-arms the deferred flag. That flag is
+        the only thing that arms another attempt for a lock whose integration
+        was loaded all along, and ``_async_run_provider_setup`` clears it on
+        the way in -- so a blip during the retry spent the retry, and the lock
+        stayed un-set-up with sync, gated on that, refusing to write anything
+        until the integration was reloaded by hand. A validation failure
+        deliberately does not re-arm: that lock is known-degraded with a
+        diagnosis and its own revalidation path, and re-probing it from every
+        connection check would put a capability read on the wire every thirty
+        seconds to learn what it already knows.
         """
         if (
             self._lcm_config_entry is None
@@ -911,6 +922,7 @@ class BaseLock:
         try:
             await self._async_run_provider_setup(self._lcm_config_entry)
         except LockDisconnected, LockOperationFailed:
+            self._setup_deferred = True
             LOGGER.debug(
                 "Provider setup failed for %s, will retry on next reconnect",
                 self.lock.entity_id,
