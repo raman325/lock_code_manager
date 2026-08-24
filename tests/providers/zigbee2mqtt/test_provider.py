@@ -469,12 +469,25 @@ class TestAsyncGetUsers:
         the lock unreachable so its backoff governs the next attempt.
         """
         lock = zigbee2mqtt_lock_connected
+        managed = patch(
+            "custom_components.lock_code_manager.providers._base.get_managed_slots",
+            return_value={1, 2},
+        )
 
+        # The rule only arms once this bridge has proven it answers reads at
+        # all, and only fires on the second consecutive silence, so the outage
+        # has to be preceded by a good poll and reached by two bad ones.
         with (
+            managed,
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
-                return_value={1, 2},
+                _PUBLISH, side_effect=_answering_publish(lock, {1: "1234", 2: "5678"})
             ),
+        ):
+            await lock.async_get_users()
+        with managed, silence():
+            await lock.async_get_users()
+        with (
+            managed,
             silence(),
             pytest.raises(LockDisconnected, match="every one of the 2"),
         ):

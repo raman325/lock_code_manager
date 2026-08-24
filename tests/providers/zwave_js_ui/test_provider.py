@@ -51,6 +51,21 @@ def _user_code_handler(
     return _handler
 
 
+def _answering_handler() -> Callable[[str, dict[str, Any]], dict[str, Any] | None]:
+    """
+    Answer every slot with a real enabled code, whichever slot is asked about.
+
+    What the code is does not matter to the tests that use this; that the
+    transport answered at all does, because that is what proves the lock can
+    be read and arms the all-silent rule.
+    """
+
+    def _handler(_api_base: str, _request: dict[str, Any]) -> dict[str, Any]:
+        return {"success": True, "result": {"userIdStatus": 1, "userCode": "1234"}}
+
+    return _handler
+
+
 def _slot_state(users: list[User], slot: int) -> SlotCredential:
     """Pull one slot's projected Personal Identification Number state."""
     return next(user for user in users if user.user_id == slot).pin_credentials[0].state
@@ -206,15 +221,102 @@ class TestAsyncGetUsers:
         unreachable so its backoff governs the next attempt.
         """
         lock = zui_gateway_resolved
+        zui_api_responder.set_handler("sendCommand", _answering_handler())
+        with patch(MANAGED_SLOTS, return_value={1, 2}):
+            await lock.async_get_users()
+
         zui_api_responder.set_result(
             "sendCommand", None, success=False, message="Node 20 is not alive"
         )
-
+        with patch(MANAGED_SLOTS, return_value={1, 2}):
+            await lock.async_get_users()
         with (
             patch(MANAGED_SLOTS, return_value={1, 2}),
             pytest.raises(LockDisconnected, match="every one of the 2"),
         ):
             await lock.async_get_users()
+
+    async def test_a_transport_that_never_answered_a_read_never_disconnects(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        Silence only means "gone" once this transport has proven it can speak.
+
+        A bridge that accepts writes but answers no reads at all -- the
+        write-only Zigbee2MQTT converter, a gateway whose node has User Code
+        Set but not Get -- worked before this rule existed: every poll came
+        back all-unreadable and every write landed. Raising on it instead
+        trips the breaker, suspends the slots, and takes the writes down with
+        the reads that were never going to work.
+        """
+        lock = zui_gateway_resolved
+        zui_api_responder.set_result(
+            "sendCommand", None, success=False, message="Command not supported"
+        )
+
+        for _ in range(4):
+            with patch(MANAGED_SLOTS, return_value={1, 2}):
+                users = await lock.async_get_users()
+            assert _slot_state(users, 1) is SlotCredential.unreadable()
+            assert _slot_state(users, 2) is SlotCredential.unreadable()
+
+    async def test_one_silent_poll_after_a_good_one_is_absorbed(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        A lossy mesh drops correlated bursts, and two slots is a small sample.
+
+        Issue #1397 had a node timing out roughly half its responses, which
+        loses both replies of a two-slot poll about a quarter of the time.
+        Tripping the breaker there suspends a lock that is merely slow, so
+        one silent poll is absorbed and only a second consecutive one is
+        treated as an outage.
+        """
+        lock = zui_gateway_resolved
+        zui_api_responder.set_handler("sendCommand", _answering_handler())
+        with patch(MANAGED_SLOTS, return_value={1, 2}):
+            await lock.async_get_users()
+
+        zui_api_responder.set_result(
+            "sendCommand", None, success=False, message="Node 20 is not alive"
+        )
+        with patch(MANAGED_SLOTS, return_value={1, 2}):
+            users = await lock.async_get_users()
+
+        assert _slot_state(users, 1) is SlotCredential.unreadable()
+
+    async def test_an_answered_poll_between_two_silent_ones_resets_the_count(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        Only consecutive silence is an outage; alternating is a weak link.
+
+        Without the reset a lock that answers every other poll accumulates
+        silences forever and is eventually declared gone while it is plainly
+        still talking.
+        """
+        lock = zui_gateway_resolved
+        answering = _answering_handler()
+
+        for _ in range(3):
+            zui_api_responder.set_handler("sendCommand", answering)
+            with patch(MANAGED_SLOTS, return_value={1, 2}):
+                await lock.async_get_users()
+            zui_api_responder.set_result(
+                "sendCommand", None, success=False, message="Node 20 is not alive"
+            )
+            with patch(MANAGED_SLOTS, return_value={1, 2}):
+                users = await lock.async_get_users()
+            assert _slot_state(users, 1) is SlotCredential.unreadable()
 
     async def test_a_lone_slot_losing_its_reply_is_not_a_dead_transport(
         self,
