@@ -6,11 +6,11 @@ import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
+from functools import partial
 import json
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from homeassistant.components.mqtt import (
-    DOMAIN as MQTT_DOMAIN,
     async_publish,
     async_subscribe,
 )
@@ -20,22 +20,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import (
-    Credential,
-    CredentialRef,
-    User,
-    WriteResult,
-    user_from_slot,
-)
+from ..domain.credentials import Credential, CredentialRef, User, WriteResult
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
-from ._base import BaseLock
-from ._util import (
-    entity_state_is_available,
-    is_masked_code,
-    parse_slot_num,
-    resolve_discovery_payload,
-)
+from ._mqtt import BaseMqttLock
+from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER
 
 # Device registry identifier prefix Zigbee2MQTT uses in its HA discovery
@@ -126,7 +115,7 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
 
 
 @dataclass(repr=False, eq=False)
-class Zigbee2MQTTLock(BaseLock):
+class Zigbee2MQTTLock(BaseMqttLock):
     """Class to represent Zigbee2MQTT lock."""
 
     _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
@@ -139,11 +128,6 @@ class Zigbee2MQTTLock(BaseLock):
         init=False, default_factory=dict
     )
     _subscribed_topic: str | None = field(init=False, default=None)
-
-    @property
-    def domain(self) -> str:
-        """Return integration domain."""
-        return MQTT_DOMAIN
 
     @property
     def supports_push(self) -> bool:
@@ -236,15 +220,16 @@ class Zigbee2MQTTLock(BaseLock):
             "zigbee2mqtt_* identifier)."
         )
 
+    def _raise_not_connected(self) -> NoReturn:
+        """Name the wrong-bridge misconfiguration before the generic reason."""
+        self._maybe_raise_wrong_bridge_disconnect()
+        super()._raise_not_connected()
+
     async def async_is_integration_connected(self) -> bool:
         """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
             return False
         return bool(self._resolve_device_topic())
-
-    async def async_is_device_available(self) -> bool:
-        """Return whether the lock entity reports an operational state."""
-        return entity_state_is_available(self.hass, self.lock.entity_id)
 
     @callback
     def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
@@ -538,12 +523,7 @@ class Zigbee2MQTTLock(BaseLock):
         """
         code_slot = credential.slot
 
-        if not mqtt_config_entry_enabled(self.hass):
-            raise LockDisconnected("MQTT component not available")
-
-        if not await self.async_is_integration_connected():
-            self._maybe_raise_wrong_bridge_disconnect()
-            raise LockDisconnected("Lock not connected")
+        await self._async_ensure_operational(require_device=False)
 
         set_topic = self._get_topic("set")
         if not set_topic:
@@ -604,12 +584,7 @@ class Zigbee2MQTTLock(BaseLock):
         """
         code_slot = ref.slot
 
-        if not mqtt_config_entry_enabled(self.hass):
-            raise LockDisconnected("MQTT component not available")
-
-        if not await self.async_is_integration_connected():
-            self._maybe_raise_wrong_bridge_disconnect()
-            raise LockDisconnected("Lock not connected")
+        await self._async_ensure_operational(require_device=False)
 
         set_topic = self._get_topic("set")
         if not set_topic:
@@ -661,33 +636,13 @@ class Zigbee2MQTTLock(BaseLock):
         """
         Read Personal Identification Number codes one index at a time.
 
-        Queries Zigbee2MQTT one slot at a time over MQTT so the bridge can
-        respond to each GET before the next. Transient publish/timeout/read
-        failures produce an unreadable credential so the coordinator does
-        not treat a transient MQTT error as a confirmed-empty slot and storm
-        reprogramming after recovery.
-
-        Every slot failing at the transport is a different thing from every
-        slot reading unreadable, and only the first raises. An all-unreadable
-        return is a successful poll as far as the coordinator is concerned:
-        it resets the connectivity breaker, un-suspends the slots, and lets
-        them re-fail on the next tick -- an oscillation on the order of
-        seconds, flipping every slot in and out of sync. A broker that has
-        stopped carrying traffic gets this far because every gate above
-        answers from Home Assistant's configuration rather than from the
-        wire. A slot the lock answered with a withheld, disabled, or masked
-        code is genuine data and must not count towards this, however
-        unreadable it is.
+        What sequencing the reads buys, and why a read that reached nothing
+        raises rather than reporting a lock full of unreadable slots, is
+        ``BaseMqttLock._async_read_slots``. A broker that has stopped
+        carrying traffic gets that far because every gate below answers from
+        Home Assistant's configuration rather than from the wire.
         """
-        if not mqtt_config_entry_enabled(self.hass):
-            raise LockDisconnected("MQTT component not available")
-
-        if not await self.async_is_integration_connected():
-            self._maybe_raise_wrong_bridge_disconnect()
-            raise LockDisconnected("Lock not connected")
-
-        if not await self.async_is_device_available():
-            raise LockDisconnected("Device not available")
+        await self._async_ensure_operational()
 
         # Renames/bridge migrations with no disconnect self-heal here: the
         # hourly hard refresh lands on this read and re-checks that the push
@@ -705,27 +660,15 @@ class Zigbee2MQTTLock(BaseLock):
         if not get_topic:
             raise LockDisconnected("Could not determine MQTT topic")
 
-        # One request per index, so the caller's scope bounds the work.
-        code_slots = self.managed_slots if slots is None else slots
-
-        if not code_slots:
-            return []
-
-        reads = {
-            slot_num: await self._async_read_slot(slot_num, get_topic)
-            for slot_num in sorted(code_slots)
-        }
-        if all(state is None for state in reads.values()):
-            raise LockDisconnected(
-                f"{self.lock.entity_id}: none of the {len(reads)} requested slot "
-                "reads reached the lock"
-            )
-        return [
-            user_from_slot(
-                slot_num, SlotCredential.unreadable() if state is None else state
-            )
-            for slot_num, state in reads.items()
-        ]
+        # One request per index, so the caller's scope bounds the work. The
+        # topic is resolved once for the whole read rather than per slot: it
+        # comes from a discovery-data walk, and one answer for one poll is
+        # also what keeps a mid-read rename from splitting it across topics.
+        return await self._async_read_slots(
+            self.managed_slots if slots is None else slots,
+            partial(self._async_read_slot, get_topic=get_topic),
+            transport_failure="failed to reach the lock",
+        )
 
     async def _async_read_slot(
         self, slot_num: int, get_topic: str
@@ -733,23 +676,11 @@ class Zigbee2MQTTLock(BaseLock):
         """
         Ask the lock for one slot and wait for the answer; None means silence.
 
-        The caller needs the two failures apart, so a request that never left
-        and a request nothing came back for are None rather than unreadable
-        credentials: a slot the bridge described as withheld, disabled, or
-        masked is data, and a slot that produced no reply at all is not. Both
-        reach the coordinator as unreadable -- calling either empty would
-        take a transient MQTT problem for a confirmed-empty slot and storm
-        reprogramming once MQTT recovers -- but only the silences decide
-        whether the whole read was worth anything.
-
-        One silent slot among answered ones stays merely unreadable, which is
-        why this is a per-slot verdict and not an exception. Slots are
-        queried one at a time so Zigbee2MQTT and the firmware can answer each
-        GET before the next, and a lock that answers most requests and drops
-        one is a weak link rather than a lost transport. A parallel gather
-        with per-slot timeouts can fail an entire refresh and leave the
-        coordinator with no data, which makes sync skip every slot (see
-        ``SlotSyncManager._resolve_credential_snapshot``).
+        A request that never left and a request nothing came back for are
+        both silence: a slot the bridge described as withheld, disabled, or
+        masked is data, and a slot that produced no reply at all is not.
+        That is the distinction ``BaseMqttLock._async_read_slots`` needs to
+        tell a poll from a read that reached nothing.
         """
         loop = asyncio.get_running_loop()
         future = loop.create_future()

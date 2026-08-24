@@ -14,7 +14,6 @@ from uuid import uuid4
 from zwave_js_server.const import CommandClass
 
 from homeassistant.components.mqtt import (
-    DOMAIN as MQTT_DOMAIN,
     async_publish,
     async_subscribe,
 )
@@ -24,22 +23,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import (
-    Credential,
-    CredentialRef,
-    User,
-    WriteResult,
-    user_from_slot,
-)
+from ..domain.credentials import Credential, CredentialRef, User, WriteResult
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
-from ._base import BaseLock
-from ._util import (
-    entity_state_is_available,
-    is_masked_code,
-    parse_slot_num,
-    resolve_discovery_payload,
-)
+from ._mqtt import BaseMqttLock
+from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER
 
 # Tail of the HA discovery device identifier zwave-js-ui publishes
@@ -239,7 +227,7 @@ def _project_user_code_result(result: Any) -> SlotCredential:
 
 
 @dataclass(repr=False, eq=False)
-class ZWaveJSUILock(BaseLock):
+class ZWaveJSUILock(BaseMqttLock):
     """Lock bridged through zwave-js-ui's MQTT gateway (api-driven)."""
 
     _api_base: str | None = field(init=False, default=None)
@@ -260,11 +248,6 @@ class ZWaveJSUILock(BaseLock):
     # so its unsub goes in the base's push-unsub registry.
     _subscribed_node_topic: str | None = field(init=False, default=None)
     _min_operation_delay: float = field(init=False, default=ZWAVE_JS_UI_OPERATION_DELAY)
-
-    @property
-    def domain(self) -> str:
-        """Return integration domain."""
-        return MQTT_DOMAIN
 
     @property
     def supports_push(self) -> bool:
@@ -473,10 +456,6 @@ class ZWaveJSUILock(BaseLock):
         if not mqtt_config_entry_enabled(self.hass):
             return False
         return bool(self._parsed_identifier() and self._gateway_prefix())
-
-    async def async_is_device_available(self) -> bool:
-        """Return whether the lock entity reports an operational state."""
-        return entity_state_is_available(self.hass, self.lock.entity_id)
 
     async def _async_subscribe(
         self, topic: str, handler: Callable[[ReceiveMessage], None]
@@ -1003,47 +982,14 @@ class ZWaveJSUILock(BaseLock):
         )
         return response.get("result")
 
-    async def _async_ensure_operational(self) -> None:
-        """
-        Refuse to address a lock whose transport, gateway, or entity is down.
-
-        Every public operation shares this preamble, and the order is what
-        makes the error useful: MQTT being off explains a missing gateway,
-        and a missing gateway explains an unavailable entity, so the
-        outermost cause is the one reported.
-
-        This is deliberately stricter than Zigbee2MQTT's equivalent, which
-        checks device availability before reads but not before writes: here a
-        write is an api round trip that an unavailable node cannot answer, so
-        it fails as a disconnect up front instead of as a timeout ten seconds
-        later.
-        """
-        if not mqtt_config_entry_enabled(self.hass):
-            raise LockDisconnected("MQTT component not available")
-        if not await self.async_is_integration_connected():
-            raise LockDisconnected("Lock not connected")
-        if not await self.async_is_device_available():
-            raise LockDisconnected("Device not available")
-
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read Personal Identification Number codes one index at a time.
 
-        Each slot is one api round trip, issued sequentially so the gateway
-        and the lock's firmware answer each GET before the next goes out. A
-        read that fails produces an unreadable credential rather than an
-        empty one, for the same reason Zigbee2MQTT's read does: a transient
-        failure taken for a confirmed-empty slot makes sync storm
-        reprogramming once the lock answers again.
-
-        Every slot being refused is a different thing from every slot reading
-        unreadable, and only the first raises. An all-unreadable return is a
-        successful poll as far as the coordinator is concerned: it resets the
-        connectivity breaker, un-suspends the slots, and lets them re-fail on
-        the next tick -- an oscillation on the order of seconds, flipping
-        every slot in and out of sync. A read the lock answered with a
-        withheld or disabled code is genuine data and must not count towards
-        this, however unreadable it is.
+        Each slot is one api round trip. What sequencing them buys, and why
+        an all-refused read raises rather than reporting a lock full of
+        unreadable slots, is ``BaseMqttLock._async_read_slots``; the refusal
+        here is the gateway declining to run the command.
         """
         await self._async_ensure_operational()
 
@@ -1064,36 +1010,20 @@ class ZWaveJSUILock(BaseLock):
                 )
 
         # One request per index, so the caller's scope bounds the work.
-        code_slots = self.managed_slots if slots is None else slots
-        if not code_slots:
-            return []
-
-        reads = {
-            slot_num: await self._async_read_slot(slot_num)
-            for slot_num in sorted(code_slots)
-        }
-        if all(state is None for state in reads.values()):
-            raise LockDisconnected(
-                f"{self.lock.entity_id}: every one of the {len(reads)} requested "
-                "slot reads was refused"
-            )
-        return [
-            user_from_slot(
-                slot_num, SlotCredential.unreadable() if state is None else state
-            )
-            for slot_num, state in reads.items()
-        ]
+        return await self._async_read_slots(
+            self.managed_slots if slots is None else slots,
+            self._async_read_slot,
+            transport_failure="was refused",
+        )
 
     async def _async_read_slot(self, slot_num: int) -> SlotCredential | None:
         """
         Ask the lock what one slot holds; None means it would not answer.
 
-        The caller needs the two failures apart, so a refusal is None rather
-        than an unreadable credential: a slot the lock described as withheld
-        or disabled is data, and a slot it refused to describe is not. Both
-        reach the coordinator as unreadable -- calling a refusal empty would
-        tell sync the code is gone -- but only the refusals decide whether
-        the whole read was worth anything.
+        A slot the lock described as withheld or disabled is data, and a slot
+        the gateway refused to describe is not -- the distinction
+        ``BaseMqttLock._async_read_slots`` needs to tell a poll from a lock
+        that said nothing at all.
 
         A disconnect is deliberately not caught: it is a lost transport
         rather than a bad slot, and the reconnect path only runs if it

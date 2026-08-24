@@ -36,6 +36,10 @@ from .conftest import Z2M_FULL_TOPIC, _minimal_lock
 
 _PUBLISH = "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish"
 _WAIT_FOR = "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for"
+# The operational preamble every operation runs first lives on BaseMqttLock,
+# so the MQTT-enabled check it makes is bound in that module, not this
+# provider's -- which still makes its own for the subscription paths.
+MQTT_BASE = "custom_components.lock_code_manager.providers._mqtt"
 
 
 def _publish_never_leaves() -> AbstractContextManager[Any]:
@@ -472,7 +476,7 @@ class TestAsyncGetUsers:
                 return_value={1, 2},
             ),
             silence(),
-            pytest.raises(LockDisconnected, match="none of the 2"),
+            pytest.raises(LockDisconnected, match="every one of the 2"),
         ):
             await lock.async_get_users()
 
@@ -641,7 +645,7 @@ class TestAsyncSetClearHardRefresh:
         lock = zigbee2mqtt_lock_with_device
         with (
             patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                f"{MQTT_BASE}.mqtt_config_entry_enabled",
                 return_value=False,
             ),
             pytest.raises(LockDisconnected),
@@ -657,7 +661,7 @@ class TestAsyncSetClearHardRefresh:
         credential = credential_from_slot(1, SlotCredential.known("1234"))
         with (
             patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                f"{MQTT_BASE}.mqtt_config_entry_enabled",
                 return_value=False,
             ),
             pytest.raises(LockDisconnected, match="MQTT component not available"),
@@ -675,7 +679,7 @@ class TestAsyncSetClearHardRefresh:
         ref = CredentialRef(user_id=5, type=CredentialType.PIN, slot=5)
         with (
             patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                f"{MQTT_BASE}.mqtt_config_entry_enabled",
                 return_value=False,
             ),
             pytest.raises(LockDisconnected, match="MQTT component not available"),
@@ -799,6 +803,47 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockDisconnected, match="Could not determine MQTT topic"),
         ):
             await lock.async_delete_credential(ref)
+
+    async def test_writes_go_out_for_a_lock_whose_entity_is_unavailable(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+    ) -> None:
+        """
+        A write does not wait on the device; a read does, and the split is
+        deliberate.
+
+        Zigbee2MQTT takes a ``set_pin_code`` for a device that is not
+        currently reachable and delivers it when the device next checks in,
+        so refusing the publish would drop a code the bridge would have
+        carried. A read is answered by the device itself, so an unavailable
+        one is refused up front instead of costing a ten-second timeout per
+        slot.
+        """
+        lock = zigbee2mqtt_lock_connected
+        hass.states.async_set(lock.lock.entity_id, "unavailable")
+        credential = credential_from_slot(4, SlotCredential.known("4321"))
+        ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
+
+        with patch(_PUBLISH, new_callable=AsyncMock) as publish:
+            assert (
+                await lock.async_set_credential(
+                    4, credential, "4321", name=None, source="direct"
+                )
+                is WriteResult.CONFIRMED
+            )
+            assert await lock.async_delete_credential(ref) is True
+
+        assert publish.await_count == 2
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                return_value={4},
+            ),
+            pytest.raises(LockDisconnected, match="Device not available"),
+        ):
+            await lock.async_get_users()
 
     async def test_async_set_credential_without_coordinator_still_true(
         self,

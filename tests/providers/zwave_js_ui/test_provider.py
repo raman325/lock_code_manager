@@ -28,6 +28,10 @@ from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUIL
 from .conftest import ZUI_API_BASE, ZUI_NODE_ID, ZWaveJSUIApiResponder
 
 MODULE = "custom_components.lock_code_manager.providers.zwave_js_ui"
+# The operational preamble every operation runs first lives on BaseMqttLock,
+# so the MQTT-enabled check it makes is bound in that module, not this
+# provider's -- which still makes its own for the subscription paths.
+MQTT_BASE = "custom_components.lock_code_manager.providers._mqtt"
 MANAGED_SLOTS = "custom_components.lock_code_manager.providers._base.get_managed_slots"
 # User Code Command Class (99), endpoint 0 -- the ``sendCommand`` target every
 # credential operation addresses.
@@ -433,7 +437,7 @@ class TestOperationalGuards:
         lock = zui_gateway_resolved
         guards = {
             "mqtt_disabled": patch(
-                f"{MODULE}.mqtt_config_entry_enabled", return_value=False
+                f"{MQTT_BASE}.mqtt_config_entry_enabled", return_value=False
             ),
             # No discovery payload at all, which is the only way left to have
             # no gateway: a missing node topic alone still leaves the
