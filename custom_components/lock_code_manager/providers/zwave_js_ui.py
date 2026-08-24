@@ -277,25 +277,45 @@ class ZWaveJSUILock(BaseLock):
 
     @property
     def supports_push(self) -> bool:
-        """Return whether this lock supports push-based updates."""
-        return True
+        """
+        Return whether this lock's value tree can be subscribed to.
+
+        Push needs the node topic, and only a gateway that built the state
+        topic itself tells us what that is; a MANUAL gateway pointed at a
+        custom topic leaves nothing to subscribe to. Such a lock still works
+        over the api, so it runs api-only and the coordinator polls it --
+        which is why this is derived rather than a constant ``True``. As a
+        constant it disabled polling for a lock that had no push either,
+        leaving it with no data path at all.
+
+        The coordinator reads this once, when it is constructed, and that
+        happens after ``async_setup``; the answer comes from Home Assistant's
+        MQTT discovery data, which is already loaded by then.
+        """
+        return self._prefix_and_node_topic() is not None
 
     @property
     def supports_code_slot_events(self) -> bool:
-        """Return whether this lock supports code slot events."""
-        return True
+        """
+        Return whether keypad events can be observed.
+
+        Same answer and same reason as ``supports_push``: the events are
+        Notification Command Class publications arriving on the very same
+        node subscription.
+        """
+        return self.supports_push
 
     @property
     def usercode_scan_interval(self) -> timedelta:
         """
         Return scan interval for usercodes.
 
-        Inert as long as ``supports_push`` is true: the coordinator leaves its
+        Inert while ``supports_push`` is true: the coordinator leaves its
         update interval unset for a push provider, so nothing schedules a poll
         at this cadence and drift is caught by the hourly hard refresh instead.
-        This is the fallback the coordinator would use if push were ever
-        unsupported or disabled, spaced out because every slot costs its own
-        api round trip through the gateway and the mesh.
+        This is the cadence an api-only lock actually runs at, spaced out
+        because every slot costs its own api round trip through the gateway
+        and the mesh.
         """
         return timedelta(minutes=5)
 
@@ -319,8 +339,19 @@ class ZWaveJSUILock(BaseLock):
         all, so the settling has to come from setup running well before the
         first poll publishes anything.
 
+        An api-only lock skips the node subscription and nothing else. That is
+        an ordinary configuration rather than a fault, so it is reported at
+        info: reads and writes work, push updates and keypad events do not.
         """
         await self._async_ensure_api_response_subscription()
+        if not self.supports_push:
+            LOGGER.info(
+                "Lock %s: its gateway publishes no recoverable node topic, so "
+                "it runs api-only -- reads and writes work, push updates and "
+                "keypad events do not",
+                self.lock.entity_id,
+            )
+            return
         await self._async_ensure_node_subscription()
 
     def _parsed_identifier(self) -> tuple[str, int] | None:
@@ -435,10 +466,22 @@ class ZWaveJSUILock(BaseLock):
         return parsed
 
     async def async_is_integration_connected(self) -> bool:
-        """Return whether MQTT is usable and this lock maps to a zwave-js-ui node."""
+        """
+        Return whether MQTT is usable and this lock's gateway is addressable.
+
+        The node topic is deliberately not required. A lock behind a MANUAL
+        gateway, whose state topic is a custom shape carrying no node address,
+        can still be read and written through the api; it just cannot be
+        pushed to. Refusing it outright cost the whole lock to save the half
+        of it that does not work.
+
+        What is required is proof that this is a zwave-js-ui device -- the
+        device identifier -- and somewhere to address api calls. Neither is
+        ever inferred from a name or a topic shape.
+        """
         if not mqtt_config_entry_enabled(self.hass):
             return False
-        return bool(self._parsed_identifier() and self._prefix_and_node_topic())
+        return bool(self._parsed_identifier() and self._gateway_prefix())
 
     async def async_is_device_available(self) -> bool:
         """Return whether the lock entity reports an operational state."""
@@ -991,15 +1034,18 @@ class ZWaveJSUILock(BaseLock):
         # Node renames and gateway migrations produce no disconnect, so the
         # hourly hard refresh -- which lands here, and is the only recurring
         # read a push provider makes -- is what notices the subscription has
-        # drifted off the topic discovery now points at.
-        try:
-            await self._async_ensure_node_subscription()
-        except LockDisconnected as err:
-            LOGGER.debug(
-                "Lock %s: could not refresh push subscription before poll: %s",
-                self.lock.entity_id,
-                err,
-            )
+        # drifted off the topic discovery now points at. An api-only lock has
+        # no subscription to drift, so it skips this entirely rather than
+        # logging a failure it can do nothing about on every poll.
+        if self.supports_push:
+            try:
+                await self._async_ensure_node_subscription()
+            except LockDisconnected as err:
+                LOGGER.debug(
+                    "Lock %s: could not refresh push subscription before poll: %s",
+                    self.lock.entity_id,
+                    err,
+                )
 
         # One request per index, so the caller's scope bounds the work.
         code_slots = self.managed_slots if slots is None else slots
@@ -1152,3 +1198,18 @@ class ZWaveJSUILock(BaseLock):
         self._clear_push_unsubs()
         self._subscribed_node_topic = None
         self._release_api_subscription()
+
+    async def async_unload(self, remove_permanently: bool) -> None:
+        """
+        Release both subscriptions on unload, push or no push.
+
+        The base only tears the push subscription down when ``supports_push``
+        is true, and this provider derives that from discovery data. An
+        api-only lock never had a node subscription but its api transport is
+        live all the same, and a lock whose discovery data went missing
+        between subscribing and unloading would answer False here having
+        answered True earlier. Teardown is idempotent, so doing it up front
+        and letting the base repeat it costs nothing.
+        """
+        self.teardown_push_subscription()
+        await super().async_unload(remove_permanently)

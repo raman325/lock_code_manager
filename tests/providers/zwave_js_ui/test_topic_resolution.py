@@ -161,23 +161,27 @@ async def test_prefix_and_node_topic_derivation(
         pytest.param("zwave/98/0/currentMode", id="four-segments"),
     ],
 )
-async def test_manual_gateway_custom_topic_is_unresolvable(
+async def test_manual_gateway_custom_topic_yields_no_node_but_stays_connected(
     hass: HomeAssistant, mqtt_mock, mqtt_teardown, state_topic: str
 ) -> None:
     """
-    A custom topic too short to hold a prefix, a node, and a value path resolves
-    to nothing.
+    A custom topic gives up no node address, and that costs only push.
 
     MANUAL gateways let the user point a discovery entry at any topic at all,
     and such a topic carries no node address to recover. Splitting it anyway
-    would hand the API client a prefix invented from a user's naming choice.
+    would hand the api client a prefix invented from a user's naming choice.
+
+    The lock is still perfectly addressable, though: its identifier names the
+    node and its availability list names the gateway, so reads and writes go
+    through the api and only push is lost.
     """
     entity = await async_discover_zui_lock(hass, state_topic=state_topic)
     lock = build_zui_lock(hass, entity)
 
     assert lock._resolve_state_topic() == state_topic
     assert lock._prefix_and_node_topic() is None
-    assert await lock.async_is_integration_connected() is False
+    assert lock.supports_push is False
+    assert await lock.async_is_integration_connected() is True
 
 
 async def test_state_topic_missing_from_discovery(

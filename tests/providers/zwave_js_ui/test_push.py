@@ -71,11 +71,26 @@ async def zui_lock_subscribed(
     return zui_lock_provider
 
 
-def test_push_capabilities_are_advertised() -> None:
-    """The node subscription is what makes both capabilities true."""
-    lock = ZWaveJSUILock.__new__(ZWaveJSUILock)
+async def test_push_capabilities_follow_the_node_topic(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    Both capabilities are exactly "is there a node topic to subscribe to".
+
+    They ride the same subscription -- code slot events are Notification
+    Command Class publications under the node topic -- so they cannot
+    disagree, and neither can be a constant: a MANUAL gateway pointed at a
+    custom state topic gives us nothing to subscribe to, and advertising push
+    anyway would make the coordinator disable polling for a lock that has no
+    push either.
+    """
+    lock = zui_lock_provider
     assert lock.supports_push is True
     assert lock.supports_code_slot_events is True
+
+    with patch.object(ZWaveJSUILock, "_prefix_and_node_topic", return_value=None):
+        assert lock.supports_push is False
+        assert lock.supports_code_slot_events is False
 
 
 class TestUserCodeValues:

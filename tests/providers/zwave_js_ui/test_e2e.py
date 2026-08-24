@@ -47,6 +47,7 @@ from .conftest import (
     ZUI_NODE_ID,
     ZUI_NODE_TOPIC,
     ZWaveJSUIApiResponder,
+    async_discover_zui_lock,
 )
 
 # Door Lock is 98; User Code Command Class is 99.
@@ -392,6 +393,140 @@ class TestKeypadEvents:
         assert state.state != STATE_UNKNOWN
         assert state.attributes[ATTR_CODE_SLOT] == 1
         assert state.attributes[ATTR_ACTION_TEXT] == "Keypad_unlock_operation"
+
+
+class TestApiOnlyManualGateway:
+    """A lock whose state topic gives up no node still works over the api."""
+
+    @pytest.fixture
+    async def api_only_entry(
+        self,
+        hass: HomeAssistant,
+        mqtt_mock,
+        mqtt_teardown,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: UserCodeTable,
+    ) -> AsyncGenerator[MockConfigEntry]:
+        """
+        Set up LCM over a lock discovered on a MANUAL gateway's custom topic.
+
+        The topic is the user's own naming, so nothing about it names the node
+        -- but the availability list still names the gateway, and the device
+        identifier still names the node, which is everything the api needs.
+        """
+        zui_api_responder.set_handler("sendCommand", user_code_table)
+        lock_entity = await async_discover_zui_lock(
+            hass, state_topic="attic/front_door/state"
+        )
+        config = {
+            CONF_LOCKS: [lock_entity.entity_id],
+            CONF_SLOTS: {
+                slot_num: {
+                    CONF_NAME: f"slot{slot_num}",
+                    CONF_PIN: pin,
+                    CONF_ENABLED: True,
+                }
+                for slot_num, pin in E2E_SLOT_PINS.items()
+            },
+        }
+        entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_manual")
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        yield entry
+
+        if entry.state is ConfigEntryState.LOADED:
+            await hass.config_entries.async_unload(entry.entry_id)
+            await hass.async_block_till_done()
+
+    @staticmethod
+    def _lock(entry: MockConfigEntry) -> ZWaveJSUILock:
+        """Extract the single provider the entry stood up."""
+        lock = next(iter(entry.runtime_data.locks.values()))
+        assert isinstance(lock, ZWaveJSUILock)
+        return lock
+
+    async def test_the_lock_is_claimed_and_bound(
+        self, hass: HomeAssistant, api_only_entry: MockConfigEntry
+    ) -> None:
+        """
+        Setup accepts the lock and binds its gateway.
+
+        Requiring the node topic for connectivity refused this lock outright,
+        which cost the api half of it to save the push half that never
+        worked.
+        """
+        lock = self._lock(api_only_entry)
+
+        assert lock._api_base == ZUI_API_BASE
+        assert await lock.async_is_integration_connected() is True
+
+    async def test_no_node_subscription_is_attempted(
+        self, hass: HomeAssistant, api_only_entry: MockConfigEntry
+    ) -> None:
+        """
+        Setup skips the push subscription instead of failing on it.
+
+        There is no topic to subscribe to, which is an ordinary MANUAL-gateway
+        configuration rather than an error, so nothing is attempted and
+        nothing raises.
+        """
+        lock = self._lock(api_only_entry)
+
+        assert lock.supports_push is False
+        assert lock.supports_code_slot_events is False
+        assert lock._subscribed_node_topic is None
+        assert not lock._push_unsubs
+
+    async def test_the_coordinator_polls_because_push_is_unavailable(
+        self, hass: HomeAssistant, api_only_entry: MockConfigEntry
+    ) -> None:
+        """
+        Polling is the only data path left, so the coordinator has to keep one.
+
+        This is the whole reason ``supports_push`` is derived: advertised as a
+        constant True it made the coordinator drop its update interval, and a
+        lock with neither push nor polling never reports anything at all.
+        """
+        lock = self._lock(api_only_entry)
+
+        assert lock.coordinator is not None
+        assert lock.coordinator.update_interval == lock.usercode_scan_interval
+
+    async def test_configured_pins_still_reach_the_lock(
+        self,
+        hass: HomeAssistant,
+        api_only_entry: MockConfigEntry,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """Reads and writes go through the api exactly as they do with push."""
+        for _ in range(len(E2E_SLOT_PINS) + 2):
+            if user_code_table.codes == E2E_SLOT_PINS:
+                break
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        assert user_code_table.codes == E2E_SLOT_PINS
+
+    async def test_unload_releases_the_api_transport(
+        self, hass: HomeAssistant, api_only_entry: MockConfigEntry
+    ) -> None:
+        """
+        Teardown reaches the api subscription even though push is off.
+
+        The base only releases the push subscription when ``supports_push``
+        says so, and this lock says no -- but its api subscription is live all
+        the same and would outlive the unload.
+        """
+        lock = self._lock(api_only_entry)
+        assert lock._api_response_topic is not None
+
+        assert await hass.config_entries.async_unload(api_only_entry.entry_id)
+        await hass.async_block_till_done()
+
+        assert api_only_entry.state is ConfigEntryState.NOT_LOADED
+        assert lock._api_response_topic is None
+        assert lock._api_base is None
 
 
 class TestUnload:

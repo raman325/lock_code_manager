@@ -408,7 +408,7 @@ class TestOperationalGuards:
         ("condition", "match"),
         [
             ("mqtt_disabled", "MQTT component not available"),
-            ("no_gateway_topic", "Lock not connected"),
+            ("no_gateway_binding", "Lock not connected"),
             ("entity_unavailable", "Device not available"),
         ],
     )
@@ -422,7 +422,7 @@ class TestOperationalGuards:
         match: str,
     ) -> None:
         """
-        MQTT off, an unresolvable gateway, and a dead entity all disconnect.
+        MQTT off, no gateway to address, and a dead entity all disconnect.
 
         Every operation that touches the api shares one preamble, so the
         cross product is what proves a new one cannot quietly skip it --
@@ -435,7 +435,10 @@ class TestOperationalGuards:
             "mqtt_disabled": patch(
                 f"{MODULE}.mqtt_config_entry_enabled", return_value=False
             ),
-            "no_gateway_topic": patch(
+            # No discovery payload at all, which is the only way left to have
+            # no gateway: a missing node topic alone still leaves the
+            # availability entry to bind from, and such a lock works api-only.
+            "no_gateway_binding": patch(
                 f"{MODULE}.resolve_discovery_payload", return_value=None
             ),
             "entity_unavailable": patch.object(
