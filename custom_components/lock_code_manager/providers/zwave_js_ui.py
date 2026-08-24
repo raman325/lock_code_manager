@@ -11,6 +11,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from zwave_js_server.const import CommandClass
+from zwave_js_server.const.command_class.lock import CodeSlotStatus
 
 from homeassistant.components.mqtt import (
     async_publish,
@@ -44,9 +45,6 @@ ZWAVE_JS_UI_IDENTIFIER_RE = re.compile(
 
 CC_USER_CODE = CommandClass.USER_CODE
 CC_NOTIFICATION = CommandClass.NOTIFICATION
-# zwave-js UserIDStatus enum (UserCodeCC).
-USER_ID_STATUS_AVAILABLE = 0
-USER_ID_STATUS_ENABLED = 1
 # A FLiRS (battery) lock answers on its own wake schedule, so one command can
 # legitimately take the better part of a minute. Giving up early does not
 # cancel anything: zwave-js-ui keeps working the queued command, and the retry
@@ -278,21 +276,21 @@ def _project_user_code_result(result: Any) -> SlotCredential:
     status, and any result shape that is not the expected dict, says nothing
     usable.
 
-    ``userIdStatus`` is compared with ``==`` against the int constants below,
-    which is unsafe for JSON ``true``/``false``: in Python ``True == 1``, so a
-    boolean status would otherwise masquerade as Enabled. Booleans are
-    therefore rejected up front.
+    ``userIdStatus`` is compared with ``==`` against ``CodeSlotStatus``, whose
+    members are ints, and that is unsafe for JSON ``true``/``false``: in Python
+    ``True == 1``, so a boolean status would otherwise masquerade as Enabled.
+    Booleans are therefore rejected up front.
     """
     if not isinstance(result, dict):
         return SlotCredential.unreadable()
     status = result.get("userIdStatus")
     if isinstance(status, bool):
         return SlotCredential.unreadable()
-    if status == USER_ID_STATUS_AVAILABLE:
+    if status == CodeSlotStatus.AVAILABLE:
         return SlotCredential.empty()
     code = result.get("userCode")
     if (
-        status == USER_ID_STATUS_ENABLED
+        status == CodeSlotStatus.ENABLED
         and isinstance(code, str)
         and code.strip()
         and not is_masked_code(code)
@@ -566,7 +564,7 @@ class ZWaveJSUILock(BaseMqttLock):
             # would otherwise report an occupied slot as Available. Same
             # guard ``_project_user_code_result`` and ``homeid`` apply.
             and not isinstance(value, bool)
-            and value == USER_ID_STATUS_AVAILABLE
+            and value == CodeSlotStatus.AVAILABLE
         ):
             self._confirm_slot(slot_num, SlotCredential.empty())
 
@@ -1158,7 +1156,10 @@ class ZWaveJSUILock(BaseMqttLock):
         code_slot = credential.slot
         await self._async_ensure_operational()
         await self._async_user_code_command(
-            "set", [code_slot, USER_ID_STATUS_ENABLED, pin]
+            # ``int`` for the same reason the command class id is cast: the
+            # wire payload's shape stays obvious at the call site.
+            "set",
+            [code_slot, int(CodeSlotStatus.ENABLED), pin],
         )
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED

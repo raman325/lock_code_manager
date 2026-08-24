@@ -71,7 +71,7 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import parse_tag
+from ._util import is_masked_code, parse_tag
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -255,7 +255,7 @@ class ZWaveJSLock(BaseLock):
         # CredentialData.data is str | bytes; decode bytes so a Personal
         # Identification Number is the digit string, not "b'1234'".
         code = data if isinstance(data, str) else data.decode()
-        if not code or code == "*" * len(code):
+        if not code or is_masked_code(code):
             return SlotCredential.unreadable()
         return SlotCredential.known(code)
 
@@ -916,7 +916,7 @@ class ZWaveJSLock(BaseLock):
             # reporting status), but all-zeros only counts as empty when
             # in_use is explicitly False (zeros from a partially-loaded
             # cache must not be misread as cleared).
-            if value == "*" * len(value) and slot_in_use is not False:
+            if is_masked_code(value) and slot_in_use is not False:
                 resolved = SlotCredential.unreadable()
             elif value.strip("0") == "" and slot_in_use is False:
                 resolved = SlotCredential.empty()
