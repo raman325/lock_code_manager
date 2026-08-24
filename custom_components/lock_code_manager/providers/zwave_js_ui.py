@@ -763,6 +763,12 @@ class ZWaveJSUILock(BaseLock):
         makes the error useful: MQTT being off explains a missing gateway,
         and a missing gateway explains an unavailable entity, so the
         outermost cause is the one reported.
+
+        This is deliberately stricter than Zigbee2MQTT's equivalent, which
+        checks device availability before reads but not before writes: here a
+        write is an api round trip that an unavailable node cannot answer, so
+        it fails as a disconnect up front instead of as a timeout ten seconds
+        later.
         """
         if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
@@ -878,6 +884,7 @@ class ZWaveJSUILock(BaseLock):
         one-slot lock, the same trap this module guards on ``userIdStatus``
         and ``homeid``.
         """
+        await self._async_ensure_operational()
         result = await self._async_user_code_command("getUsersCount", [])
         if isinstance(result, int) and not isinstance(result, bool) and result > 0:
             return result

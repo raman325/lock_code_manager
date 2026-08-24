@@ -70,7 +70,7 @@ def _delete_credential(lock: ZWaveJSUILock, slot: int = 1) -> Awaitable[bool]:
     )
 
 
-def test_poll_intervals_are_the_provider_s_own() -> None:
+def test_poll_intervals_belong_to_this_provider() -> None:
     """Every slot costs a round trip, so this lock is polled slowly."""
     lock = ZWaveJSUILock.__new__(ZWaveJSUILock)
     assert lock.usercode_scan_interval == timedelta(minutes=5)
@@ -317,6 +317,7 @@ class TestOperationalGuards:
             pytest.param(lambda lock: lock.async_get_users(), id="get_users"),
             pytest.param(_set_credential, id="set_credential"),
             pytest.param(_delete_credential, id="delete_credential"),
+            pytest.param(lambda lock: lock.async_get_max_slot(), id="get_max_slot"),
         ],
     )
     @pytest.mark.parametrize(
@@ -339,8 +340,11 @@ class TestOperationalGuards:
         """
         MQTT off, an unresolvable gateway, and a dead entity all disconnect.
 
-        Reads and writes share one preamble, so the cross product is what
-        proves a new operation cannot quietly skip it.
+        Every operation that touches the api shares one preamble, so the
+        cross product is what proves a new one cannot quietly skip it --
+        including the capability probe, whose answer is api traffic like any
+        other and which would otherwise report a disabled MQTT integration as
+        a call timeout.
         """
         lock = zui_gateway_resolved
         guards = {
