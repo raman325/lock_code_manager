@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 import json
 from typing import Any
@@ -46,6 +47,7 @@ from .conftest import (
     ZUI_API_BASE,
     ZUI_NODE_ID,
     ZUI_NODE_TOPIC,
+    ZUI_PREFIX,
     ZWaveJSUIApiResponder,
     async_discover_zui_lock,
 )
@@ -58,6 +60,25 @@ STATUS_ENABLED = 1
 
 E2E_SLOT_PINS = {1: "1234", 2: "5678"}
 LOCK_CAPACITY = 20
+# Second node on the same gateway, for the mixed push/api-only entry.
+API_ONLY_NODE_ID = 21
+
+
+def _capacity_is_the_node_id(_api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+    """
+    Answer ``sendCommand`` with a value that names which node was asked.
+
+    Two locks sharing one response wildcard see each other's answers, so a
+    correlation test needs answers that are told apart by content. Reporting
+    each node's capacity as its own id makes a crossed wire a wrong number.
+    """
+    target, method, _method_args = request["args"]
+    result: Any = None
+    if method == "getUsersCount":
+        result = target["nodeId"]
+    elif method == "get":
+        result = {"userIdStatus": STATUS_AVAILABLE}
+    return {"success": True, "message": "", "result": result}
 
 
 class UserCodeTable:
@@ -527,6 +548,198 @@ class TestApiOnlyManualGateway:
         assert api_only_entry.state is ConfigEntryState.NOT_LOADED
         assert lock._api_response_topic is None
         assert lock._api_base is None
+
+
+class TestMixedPushAndApiOnlyEntry:
+    """One entry holding a push lock and an api-only lock on the same gateway."""
+
+    @pytest.fixture
+    async def mixed_entry(
+        self,
+        hass: HomeAssistant,
+        mqtt_mock,
+        mqtt_teardown,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> AsyncGenerator[MockConfigEntry]:
+        """
+        Set up LCM over both gateway shapes at once, on one prefix.
+
+        The two locks differ in exactly the thing that decides their whole
+        data path: the push one's discovery state topic is the gateway's own
+        value topic and yields a node address, and the api-only one's is a
+        MANUAL gateway's custom naming and yields nothing. They share a
+        broker, a prefix, and a gateway, so everything that keeps their
+        traffic apart is per-instance.
+        """
+        zui_api_responder.set_handler("sendCommand", _capacity_is_the_node_id)
+        push_lock = await async_discover_zui_lock(hass)
+        api_only_lock = await async_discover_zui_lock(
+            hass,
+            node_id=API_ONLY_NODE_ID,
+            state_topic="attic/side_door/state",
+        )
+        config = {
+            CONF_LOCKS: [push_lock.entity_id, api_only_lock.entity_id],
+            CONF_SLOTS: {
+                slot_num: {
+                    CONF_NAME: f"slot{slot_num}",
+                    CONF_PIN: pin,
+                    CONF_ENABLED: True,
+                }
+                for slot_num, pin in E2E_SLOT_PINS.items()
+            },
+        }
+        entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_mixed")
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        yield entry
+
+        if entry.state is ConfigEntryState.LOADED:
+            await hass.config_entries.async_unload(entry.entry_id)
+            await hass.async_block_till_done()
+
+    @staticmethod
+    def _locks(entry: MockConfigEntry) -> tuple[ZWaveJSUILock, ZWaveJSUILock]:
+        """Return ``(push lock, api-only lock)`` from the entry, by node id."""
+        locks = list(entry.runtime_data.locks.values())
+        assert len(locks) == 2
+        by_node = {lock._require_node()[1]: lock for lock in locks}
+        return by_node[ZUI_NODE_ID], by_node[API_ONLY_NODE_ID]
+
+    async def test_each_lock_runs_the_mode_its_own_topic_implies(
+        self, hass: HomeAssistant, mixed_entry: MockConfigEntry
+    ) -> None:
+        """
+        Push is derived per lock, so one entry can hold both modes at once.
+
+        A provider-wide constant would have forced them together, and either
+        answer strands one of the pair: no push for the lock that has it, or
+        no polling for the lock that needs it.
+        """
+        push_lock, api_only_lock = self._locks(mixed_entry)
+
+        assert push_lock.supports_push is True
+        assert push_lock._subscribed_node_topic == ZUI_NODE_TOPIC
+        assert push_lock._push_unsubs
+
+        assert api_only_lock.supports_push is False
+        assert api_only_lock._subscribed_node_topic is None
+        assert not api_only_lock._push_unsubs
+
+    async def test_the_coordinators_run_at_the_cadence_each_mode_needs(
+        self, hass: HomeAssistant, mixed_entry: MockConfigEntry
+    ) -> None:
+        """
+        One entry, two cadences, because the coordinator asks each lock.
+
+        The push lock's coordinator runs on no timer -- the node tells it
+        when something changed -- while the api-only lock has nothing to tell
+        it anything and would report forever-stale data without a poll.
+        """
+        push_lock, api_only_lock = self._locks(mixed_entry)
+
+        assert push_lock.coordinator is not None
+        assert push_lock.coordinator.update_interval is None
+        assert api_only_lock.coordinator is not None
+        assert (
+            api_only_lock.coordinator.update_interval
+            == api_only_lock.usercode_scan_interval
+        )
+
+    async def test_one_shared_wildcard_carries_both_locks_api_traffic(
+        self, hass: HomeAssistant, mixed_entry: MockConfigEntry
+    ) -> None:
+        """
+        Both locks subscribe to the same prefix wildcard and the same gateway.
+
+        The wildcard spans every client on the prefix, so each lock's
+        subscription delivers the other's responses too -- which is the point
+        of correlating on a nonce rather than on the topic.
+        """
+        push_lock, api_only_lock = self._locks(mixed_entry)
+        response_topic = f"{ZUI_PREFIX}/_CLIENTS/+/api/+"
+
+        assert push_lock._api_response_topic == response_topic
+        assert api_only_lock._api_response_topic == response_topic
+        assert push_lock._api_base == api_only_lock._api_base == ZUI_API_BASE
+
+    async def test_overlapping_calls_do_not_cross_wires(
+        self,
+        hass: HomeAssistant,
+        mixed_entry: MockConfigEntry,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        Two calls in flight on one wildcard each get their own answer.
+
+        Every response reaches both locks' handlers, so nothing but the
+        echoed nonce distinguishes them. Both have to be waiting at once for
+        that to be tested at all -- a gateway that answers each request
+        before the next goes out never puts two nonces in play -- so the
+        stand-in holds both requests, then answers them in the opposite
+        order. A handler that resolved whichever call was waiting instead of
+        the one the nonce names would hand each lock the other's number.
+        """
+        push_lock, api_only_lock = self._locks(mixed_entry)
+        held: list[tuple[str, dict[str, Any]]] = []
+
+        def _hold(api_base: str, request: dict[str, Any]) -> None:
+            """Record the request and stay silent, keeping the call in flight."""
+            held.append((api_base, request))
+            return
+
+        zui_api_responder.set_handler("sendCommand", _hold)
+
+        capacities = asyncio.gather(
+            push_lock.async_get_max_slot(), api_only_lock.async_get_max_slot()
+        )
+        await hass.async_block_till_done()
+
+        assert len(held) == 2
+        assert len(push_lock._pending_api_calls) == 1
+        assert len(api_only_lock._pending_api_calls) == 1
+
+        for api_base, request in reversed(held):
+            async_fire_mqtt_message(
+                hass,
+                f"{api_base}/api/sendCommand",
+                json.dumps(
+                    {
+                        "success": True,
+                        "message": "",
+                        "result": request["args"][0]["nodeId"],
+                        "origin": request,
+                    }
+                ),
+            )
+
+        assert await capacities == [ZUI_NODE_ID, API_ONLY_NODE_ID]
+
+    async def test_one_unload_releases_both_locks(
+        self, hass: HomeAssistant, mixed_entry: MockConfigEntry
+    ) -> None:
+        """
+        Unloading the entry has to reach a lock whose push lifecycle never ran.
+
+        The base releases the push subscription only for a lock that reports
+        ``supports_push``, so the api-only half is released purely because
+        teardown reaches for the api transport by name. Miss that and every
+        reload orphans a wildcard subscription holding a dead provider.
+        """
+        push_lock, api_only_lock = self._locks(mixed_entry)
+
+        assert await hass.config_entries.async_unload(mixed_entry.entry_id)
+        await hass.async_block_till_done()
+
+        assert mixed_entry.state is ConfigEntryState.NOT_LOADED
+        for lock in (push_lock, api_only_lock):
+            assert lock._api_response_unsub is None
+            assert lock._api_response_topic is None
+            assert lock._api_base is None
+        assert not push_lock._push_unsubs
+        assert push_lock._subscribed_node_topic is None
 
 
 class TestUnload:
