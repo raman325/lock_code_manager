@@ -1,0 +1,756 @@
+look at the mqtt topic shape for zwave-js-ui MQTT and see if we can add support for those locks as well
+
+---
+
+"Anything beyond one zwave-js-ui gateway owning a given lock" there's no reason why we can't support multiple zwave-js-ui gateways right? They could be multiple via MQTT and multiple via WS and it shouldn't matter
+
+---
+
+proceed
+
+---
+
+1
+
+---
+
+<task-notification>
+<task-id>af751faa082c6fa33</task-id>
+<tool-use-id>toolu_01H4PStffweCq1FWDkisyten</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/af751faa082c6fa33.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 1: skeleton" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Fix applied and committed.
+
+**New SHA:** `c701b76fc9a8d7b01f2cb691924061d024cd3da6` on branch `zwave-js-ui-mqtt-provider`
+
+What changed: `custom_components/lock_code_manager/providers/zwave_js_ui.py` now imports `from zwave_js_server.const import CommandClass` and defines `CC_USER_CODE = CommandClass.USER_CODE`, `CC_NOTIFICATION = CommandClass.NOTIFICATION`, replacing the hand-rolled `99`/`113` ints. Verified `CommandClass.USER_CODE == 99` and `CommandClass.NOTIFICATION == 113` directly against the installed `zwave_js_server` package before applying, so the enum values match what was there before. `USER_ID_STATUS_AVAILABLE`/`USER_ID_STATUS_ENABLED` left as raw ints per the review note.
+
+Verification:
+- `pytest tests/providers/zwave_js_ui/ -q` → 6 passed, both before and after the ruff auto-fix.
+- `prek run --files custom_components/lock_code_manager/providers/zwave_js_ui.py` → ruff-check auto-fixed import ordering (third-party `zwave_js_server` group before the `homeassistant` group) on the first run, all hooks passed clean on the second run.
+- Commit created directly (no amend), message exactly as requested.
+
+Task is now complete with the coordinator's fix applied.</result>
+<usage><subagent_tokens>79741</subagent_tokens><tool_uses>9</tool_uses><duration_ms>45948</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7884c2b4dfc50f84</task-id>
+<tool-use-id>toolu_01MseFMquhfVo8JVjXpu1czr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/a7884c2b4dfc50f84.output</output-file>
+<status>completed</status>
+<summary>Agent "Quality review Task 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed clean: `CC_USER_CODE`/`CC_NOTIFICATION` now alias `CommandClass.USER_CODE`/`CommandClass.NOTIFICATION`, `UserIDStatus` ints correctly left alone (no library equivalent), diff is minimal and scoped. Approved.</result>
+<usage><subagent_tokens>103998</subagent_tokens><tool_uses>1</tool_uses><duration_ms>5378</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7496c3a1d4ea61ec</task-id>
+<tool-use-id>toolu_0137kdhqoAcicQHjjuaVLtpX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/a7496c3a1d4ea61ec.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 2: resolver" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both review items applied and committed.
+
+**Summary:**
+1. Blocking coverage gap fixed — added `test_mqtt_dispatch_skips_malformed_identifier` to `tests/providers/test_dispatch.py`, using a device with identifiers `{("mqtt",), ("mqtt", "zwavejs2mqtt_0xd4ee5a7a_node20")}`. The device registry accepted the malformed 1-tuple without complaint, and the test confirms `resolve_provider_class` skips it and still resolves `ZWaveJSUILock` from the valid identifier. Verified: `providers/__init__.py` now shows 100% coverage (27 statements, 0 missed) via `--cov=custom_components.lock_code_manager.providers`.
+2. Polish comment added above `SUPPORTED_PLATFORMS` in `custom_components/lock_code_manager/providers/__init__.py`: `# Platform allowlist for the config-flow entity selector and membership checks.`
+
+**Verification:**
+- `tests/providers/test_dispatch.py`: 5 passed
+- Full suite `tests/`: 1847 passed, 3 skipped (up from 1846 — the new test)
+- `prek run --files custom_components/lock_code_manager/providers/__init__.py tests/providers/test_dispatch.py`: all hooks passed
+
+**New commit SHA:** `da605cc` — `test(providers): cover malformed identifier guard in resolver`
+
+Task 2 remains complete with both follow-up items resolved.</result>
+<usage><subagent_tokens>88157</subagent_tokens><tool_uses>13</tool_uses><duration_ms>205583</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5945d88e38577d6f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/a5945d88e38577d6f.output</output-file>
+<status>completed</status>
+<summary>Agent "Quality review Task 2" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed — the fix lands correctly: `providers/__init__.py` is now 27/27 statements (100%), the new test exercises the length-1 identifier via a mixed `identifiers` set (falls through the malformed tuple, matches on the valid UI identifier), and `SUPPORTED_PLATFORMS` has its intent comment. Both Important/Minor items from the review are addressed.
+
+Approved.</result>
+<usage><subagent_tokens>82432</subagent_tokens><tool_uses>1</tool_uses><duration_ms>10132</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab420cd455406a6a5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/ab420cd455406a6a5.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: wiring" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three nits are fixed and committed.
+
+**New SHA:** `68502e6a` — `chore(providers): accurate dispatch comments, drop no-op test patches` (on top of `79a4d8b6`)
+
+## What changed
+
+1. **`domain/locks.py`** — comment reworded to the rule that is true now and stays true: "Selection-time validation and this guard share one rule: never guess a provider for an unclaimed lock." No reference to task ordering or future work.
+
+2. **`providers/__init__.py`** — trimmed "and membership checks" from the `SUPPORTED_PLATFORMS` comment; it now reads as the selector's allowlist only, keeping the note that it is deliberately wider than what resolves to a provider.
+
+3. **`tests/test_config_flow.py`** — removed all three no-op `patch.dict(providers.INTEGRATIONS_CLASS_MAP, {"test": MockLCMLock})` contexts:
+   - The one inside `_capacity_probe` — the helper now returns a single context manager instead of a 2-tuple, so its 11 call sites lost the `probe_registered` name (`probe_registered, probe_capabilities = ...` → `probe_capabilities = ...`, `with probe_registered, probe_capabilities` → `with probe_capabilities`). Its docstring now points at `auto_setup_mock_lock` as what actually registers the platform, rather than claiming to do it itself.
+   - `test_config_flow_capacity_check_skipped_when_lock_allocates_index` — dropped from its `with` tuple.
+   - `test_a_lock_whose_config_entry_is_gone_is_skipped` — the `with` collapsed to a plain `pytest.raises(LockQuerySkipped)`.
+
+   Net −40 lines in that file.
+
+## Verification
+
+- `pytest tests/test_config_flow.py tests/providers/test_dispatch.py -q` → **73 passed**
+- `pytest tests/ -q` → **1849 passed, 3 skipped** (72s)
+- `prek run --files &lt;3 changed&gt;` → all hooks pass. `ruff-format` reformatted on the first pass (the shortened `_capacity_probe(...)` calls collapsed onto single lines); re-ran clean, and the full suite was re-run after formatting.
+
+## One judgment call
+
+I kept the `probe_capabilities = _capacity_probe(...)` / `with probe_capabilities:` two-step rather than inlining to `with _capacity_probe(...):`. The single-use variable looks inlineable at most sites, but `test_setup_refuses_more_users_than_the_lock_holds` enters the same object in two separate `with` blocks (lines 845 and 857), so the name is load-bearing there — inlining everywhere else would have left one inconsistent site for no gain.
+
+The evidence that the three patches were genuinely no-ops is that the capacity assertions still pass: those tests assert `errors == {"base": "too_many_users"}`, which only appears if the probe actually resolved a provider and read capabilities. Had the autouse fixture not been supplying the mapping, the checks would have silently skipped and those assertions would fail.</result>
+<usage><subagent_tokens>142246</subagent_tokens><tool_uses>21</tool_uses><duration_ms>283862</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab420cd455406a6a5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/ab420cd455406a6a5.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: wiring" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five fixes are applied and committed.
+
+**New SHA:** `6340bd53` — `refactor(providers): entity-based resolver seam, CONFIG_FLOW_PLATFORMS rename`
+
+Branch now reads `79a4d8b6` → `68502e6a` → `6340bd53`.
+
+## What changed
+
+1. **Entity-based seam** — added `resolve_provider_class_for_entity(dev_reg, lock_entry)` to `providers/__init__.py`, with `entity_registry as er` imported alongside `device_registry as dr`. Both `domain/locks.py` and `domain/allocation.py` now call it and their duplicated device-entry prologues are gone (each call site drops from 4 lines to 1). `resolve_provider_class` stays exported and is still what the dispatch tests exercise directly.
+
+2. **Rename** — `SUPPORTED_PLATFORMS` → `CONFIG_FLOW_PLATFORMS`, comment collapsed to one line: "Selector allowlist; wider than what resolves, because mqtt is per-device." Updated in `config_flow.py` (2 refs) and `tests/providers/test_dispatch.py` (6 refs). I also renamed the test `test_supported_platforms` → `test_config_flow_platforms` so the test name tracks the constant.
+
+3. **Canonical constant** — `MQTT_DOMAIN` (imported as `from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN`, matching how `zwave_js_ui.py` and `zigbee2mqtt.py` already do it) replaces both `"mqtt"` literals: the `CONFIG_FLOW_PLATFORMS` tuple and the resolver's dispatch guard. No new import cost — `providers/__init__.py` already pulled in `.zigbee2mqtt`, which imports the mqtt component.
+
+4. **Test comment** — now states the trap directly: the malformed tuple must not collide with the first device's `("mqtt",)`, or the registry merges the devices and the well-formed identifier leaks in.
+
+5. **Inlined probe bindings** — all nine sites (685, 709, 883, 910, 926, 978, 1295, 1484, 1971) are now `with _capacity_probe(...):`. The reused binding (842/855) and the multi-line `with` (1157) are untouched, as specified.
+
+## Verification
+
+- `pytest tests/ -q` → **1849 passed, 3 skipped** (72s)
+- Coverage bar unchanged: total 99.98%, and the only uncovered line in the repo is still the pre-existing `providers/zwave_js_ui.py:43` stub. `providers/__init__.py` stayed at 100% — the two new statements in the seam are both covered. Statement count moved 6198 → 6200, exactly the seam.
+- `prek run --files &lt;6 changed&gt;` → all hooks pass, including mypy on the new signature. `ruff-format` reflowed one over-long inlined `with` on the first pass; re-ran clean and the suite was run after formatting.
+
+## One deviation from the letter of the instruction
+
+Item 5 listed line 1295 among the inlines, but my mechanical pass skipped it because two real statements sit between the binding and its `with`. I inlined it by hand — safe because `_capacity_probe` returns an unstarted `patch.object` object with no side effect until entry, so moving the call to the `with` line changes nothing about when patching begins.</result>
+<usage><subagent_tokens>158318</subagent_tokens><tool_uses>26</tool_uses><duration_ms>196238</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aae05e1186da4573b</task-id>
+<tool-use-id>toolu_019puQFsuB4Rdm9QzbpaE9WZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/aae05e1186da4573b.output</output-file>
+<status>completed</status>
+<summary>Agent "Quality review Task 3" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Re-reviewed `6340bd53`. Clean — approved.
+
+Verified: full suite 1849 passed / 3 skipped (71s), coverage 99.98% with the single miss still being the known `providers/zwave_js_ui.py:43` stub, `ruff check` and `ruff format --check` both clean, working tree clean.
+
+Spot-checks on each item:
+
+- **Item 2** — `resolve_provider_class_for_entity` at `/Users/raman/projects/lock_code_manager-zui-provider/custom_components/lock_code_manager/providers/__init__.py:58` is a thin wrapper over the existing function, both call sites collapsed to one line, and the device lookup now lives in one place. Task 4's config-flow validation gets the seam for free.
+- **Item 3** — the rename also fixed item 1's *first* instance without being asked: the new comment ("wider than what resolves, because mqtt is per-device") states the actual reason instead of asserting selector behavior that doesn't exist. Good catch on their side.
+- **Item 4** — `MQTT_DOMAIN` now used at both line 27 and line 43, matching `zigbee2mqtt.py` and `zwave_js_ui.py`.
+- **Item 6** — the trap comment now names the collision directly.
+- **Item 7** — nine inlined; the two retained bindings are exactly the two that should be (`tests/test_config_flow.py:842` genuinely re-enters the patcher in two blocks, `:1160` is a multi-line `with`). `test_a_refused_count_reports_only_what_it_can_stand_behind` correctly grew a parenthesized `with` rather than a long line.
+
+Remaining open, both tracked and both correct to defer:
+
+- **Item 1** now has one instance left, `domain/locks.py:41-42` ("Selection-time validation and this guard share one rule"). Still forward-looking until Task 4. Worth re-checking `__init__.py:1400` at the same time — its "a popped lock indicates a genuine bug, not a lock state" becomes true only once the config flow stops letting unclaimed MQTT locks through.
+- **Item 5** (translation_key) — agreed, deferring is right if the factory error becomes a backstop.
+
+One optional nit, not from my original list and not introduced here: `test_config_flow_platforms` still says "covers every map key plus mqtt exactly once" while asserting only two memberships. `set(INTEGRATIONS_CLASS_MAP) &lt;= set(CONFIG_FLOW_PLATFORMS)` would make the docstring true. Pre-existing; take it or leave it.</result>
+<usage><subagent_tokens>103735</subagent_tokens><tool_uses>5</tool_uses><duration_ms>113081</duration_ms></usage>
+</task-notification>
+
+---
+
+whats the current status?
+
+---
+
+resume, just note that the quality review task is taking upwards of an hour
+
+---
+
+<task-notification>
+<task-id>ad9df413e118c1658</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/ad9df413e118c1658.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Tasks 7+8: api client" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All six review items applied.
+
+**New SHA:** `062abdea` — `fix(zwave_js_ui): persistent api response subscription; harden api client` (on top of `74fa9156`)
+
+## Verification of the HIGH first
+
+I confirmed the race against the installed HA source rather than taking it on faith. `mqtt/client.py:251` `async_subscribe` is `async def` but only delegates to the `@callback` `async_subscribe_internal` → `client.async_subscribe`, which does `_async_track_subscription(...)` synchronously and then `_async_queue_subscriptions(...)` → `_subscribe_debouncer.async_schedule()`. There is no await on the wire SUBSCRIBE anywhere in that path (`SUBSCRIBE_COOLDOWN = 0.1`, `INITIAL_SUBSCRIBE_COOLDOWN = 0.5` at lines 108-109). So the old per-call subscribe→publish was real and lost sub-100ms responses in production while passing tests, exactly as described.
+
+## What changed
+
+**1. Persistent response subscription.** `_async_resolve_api_base` now establishes `&lt;prefix&gt;/_CLIENTS/+/api/+` *before* the discovery window (which is the one place already long enough to outlast the debounce), covering every gateway's responses including the disambiguation `getInfo` calls. `_async_api_call_at` registers `nonce → future` in `_pending_api_calls`, publishes, waits, and pops in `finally`. A single `@callback _api_response_received` correlates and resolves; the decorator's load-bearing role is commented. Cheap pre-filter is `if not self._pending_api_calls: return`, which skips the JSON parse entirely for foreign traffic when nothing is outstanding — that covers the large-`getNodes`-payload case without extra bookkeeping. `_async_api_call_at` raises `LockDisconnected` if the subscription isn't live.
+
+One deviation worth flagging: you suggested a dedicated `_api_response_unsub` field, but holding the unsub there *and* mirroring z2m's bookkeeping would have meant two representations of one fact. I registered the unsub with the base's `_register_push_unsub` (which gets the log-and-continue release semantics of `_clear_push_unsubs`, important because HA's `_async_remove` can raise if MQTT tore down first) and used `_api_response_topic: str | None` as the liveness marker — z2m's `_subscribed_topic` idiom exactly. `teardown_push_subscription` clears the unsubs, the topic, the pending futures (cancelled, as z2m does), and `_api_base`. I chose to clear `_api_base` there too: a reconnect can bring back a renamed gateway or a different broker, so re-resolving is the conservative move and it avoids a guaranteed-failing first call after every reconnect.
+
+**2. Subscribe error contract.** Added `_async_subscribe`, a thin wrapper mapping `HomeAssistantError` → `LockDisconnected`, used at both call sites — one covered raise, no duplication.
+
+**3. Cache invalidation.** `_async_api_call` resolves outside the try, then catches `LockDisconnected` from the call itself, clears `_api_base`, re-raises. Resolution failures don't touch the cache (nothing was set).
+
+**4. Bool-homeid guard.** `isinstance(homeid, bool) or not isinstance(homeid, int)` → skip. The test is built on a lock whose home hex is `0x1` so the mutation is actually reachable — with `ZUI_HOME_HEX`, `True == 0xd4ee5a7a` is false anyway and the test would have killed nothing.
+
+**5. Untested arms.** Added the silent-gateway disambiguation arm (responder returns `None` → real timeout), pending-registry-empty assertions after both timeout and normal completion, the fail-loud-without-subscription case, the subscribe-refusal case, the cache-invalidation round trip, and a teardown test that cancels an in-flight call and re-runs teardown for idempotency. Also extended the foreign-response test with an `origin: {}` row (covers the non-str nonce arm) and a post-completion foreign fire (covers the pre-filter early return).
+
+**6. Docstring rider.** `_unwrap_mqtt_value` now names the empty-payload/retained-clear case as a fourth shape, and the `(b"", None)` test row carries a matching comment.
+
+## Results
+
+- **zwave_js_ui suite:** 71 passed (was 65) in 4.0s
+- **Full suite:** 1921 passed, 3 skipped, 77s
+- **Coverage:** `zwave_js_ui.py` 219/219 = 100%; TOTAL 6415/6415 = 100%
+- `prek` clean on all four changed files
+
+## Note for Task 9
+
+`_async_api_call_at` now has a precondition: the gateway must be resolved first. Public operations should go through `_async_api_call` / `_async_user_code_command` (which resolve implicitly), not `_async_api_call_at` directly. The `zui_gateway_resolved` fixture is the right starting point for operation tests, and `ZWaveJSUIApiResponder.set_result` / `set_handler` still take per-method tables as planned.</result>
+<usage><subagent_tokens>183570</subagent_tokens><tool_uses>32</tool_uses><duration_ms>529136</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5b55f86887e0276f</task-id>
+<tool-use-id>toolu_015en89EuqepSx9ceCtsYG5J</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/a5b55f86887e0276f.output</output-file>
+<status>completed</status>
+<summary>Agent "Spec review Tasks 7+8" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Tree verified clean; all probes reverted. Here's the re-review.
+
+## HIGH: **CLOSED** ✅ (mechanism sound) — but the property that closes it is **untested**
+
+**Verified counts, exactly as expected:** zui suite **71 passed**; full suite **1921 passed / 3 skipped**; `zwave_js_ui.py` **219/219 = 100%**; TOTAL 6415 = 100%.
+
+The mechanism is right. The `&lt;prefix&gt;/_CLIENTS/+/api/+` subscription is established at `zwave_js_ui.py:313-320`, **before** the `asyncio.sleep(GATEWAY_DISCOVERY_TIMEOUT)` at `:335` — a 3s window against a 0.1s/0.5s debounce, so it comfortably outlasts it. Per-call subscribe is gone; `_async_api_call_at` registers the nonce in `_pending_api_calls` **before** publishing (`:410` before `:413`), which is the registry-side analogue of subscribe-before-publish and is correctly ordered. The wildcard also correlates the disambiguation `getInfo` calls, so those no longer race either.
+
+I also confirmed the wildcard can't self-trigger: requests go to `.../api/&lt;name&gt;/set` (6 segments), which does not match `+/api/+` (exactly 5). And late cross-gateway responses can't cross-wire — a slow gateway's answer arrives after its nonce was popped, so `.get(nonce)` misses and it's ignored.
+
+**The caveat.** I ran the decisive mutation: moved the subscription block to *after* the discovery window. **71 passed, zero failures.** The single most important property of this fix is not protected by any test — the same blind spot that hid the original bug, for the same reason (`async_fire_mqtt_message` dispatches against `_simple_subscriptions`, which is populated synchronously; the debouncer and broker are never in the loop). Today only the comment defends it; a later refactor that moves that block gets no signal.
+
+A cheap test that *would* kill it: patch `asyncio.sleep` in the module and assert `self._api_response_topic is not None` at the moment it's called — a direct encoding of "the subscription predates the window."
+
+---
+
+## ❌ NEW (MEDIUM) — the api subscription leaks on unload; the deviation in item 2 is the cause
+
+The deviation routes the unsub through the base's `_register_push_unsub`, so its release depends on `teardown_push_subscription()` being called. It never is. `ZWaveJSUILock` does not override `supports_push`, so it inherits `False` (`_base.py:546`), and `_base.py:992` gates the only unload-time teardown on `if self.supports_push:`. Demonstrated empirically:
+
+```
+supports_push: False
+push unsubs registered after resolution: 1
+push unsubs STILL held after async_unload: 1
+_api_response_topic after async_unload: zwave/_CLIENTS/+/api/+
+```
+
+So every LCM reload leaves an orphaned wildcard subscription behind, holding a reference to the dead provider instance and accumulating per reload. (The `_pending_api_calls` pre-filter keeps each orphan cheap, but they never go away.)
+
+Notably, this violates the documented contract of the very helper it adopted — `_register_push_unsub`'s docstring (`_base.py:333-340`) says its scope is *explicitly* the push-subscription lifecycle and that *"Listeners with a different lifecycle ... do NOT belong here — they must be tracked separately."* The api response subscription lives as long as the **provider**, not as long as a push subscription. `async_unload` is not `@final` and is already overridden by `virtual.py:63` and `zwave_js.py:1054` (the latter for exactly this class of listener) — clean precedent for releasing it there, while keeping `teardown_push_subscription` for the reconnect case.
+
+This is newly introduced: before `062abdea` there was no persistent subscription to leak.
+
+---
+
+## Item-by-item verdicts
+
+1. **Persistent subscription / nonce registry / pre-filter / fail-loud** — ✅ all correct. The `if not self._pending_api_calls: return` pre-filter is safe *because* registration precedes publish, so it can never drop a wanted response. `@callback` decorator retained on `_api_response_received` with the load-bearing rationale commented — good, that was my recommendation.
+2. **Teardown/reconnect semantics** — ✅ sound for the states it covers, ❌ except the unload path above. I specifically verified **"no path can publish while the subscription is dead"**: `_clear_push_unsubs` is `@final` and called *only* from provider `teardown_push_subscription` implementations (nothing in the base calls it independently), and that method clears `_api_response_topic` and `_api_base` in the same breath — so the marker can never outlive the subscription. Post-teardown an api call fails loud (`:396`), and the next call re-resolves and re-subscribes because both fields are None together. The one asymmetry that *does* exist is the inverse and harmless: unload leaves the marker set with a live subscription.
+3. **`_api_base` cleared on call-level disconnect** — ✅ correct. `await self._async_resolve_api_base()` is outside the `try`, so a resolution failure doesn't spuriously clear. Clearing on the "no subscription" disconnect is incidentally beneficial: it forces re-resolution, which re-establishes the subscription.
+4. **Bool-homeid guard** — ✅ **mutation verified reachable.** I removed the guard and ran the suite: `test_boolean_home_id_never_matches` FAILED (1 failed, 70 passed). The claim holds. The guard is also broader than asked (rejects str/float/None homeids too), which is right.
+5. **New tests** — ✅ all six present and meaningful: silent-gateway timeout arm (`test_gateway_that_never_answers_is_skipped`, closing my earlier "untested despite 100% coverage" gap), registry cleanup after both timeout and completion, fail-without-subscription, subscribe-refusal, cache-invalidation round trip, teardown-cancels-in-flight plus idempotent re-teardown.
+
+**Pyright (`:381`) — typing artifact, not a latent None path.** Confirmed the diagnostic is real (`uvx pyright --pythonpath .venv/bin/python` → 1 error, imports resolved). But it's caused by `matches = []` being unannotated: Pyright infers `list[Unknown]`, so `matches[0]` is `Unknown` and the member type widens to `Unknown | str | None` — the `Unknown` in the message is the tell. Line 348's `return` after the f-string assignment is *not* flagged, which corroborates it. Every return path is preceded by an assignment of a definitely-`str` value with no `await` in between, so no concurrent mutation is possible either: **no path can return None.** I verified the one-line fix — annotating `matches: list[str] = []` clears it to **0 errors**.
+
+My two earlier findings are both properly closed: the `_async_subscribe` wrapper converts `HomeAssistantError` → `LockDisconnected` at both call sites (`:331` and `:318`) with a test, and cache invalidation now self-heals, which materially reduces (though by design does not eliminate) the unverified-single-gateway-cache risk I flagged as LOW.
+
+**Nothing else new.** The `test_payload.py` change is a comment on an existing parametrize case; the `_unwrap_mqtt_value` change is docstring-only.</result>
+<usage><subagent_tokens>183816</subagent_tokens><tool_uses>29</tool_uses><duration_ms>311200</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad9df413e118c1658</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/ad9df413e118c1658.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Tasks 7+8: api client" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three items applied and both mutations verified.
+
+**New SHA:** `606bc891` — `fix(zwave_js_ui): provider-lifetime api subscription release; pin subscribe ordering`
+
+## 1. MEDIUM — unload leak (my deviation, confirmed and fixed)
+
+I verified the mechanism rather than assuming it: `_base.py:992` is `if self.supports_push: self.unsubscribe_push_updates()`, and this provider inherits `supports_push=False`, so the `_register_push_unsub`-registered subscription was genuinely never released on unload. You were right that my "release safety" argument for using the base registry didn't survive contact with the gate that guards it — I traded a small robustness win for a real leak.
+
+- `_api_response_unsub: Callable[[], None] | None` — dedicated field, out of the push bucket, with a comment pointing at *why* (`_base.py:333-340`'s own carve-out for non-push-lifecycle listeners).
+- `_release_api_subscription()` — idempotent: unsub with log-and-continue on `HomeAssistantError` (I kept that behaviour, just implemented locally instead of borrowing it from `_clear_push_unsubs`), then clear `_api_response_topic`, cancel + clear `_pending_api_calls`, clear `_api_base`.
+- Called from `teardown_push_subscription` (reconnect re-resolve semantics preserved, and kept present for when the push task flips `supports_push`) **and** an `async_unload` override doing `await super().async_unload(remove_permanently)` first, then release — same order as `zwave_js.py:1054`.
+
+Tests: unload releases the subscription and nulls `_api_response_unsub`/`_api_response_topic`/`_api_base`, with the released state also asserted *behaviourally* (a subsequent `_async_api_call_at` refuses); idempotent double-release; and a separate test that an unsubscribe refusal still clears everything else.
+
+## 2. Ordering regression test — mutation verified
+
+I did not need to patch the sleep. The existing fixtures already park execution inside the window: when `async_start_gateway_resolution` returns, the task is blocked in `asyncio.sleep` (that is precisely why firing the status afterwards works in every other test). So the test asserts, at that moment, that `_api_response_topic == "zwave/_CLIENTS/+/api/+"` and `_api_response_unsub is not None`. That is the invariant stated directly, with no patching and no new machinery.
+
+**Mutation result:** I moved the subscribe block to after `finally: unsub()` and ran the suite:
+
+```
+FAILED tests/providers/zwave_js_ui/test_api.py::test_response_subscription_predates_the_discovery_window
+1 failed, 73 passed
+```
+
+Exactly one test failed — the new one — then I restored and re-confirmed 74 passed.
+
+I also mutation-checked item 1 while I was at it, since the whole claim rests on the base *not* releasing the subscription. Removing the `async_unload` override gives `1 failed, 73 passed`, failing only `test_unload_releases_the_api_subscription` — so the base demonstrably does not cover it, and the test is pinned to that fact rather than to my override existing.
+
+## 3. Trivial
+
+`matches: list[str] = []` annotated.
+
+## Results
+
+- **zwave_js_ui suite:** 74 passed (was 71)
+- **Full suite:** 1924 passed, 3 skipped, 77s
+- **Coverage:** `zwave_js_ui.py` 231/231 = 100%; TOTAL 6427/6427 = 100%
+- `prek` clean on both changed files; worktree clean
+
+Branch now sits at three commits: `74fa9156` (feature) → `062abdea` (race fix) → `606bc891` (leak fix + ordering pin).</result>
+<usage><subagent_tokens>203794</subagent_tokens><tool_uses>17</tool_uses><duration_ms>283860</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac41bedfae82c23ae</task-id>
+<tool-use-id>toolu_01NQ79oQVUgAgj4TqVBYdWV5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/ac41bedfae82c23ae.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 10: push/events" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task 9 review findings applied on top of the push work.
+
+## New commit: `dca1d999` — `fix(zwave_js_ui): guard get_max_slot like every other operation`
+
+1. **Important** — `async_get_max_slot` now calls `await self._async_ensure_operational()` before its `getUsersCount` round trip, so a disabled MQTT integration, an unresolvable gateway, and an unavailable entity each raise `LockDisconnected` up front instead of surfacing as whatever the api client produces (a 10s timeout at best). `TestOperationalGuards` grew from a 3×3 to a **3×4 grid** — the guard-condition cross product now includes the capability probe, and its docstring says why the probe belongs in it.
+2. **Minor** — `_async_ensure_operational`'s docstring now names the strictness delta against Zigbee2MQTT: z2m checks device availability before reads but not before writes; here a write is an api round trip an unavailable node cannot answer, so it fails as a disconnect rather than a timeout. A parity reader won't mistake it for accidental drift.
+3. **Trivial** — `test_poll_intervals_are_the_provider_s_own` → `test_poll_intervals_belong_to_this_provider`.
+
+## Verification
+
+- `pytest tests/ -q`: **2013 passed, 3 skipped** (was 2010; +3 from the new guard parametrize row).
+- zwave-js-ui directory: **163 tests** (was 160).
+- Coverage: **100%** total, and `zwave_js_ui.py` 383 stmts / 0 miss.
+- `prek run --files &lt;changed&gt;`: clean.
+- Mutation check on the fix itself (M15): removing the new `_async_ensure_operational()` call **KILLED** by exactly the three new `get_max_slot` guard params — the row is load-bearing, not decorative.
+
+Branch `zwave-js-ui-mqtt-provider` now sits at `dca1d999`, with the push feature at `d913fc03` beneath it.</result>
+<usage><subagent_tokens>184799</subagent_tokens><tool_uses>12</tool_uses><duration_ms>166632</duration_ms></usage>
+</task-notification>
+
+---
+
+create the PR
+
+---
+
+what happens if a user uses custom topics for zwavejsui or zigbee2mqtt? Is there not a way to read it directly from the lock entity or device?
+
+---
+
+yes, but lets implement H1-8 ont his PR
+
+---
+
+<task-notification>
+<task-id>a6142ee9d51867a8f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/a6142ee9d51867a8f.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement z2m parity hardening" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five items are on `zwave-js-ui-mqtt-provider`, nothing pushed. Final state: **2096 passed, 3 skipped, 100.00% total coverage, `prek run --all-files` clean, both e2e suites green.**
+
+## Earlier two items (from my original assignment)
+
+- **`ed86168f`** `fix(zigbee2mqtt): masked user codes are unreadable, not known` — `is_masked_code` moved to `_util.py` (shared with zui), both z2m read paths gated. 2 mutations killed.
+- **`ac28f228`** `fix(zigbee2mqtt): all-slots-transport-failed reads raise...` — typed `None` distinction in `_async_read_slot`, raise in `async_get_users`. 5 mutations killed.
+
+Full detail was in my previous report; below is the new work.
+
+## Item 1 — prefix drift (`4534bdab`)
+
+**Approach.** Two halves, both load-bearing. `_async_ensure_api_response_subscription` now computes `f"{prefix}/_CLIENTS/+/api/+"` first and no-ops only when `_api_response_topic` equals it, otherwise `_release_api_subscription()` then subscribes fresh. `_async_resolve_api_base` *ensures* rather than checks, and refuses the attempt when `settled_topic is None or settled_topic != self._api_response_topic` — so a just-resubscribed drift obeys the same debounce-settling rule a first subscription already did, rather than publishing into a subscription the broker hasn't been told about.
+
+An unresolvable prefix still leaves a live subscription alone; the info log is kept to the case where nothing is subscribed, so transiently missing discovery data doesn't log on every call.
+
+**Fail-first (confirmed twice).** `test_a_changed_gateway_prefix_moves_the_api_subscription`: api-only lock (MANUAL topic → `supports_push` False) working on `zwave`, gateway moves to `zwave2` and republishes discovery. Against pre-fix code the second operation raises `Timed out waiting…` instead of `No settled…` — the loop. I re-verified this after finalizing the test by `git checkout`-ing the provider.
+
+**Mutations, both killed:** idempotence back to `is not None` → fails; resolve back to guard-only (`if settled_topic is None: ensure()`) → fails. Neither half alone fixes it.
+
+Also added `test_a_transiently_unresolvable_prefix_keeps_the_subscription`. **+2 tests.**
+
+## Item 2 — mixed entry (`8d0cdbdc`)
+
+`TestMixedPushAndApiOnlyEntry`, **5 tests**: per-lock mode (node subscription vs none), per-mode coordinator cadence (`None` vs `usercode_scan_interval`), shared prefix wildcard + same bound gateway, nonce correlation, one unload releasing both.
+
+**The correlation test needed a second pass.** My first version used `asyncio.gather` with an inline-answering stand-in and **survived** a mutation that ignored the nonce entirely — the gateway answered each request before the next went out, so two nonces were never in play. Rewritten to hold both requests until both calls are waiting, then answer in the opposite order, with each node reporting its own id as its capacity. It now kills that mutation. Also killed: dropping `teardown_push_subscription` from `async_unload`, and `supports_push` as a constant `True`.
+
+## Item 3 — `BaseMqttLock` (`84b11604`)
+
+**Placement:** new `providers/_mqtt.py`. `_util.py` was not an option — `_base.py` imports it, so a class inheriting `BaseLock` there is a cycle. Intermediate `@dataclass(repr=False, eq=False)` class, no new fields; the provider registry is an explicit map so nothing auto-collects it.
+
+**Hosted:** `_async_ensure_operational(require_device=True)`, `_async_read_slots(...)` (the H7/Z2 template — now one implementation), `async_is_device_available`, and `domain`. **Not hosted:** subscription lifecycles, payload projections, the api client, poll cadences.
+
+**What resisted, and why:**
+1. *Different failure vocabularies.* The base owns the frame `every one of the {n} requested slot reads {transport_failure}`; callers own the noun (`"was refused"` / `"failed to reach the lock"`). zui's message is byte-identical to before; z2m's changed, so one `match=` string moved.
+2. *z2m's wrong-bridge error.* Folding it into a returns-the-exception hook would have orphaned `_maybe_raise_wrong_bridge_disconnect` and its test. Kept as a `_raise_not_connected` hook that delegates, collapsing three inline call sites into one.
+3. *`@callback` costs mypy the `NoReturn` inference* — `super()._raise_not_connected()` wasn't seen as terminal. Dropped the decorator (consistent with `_maybe_raise_wrong_bridge_disconnect`, which never had it); these are internal helpers, not registered listeners.
+
+**Patch targets moved — 3 total,** all because the preamble's MQTT-enabled check is now bound in `_mqtt` (each provider still binds its own for subscription paths, and those sites were left alone): `zwave_js_ui/test_provider.py` (the guards cross-product), `zigbee2mqtt/test_provider.py` ×2 (set/delete mqtt-disabled). Plus `test_async_get_users_mqtt_disabled_raises`, which passed either way but was silently exercising the wrong guard — moved so it tests what its name says. And 1 message match. Both directories otherwise untouched.
+
+**Mutations:** `all`→`any` in the shared loop fails tests in *both* directories (proving both really route through it); z2m dropping the wrong-bridge delegation → 2 failures.
+
+**One gap found and closed.** Ignoring `require_device` initially killed nothing — nothing pinned that a z2m write skips the device-availability check a read makes. That asymmetry was documented in a docstring and otherwise unguarded. Added `test_writes_go_out_for_a_lock_whose_entity_is_unavailable`; both forms of the mutation (base ignoring the flag, call sites dropping it) now fail.
+
+**Net:** `zigbee2mqtt.py` −18 lines, `zwave_js_ui.py` −18, `_mqtt.py` +33 — roughly line-neutral. The gain isn't line count, it's that the all-transport-failed invariant exists once.
+
+## One thing worth flagging
+
+Stale `.pyc` files in `tests/providers/*/​__pycache__/` from an earlier session's scratch probes (`test_h6b_probe`, `test_zzz_probe`, `test_scratch`, …) were being collected under `--cov` and produced a phantom failure in a file that doesn't exist. I cleared the `__pycache__` dirs; nothing tracked was touched. If a future run reports a failure in a file you can't find, that's the cause.</result>
+<usage><subagent_tokens>299972</subagent_tokens><tool_uses>103</tool_uses><duration_ms>1811032</duration_ms></usage>
+</task-notification>
+
+---
+
+run code review on this pr
+
+---
+
+<task-notification>
+<task-id>a760df2b66d52e2ae</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/a760df2b66d52e2ae.output</output-file>
+<status>completed</status>
+<summary>Agent "Conventions angle finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All governing rules checked. Summary of what I verified against the diff and PR-head checkout:
+
+- Read /tmp/lcm-pr1466/CLAUDE.md and /tmp/lcm-pr1466/AGENTS.md (no .claude/CLAUDE.md exists in the PR checkout; no other ancestor CLAUDE.md files).
+- No inline/local imports (only `TYPE_CHECKING` blocks and docstring prose matched).
+- No `nonlocal`/`global` anywhere in the diff.
+- No Google-style `Args:`/`Returns:` docstring sections.
+- No history-narrative comments ("used to be", "previously", etc.); all added comments state intent.
+- Acronym use ("CC", "User Code CC") matches the established spelled-elsewhere project vocabulary already used throughout `providers/zwave_js.py` and AGENTS.md itself — not a clear violation.
+- The two caplog uses assert on `record.levelno` (structured), complying with "Minimize caplog text assertions".
+- No manual `hass.data[...]` injection in tests; `lock.coordinator = MagicMock()` matches the pre-existing pattern in `tests/providers/matter/test_provider.py` and payload-level tests where no real coordinator exists.
+- `async_setup` idempotency is tested (`tests/providers/zwave_js_ui/test_api.py:903` area).
+- PR body uses the `.github/PULL_REQUEST_TEMPLATE.md` sections; tests ship with code changes.
+- `ruff check` (enforces D docstrings + isort order per pyproject) passes on the PR head; the new/changed provider test suites pass (343 passed, 1 skipped, ~13s).
+- No overrides of `async_set_usercode`/`async_clear_usercode`.
+
+The only quotable-rule violation found is doc-maintenance: the PR restructures the provider architecture that AGENTS.md explicitly documents (enumerated provider file list in "Providers System", and step 2 of "Adding Lock Provider Support": "Subclass `BaseLock` from `providers/_base.py`") without touching AGENTS.md — the PR-head AGENTS.md is byte-identical to main's (verified by diff), so it now omits `zwave_js_ui.py` entirely and misdirects future MQTT providers to subclass `BaseLock` directly instead of the new `BaseMqttLock`.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/providers/_mqtt.py",
+    "line": 47,
+    "summary": "PR adds two provider files (zwave_js_ui.py, BaseMqttLock in _mqtt.py) but leaves AGENTS.md's provider architecture docs untouched and now-inaccurate",
+    "failure_scenario": "CLAUDE.md (/tmp/lcm-pr1466/CLAUDE.md) states: '`AGENTS.md` is the master file for guidance for any coding agent... Claude Code users should also reference `AGENTS.md` for complete guidance and keep it up to date as instructed.' AGENTS.md's 'Providers System' section enumerates every provider file (zwave_js.py, matter.py, schlage.py, akuvox.py, zigbee2mqtt.py, virtual.py) and its 'Adding Lock Provider Support' step 2 says 'Subclass `BaseLock` from `providers/_base.py`'. The diff adds providers/zwave_js_ui.py and a new BaseMqttLock intermediate base in providers/_mqtt.py (line 47: 'class BaseMqttLock(BaseLock):') without updating AGENTS.md (byte-identical to main). Cost: the next agent following the master guidance won't know zwave_js_ui exists, and a future MQTT provider author will be directed to subclass BaseLock directly, bypassing the shared operational-guard/read-loop invariants the PR deliberately hoisted into BaseMqttLock."
+  }
+]
+```</result>
+<usage><subagent_tokens>90115</subagent_tokens><tool_uses>26</tool_uses><duration_ms>217238</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a855d6c37d86a9bd9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/a855d6c37d86a9bd9.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency angle finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. Here are the efficiency findings, verified against the PR-head checkout (including HA's `mqtt.debug_info.info_for_device` implementation, which rebuilds the full debug-info structure — str()/datetime conversion of every stored message for every MQTT entity on the device — on each call).
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/providers/_util.py",
+    "line": 179,
+    "summary": "Every discovery lookup rebuilds HA's full MQTT debug-info for the whole device, and callers repeat it 4-6 times per operation and 1-2 times every 30 seconds",
+    "failure_scenario": "resolve_discovery_payload calls mqtt_debug_info.info_for_device, which iterates every MQTT entity on the device (a zwave-js-ui lock discovers dozens) and converts every buffered message (str(payload), utc_from_timestamp) just to fish out one entity's discovery payload. In zwave_js_ui a single poll resolves it repeatedly: async_is_integration_connected -&gt; _gateway_prefix (1-2 walks), then again inside _async_ensure_operational, plus supports_push and _async_ensure_node_subscription each calling _prefix_and_node_topic (2 more walks). BaseLock.connection_check_interval defaults to 30s and is not overridden, so async_internal_is_reachable repeats 1-2 walks per lock every 30 seconds forever. Cheaper: resolve the payload once per operation and pass it down (state topic, prefix, availability all come from the same dict), and/or memoize it on the instance, invalidated when the resolved topic changes -- the drift checks already compare topics."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/_mqtt.py",
+    "line": 85,
+    "summary": "_async_ensure_operational re-runs the exact connectivity checks _execute_rate_limited just performed, doubling the discovery-walk cost of every coordinator-driven operation",
+    "failure_scenario": "All coordinator paths (async_internal_get_usercodes, async_internal_hard_refresh_codes, set/clear wrappers) go through _execute_rate_limited, which already awaits async_is_integration_connected and async_is_device_available before invoking the provider method; async_get_users/async_set_credential/async_delete_credential then immediately call _async_ensure_operational, which awaits both again. For zwave_js_ui each async_is_integration_connected is 1-2 info_for_device walks, so every poll pays the walk tax twice for identical answers milliseconds apart. Cheaper: have _async_ensure_operational only add what the base gate does not check (mqtt_config_entry_enabled), or pass a flag when the caller is an internal wrapper that already gated."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 688,
+    "summary": "Each lock holds its own lifetime wildcard subscription to &lt;prefix&gt;/_CLIENTS/+/api/+ and json.loads-parses every client's api response while any of its calls is pending",
+    "failure_scenario": "The subscription covers all api traffic from all gateways and all clients on the prefix. During a slot read (each call pending up to 60s, and reads are back-to-back per slot), the not-pending fast path is almost never taken, so every response on the wildcard -- including other clients' large getNodes dumps -- is fully parsed just to look for the nonce. With N LCM locks behind one gateway, HA fans each message out to N identical subscriptions and the payload is parsed N times. Cheaper: one shared correlator per gateway prefix in hass.data (one subscription, one parse, futures keyed by nonce across locks); failing that, a cheap `REQUEST_ID_KEY not in msg.payload` substring prefilter before json.loads skips every foreign payload."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 850,
+    "summary": "Multi-gateway disambiguation probes candidates with getInfo sequentially, costing GATEWAY_LOCAL_TIMEOUT (5s) per dead gateway serially inside a coordinator refresh",
+    "failure_scenario": "The for-loop over sorted candidates awaits each _async_api_call_at(..., 'getInfo', timeout=5.0) in turn; the calls are independent (distinct api bases, correlated by nonce on the same subscription) but a prefix with, say, 4 gateways of which 3 are stale corpses stalls resolution 15+ seconds serially, all inside the coordinator's first refresh. Cheaper: fire the probes with asyncio.gather(return_exceptions=True) -- total wait becomes one 5s timeout regardless of candidate count, and the single-match arbitration logic is unchanged."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 831,
+    "summary": "Api-base resolution (3s status-collection sleep + getInfo probes) is cached per lock instance although the answer is a per-gateway fact, so N locks each repay the full discovery cost",
+    "failure_scenario": "_api_base lives on the instance; every ZWaveJSUILock behind the same gateway whose discovery payload lacks the availability fast path runs its own status-scan subscription, its own unconditional 3-second asyncio.sleep, and its own getInfo probes -- and again per lock after every _release_api_subscription (reconnect/teardown drops the cache). Ten locks on one gateway means 30+ seconds of duplicated scanning per reconnect cycle for one shared answer. Cheaper: cache the resolved base per (prefix, home_hex) in hass.data with a shared in-flight future so concurrent resolvers coalesce into one scan; invalidate on the same disconnect signal that clears the instance cache today."
+  }
+]
+```
+
+Notes on what I deliberately did not flag: the sequential per-slot reads (`_async_read_slots`) and the 60s api timeout are documented, argued design choices about mesh/queue behavior, not waste; `_pending_api_calls` and z2m `_pending_codes` are both cleaned in `finally`/on release, so there is no unbounded growth; and the coordinator cold-start retry arm guards its `update_interval` assignment, so it is not repeated work.</result>
+<usage><subagent_tokens>113653</subagent_tokens><tool_uses>17</tool_uses><duration_ms>252557</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aab7c97d3e74acf4e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/aab7c97d3e74acf4e.output</output-file>
+<status>completed</status>
+<summary>Agent "Altitude angle finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All evidence is gathered. Here are my findings.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/allocation.py",
+    "line": 67,
+    "summary": "Throwaway-provider teardown was patched at one call site (unmanaged.py's finally) but not in build_lock_instance itself, so allocation's three throwaway sites leak live MQTT subscriptions",
+    "failure_scenario": "async_check_slot_capacity, async_read_occupancy, and async_max_slot each build a ZWaveJSUILock and call read APIs that subscribe mid-call (_async_ensure_api_response_subscription subscribes to &lt;prefix&gt;/_CLIENTS/+/api/+ even on the failure path; async_get_users additionally subscribes the node wildcard whose handler fires async_fire_code_slot_event). Nothing tears these throwaways down, so every config-flow submit/edit leaks subscriptions and leaves a ghost instance firing duplicate code-slot events alongside the entry's real provider — exactly the failure the unmanaged.py comment describes. The fix belongs in the throwaway lifecycle (build_lock_instance as a context manager, or callers required to unload), not replicated finally-blocks per call site; today only 1 of 4 sites has the shim."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 785,
+    "summary": "The 'settled subscription' policy (fail first call, let the coordinator's backoff retry) is a coordinator-shaped assumption baked into the api transport; every fresh instance deterministically fails its first api call",
+    "failure_scenario": "A fresh ZWaveJSUILock always has _api_response_topic=None, so _async_resolve_api_base raises 'No settled subscription' on the first call by construction. That is fine for the coordinator (same instance retries), but every shared setup-time consumer uses throwaway instances that never run async_setup and die after one call: slot-capacity checks, occupancy reads, async_max_slot, and the unmanaged-code sweep can never get an answer from a zwave-js-ui lock — allocation refuses/degrades on every flow, and the migration sweep silently reports nothing. Tests patch build_lock_instance so nothing exercises this. The deeper fix is a settling callers can await (flush/await the MQTT subscribe debounce, or retry within the call's own 60s budget) instead of encoding 'someone else will retry me' into the transport."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 1135,
+    "summary": "The api transport's teardown is hung on the push-lifecycle hook (teardown_push_subscription) because BaseLock has no unconditional provider-teardown hook, forcing three documented workarounds",
+    "failure_scenario": "The api subscription is documented as NOT part of the push lifecycle, yet its release rides teardown_push_subscription; async_unload must pre-empt the base ('do it up front and let the base repeat it') because BaseLock.async_unload gates teardown on supports_push; and the connection-transition arm (_base.py ~1031, also supports_push-gated) never releases an api-only lock's subscription at all — which zwave_js_ui.py lines 712-717 then compensate for with the idempotent-on-topic resubscribe dance. One unconditional teardown hook on BaseLock (called from unload and connection-down regardless of supports_push) removes all three shims and would also give throwaway callers a single correct dispose method."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/__init__.py",
+    "line": 47,
+    "summary": "MQTT device dispatch inlines both providers' claim rules (Z2M prefix, ZUI identifier regex) plus an ordering trap into shared resolve_provider_class instead of a per-provider claims_device hook",
+    "failure_scenario": "The shared resolver imports Z2M_IDENTIFIER_PREFIX and parse_zwave_js_ui_identifier and carries a comment re-deriving why Z2M must be tested first — cross-provider reasoning baked into infrastructure. Adding a third MQTT bridge provider (the roadmap that motivated BaseMqttLock) means editing this function and re-proving the ordering argument, and each provider now states its claim in two places (dispatch here, _is_z2m_device/_parsed_identifier locally). A claims_device classmethod on each MQTT provider iterated over an ordered MQTT_PROVIDERS tuple (the approved design) keeps claim knowledge in the provider and reduces the shared seam to iteration order with one attached comment."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 49,
+    "summary": "USER_ID_STATUS_AVAILABLE/ENABLED are hand-declared ints (0/1) duplicating zwave_js_server's CodeSlotStatus enum that the sibling zwave_js provider already imports as the canonical source",
+    "failure_scenario": "The module already imports CommandClass from zwave_js_server.const, and zwave_js.py uses CodeSlotStatus.AVAILABLE/ENABLED (const/command_class/lock.py, which also defines DISABLED=2) for the very same userIdStatus field. Re-declaring the protocol constants locally means the two providers can drift in how they classify the same wire value, and the DISABLED state is invisible here (silently folded into unreadable with no name at the comparison site). Import CodeSlotStatus and compare against the enum; the boolean guard stays as-is."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 269,
+    "summary": "supports_push is a live derivation from MQTT discovery data but is snapshotted once at coordinator construction, and the module itself contradicts the 'discovery is loaded by then' assumption it rests on",
+    "failure_scenario": "_async_ensure_api_response_subscription treats missing discovery data at setup as 'an expected startup condition' (lines 726-734), while supports_push's docstring asserts discovery 'is already loaded' when the coordinator reads it — same underlying resolve_discovery_payload source. If discovery lands late, the lock is permanently classified api-only: the coordinator is constructed polling at 5-minute cadence and nothing ever re-evaluates push support, so a push-capable lock runs degraded until reload. Either the capability should be re-derived on the reconnect/resubscribe path (which already re-resolves topics) with the coordinator told, or setup should await discovery data the way the api path defers for it — a frozen snapshot of an async-arriving fact is the bandaid."
+  }
+]
+```</result>
+<usage><subagent_tokens>125901</subagent_tokens><tool_uses>30</tool_uses><duration_ms>405985</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a31852279c319728e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/a31852279c319728e.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle B: removed-behavior audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I completed the removed-behavior audit of PR #1466: walked every deleted/replaced hunk in `/tmp/pr1466.diff`, compared old `zigbee2mqtt.py` on main against the new `zigbee2mqtt.py` + `_mqtt.py` hoist line by line, traced all former `INTEGRATIONS_CLASS_MAP` call sites (config_flow, `domain/locks.py`, `domain/allocation.py` — all converted; no other users exist on main), verified the unmanaged-sweep teardown (ZUI's api subscription IS released via its `teardown_push_subscription` override, so no leak), verified the coordinator cold-start retry arm composes with `_reset_backoff`, and confirmed no deleted test lost coverage (all z2m tests were strengthened, not removed; new dispatch/config-flow/coordinator tests cover the new refusal paths).
+
+Two candidates survived with nameable failure scenarios; everything else I chased (ensure-operational ordering, wrong-bridge error precedence, discovery-payload walk, masked-code projection, device-availability split on writes, sorted read ordering, dispatch ordering Z2M-before-ZUI, `mqtt_teardown` fixture move, `_capacity_probe` simplification) re-establishes the old invariant exactly, with tests.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/providers/_mqtt.py",
+    "line": 129,
+    "summary": "The all-slots-silent LockDisconnected raise removes main's guarantee that a transient per-slot MQTT read failure never fails the whole poll, and the 'weak link vs lost transport' distinction the docstring relies on is unexpressible in the common single-user configuration (n=1: one silence == every silence)",
+    "failure_scenario": "Entry manages exactly one user on a Zigbee2MQTT lock; during the hourly hard refresh (or any poll) the Zigbee mesh drops the single GET reply — routine on lossy meshes. On main this returned a successful poll with that slot unreadable (breaker untouched, data kept). Now sorted(reads)=={slot: None} so all() is trivially true and async_get_users raises LockDisconnected -&gt; UpdateFailed -&gt; _apply_backoff. A merely lossy but healthy lock (it answers writes and most reads) accrues breaker failures; consecutive drops trip the breaker, suspending its only slot and raising the lock_offline repair, while a two-slot entry with the identical drop rate would never fail a poll."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/locks.py",
+    "line": 42,
+    "summary": "Pre-existing config entries containing an mqtt lock no provider claims regress from 'lock kept degraded with unavailable entities and automatic retry' (main: Zigbee2MQTTLock instantiated, async_setup_internal defers/degrades and revalidates on reconnect) to 'lock silently popped from the entry with only an error log' — the new comment in __init__.py asserts this path 'cannot arrive here from the selection path', but old entries arrive without any selection, and no repair issue or reauth is raised",
+    "failure_scenario": "User on &lt;=5.0.x added an mqtt-platform lock from an unsupported bridge (the old selector accepted any integration=mqtt lock; INTEGRATIONS_CLASS_MAP['mqtt'] made it a permanently-degraded Zigbee2MQTTLock with visible unavailable entities). After upgrading to this PR, resolve_provider_class_for_entity returns None, async_create_lock_instance raises HomeAssistantError inside the gather in async_update_listener, the lock is popped (custom_components/lock_code_manager/__init__.py:1416): its slot entities are never created, dashboards break, and unlike the missing-registry-entry case at __init__.py:745 no reauth flow and no repair issue tells the user why — only a log line."
+  }
+]
+```</result>
+<usage><subagent_tokens>174048</subagent_tokens><tool_uses>38</tool_uses><duration_ms>599615</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>afaaca1eb97d8ba38</task-id>
+<tool-use-id>toolu_015JWjjqyVVGybp2LJY323Fs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/afaaca1eb97d8ba38.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle A: line-by-line scan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 777,
+    "summary": "A fresh ZWaveJSUILock's first api call always raises 'No settled api response subscription', and allocation/config-flow/unmanaged-sweep all use fresh throwaway instances that never run async_setup, so every occupancy read deterministically fails and the flow can never complete for a zwave-js-ui lock",
+    "failure_scenario": "User adds a zwave-js-ui lock via the config flow (or edits options/reauth on an entry containing one) -&gt; _allocate_for builds a throwaway via build_lock_instance (no async_setup, so _api_response_topic is None) -&gt; async_get_users -&gt; _async_resolve_api_base hits 'settled_topic is None' and raises LockDisconnected -&gt; async_internal_get_occupied_indices returns None -&gt; Occupancy.unreadable non-empty -&gt; async_allocate_for raises 'occupancy_unknown' -&gt; form error. Resubmitting builds a NEW throwaway with _api_response_topic None again, so the refusal repeats forever; the provider is unconfigurable. Same root cause makes async_sweep_unmanaged_codes permanently skip zwave-js-ui locks (warning + no unmanaged-code repairs). test_api.py:951/1015 assert the raise in isolation but nothing exercises it through allocation."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/allocation.py",
+    "line": 232,
+    "summary": "Throwaway MQTT provider instances built by async_read_occupancy / async_check_slot_capacity / async_max_slot subscribe to MQTT (zui node wildcard + api response topic; z2m device topic) and are never torn down -- the PR added lock.unsubscribe_push_updates() only in unmanaged.py",
+    "failure_scenario": "Options-flow submission on an entry with a zwave-js-ui lock -&gt; build_lock_instance -&gt; async_internal_get_occupied_indices -&gt; async_get_users ensures the node subscription (registered in _push_unsubs) and _async_resolve_api_base subscribes '&lt;prefix&gt;/_CLIENTS/+/api/+' before raising -&gt; allocation catches the error, but the sweep's finally-block teardown has no counterpart here. The MQTT subscription callback keeps the throwaway alive forever; its _process_node_message fires async_fire_code_slot_event for every keypad lock/unlock alongside the entry's real provider, so automations see duplicate (triplicate, ... one more per flow attempt) lock_code_manager events."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 842,
+    "summary": "The single-candidate gateway fast path in _async_resolve_api_base binds without the home-id verification the multi-candidate path insists on, so writes can be routed to a gateway serving a different Z-Wave network",
+    "failure_scenario": "Two zwave-js-ui gateways (different home ids) share topic prefix 'zwave' on one broker; the lock's discovery payload carries no gateway availability entry (older gateway / availability disabled), so the retained-status scan runs. The lock's own gateway is down (retained status {\"value\": false}), the other is online -&gt; candidates has exactly 1 entry -&gt; bound outright with home_hex never compared -&gt; async_set_credential sends sendCommand {nodeId: N} to the wrong network's gateway, programming a PIN onto whatever device is node N there -- exactly the hazard the len(matches) != 1 branch refuses to tiebreak."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 1131,
+    "summary": "_release_api_subscription cancels in-flight api futures, but _async_api_call_at's asyncio.wait_for catches only TimeoutError, so CancelledError (a BaseException) escapes the provider contract instead of LockDisconnected",
+    "failure_scenario": "A sync-driven async_set_credential is awaiting the response future when teardown_push_subscription runs (MQTT connection-down transition, unload, or a concurrent _async_ensure_api_response_subscription detecting a prefix move -&gt; _release_api_subscription) -&gt; future.cancel() -&gt; wait_for raises CancelledError at the await point -&gt; propagates through _async_api_call (except LockDisconnected doesn't match) out of the provider as a raw CancelledError; the sync layer's LockCodeManagerError handling never runs, the write is reported as a task cancellation/unhandled error rather than a clean disconnect, and no reconnect/backoff bookkeeping happens."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "line": 320,
+    "summary": "async_setup's api response subscription and the coordinator's first refresh run back-to-back in async_setup_internal, so the first poll's publish races HA MQTT's debounced wire SUBSCRIBE and the response is lost -- the exact prod-only debouncer race this design was meant to avoid",
+    "failure_scenario": "HA startup: async_setup awaits async_subscribe (registered locally, wire SUBSCRIBE deferred behind the debouncer), then async_setup_internal immediately awaits async_config_entry_first_refresh -&gt; the getUsersCount/get publish reaches the broker and the gateway answers within milliseconds, before the SUBSCRIBE goes out -&gt; unretained response dropped -&gt; first slot read blocks the full 60s API_CALL_TIMEOUT (stalling entry setup), first refresh fails, entities unavailable until the coordinator's 60s cold-start retry. Invisible in tests because async_fire_mqtt_message delivers to locally-registered subscriptions regardless of wire state."
+  },
+  {
+    "file": "tests/providers/zwave_js_ui/test_e2e.py",
+    "line": 179,
+    "summary": "No test drives config-flow allocation through a real MQTT provider: e2e creates entries via MockConfigEntry (bypassing the flow) and test_user_step_accepts_claimed_mqtt_lock stops at the choose_path menu before allocation runs, neutralizing coverage of the throwaway-instance code paths",
+    "failure_scenario": "The two production defects above (deterministic 'occupancy_unknown' refusal and leaked throwaway subscriptions) both live in the flow-&gt;allocation-&gt;throwaway-provider path; test_e2e.py:179 injects MockConfigEntry directly and tests/test_config_flow.py:2029 asserts only step_id == 'choose_path' (line 2041), so CI passes while the provider cannot actually be added through the UI. Extending the claimed-mqtt-lock flow test one step further (submit a user count) would have caught finding 1 immediately."
+  }
+]
+```</result>
+<usage><subagent_tokens>178716</subagent_tokens><tool_uses>45</tool_uses><duration_ms>653218</duration_ms></usage>
+</task-notification>
+
+---
+
+yes
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>aefd4a3ca1e9f9b6f</task-id>
+<tool-use-id>toolu_01XUBGRzqTNeAhJxGUgxe5AX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/b54329ea-8330-465f-9d85-17ca3ed7cd13/tasks/aefd4a3ca1e9f9b6f.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix round wave 1: blockers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All eight items are committed, working tree clean, nothing pushed.
+
+## Verification
+
+- `pytest tests/ -q`: **2116 passed, 3 skipped** (baseline was 2096; +20 tests)
+- Total coverage: **100%** (6660 statements, 0 missed)
+- `prek run --all-files`: all 22 hooks pass
+- e2e suites re-run 2×: 83 passed both times
+
+## Per item
+
+**F1 — settle-wait `a2d215f4`**
+Replaced the refusal with `SUBSCRIBE_SETTLE_DELAY = 1.0`. **Design deviation from the brief:** I put the wait inside `_async_ensure_api_response_subscription` (right after the subscribe) rather than in `_async_resolve_api_base`. The brief's placement does *not* fix the setup-time race it also asked for — when `async_setup` has already subscribed, `settled_topic` equals the post-ensure topic, so no wait would happen before the first poll. Settling at the point of subscription makes the invariant unconditional and removes the need for any caller to know whether it created the subscription. Fail-loud kept only for "no subscription could be established at all" (reachable via discovery data vanishing mid-call; covered). Conftest patches the constant to `0`. Mutation: removing the sleep → `test_a_fresh_subscription_settles_before_anything_is_published` fails (ordering recorded via a fingerprint sleep duration, since the mocked broker cannot reproduce the debounce). 3 tests rewritten/added.
+
+**F2 — borrowed-instance lifecycle `e1fcd0a2`**
+`borrowed_lock_instance` async context manager in `domain/locks.py`; all four sites converted. **Two brief claims were wrong and I did not follow them:** (a) `unsubscribe_push_updates` is *not* `supports_push`-gated at the base — the gate is at `async_unload`'s call site — so it already releases the zui api transport on an api-only lock; (b) `async_unload(remove_permanently=False)` is *not* safe on a never-setup instance: `VirtualLock._store` is a `field(init=False)` with no default (AttributeError), and on the path where it does exist it would `async_save(self._data)`, erasing the store for an instance that never read it. Disposal is therefore `unsubscribe_push_updates`. 5 tests; dropping the `finally` fails all 5, including the ghost-event regression.
+
+**F3 — sole-candidate home id `4c01d52e`**
+Removed the single-candidate shortcut entirely; every candidate is probed. Error names the expected home hex plus the candidates. Availability fast path left uncheck­ed with a comment explaining it is self-attributed. Mutation: restoring the shortcut fails 4 tests. 3 tests added, 3 updated (responder now answers getInfo).
+
+**F4 — CancelledError `780d7ea9`**
+`future.cancelled()` is **not** a usable discriminator: when the outer task is cancelled, asyncio cancels the awaited future too, so it is True in both cases. Used `current_task().cancelling() &gt; 0` (the idiom already in `async_unload`). Fail-first note: my first version of the outer-cancellation test passed against the mutation because the task was still parked in `async_publish` — the branch was never reached. Retimed the cancel off an Event set when the publish returns. Both mutations (swallow-outer / let-ours-escape) now kill a test. 1 test added, 1 updated.
+
+**F5 — flow-through-allocation `d45b8dc1`**
+Placed in the provider packages rather than `test_config_flow.py`: the zui fast-timeout fixture is autouse-scoped to its directory, and importing z2m's responder fixture into `test_config_flow.py` needed a `# noqa: F401` + `# noqa: F811` pair. Verified: restoring F1's refusal fails the zui test with `occupancy_unknown`. 2 tests.
+
+**F6 — n=1 degeneracy `16a378cf`**
+Chose option (a), `len(reads) &gt; 1`. Rejected (b) on evidence: zwave-js-ui's silence *is* the gateway explicitly refusing, which proves the transport is alive, and Zigbee2MQTT collapses a refused publish and a lost reply into the same `None` before the shared loop sees either — there is no provable-death signal to carve out. Boundary mutated both directions (`&gt;0` and `&gt;2`); each kills 3 tests. 3 tests added.
+
+**F7 — dropped-lock repair `f5a7770c`**
+New `lock_dropped` per-lock repair, created at the pop, cleared on successful setup, on lock removal, and on entry removal. **Found and fixed a second bug:** the removal path did `lock: BaseLock = runtime_data.locks[lock_entity_id]` — dead code that KeyErrors for a popped lock. Swallowed by the fire-and-forget update listener, it silently abandoned the rest of the update, so the repair's own advice ("remove it from the entry") half-failed. My first version of that test passed against the mutation for exactly that reason; I added a slot in the same update so the abandonment is observable. 3 mutations, all killed. 2 tests, strings + en.json.
+
+**F8 — deferred setup `95e48ae0` (DONE_WITH_CONCERNS)**
+Write-suspension half fixed properly: the 30s connection check re-runs the integration-loaded path for a reachable lock whose setup was deferred. Armed by a new `_setup_deferred` flag, not `provider_setup_succeeded` — the latter is also False after a *failed* validation, and gating on it re-probed a known-degraded lock every 30s (caught by an existing test failing). Triggered on any reachable observation, not a False→True edge, because the first check can already find the lock reachable. Reconnect spawning factored into `_async_start_reconnect` so both triggers share `async_unload`'s cancel slot. 3 tests (2 base-layer + 1 zui cold-boot integration); 2 mutations killed.
+
+**Deferred:** the `supports_push` re-derivation. `_original_update_interval` is still snapshot at coordinator construction, so a lock that gains push from late discovery keeps polling until the next reload. This is a redundant poll, not a lost update — the retry re-runs the provider's own `async_setup`, and the zui test asserts `_subscribed_node_topic` is established, so push works. Fixing it means writing into an interval owned at different times by the breaker backoff, the cold-start probe, and restore-on-recovery; per the brief I left it whole rather than half-fixing, and documented it at the snapshot site.</result>
+<usage><subagent_tokens>341606</subagent_tokens><tool_uses>10</tool_uses><duration_ms>344862</duration_ms></usage>
+</task-notification>
