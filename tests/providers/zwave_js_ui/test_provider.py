@@ -216,6 +216,30 @@ class TestAsyncGetUsers:
         ):
             await lock.async_get_users()
 
+    async def test_a_lone_slot_losing_its_reply_is_not_a_dead_transport(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        One slot asked about and one reply lost is noise, not an outage.
+
+        The all-silent rule needs at least two reads to say anything: with a
+        single managed slot it fires on the first routine drop, so an entry
+        with one user would have its breaker tripped by a mesh an entry with
+        two users rides out untroubled.
+        """
+        lock = zui_gateway_resolved
+        zui_api_responder.set_result(
+            "sendCommand", None, success=False, message="Node 20 is not alive"
+        )
+
+        with patch(MANAGED_SLOTS, return_value={1}):
+            users = await lock.async_get_users()
+
+        assert _slot_state(users, 1) is SlotCredential.unreadable()
+
     async def test_one_refusal_beside_one_real_read_is_still_data(
         self,
         hass: HomeAssistant,

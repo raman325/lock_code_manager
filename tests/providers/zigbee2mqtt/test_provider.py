@@ -480,6 +480,41 @@ class TestAsyncGetUsers:
         ):
             await lock.async_get_users()
 
+    @pytest.mark.parametrize(
+        "silence",
+        [
+            pytest.param(_publish_never_leaves, id="no_get_left_home_assistant"),
+            pytest.param(_no_reply_ever_arrives, id="no_reply_came_back"),
+        ],
+    )
+    async def test_a_lone_slot_losing_its_reply_is_not_a_dead_transport(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+        silence: Callable[[], AbstractContextManager[Any]],
+    ) -> None:
+        """
+        One slot asked about and one reply lost is noise, not an outage.
+
+        The all-silent rule needs at least two reads to say anything: with a
+        single managed slot it fires on the first routine drop, so an entry
+        with one user would have its breaker tripped by a network an entry
+        with two users rides out untroubled.
+        """
+        lock = zigbee2mqtt_lock_connected
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                return_value={1},
+            ),
+            silence(),
+        ):
+            users = await lock.async_get_users()
+
+        assert [user.user_id for user in users] == [1]
+        assert users[0].pin_credentials[0].state is SlotCredential.unreadable()
+
     async def test_every_slot_masked_is_a_healthy_poll(
         self,
         hass: HomeAssistant,

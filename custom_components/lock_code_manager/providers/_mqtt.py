@@ -121,12 +121,29 @@ class BaseMqttLock(BaseLock):
         that answers most requests and drops one is a weak link rather than a
         lost transport, and the caller's ``transport_failure`` phrase names
         what silence means on its own bridge.
+
+        Which is why two slots is the smallest read this can judge. Asking
+        about one and hearing nothing is a single lost reply, and on a lossy
+        mesh that is routine -- issue #1397 had a node dropping roughly half
+        its responses. Raising there would trip the connectivity breaker on
+        ordinary noise for an entry with one user, while an entry with two on
+        the same lock, losing replies at the same rate, polled on
+        untroubled. How many people a household has must not decide whether
+        its lock is reported unreachable.
+
+        Nothing about a transport that is genuinely gone rests on this
+        signal. Every public operation runs ``_async_ensure_operational``
+        first, which fails the read outright when the MQTT integration is
+        down, the bridge's entry has gone, or the lock entity is
+        unavailable -- and on both bridges that entity's availability follows
+        the bridge's own status topic. Writes fail on their own path whatever
+        the slot count.
         """
         if not code_slots:
             return []
 
         reads = {slot_num: await read_slot(slot_num) for slot_num in sorted(code_slots)}
-        if all(state is None for state in reads.values()):
+        if len(reads) > 1 and all(state is None for state in reads.values()):
             raise LockDisconnected(
                 f"{self.lock.entity_id}: every one of the {len(reads)} requested "
                 f"slot reads {transport_failure}"
