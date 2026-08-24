@@ -290,6 +290,27 @@ async def test_binding_without_discovery_data_falls_through(
     assert zui_lock_with_device._gateway_prefix() is None
 
 
+async def test_a_payload_naming_neither_gateway_nor_topic_has_no_prefix(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    Both prefix sources absent leaves nothing to guess from.
+
+    The device name would be a third source and is deliberately not one: a
+    gateway with a location segment or a renamed node publishes nowhere near
+    it, so an invented prefix addresses a broker level nobody listens on.
+    """
+    lock = build_zui_lock(
+        hass,
+        await async_discover_zui_lock(
+            hass, include_state_topic=False, include_availability=False
+        ),
+    )
+
+    assert lock._gateway_from_availability() is None
+    assert lock._gateway_prefix() is None
+
+
 async def test_a_sole_candidate_is_asked_which_network_it_runs(
     hass: HomeAssistant,
     zui_scan_lock_provider: ZWaveJSUILock,
@@ -533,6 +554,68 @@ async def test_two_gateways_on_one_home_id_refuse_to_be_tiebroken(
         LockDisconnected, match=f"{OTHER_GATEWAY_NAME}, {ZUI_GATEWAY_NAME}"
     ):
         await task
+
+
+async def test_a_second_lock_on_the_scanned_gateway_reuses_the_answer(
+    hass: HomeAssistant,
+    mqtt_mock,
+    mqtt_teardown,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    The scan answers a question about the gateway, so it is asked once.
+
+    Nothing is published for the second lock, so a per-instance answer would
+    find no gateway at all under the prefix and refuse rather than binding.
+    """
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    first, second = [
+        build_zui_lock(
+            hass,
+            await async_discover_zui_lock(
+                hass, node_id=node_id, include_availability=False
+            ),
+        )
+        for node_id in (ZUI_NODE_ID, ZUI_NODE_ID + 1)
+    ]
+
+    task = await async_start_gateway_resolution(hass, first)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+    probes = len(zui_api_responder.requests)
+
+    await second._async_ensure_api_response_subscription()
+    assert await second._async_resolve_api_base() == ZUI_API_BASE
+    assert len(zui_api_responder.requests) == probes
+
+
+async def test_a_gateway_that_stops_answering_sends_the_scan_round_again(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A dropped binding drops the shared scan result with it.
+
+    Keeping the scan's answer past the disconnect that invalidated the
+    instance's would hand the very next call the address nobody answered on,
+    and no lock behind that gateway could ever rediscover it.
+    """
+    lock = zui_scan_lock_provider
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    task = await async_start_gateway_resolution(hass, lock)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+
+    # The gateway goes quiet: an api call times out, which is what drops the
+    # binding on the real path.
+    with pytest.raises(LockDisconnected, match="Timed out waiting"):
+        await lock.async_get_max_slot()
+
+    # Nothing publishes a status this time, so a scan that reopened has
+    # nothing to find -- which is the proof that it did reopen.
+    with pytest.raises(LockDisconnected, match="published a client status"):
+        await lock._async_resolve_api_base()
 
 
 async def test_lock_without_an_identifier_cannot_be_resolved() -> None:

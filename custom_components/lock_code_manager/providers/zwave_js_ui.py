@@ -133,6 +133,20 @@ KEYPAD_EVENT_TO_LOCKED = {
     "keypad_lock_operation": True,
     "keypad_unlock_operation": False,
 }
+# Where the gateways found by scanning a topic prefix live, keyed by
+# ``(prefix, home hex)``. Deliberately in ``hass.data`` rather than on the
+# instance: the scan answers a question about a gateway, not about a lock, and
+# every lock behind that gateway would otherwise pay for it separately.
+# Surviving an integration reload is intended -- the gateway did not move.
+GATEWAY_SCANS_KEY = "lock_code_manager_zwave_js_ui_gateway_scans"
+
+
+@dataclass
+class _GatewayScan:
+    """One prefix-and-network's scan result, with the mutex that produces it."""
+
+    mutex: asyncio.Lock = field(default_factory=asyncio.Lock)
+    api_base: str | None = None
 
 
 def _is_endpoint_zero(segment: str) -> bool:
@@ -293,6 +307,10 @@ class ZWaveJSUILock(BaseMqttLock):
     """Lock bridged through zwave-js-ui's MQTT gateway (api-driven)."""
 
     _api_base: str | None = field(init=False, default=None)
+    # Key into the shared scan store, set only when this lock's binding came
+    # from a scan. An availability-bound lock has nothing to invalidate for
+    # anybody else: its gateway was named by its own discovery payload.
+    _scan_key: tuple[str, str] | None = field(init=False, default=None)
     # The api response subscription is deliberately NOT in the base's
     # push-unsub registry: that bucket is released only when supports_push
     # is true, and this subscription is the api transport, alive for the
@@ -799,10 +817,7 @@ class ZWaveJSUILock(BaseMqttLock):
         leave it having to interrogate each one.
 
         The scan is the fallback for a discovery payload carrying no such
-        entry. MQTT ``+`` matches a whole level, so the ZWAVE_GATEWAY- filter
-        is applied client-side on the received topic segment; retained
-        statuses arrive immediately after subscribing and the window exists
-        only to collect them all before deciding.
+        entry.
         """
         if self._api_base:
             return self._api_base
@@ -839,6 +854,43 @@ class ZWaveJSUILock(BaseMqttLock):
             )
             return self._api_base
 
+        self._api_base = await self._async_bind_by_scan(prefix, home_hex)
+        return self._api_base
+
+    async def _async_bind_by_scan(self, prefix: str, home_hex: str) -> str:
+        """
+        Find the gateway running ``home_hex`` on ``prefix``, once per gateway.
+
+        The scan is the same question for every lock behind one gateway, and
+        they ask it together: their coordinators refresh on the same tick, and
+        a gateway that has just come back invalidates all of their bindings at
+        once. So the answer is shared across provider instances and the scan
+        is serialized behind it -- the second lock waits out the first one's
+        window instead of opening a second.
+
+        A failed scan caches nothing, so the next caller retries rather than
+        inheriting a refusal.
+        """
+        scans: dict[tuple[str, str], _GatewayScan] = self.hass.data.setdefault(
+            GATEWAY_SCANS_KEY, {}
+        )
+        key = (prefix, home_hex)
+        scan = scans.setdefault(key, _GatewayScan())
+        async with scan.mutex:
+            if scan.api_base is None:
+                scan.api_base = await self._async_scan_for_gateway(prefix, home_hex)
+        self._scan_key = key
+        return scan.api_base
+
+    async def _async_scan_for_gateway(self, prefix: str, home_hex: str) -> str:
+        """
+        Interrogate every gateway publishing on ``prefix`` and pick this lock's.
+
+        MQTT ``+`` matches a whole level, so the ZWAVE_GATEWAY- filter is
+        applied client-side on the received topic segment; retained statuses
+        arrive immediately after subscribing and the window exists only to
+        collect them all before deciding.
+        """
         gateways: set[str] = set()
 
         @callback
@@ -888,27 +940,23 @@ class ZWaveJSUILock(BaseMqttLock):
         # neighbouring network, would otherwise bind to it -- and every
         # Personal Identification Number would be written into that network's
         # node of the same number.
+        #
+        # They are all asked at once. A candidate that has stopped answering
+        # still costs the whole local budget, and asked in turn that is one
+        # budget per dead gateway before the live one is even reached -- while
+        # the api this spends is answered from each gateway's own memory and
+        # puts nothing on anybody's mesh.
         candidates = sorted(gateways)
+        api_bases = [f"{prefix}/_CLIENTS/{client}" for client in candidates]
         home_id = int(home_hex, 16)
-        matches: list[str] = []
-        for client in candidates:
-            api_base = f"{prefix}/_CLIENTS/{client}"
-            try:
-                response = await self._async_api_call_at(
-                    api_base, "getInfo", [], timeout=GATEWAY_LOCAL_TIMEOUT
-                )
-            except (LockDisconnected, LockOperationFailed) as err:
-                LOGGER.debug("Gateway %s did not answer getInfo: %s", api_base, err)
-                continue
-            result = response.get("result")
-            homeid = result.get("homeid") if isinstance(result, dict) else None
-            # ``True == 1`` in Python, so a JSON boolean would otherwise be
-            # able to match a home id of 1. Same guard as
-            # ``_project_user_code_result`` applies to userIdStatus.
-            if isinstance(homeid, bool) or not isinstance(homeid, int):
-                continue
-            if homeid == home_id:
-                matches.append(api_base)
+        answers = await asyncio.gather(
+            *(self._async_probe_home_id(api_base) for api_base in api_bases)
+        )
+        matches = [
+            api_base
+            for api_base, answer in zip(api_bases, answers, strict=True)
+            if answer == home_id
+        ]
 
         if len(matches) != 1:
             # Two gateways answering for the same home id are a primary and a
@@ -920,8 +968,31 @@ class ZWaveJSUILock(BaseMqttLock):
                 f"{home_hex} for {self.lock.entity_id} among "
                 f"{', '.join(candidates)}"
             )
-        self._api_base = matches[0]
-        return self._api_base
+        return matches[0]
+
+    async def _async_probe_home_id(self, api_base: str) -> int | None:
+        """
+        Ask one gateway which Z-Wave network it runs; None when it will not say.
+
+        Silence and a refusal are the same answer here -- getInfo is served
+        from the gateway's own cached driver state, so a client that cannot
+        answer it is in no state to be trusted with a write either.
+        """
+        try:
+            response = await self._async_api_call_at(
+                api_base, "getInfo", [], timeout=GATEWAY_LOCAL_TIMEOUT
+            )
+        except (LockDisconnected, LockOperationFailed) as err:
+            LOGGER.debug("Gateway %s did not answer getInfo: %s", api_base, err)
+            return None
+        result = response.get("result")
+        homeid = result.get("homeid") if isinstance(result, dict) else None
+        # ``True == 1`` in Python, so a JSON boolean would otherwise be able to
+        # match a home id of 1. Same guard as ``_project_user_code_result``
+        # applies to userIdStatus.
+        if isinstance(homeid, bool) or not isinstance(homeid, int):
+            return None
+        return homeid
 
     async def _async_api_call_at(
         self,
@@ -1026,8 +1097,24 @@ class ZWaveJSUILock(BaseMqttLock):
         try:
             return await self._async_api_call_at(api_base, api_name, args)
         except LockDisconnected:
-            self._api_base = None
+            self._forget_api_base()
             raise
+
+    @callback
+    def _forget_api_base(self) -> None:
+        """
+        Drop the resolved gateway, and any scan result that produced it.
+
+        A binding that stopped answering is stale for every lock that shares
+        it: they were all told the same gateway sits at the same address, and
+        the scan that said so has to run again rather than be replayed.
+        """
+        self._api_base = None
+        if (key := self._scan_key) is None:
+            return
+        self._scan_key = None
+        if (scan := self.hass.data.get(GATEWAY_SCANS_KEY, {}).get(key)) is not None:
+            scan.api_base = None
 
     async def _async_user_code_command(self, method: str, args: list[Any]) -> Any:
         """Invoke a User Code CC API method on this node and return its result."""
@@ -1187,7 +1274,7 @@ class ZWaveJSUILock(BaseMqttLock):
                     err,
                 )
         self._api_response_topic = None
-        self._api_base = None
+        self._forget_api_base()
         for future in self._pending_api_calls.values():
             if not future.done():
                 future.cancel()
