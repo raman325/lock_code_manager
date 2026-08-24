@@ -1219,6 +1219,53 @@ async def test_the_response_subscription_is_established_by_setup(
     assert lock._api_response_unsub is not None
 
 
+async def test_two_concurrent_ensures_make_one_subscription(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    Two callers arriving together must not both subscribe.
+
+    The idempotence guard reads the live topic and the subscribe that follows
+    awaits, so a second caller entering that window passes the guard too:
+    both subscribe, and whichever finishes second overwrites the other's
+    unsub. The lost one is leaked -- nothing else holds a reference to it --
+    so the broker keeps delivering into a handler for the rest of the run. It
+    is reachable in ordinary operation: the deferred-setup retry task and an
+    in-flight poll both re-ensure.
+    """
+    lock = zui_lock_provider
+    opened: list[str] = []
+    released: list[str] = []
+    real_subscribe = ZWaveJSUILock._async_subscribe
+
+    async def _spy(self: ZWaveJSUILock, topic: str, *args: Any, **kw: Any) -> Any:
+        # Home Assistant's own subscribe awaits, which is what opens the
+        # window. Yielding here makes the interleaving deterministic instead
+        # of dependent on how the mocked broker happens to schedule.
+        await asyncio.sleep(0)
+        unsub = await real_subscribe(self, topic, *args, **kw)
+        opened.append(topic)
+
+        def _release() -> None:
+            released.append(topic)
+            unsub()
+
+        return _release
+
+    with patch.object(ZWaveJSUILock, "_async_subscribe", _spy):
+        await asyncio.gather(
+            lock._async_ensure_api_response_subscription(),
+            lock._async_ensure_api_response_subscription(),
+        )
+
+    assert opened == [f"{ZUI_PREFIX}/_CLIENTS/+/api/+"]
+
+    # Teardown can only release the one unsub the instance kept, so anything
+    # opened beyond it is unreachable for the rest of the run.
+    lock.teardown_push_subscription()
+    assert released == opened
+
+
 async def test_the_response_subscription_is_established_at_most_once(
     hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
 ) -> None:

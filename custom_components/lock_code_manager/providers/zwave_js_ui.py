@@ -360,6 +360,14 @@ class ZWaveJSUILock(BaseMqttLock):
     _api_response_unsub: Callable[[], None] | None = field(init=False, default=None)
     # Topic the live subscription covers, or None when there is none.
     _api_response_topic: str | None = field(init=False, default=None)
+    # Serializes ``_async_ensure_api_response_subscription``. Deliberately not
+    # the base's ``_aio_lock``, which is held for the whole of every rate-
+    # limited provider operation -- and those operations resolve the api base,
+    # which ensures this subscription, so sharing it would deadlock on the
+    # first read.
+    _api_subscription_lock: asyncio.Lock = field(
+        init=False, default_factory=asyncio.Lock
+    )
     # Outstanding api calls by nonce. The single response handler resolves
     # whichever future the gateway's echoed nonce names.
     _pending_api_calls: dict[str, asyncio.Future[dict[str, Any]]] = field(
@@ -854,30 +862,39 @@ class ZWaveJSUILock(BaseMqttLock):
         subscription is settled by the time this returns and no caller has to
         remember whether it made one. That is what lets the same call publish
         into it safely.
-        """
-        if (prefix := self._gateway_prefix()) is None:
-            if self._api_response_topic is None:
-                LOGGER.info(
-                    "Lock %s: no zwave-js-ui topic prefix in discovery data yet; "
-                    "the api response subscription will be established once it "
-                    "arrives",
-                    self.lock.entity_id,
-                )
-            return
-        response_topic = f"{prefix}/_CLIENTS/+/api/+"
-        if self._api_response_topic == response_topic:
-            return
 
-        # Moved, or first subscribe. The release drops the cached base along
-        # with the subscription, which is what a new prefix requires: the old
-        # base named a gateway at an address that no longer carries this
-        # lock's traffic.
-        self._release_api_subscription()
-        self._api_response_unsub = await self._async_subscribe(
-            response_topic, self._api_response_received
-        )
-        self._api_response_topic = response_topic
-        await asyncio.sleep(SUBSCRIBE_SETTLE_DELAY)
+        Serialized on its own lock, because the idempotence guard reads a
+        field the subscribe below sets and there is an await in between. Two
+        callers that reach it together -- the deferred-setup retry task and an
+        in-flight poll, say -- both passed the guard and both subscribed, and
+        whichever finished second overwrote the other's unsub. Nothing else
+        held a reference to the loser, so the broker went on delivering into
+        it for the rest of the run.
+        """
+        async with self._api_subscription_lock:
+            if (prefix := self._gateway_prefix()) is None:
+                if self._api_response_topic is None:
+                    LOGGER.info(
+                        "Lock %s: no zwave-js-ui topic prefix in discovery data "
+                        "yet; the api response subscription will be established "
+                        "once it arrives",
+                        self.lock.entity_id,
+                    )
+                return
+            response_topic = f"{prefix}/_CLIENTS/+/api/+"
+            if self._api_response_topic == response_topic:
+                return
+
+            # Moved, or first subscribe. The release drops the cached base
+            # along with the subscription, which is what a new prefix
+            # requires: the old base named a gateway at an address that no
+            # longer carries this lock's traffic.
+            self._release_api_subscription()
+            self._api_response_unsub = await self._async_subscribe(
+                response_topic, self._api_response_received
+            )
+            self._api_response_topic = response_topic
+            await asyncio.sleep(SUBSCRIBE_SETTLE_DELAY)
 
     async def _async_resolve_api_base(self) -> str:
         """
