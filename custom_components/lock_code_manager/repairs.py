@@ -63,9 +63,8 @@ class UnmanagedCodeRepairFlow(RepairsFlow):
         self, user_input: dict[str, str] | None = None
     ) -> data_entry_flow.FlowResult:
         """Clear the code off the lock."""
-        lock = None
+        lock = get_managed_lock(self.hass, self._lock_entity_id)
         try:
-            lock = get_managed_lock(self.hass, self._lock_entity_id)
             await lock.async_internal_clear_usercode(self._slot)
         except LockCodeManagerError as err:
             _LOGGER.warning(
@@ -77,8 +76,9 @@ class UnmanagedCodeRepairFlow(RepairsFlow):
             # The error alone cannot distinguish a lock that rejected the
             # clear from a link that dropped the reply. Whatever the
             # provider can measure about its transport goes in verbatim so
-            # the reader can settle it at a glance (issue #1307).
-            link_health = lock.describe_link_health() if lock else None
+            # the reader can settle it at a glance (issue #1397, resurfaced
+            # by #1307's failed clear).
+            link_health = lock.describe_link_health()
             # Left standing deliberately: the code is still on the lock, so
             # resolving the issue would report a clear that did not happen.
             return self.async_abort(

@@ -551,7 +551,8 @@ class BaseLock:
         Describe how reliably the integration is reaching this lock, if it can.
 
         Purely descriptive: the returned sentence is appended to the repair
-        raised when a slot suspends, and nothing reads it to make a decision.
+        raised when a slot suspends and to the abort shown when an
+        unmanaged-code clear fails, and nothing reads it to make a decision.
         A provider that cannot measure its transport returns None and the
         repair keeps its generic wording.
 
