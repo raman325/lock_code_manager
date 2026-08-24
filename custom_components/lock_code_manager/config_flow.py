@@ -97,11 +97,11 @@ SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
 POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
 
-def _unclaimed_mqtt_locks(
+def _check_unclaimed_mqtt_locks(
     hass: HomeAssistant, lock_entity_ids: Iterable[str]
-) -> list[str]:
+) -> tuple[dict[str, str], dict[str, Any]]:
     """
-    Return selected mqtt lock entities no provider claims.
+    Turn any unclaimed mqtt selection into the form error that names it.
 
     The entity selector filter can only express integration+domain, so
     per-device dispatch has to be enforced here at submit time -- otherwise
@@ -109,20 +109,14 @@ def _unclaimed_mqtt_locks(
     """
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
-    return [
+    unclaimed = [
         entity_id
         for entity_id in lock_entity_ids
         if (entry := ent_reg.async_get(entity_id)) is not None
         and entry.platform == MQTT_DOMAIN
         and resolve_provider_class_for_entity(dev_reg, entry) is None
     ]
-
-
-def _check_unclaimed_mqtt_locks(
-    hass: HomeAssistant, lock_entity_ids: Iterable[str]
-) -> tuple[dict[str, str], dict[str, Any]]:
-    """Turn any unclaimed mqtt selection into the form error that names it."""
-    if unclaimed := _unclaimed_mqtt_locks(hass, lock_entity_ids):
+    if unclaimed:
         return {CONF_LOCKS: "unsupported_mqtt_lock"}, {"locks": ", ".join(unclaimed)}
     return {}, {}
 

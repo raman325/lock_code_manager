@@ -2,9 +2,8 @@
 Shared helpers for provider implementations.
 
 Provider-internal utilities that don't belong in the integration-wide
-``util.py``: entity availability, withheld-code recognition, and MQTT
-discovery lookups shared by the providers that reach their locks through
-an MQTT bridge, plus the
+``util.py``: withheld-code recognition, and MQTT discovery lookups shared
+by the providers that reach their locks through an MQTT bridge, plus the
 slot-tagging used by providers whose lock APIs identify codes by user-name
 rather than by slot number (Schlage, Akuvox, and -- once the unified-user
 migration lands -- Matter and Z-Wave User Credential CC).
@@ -142,18 +141,6 @@ def is_masked_code(code: str) -> bool:
     return set(code) == {"*"}
 
 
-def entity_state_is_available(hass: HomeAssistant, entity_id: str) -> bool:
-    """
-    Return whether an entity currently reports an operational state.
-
-    Deferring to the entity's own availability rather than re-deriving the
-    source integration's internals. A missing state row reads the same as an
-    explicit ``unavailable``: neither is an entity that can answer a command.
-    """
-    state = hass.states.get(entity_id)
-    return not (state is None or state.state == "unavailable")
-
-
 def resolve_discovery_payload(
     hass: HomeAssistant, lock: er.RegistryEntry
 ) -> dict[str, Any] | None:
@@ -181,13 +168,18 @@ def resolve_discovery_payload(
         # MQTT integration data not loaded.
         LOGGER.debug("MQTT debug info unavailable for %s", lock.entity_id)
         return None
-    for entity_info in info.get("entities", []):
-        if entity_info.get("entity_id") != lock.entity_id:
-            continue
-        discovery_data = entity_info.get("discovery_data") or {}
-        payload = discovery_data.get("payload")
-        if not isinstance(payload, dict):
-            LOGGER.debug("No discovery payload for %s", lock.entity_id)
-            return None
-        return payload
-    return None
+    entity_info = next(
+        (
+            candidate
+            for candidate in info.get("entities", [])
+            if candidate.get("entity_id") == lock.entity_id
+        ),
+        None,
+    )
+    if entity_info is None:
+        return None
+    payload = (entity_info.get("discovery_data") or {}).get("payload")
+    if not isinstance(payload, dict):
+        LOGGER.debug("No discovery payload for %s", lock.entity_id)
+        return None
+    return payload

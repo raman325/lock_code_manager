@@ -46,7 +46,6 @@ from ..domain.credentials import User, user_from_slot
 from ..domain.exceptions import LockDisconnected
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import entity_state_is_available
 from .const import LOGGER
 
 
@@ -95,8 +94,16 @@ class BaseMqttLock(BaseLock):
         return await self.async_get_usercodes()
 
     async def async_is_device_available(self) -> bool:
-        """Return whether the lock entity reports an operational state."""
-        return entity_state_is_available(self.hass, self.lock.entity_id)
+        """
+        Return whether the lock entity reports an operational state.
+
+        Deferring to the entity's own availability rather than re-deriving the
+        bridge's internals -- both bridges publish a status topic the entity
+        already follows. A missing state row reads the same as an explicit
+        ``unavailable``: neither is an entity that can answer a command.
+        """
+        state = self.hass.states.get(self.lock.entity_id)
+        return not (state is None or state.state == "unavailable")
 
     def _raise_not_connected(self) -> NoReturn:
         """
