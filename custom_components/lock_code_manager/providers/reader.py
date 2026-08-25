@@ -36,6 +36,17 @@ class ReaderLock(VirtualLock):
         """Return the anchor entity's integration domain."""
         return self.lock.platform
 
+    @property
+    def supports_code_slot_events(self) -> bool:
+        """
+        Readers exist to generate code-slot usage events.
+
+        The False inherited from VirtualLock covers storage-only virtual
+        locks; a reader's validations must reach the credential_used event
+        entity, and its availability counts only supporting locks.
+        """
+        return True
+
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up slot storage and start watching the anchor entity."""
         await super().async_setup(config_entry)
@@ -68,6 +79,10 @@ class ReaderLock(VirtualLock):
         # subscribes, so a firing listener implies the reference is set.
         lcm_entry = self._lcm_config_entry
         assert lcm_entry is not None
+        # async_validate_credential is await-free, so under eager task start
+        # it completes synchronously inside this callback: submissions cannot
+        # interleave with each other or straddle an unload. Revisit if the
+        # validation core ever gains an await.
         self.hass.async_create_task(
             async_validate_credential(self.hass, lcm_entry, self, new_state.state),
             f"Validate credential submitted via {self.lock.entity_id}",

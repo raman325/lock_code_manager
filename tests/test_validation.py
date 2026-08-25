@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.lock import LockState
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -15,6 +16,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_CODE_SLOT,
     ATTR_REASON,
+    ATTR_TO,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
@@ -196,6 +198,9 @@ async def test_success_fires_lock_state_changed(
 
     assert len(state_events) == 1
     assert state_events[0].data[ATTR_CODE_SLOT] == 1
+    # Presented as an unlock transition so the credential_used event surface
+    # treats a validation exactly like a physical PIN unlock.
+    assert state_events[0].data[ATTR_TO] == LockState.UNLOCKED
     assert not failure_events
 
 

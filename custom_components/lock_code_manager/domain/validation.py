@@ -79,8 +79,12 @@ async def async_validate_credential(
     if active is not None:
         name = get_entry_config(config_entry).name_for(active.slot_num)
         if fire_events:
+            # A validated credential is represented as an unlock transition
+            # so the standard event surface, which forwards only transitions
+            # to unlocked, treats it exactly like a physical PIN unlock.
             lock.async_fire_code_slot_event(
                 code_slot=active.slot_num,
+                to_locked=False,
                 action_text="Credential validated",
             )
         return ValidationResult(valid=True, user=name, reason=None)

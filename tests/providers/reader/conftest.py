@@ -33,11 +33,20 @@ READER_LCM_CONFIG = {
 
 
 @pytest.fixture
-async def esphome_config_entry(hass: HomeAssistant) -> MockConfigEntry:
+async def esphome_config_entry(
+    hass: HomeAssistant,
+) -> AsyncGenerator[MockConfigEntry]:
     """Create the anchor entity's provider config entry."""
     esphome_entry = MockConfigEntry(domain="esphome")
     esphome_entry.add_to_hass(hass)
-    return esphome_entry
+
+    yield esphome_entry
+
+    # A test that drove this mock entry to LOADED must not leave it there:
+    # hass teardown would then genuinely try to unload esphome, which was
+    # never set up, and fail on its imports.
+    if esphome_entry.state is not ConfigEntryState.NOT_LOADED:
+        esphome_entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
 
 
 @pytest.fixture

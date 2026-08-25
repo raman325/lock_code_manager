@@ -22,6 +22,9 @@ from custom_components.lock_code_manager.providers.reader import ReaderLock
 
 from .conftest import READER_ENTITY_ID
 
+# Per-user credential_used event entity: entry title slug + user name + key.
+SLOT_1_EVENT_ENTITY = "event.mock_title_alice_credential_used"
+
 
 async def test_valid_code_fires_usage_event(
     hass: HomeAssistant, lcm_config_entry: MockConfigEntry
@@ -107,6 +110,39 @@ async def test_unloaded_entry_stops_validating(
     assert not failure_events
 
 
+async def test_event_entity_available_for_reader_only_entry(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    The credential_used event entity is available with only a reader attached.
+
+    Availability requires at least one lock that supports code slot events;
+    a reader must count as one, or reader-only entries ship a permanently
+    unavailable event entity.
+    """
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+    assert state.state != STATE_UNAVAILABLE
+
+
+async def test_valid_code_updates_credential_used_entity(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """A valid submission surfaces on the slot's credential_used event entity."""
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+    assert state.state == STATE_UNKNOWN
+
+    hass.states.async_set(READER_ENTITY_ID, "1234")
+    await hass.async_block_till_done()
+
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+    assert state.state != STATE_UNKNOWN
+    # The event type is the source lock (here, the reader anchor) entity ID.
+    assert state.attributes["event_type"] == READER_ENTITY_ID
+
+
 async def test_provider_reload_after_unload_does_not_rearm(
     hass: HomeAssistant,
     lcm_config_entry: MockConfigEntry,
@@ -135,23 +171,21 @@ async def test_provider_reload_after_unload_does_not_rearm(
     assert not usage_events
     assert not failure_events
 
-    # Return the mocked provider entry to NOT_LOADED so hass teardown does
-    # not try to genuinely unload an esphome entry that was never set up.
-    esphome_config_entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
-
 
 async def test_resetup_does_not_duplicate_validation(
-    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    esphome_config_entry: MockConfigEntry,
 ) -> None:
     """
-    Re-running provider setup replaces the anchor listener instead of stacking one.
+    A provider reconnect replaces the anchor listener instead of stacking one.
 
-    The base reconnect path re-invokes ``async_setup`` on every provider
-    integration reload; a stacked listener would validate each submission
-    once per reload.
+    The anchor's provider entry reaching LOADED drives the base reconnect
+    path, which re-invokes ``async_setup``; a stacked listener would
+    validate each submission once per reload.
     """
-    lock = lcm_config_entry.runtime_data.locks[READER_ENTITY_ID]
-    await lock.async_setup(lcm_config_entry)
+    esphome_config_entry.mock_state(hass, ConfigEntryState.LOADED)
+    await hass.async_block_till_done()
 
     usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
 
