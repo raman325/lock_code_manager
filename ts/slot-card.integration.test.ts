@@ -4714,4 +4714,76 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(reloads).toBe(0);
         });
     });
+
+    describe('a credential reader in the lock list', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+        let moreInfo: CustomEvent[];
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            moreInfo = [];
+            card.addEventListener('hass-more-info', (e) => moreInfo.push(e as CustomEvent));
+            card._data = makeSlotCardData({
+                locks: [
+                    { code: '1234', entity_id: 'lock.front', in_sync: true, name: 'Front Door' },
+                    {
+                        code: '1234',
+                        entity_id: 'sensor.keypad_last_credential',
+                        in_sync: true,
+                        name: 'Keypad'
+                    }
+                ]
+            });
+            await flush();
+        });
+
+        function nameSpan(name: string): HTMLElement {
+            const spans = Array.from(card.shadowRoot!.querySelectorAll<HTMLElement>('.lock-name'));
+            const span = spans.find((s) => s.textContent?.trim() === name);
+            expect(span).toBeTruthy();
+            return span!;
+        }
+
+        it('still shows the reader row, so the user can see it is in sync', () => {
+            expect(nameSpan('Keypad')).toBeTruthy();
+            expect(card.shadowRoot!.textContent).toContain('Front Door');
+        });
+
+        it('opens more-info from a lock name', () => {
+            nameSpan('Front Door').click();
+
+            expect(moreInfo.map((e) => e.detail.entityId)).toEqual(['lock.front']);
+        });
+
+        it('does not open more-info from a reader name', () => {
+            // The reader's state is the credential last typed at the keypad,
+            // so its more-info dialog would show the PIN and its history.
+            nameSpan('Keypad').click();
+
+            expect(moreInfo).toHaveLength(0);
+        });
+
+        it('gives a reader name no click affordance at all', () => {
+            const span = nameSpan('Keypad');
+
+            expect(span.getAttribute('role')).toBeNull();
+            expect(span.getAttribute('tabindex')).toBeNull();
+            expect(span.getAttribute('title')).toBeNull();
+            expect(span.getAttribute('aria-label')).toBeNull();
+        });
+
+        it('gives a reader name no keyboard activation path', () => {
+            nameSpan('Keypad').dispatchEvent(
+                new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' })
+            );
+            nameSpan('Keypad').dispatchEvent(
+                new KeyboardEvent('keydown', { bubbles: true, key: ' ' })
+            );
+
+            expect(moreInfo).toHaveLength(0);
+        });
+    });
 });

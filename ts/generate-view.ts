@@ -7,6 +7,7 @@ import {
     IN_SYNC_KEY,
     KEY_ORDER
 } from './const';
+import { isLockEntity } from './ha-components';
 import {
     EntityRegistryEntry,
     HomeAssistant,
@@ -71,7 +72,7 @@ export async function generateView(
     // `lock` domain has a lock state to show; a reader gets no badge, and the
     // slot cards already carry its per-slot status.
     configEntryData.locks
-        .filter((lock) => lock.entity_id.split('.')[0] === 'lock')
+        .filter((lock) => isLockEntity(lock.entity_id))
         .sort((a, b) => a.entity_id.localeCompare(b.entity_id))
         .forEach((lock) => {
             badges.push({

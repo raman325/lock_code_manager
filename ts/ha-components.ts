@@ -52,6 +52,21 @@ export async function ensureEntityPickerLoaded(): Promise<boolean> {
     return Boolean(customElements.get('ha-entity-picker'));
 }
 
+/** The domain half of an entity id -- `lock` in `lock.front_door`. */
+function entityDomain(entityId: string): string {
+    return entityId.split('.')[0];
+}
+
+/**
+ * True when the entity is an actual lock.
+ *
+ * A config entry's lock list also carries credential readers, which are
+ * distinguished from locks only by their domain.
+ */
+export function isLockEntity(entityId: string): boolean {
+    return entityDomain(entityId) === 'lock';
+}
+
 /** Entity domains that can gate a PIN. */
 export const CONDITION_DOMAINS = [
     'calendar',
@@ -63,5 +78,5 @@ export const CONDITION_DOMAINS = [
 
 /** True when the entity belongs to a domain that can gate a PIN. */
 export function isConditionEntity(entityId: string): boolean {
-    return (CONDITION_DOMAINS as readonly string[]).includes(entityId.split('.')[0]);
+    return (CONDITION_DOMAINS as readonly string[]).includes(entityDomain(entityId));
 }
