@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -12,6 +13,8 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from ..domain.validation import validate_across_entries
 from .virtual import VirtualLock
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(repr=False, eq=False)
@@ -84,14 +87,25 @@ class ReaderLock(VirtualLock):
             STATE_UNAVAILABLE,
         ):
             return
-        # A submission is a transition WITHIN normal operation, so the old
-        # state has to be a real one too. Coming back from unavailable or
-        # unknown -- a Wi-Fi blip, an integration reload, a restart -- the
-        # device republishes whatever it last held, and counting that as a
-        # press runs the user's "on credential_used, open the door"
-        # automation with nobody standing at the keypad.
+        # Coming back from unavailable -- a Wi-Fi blip, an integration
+        # reload, a restart -- the device republishes whatever it last held,
+        # and counting that as a press runs the user's "on credential_used,
+        # open the door" automation with nobody standing at the keypad.
+        #
+        # unavailable ONLY, deliberately: an integration or device outage
+        # takes entities there, so the republish path is still caught, while
+        # a keypad that idles on unknown between presses keeps working.
+        # Suppressing after unknown too would swallow every one of its
+        # submissions with nothing to see.
         old_state = event.data["old_state"]
-        if old_state is None or old_state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+        if old_state is None or old_state.state == STATE_UNAVAILABLE:
+            # A suppressed press is otherwise indistinguishable from one the
+            # keypad never reported.
+            _LOGGER.debug(
+                "%s: ignoring a value published with a previous state of %s",
+                self.lock.entity_id,
+                old_state.state if old_state else "none",
+            )
             return
         # Provider instances are shared across Lock Code Manager entries, so
         # the entry that ran setup is not the only one this anchor answers

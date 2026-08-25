@@ -41,6 +41,13 @@ from .conftest import READER_ENTITY_ID, SECOND_READER_ENTITY_ID
 # Per-user credential_used event entity: entry title slug + user name + key.
 SLOT_1_EVENT_ENTITY = "event.mock_title_alice_credential_used"
 
+READER_LOGGER = ReaderLock.__module__
+
+
+def _reader_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """Return only the records the reader provider itself emitted."""
+    return [record for record in caplog.records if record.name == READER_LOGGER]
+
 
 async def test_valid_code_fires_usage_event(
     hass: HomeAssistant, lcm_config_entry: MockConfigEntry
@@ -93,31 +100,84 @@ async def test_blank_states_are_ignored(
     assert not failure_events
 
 
-@pytest.mark.parametrize("interrupted_by", [STATE_UNAVAILABLE, STATE_UNKNOWN])
 async def test_republished_code_after_an_outage_is_not_a_submission(
-    hass: HomeAssistant, lcm_config_entry: MockConfigEntry, interrupted_by: str
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     A keypad restoring its last value after an outage has submitted nothing.
 
     A Wi-Fi blip, an integration reload, or a Home Assistant restart drops
-    the anchor to unavailable or unknown and then republishes whatever it
-    last held. Treating that as a press runs the user's "on credential_used,
-    open the door" automation with nobody standing there.
+    the anchor to unavailable and then republishes whatever it last held.
+    Treating that as a press runs the user's "on credential_used, open the
+    door" automation with nobody standing there.
     """
     usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
 
-    for state in (interrupted_by, "1234"):
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=READER_LOGGER):
+        for state in (STATE_UNAVAILABLE, "1234"):
+            hass.states.async_set(READER_ENTITY_ID, state)
+            await hass.async_block_till_done()
+
+    assert not usage_events
+    assert not failure_events
+    # Suppression is otherwise indistinguishable from a keypad that never
+    # reported the press, so it has to leave a trace to diagnose from.
+    assert [record.levelno for record in _reader_records(caplog)] == [logging.DEBUG]
+
+
+async def test_a_code_after_an_idle_unknown_is_a_submission(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    A keypad that idles on unknown between presses still submits codes.
+
+    Suppression keys on unavailable alone. An integration or device outage
+    takes entities to unavailable, so the republish-on-recovery path is
+    still caught, while unknown stays an ordinary idle value -- a keypad
+    that clears itself to unknown would otherwise have every press
+    swallowed, with no event and nothing to look at.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    for state in (STATE_UNKNOWN, "1234"):
         hass.states.async_set(READER_ENTITY_ID, state)
         await hass.async_block_till_done()
 
-    assert not usage_events
+    assert [event.data[ATTR_CODE_SLOT] for event in usage_events] == [1]
+    assert not failure_events
+
+
+async def test_a_press_after_an_outage_recovery_still_fires(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    Suppressing the republished value does not wedge the reader.
+
+    The guard drops one transition, not the reader: the next genuine press
+    -- the same code, typed once the keypad has cleared itself -- has to
+    validate, or an outage would silently retire the keypad until Home
+    Assistant restarts.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    for state in (STATE_UNAVAILABLE, "1234", "", "1234"):
+        hass.states.async_set(READER_ENTITY_ID, state)
+        await hass.async_block_till_done()
+
+    assert [event.data[ATTR_CODE_SLOT] for event in usage_events] == [1]
     assert not failure_events
 
 
 async def test_first_state_after_registration_is_not_a_submission(
-    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An anchor appearing with a value already set has submitted nothing."""
     usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
@@ -125,11 +185,14 @@ async def test_first_state_after_registration_is_not_a_submission(
 
     hass.states.async_remove(READER_ENTITY_ID)
     await hass.async_block_till_done()
-    hass.states.async_set(READER_ENTITY_ID, "1234")
-    await hass.async_block_till_done()
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=READER_LOGGER):
+        hass.states.async_set(READER_ENTITY_ID, "1234")
+        await hass.async_block_till_done()
 
     assert not usage_events
     assert not failure_events
+    assert [record.levelno for record in _reader_records(caplog)] == [logging.DEBUG]
 
 
 async def test_repeated_code_after_clear(
