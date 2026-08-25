@@ -33,17 +33,24 @@ READER_LCM_CONFIG = {
 
 
 @pytest.fixture
-async def reader_entity(hass: HomeAssistant) -> er.RegistryEntry:
-    """Register a sensor-domain anchor entity under the esphome platform."""
+async def esphome_config_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Create the anchor entity's provider config entry."""
     esphome_entry = MockConfigEntry(domain="esphome")
     esphome_entry.add_to_hass(hass)
+    return esphome_entry
 
+
+@pytest.fixture
+async def reader_entity(
+    hass: HomeAssistant, esphome_config_entry: MockConfigEntry
+) -> er.RegistryEntry:
+    """Register a sensor-domain anchor entity under the esphome platform."""
     entity = er.async_get(hass).async_get_or_create(
         "sensor",
         "esphome",
         "keypad_code",
         suggested_object_id="keypad_code",
-        config_entry=esphome_entry,
+        config_entry=esphome_config_entry,
     )
     assert entity.entity_id == READER_ENTITY_ID
     # A cleared keypad idles on an empty state; set it before LCM subscribes

@@ -7,6 +7,7 @@ from pytest_homeassistant_custom_component.common import (
     async_capture_events,
 )
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 
@@ -104,6 +105,39 @@ async def test_unloaded_entry_stops_validating(
 
     assert not usage_events
     assert not failure_events
+
+
+async def test_provider_reload_after_unload_does_not_rearm(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    esphome_config_entry: MockConfigEntry,
+) -> None:
+    """
+    A provider reload after LCM unload must not re-arm the reader.
+
+    The base config-entry-state listener watches the anchor's provider
+    entry; if unload left it in place, the LOADED transition would re-run
+    provider setup against the unloaded LCM entry and every subsequent
+    submission would crash on its missing runtime data.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    assert await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    esphome_config_entry.mock_state(hass, ConfigEntryState.LOADED)
+    await hass.async_block_till_done()
+
+    hass.states.async_set(READER_ENTITY_ID, "1234")
+    await hass.async_block_till_done()
+
+    assert not usage_events
+    assert not failure_events
+
+    # Return the mocked provider entry to NOT_LOADED so hass teardown does
+    # not try to genuinely unload an esphome entry that was never set up.
+    esphome_config_entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
 
 
 async def test_resetup_does_not_duplicate_validation(
