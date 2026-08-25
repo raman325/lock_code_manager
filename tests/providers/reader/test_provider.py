@@ -487,3 +487,27 @@ async def test_whitespace_only_state_is_blank(
 
     assert not usage_events
     assert not failure_events
+
+
+async def test_padded_stored_pin_validates_at_the_reader(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    A PIN saved with surrounding whitespace still opens the keypad.
+
+    The reader strips what is submitted but can only compare it against
+    what was stored, so padding kept on the stored side makes a credential
+    that nothing a user can type will ever match.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    await coordinator.async_request_pin_update(" 4321 ")
+    await hass.async_block_till_done()
+
+    hass.states.async_set(READER_ENTITY_ID, "4321")
+    await hass.async_block_till_done()
+
+    assert [event.data[ATTR_CODE_SLOT] for event in usage_events] == [1]
+    assert not failure_events

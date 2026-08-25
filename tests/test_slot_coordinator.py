@@ -326,6 +326,31 @@ async def test_request_pin_update_normalizes_whitespace(
     assert config.get(CONF_ENABLED) is False
 
 
+async def test_request_pin_update_strips_surrounding_whitespace(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    A padded PIN is stored stripped, and its length is judged stripped too.
+
+    Every consumer compares against the stored value stripped -- validation
+    at a credential reader most visibly -- so storing the padding makes a
+    PIN nobody can enter.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        lock._capabilities_cache = _pin_caps(4, 8)
+    coordinator = runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_pin_update("  12345678  ")
+    await hass.async_block_till_done()
+
+    config = get_entry_config(lock_code_manager_config_entry).slot(1)
+    assert config.get(CONF_PIN) == "12345678"
+    assert config.get(CONF_ENABLED) is True
+
+
 async def test_request_active_toggle_blocks_when_no_pin(
     hass: HomeAssistant,
     mock_lock_config_entry,
