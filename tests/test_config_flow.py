@@ -2285,3 +2285,130 @@ async def test_options_flow_adds_reader_to_existing_entry(
     defaults = _form_defaults(result)
     assert defaults[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
     assert defaults[CONF_READERS] == [reader.entity_id]
+
+
+async def test_user_step_dedupes_entity_in_both_fields(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """An entity submitted in both fields is persisted exactly once."""
+    reader = _register_reader(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, reader.entity_id],
+            CONF_READERS: [reader.entity_id],
+        },
+    )
+
+    assert result["type"] == "menu"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    with _holding():
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, reader.entity_id]
+
+
+async def test_options_flow_dedupes_entity_in_both_fields(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The options flow persists an entity picked in both fields exactly once."""
+    reader = _register_reader(hass)
+    flow_id, _ = await _start_options_flow(hass)
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            {
+                CONF_LOCKS: [LOCK_1_ENTITY_ID, reader.entity_id],
+                CONF_READERS: [reader.entity_id],
+                CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            },
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, reader.entity_id]
+
+
+async def test_reauth_replaces_a_deleted_reader(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Reauth lets a vanished reader be swapped for a new one.
+
+    Reauth fires whenever ANY entity in the stored list is missing from the
+    registry, readers included, so the form has to offer a readers field or
+    a reader entry can never recover.
+    """
+    reader = _register_reader(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, "sensor.gone_reader"],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+        },
+    )
+    entry.add_to_hass(hass)
+    entry.async_start_reauth(hass, context={"lock_entity_id": "sensor.gone_reader"})
+    await hass.async_block_till_done()
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"],
+        {CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_READERS: [reader.entity_id]},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID, reader.entity_id]
+    assert CONF_READERS not in entry.data
+
+
+async def test_reauth_splits_a_mixed_entry_and_round_trips(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The reauth form shows readers in their own field and a no-change submit keeps them."""
+    reader = _register_reader(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, reader.entity_id],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+        },
+    )
+    entry.add_to_hass(hass)
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"], None)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reauth_confirm"
+    defaults = _form_defaults(result)
+    assert defaults[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert defaults[CONF_READERS] == [reader.entity_id]
+
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"],
+        {CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_READERS: [reader.entity_id]},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID, reader.entity_id]

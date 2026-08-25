@@ -104,6 +104,34 @@ SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
 POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
 
+def _merge_locks_and_readers(locks: Iterable[str], readers: Iterable[str]) -> list[str]:
+    """
+    Merge the two form fields into the one persisted CONF_LOCKS list.
+
+    Order-preserving dedup, locks first: entity selector filters are
+    UI-only, so the same entity can arrive in both fields, and a list that
+    carries it twice creates every per-lock entity twice downstream.
+    """
+    return list(dict.fromkeys([*locks, *readers]))
+
+
+def _split_locks_and_readers(
+    entity_ids: Iterable[str],
+) -> tuple[list[str], list[str]]:
+    """Split a stored CONF_LOCKS list back into the two form fields by domain."""
+    locks = [
+        entity_id
+        for entity_id in entity_ids
+        if split_entity_id(entity_id)[0] not in READER_ANCHOR_DOMAINS
+    ]
+    readers = [
+        entity_id
+        for entity_id in entity_ids
+        if split_entity_id(entity_id)[0] in READER_ANCHOR_DOMAINS
+    ]
+    return locks, readers
+
+
 def _check_unclaimed_mqtt_locks(
     hass: HomeAssistant, lock_entity_ids: Iterable[str]
 ) -> tuple[dict[str, str], dict[str, Any]]:
@@ -290,10 +318,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # CONF_LOCKS is the single persisted list. A reader is
                 # distinguishable downstream by entity domain alone, so a
                 # separate persisted key would be a second source of truth.
-                user_input[CONF_LOCKS] = [
-                    *user_input[CONF_LOCKS],
-                    *user_input.pop(CONF_READERS),
-                ]
+                user_input[CONF_LOCKS] = _merge_locks_and_readers(
+                    user_input[CONF_LOCKS], user_input.pop(CONF_READERS)
+                )
                 self.data = user_input
                 return await self.async_step_choose_path()
 
@@ -524,18 +551,32 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is None:
             # Either the frontend re-invoking the step to render the form, or
-            # the initial call carrying the entry's data. Seed the lock
-            # selector from the entry's current config either way.
-            user_input = {CONF_LOCKS: list(get_entry_config(config_entry).locks)}
+            # the initial call carrying the entry's data. Seed the selectors
+            # from the entry's current config either way, split by entity
+            # domain: a stored reader offered inside the lock-filtered
+            # selector would sit outside its filter, at the frontend's mercy.
+            seeded_locks, seeded_readers = _split_locks_and_readers(
+                get_entry_config(config_entry).locks
+            )
+            user_input = {CONF_LOCKS: seeded_locks, CONF_READERS: seeded_readers}
         else:
             existing_slots = get_entry_config(config_entry).slot_numbers
-            additional_errors, additional_placeholders = _check_unclaimed_mqtt_locks(
-                self.hass, user_input[CONF_LOCKS]
+            merged_locks = _merge_locks_and_readers(
+                user_input[CONF_LOCKS], user_input[CONF_READERS]
             )
+            additional_errors: dict[str, str] = {}
+            additional_placeholders: dict[str, Any] = {}
+            if not merged_locks:
+                additional_errors["base"] = "at_least_one_lock_or_reader"
+            else:
+                (
+                    additional_errors,
+                    additional_placeholders,
+                ) = _check_unclaimed_mqtt_locks(self.hass, user_input[CONF_LOCKS])
             if not additional_errors:
                 additional_errors, additional_placeholders = _check_common_slots(
                     self.hass,
-                    user_input[CONF_LOCKS],
+                    merged_locks,
                     existing_slots,
                     config_entry,
                 )
@@ -544,7 +585,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # already-valid slot set can become too large for the new lock.
                 try:
                     await async_check_slot_capacity(
-                        self.hass, user_input[CONF_LOCKS], existing_slots
+                        self.hass, merged_locks, existing_slots
                     )
                 except SlotAllocationError as err:
                     additional_errors = {"base": err.translation_key}
@@ -561,11 +602,13 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # Resolved through EntryConfig, not by merging raw dicts: the
                 # two sides may be in different shapes, and a raw merge carries
                 # both, discarding the very save this block exists to consume.
+                # Only the merged CONF_LOCKS is written; CONF_READERS is a
+                # form-only key.
                 self.hass.config_entries.async_update_entry(
                     config_entry,
                     data={
                         **get_entry_config(config_entry).to_dict(),
-                        **user_input,
+                        CONF_LOCKS: merged_locks,
                     },
                     options={},
                 )
@@ -579,9 +622,12 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
+                    vol.Optional(
                         CONF_LOCKS, default=user_input[CONF_LOCKS]
-                    ): LOCK_ENTITY_SELECTOR
+                    ): LOCK_ENTITY_SELECTOR,
+                    vol.Optional(
+                        CONF_READERS, default=user_input[CONF_READERS]
+                    ): READER_ENTITY_SELECTOR,
                 }
             ),
             errors=errors,
@@ -614,7 +660,9 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             # single persisted list: a reader is distinguishable downstream
             # by entity domain alone, so a separate persisted key would be a
             # second source of truth.
-            merged_locks = [*user_input[CONF_LOCKS], *user_input[CONF_READERS]]
+            merged_locks = _merge_locks_and_readers(
+                user_input[CONF_LOCKS], user_input[CONF_READERS]
+            )
             if not merged_locks:
                 errors["base"] = "at_least_one_lock_or_reader"
             # Accumulated alongside the users validation rather than
@@ -680,17 +728,10 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
         # deeply read-only mappings EntryConfig uses internally. The one
         # stored list splits back into the two form fields by entity domain,
         # so existing readers show in the readers field.
+        default_locks, default_readers = _split_locks_and_readers(config.locks)
         defaults = {
-            CONF_LOCKS: [
-                entity_id
-                for entity_id in config.locks
-                if split_entity_id(entity_id)[0] not in READER_ANCHOR_DOMAINS
-            ],
-            CONF_READERS: [
-                entity_id
-                for entity_id in config.locks
-                if split_entity_id(entity_id)[0] in READER_ANCHOR_DOMAINS
-            ],
+            CONF_LOCKS: default_locks,
+            CONF_READERS: default_readers,
             CONF_USERS: {name: dict(user) for name, user in config.users.items()},
         }
 
