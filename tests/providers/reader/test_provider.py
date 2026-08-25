@@ -466,3 +466,24 @@ async def test_device_diagnostics_redact_every_anchor_sharing_a_device(
     assert all(anchor["state"] == REDACTED for anchor in anchors)
     assert "4321" not in str(diagnostics)
     assert "8888" not in str(diagnostics)
+
+
+async def test_whitespace_only_state_is_blank(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    A state that is empty once stripped has submitted nothing.
+
+    Validation strips before it matches, so a keypad that clears itself to
+    a space or a newline matches no slot and would report a failure nobody
+    caused.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    for state in ("   ", "\n", "\t "):
+        hass.states.async_set(READER_ENTITY_ID, state)
+        await hass.async_block_till_done()
+
+    assert not usage_events
+    assert not failure_events

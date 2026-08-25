@@ -74,7 +74,11 @@ class ReaderLock(VirtualLock):
     def _async_anchor_state_changed(self, event: Event[EventStateChangedData]) -> None:
         """Validate the code a new anchor state carries, skipping blank states."""
         new_state = event.data["new_state"]
-        if new_state is None or new_state.state in (
+        # Blankness is judged after stripping because validation strips
+        # before it matches: a keypad clearing itself to a space or a
+        # newline would otherwise match no slot and report a failure
+        # nobody caused.
+        if new_state is None or new_state.state.strip() in (
             "",
             STATE_UNKNOWN,
             STATE_UNAVAILABLE,
