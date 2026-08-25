@@ -71,7 +71,12 @@ def validate_credential(
 
     Callers rely on this completing without suspension: nothing may
     interleave between a validation and whatever its caller does next.
+
+    Normalizing here rather than at each entry point is what makes "one
+    validation function" true: a keypad that appends a newline has to get
+    the same answer as the service call that trims one.
     """
+    code = code.strip()
     coordinators = config_entry.runtime_data.slot_coordinators
     matches = [c for c in coordinators.values() if c.pin_value == code]
     # A coordinator whose active state was never computed (``is_active`` is

@@ -15,12 +15,19 @@ from homeassistant.const import ATTR_STATE, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CODE,
     ATTR_CODE_SLOT,
+    ATTR_FIRE_EVENTS,
+    ATTR_LOCK_ENTITY_ID,
     ATTR_REASON,
+    ATTR_USER,
+    ATTR_VALID,
+    DOMAIN,
     EVENT_CODE_VALIDATION_FAILED,
     EVENT_LOCK_STATE_CHANGED,
     REASON_UNKNOWN_CODE,
     REDACTED,
+    SERVICE_VALIDATE_CODE,
 )
 from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -331,6 +338,37 @@ async def test_second_entry_still_validates_after_first_unloads(
     # The state-change dispatcher swallows a listener's exception, so a
     # crash would show up only here.
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+async def test_padded_code_validates_on_both_paths(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    Surrounding whitespace is stripped whichever path submits the code.
+
+    The service schema stripped its own argument, so a keypad emitting a
+    trailing newline validated through the service and failed at the
+    reader -- two answers from what is meant to be one validation.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    hass.states.async_set(READER_ENTITY_ID, " 1234 ")
+    await hass.async_block_till_done()
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_VALIDATE_CODE,
+        {
+            ATTR_LOCK_ENTITY_ID: READER_ENTITY_ID,
+            ATTR_CODE: " 1234 ",
+            ATTR_FIRE_EVENTS: False,
+        },
+        blocking=True,
+        return_response=True,
+    )
+
+    assert [event.data[ATTR_CODE_SLOT] for event in usage_events] == [1]
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
 
 
 async def test_diagnostics_never_contain_the_submitted_code(
