@@ -10,7 +10,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from ..domain.validation import validate_credential
+from ..domain.validation import validate_across_entries
 from .virtual import VirtualLock
 
 
@@ -75,11 +75,12 @@ class ReaderLock(VirtualLock):
             STATE_UNAVAILABLE,
         ):
             return
-        # async_setup_internal stores the entry before async_setup
-        # subscribes, so a firing listener implies the reference is set.
-        lcm_entry = self._lcm_config_entry
-        assert lcm_entry is not None
+        # Provider instances are shared across Lock Code Manager entries, so
+        # the entry that ran setup is not the only one this anchor answers
+        # to: validate against every entry that contains it, or credentials
+        # belonging to any other entry read as unknown.
+        #
         # A synchronous call inside the state-change callback: submissions
         # cannot interleave with each other or straddle an unload, and the
         # validation core's signature guarantees it.
-        validate_credential(self.hass, lcm_entry, self, new_state.state)
+        validate_across_entries(self.hass, self.lock.entity_id, new_state.state)

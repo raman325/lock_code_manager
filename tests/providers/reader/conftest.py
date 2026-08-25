@@ -31,6 +31,13 @@ READER_LCM_CONFIG = {
     },
 }
 
+# A second entry on the same anchor, with slots and users disjoint from the
+# first: the shared BaseLock instance belongs to whichever entry set it up.
+SECOND_READER_LCM_CONFIG = {
+    CONF_LOCKS: [READER_ENTITY_ID],
+    CONF_SLOTS: {3: {CONF_NAME: "charlie", CONF_PIN: "9999", CONF_ENABLED: True}},
+}
+
 
 @pytest.fixture
 async def esphome_config_entry(
@@ -91,3 +98,27 @@ async def lcm_config_entry(
     # A test exercising unload leaves the entry already torn down.
     if lcm_entry.state is ConfigEntryState.LOADED:
         await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+@pytest.fixture
+async def second_lcm_config_entry(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+) -> AsyncGenerator[MockConfigEntry]:
+    """
+    Set up a second LCM entry on the same reader anchor.
+
+    Ordering matters: this entry loads after the first, so it reuses the
+    first entry's ReaderLock instead of creating its own.
+    """
+    second_entry = MockConfigEntry(
+        domain=DOMAIN, data=SECOND_READER_LCM_CONFIG, unique_id="test_reader_2"
+    )
+    second_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(second_entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield second_entry
+
+    if second_entry.state is ConfigEntryState.LOADED:
+        await hass.config_entries.async_unload(second_entry.entry_id)

@@ -18,7 +18,7 @@ from ..const import (
     REASON_USER_DISABLED,
 )
 from .models import LockCodeManagerConfigEntry
-from .queries import get_entry_config
+from .queries import get_entry_config, iter_loaded_lcm_entries
 from .slot_coordinator import SlotEntityCoordinator
 
 if TYPE_CHECKING:
@@ -111,3 +111,65 @@ def validate_credential(
             },
         )
     return ValidationResult(valid=False, user=None, reason=reason)
+
+
+# Failure reasons ordered least to most restrictive: a code that matched a
+# user somewhere outranks one unknown everywhere.
+_REASON_PRECEDENCE = (
+    REASON_UNKNOWN_CODE,
+    REASON_CONDITION_NOT_MET,
+    REASON_USER_DISABLED,
+)
+
+
+@callback
+def validate_across_entries(
+    hass: HomeAssistant,
+    lock_entity_id: str,
+    code: str,
+    *,
+    fire_events: bool = True,
+) -> ValidationResult | None:
+    """
+    Validate ``code`` against every loaded entry managing ``lock_entity_id``.
+
+    One submission gets one verdict and at most one event, however many
+    entries share the entity: the first valid result wins, and when none is
+    valid the most restrictive failure reason across entries does -- the same
+    precedence each entry already applies among its own slots.
+
+    None means no loaded entry manages the entity; each caller decides what
+    that is worth.
+    """
+    targets = [
+        (entry, entry.runtime_data.locks[lock_entity_id])
+        for entry in iter_loaded_lcm_entries(hass)
+        if lock_entity_id in entry.runtime_data.locks
+    ]
+    if not targets:
+        return None
+
+    results = [
+        validate_credential(hass, entry, lock, code, fire_events=False)
+        for entry, lock in targets
+    ]
+
+    chosen = next((index for index, result in enumerate(results) if result.valid), None)
+    if chosen is None:
+        reason = max(
+            (result.reason for result in results), key=_REASON_PRECEDENCE.index
+        )
+        chosen = next(
+            index for index, result in enumerate(results) if result.reason == reason
+        )
+
+    if not fire_events:
+        return results[chosen]
+
+    # Recomputed against the chosen entry alone: validating with events
+    # on in every entry would emit both a success and a failure event for
+    # one submission when a shared entity validates in one entry but not
+    # another. The event-free computation is synchronous and side-effect
+    # free, so nothing can change between the two passes.
+    entry, lock = targets[chosen]
+    return validate_credential(hass, entry, lock, code)

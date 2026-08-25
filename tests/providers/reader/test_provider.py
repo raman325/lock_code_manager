@@ -211,6 +211,59 @@ async def test_resetup_does_not_duplicate_validation(
     assert len(usage_events) == 1
 
 
+async def test_validates_against_every_entry_sharing_the_anchor(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    second_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """
+    A PIN from either entry sharing the anchor validates.
+
+    The BaseLock instance is shared, so only the first entry ever ran
+    provider setup; a reader that validated against that entry alone would
+    reject every credential belonging to the second one.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    for code in ("1234", "", "9999"):
+        hass.states.async_set(READER_ENTITY_ID, code)
+        await hass.async_block_till_done()
+
+    assert [event.data[ATTR_CODE_SLOT] for event in usage_events] == [1, 3]
+    assert not failure_events
+
+
+async def test_second_entry_still_validates_after_first_unloads(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    second_lcm_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Unloading the entry that set the reader up leaves the other one working.
+
+    The shared instance survives the unload because another entry still
+    manages the anchor; a reader holding that entry's reference would then
+    crash on its released runtime data on every submission.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    assert await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    caplog.clear()
+    hass.states.async_set(READER_ENTITY_ID, "9999")
+    await hass.async_block_till_done()
+
+    assert [event.data[ATTR_CODE_SLOT] for event in usage_events] == [3]
+    assert not failure_events
+    # The state-change dispatcher swallows a listener's exception, so a
+    # crash would show up only here.
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+
 async def test_dispatched_end_to_end_as_reader(
     hass: HomeAssistant, lcm_config_entry: MockConfigEntry
 ) -> None:
