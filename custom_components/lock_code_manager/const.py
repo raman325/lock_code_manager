@@ -107,6 +107,17 @@ REASON_UNKNOWN_CODE = "unknown_code"
 REASON_USER_DISABLED = "user_disabled"
 REASON_CONDITION_NOT_MET = "condition_not_met"
 
+# Failure reasons ordered least to most restrictive: a code that matched a
+# user somewhere outranks one unknown everywhere, and a user held back by
+# more than a condition outranks one merely waiting on its condition.
+# Choosing among the slots of one entry and choosing among entries sharing
+# a lock are the same choice, so both read their ordering from here.
+REASON_PRECEDENCE = (
+    REASON_UNKNOWN_CODE,
+    REASON_CONDITION_NOT_MET,
+    REASON_USER_DISABLED,
+)
+
 # Stands in for a value withheld from a surface that leaves the integration:
 # the event bus, the recorder, a diagnostics download.
 REDACTED = "**REDACTED**"

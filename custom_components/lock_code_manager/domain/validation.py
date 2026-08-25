@@ -14,6 +14,7 @@ from ..const import (
     ATTR_REASON,
     EVENT_CODE_VALIDATION_FAILED,
     REASON_CONDITION_NOT_MET,
+    REASON_PRECEDENCE,
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
 )
@@ -44,13 +45,19 @@ def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
     """
     if not matches:
         return REASON_UNKNOWN_CODE
-    if any(
-        reason != CONF_CONDITION
-        for coordinator in matches
-        for reason in coordinator.inactive_because_of
-    ):
-        return REASON_USER_DISABLED
-    return REASON_CONDITION_NOT_MET
+    return max(
+        (
+            REASON_CONDITION_NOT_MET
+            if reason == CONF_CONDITION
+            else REASON_USER_DISABLED
+            for coordinator in matches
+            for reason in coordinator.inactive_because_of
+        ),
+        key=REASON_PRECEDENCE.index,
+        # A matched slot with no recorded reason is inactive all the same,
+        # and lands on the least restrictive explanation available.
+        default=REASON_CONDITION_NOT_MET,
+    )
 
 
 @callback
@@ -118,15 +125,6 @@ def validate_credential(
     return ValidationResult(valid=False, user=None, reason=reason)
 
 
-# Failure reasons ordered least to most restrictive: a code that matched a
-# user somewhere outranks one unknown everywhere.
-_REASON_PRECEDENCE = (
-    REASON_UNKNOWN_CODE,
-    REASON_CONDITION_NOT_MET,
-    REASON_USER_DISABLED,
-)
-
-
 @callback
 def validate_across_entries(
     hass: HomeAssistant,
@@ -161,9 +159,7 @@ def validate_across_entries(
 
     chosen = next((index for index, result in enumerate(results) if result.valid), None)
     if chosen is None:
-        reason = max(
-            (result.reason for result in results), key=_REASON_PRECEDENCE.index
-        )
+        reason = max((result.reason for result in results), key=REASON_PRECEDENCE.index)
         chosen = next(
             index for index, result in enumerate(results) if result.reason == reason
         )
