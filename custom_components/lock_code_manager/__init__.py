@@ -64,7 +64,9 @@ from homeassistant.util import slugify
 
 from .const import (
     ATTR_CLEAR_CREDENTIALS,
+    ATTR_CODE,
     ATTR_CODE_SLOT,
+    ATTR_FIRE_EVENTS,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
@@ -89,6 +91,7 @@ from .const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
+    SERVICE_VALIDATE_CODE,
     STRATEGY_FILENAME,
     STRATEGY_PATH,
     Platform,
@@ -121,6 +124,7 @@ from .domain.services import (
     async_delete_user,
     async_set_slot_condition,
     async_set_usercode,
+    async_validate_code,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
 from .domain.unmanaged import async_sweep_unmanaged_codes
@@ -666,6 +670,33 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         _deobfuscate_log,
         schema=vol.Schema({vol.Required(ATTR_TEXT): cv.string}),
         supports_response=SupportsResponse.ONLY,
+    )
+
+    async def _validate_code(call: ServiceCall) -> ServiceResponse:
+        """Validate a code against the entries managing an entity."""
+        return await async_validate_code(
+            hass,
+            call.data[ATTR_LOCK_ENTITY_ID],
+            call.data[ATTR_CODE],
+            fire_events=call.data[ATTR_FIRE_EVENTS],
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_VALIDATE_CODE,
+        _validate_code,
+        schema=vol.Schema(
+            {
+                # A plain entity ID, not entity_domain("lock"): credential
+                # readers anchor on sensor and text entities.
+                vol.Required(ATTR_LOCK_ENTITY_ID): cv.entity_id,
+                vol.Required(ATTR_CODE): vol.All(
+                    cv.string, str.strip, vol.Length(min=1)
+                ),
+                vol.Optional(ATTR_FIRE_EVENTS, default=True): cv.boolean,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
     return True

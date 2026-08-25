@@ -12,12 +12,22 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
-from ..const import DOMAIN, EXCLUDED_CONDITION_PLATFORMS
+from ..const import (
+    ATTR_REASON,
+    ATTR_USER,
+    ATTR_VALID,
+    DOMAIN,
+    EXCLUDED_CONDITION_PLATFORMS,
+    REASON_CONDITION_NOT_MET,
+    REASON_UNKNOWN_CODE,
+    REASON_USER_DISABLED,
+)
 from .allocation import SlotAllocationError, async_allocate_for
 from .config import EntryConfig
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
-from .queries import get_entry_config, get_loaded_config_entry
+from .queries import get_entry_config, get_loaded_config_entry, iter_loaded_lcm_entries
+from .validation import async_validate_credential
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +93,67 @@ async def async_clear_usercode(
     """Clear a usercode from a lock slot."""
     lock = get_managed_lock(hass, lock_entity_id)
     await lock.async_internal_clear_usercode(code_slot)
+
+
+# Failure reasons ordered least to most restrictive: a code that matched a
+# user somewhere outranks one unknown everywhere.
+_REASON_PRECEDENCE = (
+    REASON_UNKNOWN_CODE,
+    REASON_CONDITION_NOT_MET,
+    REASON_USER_DISABLED,
+)
+
+
+async def async_validate_code(
+    hass: HomeAssistant, lock_entity_id: str, code: str, *, fire_events: bool = True
+) -> dict[str, Any]:
+    """
+    Validate a code against every loaded entry managing the target entity.
+
+    One submission gets one verdict and at most one event, however many
+    entries share the entity: the first valid result wins, and when none is
+    valid the most restrictive failure reason across entries does -- the same
+    precedence each entry already applies among its own slots.
+    """
+    targets = [
+        (entry, entry.runtime_data.locks[lock_entity_id])
+        for entry in iter_loaded_lcm_entries(hass)
+        if lock_entity_id in entry.runtime_data.locks
+    ]
+    if not targets:
+        raise ServiceValidationError(
+            f"Lock {lock_entity_id} is not managed by Lock Code Manager"
+        )
+
+    results = [
+        await async_validate_credential(hass, entry, lock, code, fire_events=False)
+        for entry, lock in targets
+    ]
+
+    chosen = next((index for index, result in enumerate(results) if result.valid), None)
+    if chosen is None:
+        reason = max(
+            (result.reason for result in results), key=_REASON_PRECEDENCE.index
+        )
+        chosen = next(
+            index for index, result in enumerate(results) if result.reason == reason
+        )
+
+    result = results[chosen]
+    if fire_events:
+        # Recomputed against the chosen entry alone: validating with events
+        # on in every entry would emit both a success and a failure event for
+        # one submission when a shared entity validates in one entry but not
+        # another. The event-free computation has no awaits and no side
+        # effects, so nothing can change between the two passes.
+        entry, lock = targets[chosen]
+        result = await async_validate_credential(hass, entry, lock, code)
+
+    return {
+        ATTR_VALID: result.valid,
+        ATTR_USER: result.user,
+        ATTR_REASON: result.reason,
+    }
 
 
 def _async_validate_condition(hass: HomeAssistant, condition: str) -> None:
