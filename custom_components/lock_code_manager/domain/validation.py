@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID, CONF_CONDITION
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from ..const import (
     ATTR_CODE,
@@ -53,7 +53,8 @@ def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
     return REASON_CONDITION_NOT_MET
 
 
-async def async_validate_credential(
+@callback
+def validate_credential(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     lock: BaseLock,
@@ -67,6 +68,9 @@ async def async_validate_credential(
     The active check is the slot coordinator's own derived state -- the same
     predicate the active binary sensor renders -- so a reader and the
     dashboard can never disagree about whether a credential works.
+
+    Callers rely on this completing without suspension: nothing may
+    interleave between a validation and whatever its caller does next.
     """
     coordinators = config_entry.runtime_data.slot_coordinators
     matches = [c for c in coordinators.values() if c.pin_value == code]

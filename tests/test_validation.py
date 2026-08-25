@@ -28,7 +28,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.domain.validation import (
     ValidationResult,
-    async_validate_credential,
+    validate_credential,
 )
 from custom_components.lock_code_manager.providers import BaseLock
 
@@ -122,9 +122,7 @@ async def _validate(
     **kwargs: Any,
 ) -> ValidationResult:
     """Validate a code and flush the event bus."""
-    result = await async_validate_credential(
-        hass, validation_entry, virtual_lock, code, **kwargs
-    )
+    result = validate_credential(hass, validation_entry, virtual_lock, code, **kwargs)
     await hass.async_block_till_done()
     return result
 

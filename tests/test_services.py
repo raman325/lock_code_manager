@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_CODE_SLOT,
     ATTR_FIRE_EVENTS,
+    ATTR_LCM_CONFIG_ENTRY_ID,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_REASON,
@@ -1287,6 +1288,8 @@ async def test_validate_code_multi_entry_valid_in_second(
 
     assert response == {ATTR_VALID: True, ATTR_USER: "betty", ATTR_REASON: None}
     assert len(state_events) == 1
+    # betty's slot number proves the second entry is the one that fired.
+    assert state_events[0].data[ATTR_CODE_SLOT] == 11
     assert not failure_events
 
 
@@ -1312,6 +1315,8 @@ async def test_validate_code_multi_entry_aggregate_reason(
     assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
     assert len(failure_events) == 1
     assert failure_events[0].data[ATTR_REASON] == reason
+    # The entry that recognized the code is the one that fired.
+    assert failure_events[0].data[ATTR_LCM_CONFIG_ENTRY_ID] == validate_entry.entry_id
 
 
 async def test_validate_code_reader_entity(hass: HomeAssistant) -> None:

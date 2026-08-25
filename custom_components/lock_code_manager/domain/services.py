@@ -27,7 +27,7 @@ from .config import EntryConfig
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry, iter_loaded_lcm_entries
-from .validation import async_validate_credential
+from .validation import validate_credential
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ async def async_validate_code(
         )
 
     results = [
-        await async_validate_credential(hass, entry, lock, code, fire_events=False)
+        validate_credential(hass, entry, lock, code, fire_events=False)
         for entry, lock in targets
     ]
 
@@ -144,10 +144,10 @@ async def async_validate_code(
         # Recomputed against the chosen entry alone: validating with events
         # on in every entry would emit both a success and a failure event for
         # one submission when a shared entity validates in one entry but not
-        # another. The event-free computation has no awaits and no side
-        # effects, so nothing can change between the two passes.
+        # another. The event-free computation is synchronous and side-effect
+        # free, so nothing can change between the two passes.
         entry, lock = targets[chosen]
-        result = await async_validate_credential(hass, entry, lock, code)
+        result = validate_credential(hass, entry, lock, code)
 
     return {
         ATTR_VALID: result.valid,
