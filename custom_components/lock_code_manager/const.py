@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 
 DOMAIN = "lock_code_manager"
@@ -138,6 +140,11 @@ ATTR_SYNC_STATUS = "sync_status"
 
 # Code slot properties
 CONF_CALENDAR = "calendar"
+
+# Entity domains a credential reader entry may anchor on. Only reader
+# entries can contain non-lock-domain entities, so an entity carrying one
+# of these domains dispatches to the reader provider.
+READER_ANCHOR_DOMAINS = frozenset({SENSOR_DOMAIN, TEXT_DOMAIN})
 
 # Supported domains for condition entities (CONF_CONDITION option)
 CONDITION_ENTITY_DOMAINS = [

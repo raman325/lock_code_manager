@@ -18,10 +18,12 @@ from custom_components.lock_code_manager.domain.locks import async_create_lock_i
 from custom_components.lock_code_manager.providers import (
     CONFIG_FLOW_PLATFORMS,
     INTEGRATIONS_CLASS_MAP,
+    ReaderLock,
     Zigbee2MQTTLock,
     ZWaveJSLock,
     ZWaveJSUILock,
     resolve_provider_class,
+    resolve_provider_class_for_entity,
 )
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     parse_zwave_js_ui_identifier,
@@ -151,6 +153,58 @@ async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> 
 
     assert resolve_provider_class("mqtt", device) is ZWaveJSUILock
     assert resolve_provider_class("mqtt", malformed_only) is None
+
+
+async def test_sensor_anchor_resolves_to_reader(hass: HomeAssistant) -> None:
+    """A sensor-domain entity resolves to the reader provider by entity domain."""
+    esphome_entry = MockConfigEntry(domain="esphome")
+    esphome_entry.add_to_hass(hass)
+
+    sensor_entry = er.async_get(hass).async_get_or_create(
+        "sensor",
+        "esphome",
+        "keypad_code",
+        config_entry=esphome_entry,
+    )
+
+    assert (
+        resolve_provider_class_for_entity(dr.async_get(hass), sensor_entry)
+        is ReaderLock
+    )
+
+
+async def test_text_anchor_resolves_to_reader(hass: HomeAssistant) -> None:
+    """A text-domain entity resolves to the reader provider by entity domain."""
+    esphome_entry = MockConfigEntry(domain="esphome")
+    esphome_entry.add_to_hass(hass)
+
+    text_entry = er.async_get(hass).async_get_or_create(
+        "text",
+        "esphome",
+        "keypad_input",
+        config_entry=esphome_entry,
+    )
+
+    assert (
+        resolve_provider_class_for_entity(dr.async_get(hass), text_entry) is ReaderLock
+    )
+
+
+async def test_lock_domain_still_dispatches_by_platform(hass: HomeAssistant) -> None:
+    """A lock-domain entity keeps resolving by platform, untouched by reader dispatch."""
+    zwave_entry = MockConfigEntry(domain="zwave_js")
+    zwave_entry.add_to_hass(hass)
+
+    lock_entry = er.async_get(hass).async_get_or_create(
+        "lock",
+        "zwave_js",
+        "front_door",
+        config_entry=zwave_entry,
+    )
+
+    assert (
+        resolve_provider_class_for_entity(dr.async_get(hass), lock_entry) is ZWaveJSLock
+    )
 
 
 def test_config_flow_platforms():

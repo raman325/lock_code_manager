@@ -5,9 +5,11 @@ from __future__ import annotations
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from ..const import READER_ANCHOR_DOMAINS
 from ._base import BaseLock
 from .akuvox import AkuvoxLock
 from .matter import MatterLock
+from .reader import ReaderLock
 from .schlage import SchlageLock
 from .virtual import VirtualLock
 from .zha import ZHALock
@@ -64,6 +66,11 @@ def resolve_provider_class_for_entity(
     dev_reg: dr.DeviceRegistry, lock_entry: er.RegistryEntry
 ) -> type[BaseLock] | None:
     """Resolve a provider for an entity, looking up its device for mqtt dispatch."""
+    # Only reader entries may contain non-lock-domain entities, so the
+    # entity's own domain is the discriminator. Platform dispatch would
+    # misfire here: an esphome sensor is not an esphome lock.
+    if lock_entry.domain in READER_ANCHOR_DOMAINS:
+        return ReaderLock
     device_entry = (
         dev_reg.async_get(lock_entry.device_id) if lock_entry.device_id else None
     )
