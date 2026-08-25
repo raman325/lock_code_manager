@@ -123,6 +123,9 @@ CONF_CONFIG_ENTRY = "config_entry"
 CONF_CONDITIONS = "conditions"
 CONF_ENTITIES = "entities"
 CONF_LOCKS = "locks"
+# A form-only field: the config and options flows collect readers separately
+# for clarity, then merge them into CONF_LOCKS before anything is persisted.
+CONF_READERS = "readers"
 CONF_SLOTS = "slots"
 CONF_USERS = "users"
 CONF_NUM_USERS = "num_users"

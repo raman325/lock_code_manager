@@ -6,6 +6,7 @@
       "unknown": "An unexpected error occurred during setup."
     },
     "error": {
+      "at_least_one_lock_or_reader": "Select at least one lock or credential reader.",
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
       "missing_pin_if_enabled": "A PIN must be set for any user who is enabled.",
@@ -49,9 +50,13 @@
       "user": {
         "data": {
           "locks": "Locks",
-          "name": "Name"
+          "name": "Name",
+          "readers": "Credential readers"
         },
-        "description": "Give this configuration a unique name (e.g. `House Locks`) and select the locks you would like to manage with it.",
+        "data_description": {
+          "readers": "Code-input entities (e.g. an ESPHome keypad's text sensor) whose submitted codes Lock Code Manager validates against this configuration's users."
+        },
+        "description": "Give this configuration a unique name (e.g. `House Locks`) and select the locks and/or credential readers you would like to manage with it.",
         "title": "Lock Code Manager"
       },
       "yaml": {
@@ -137,13 +142,18 @@
       "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
       "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
-      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}"
+      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
+      "at_least_one_lock_or_reader": "Select at least one lock or credential reader."
     },
     "step": {
       "init": {
         "data": {
           "locks": "Locks",
+          "readers": "Credential readers",
           "slots": "Slots YAML"
+        },
+        "data_description": {
+          "readers": "Code-input entities (e.g. an ESPHome keypad's text sensor) whose submitted codes Lock Code Manager validates against this configuration's users."
         },
         "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
         "title": "Lock Code Manager"

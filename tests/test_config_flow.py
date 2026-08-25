@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, PropertyMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
@@ -17,6 +18,7 @@ from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_USERS,
+    CONF_READERS,
     CONF_USERS,
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
@@ -2012,10 +2014,12 @@ async def test_user_step_rejects_unclaimed_mqtt_lock(
     assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
     assert result["description_placeholders"] == {"locks": unclaimed.entity_id}
     # The refusal comes back holding the name, which means the check ran
-    # before the step consumed it.
+    # before the step consumed it. The readers field defaults to an empty
+    # list on the way in, so it comes back as one.
     assert _suggested_values(result) == {
         CONF_NAME: "test",
         CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+        CONF_READERS: [],
     }
 
     result = await hass.config_entries.flow.async_configure(
@@ -2131,3 +2135,153 @@ async def test_reauth_rejects_unclaimed_mqtt_lock(
     assert result["step_id"] == "reauth_confirm"
     assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
     assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+
+
+READER_SENSOR_ENTITY_ID = "sensor.keypad_code"
+
+
+def _register_reader(hass: HomeAssistant) -> er.RegistryEntry:
+    """
+    Register a sensor-domain reader anchor under a provider config entry.
+
+    The entry is never loaded, so hass teardown will not try to unload the
+    real esphome integration.
+    """
+    esphome_entry = MockConfigEntry(domain="esphome")
+    esphome_entry.add_to_hass(hass)
+    entity = er.async_get(hass).async_get_or_create(
+        "sensor",
+        "esphome",
+        "keypad_code",
+        suggested_object_id="keypad_code",
+        config_entry=esphome_entry,
+    )
+    assert entity.entity_id == READER_SENSOR_ENTITY_ID
+    return entity
+
+
+def _form_defaults(result) -> dict[str, object]:
+    """Read back what a rendered form pre-fills for each defaulted field."""
+    return {
+        str(key): key.default()
+        for key in result["data_schema"].schema
+        if key.default is not vol.UNDEFINED
+    }
+
+
+async def test_reader_only_entry(hass: HomeAssistant) -> None:
+    """A reader with no locks is a complete entry, stored in CONF_LOCKS."""
+    reader = _register_reader(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_NAME: "test", CONF_LOCKS: [], CONF_READERS: [reader.entity_id]},
+    )
+
+    assert result["type"] == "menu"
+    assert result["step_id"] == "choose_path"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [reader.entity_id]
+    assert CONF_READERS not in result["data"]
+
+
+async def test_mixed_lock_and_reader_entry(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Locks and readers merge into one list, locks first, order stable."""
+    reader = _register_reader(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_READERS: [reader.entity_id],
+        },
+    )
+
+    assert result["type"] == "menu"
+    assert result["step_id"] == "choose_path"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    with _holding():
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, reader.entity_id]
+    assert CONF_READERS not in result["data"]
+
+
+async def test_no_locks_and_no_readers_errors(hass: HomeAssistant) -> None:
+    """Submitting neither locks nor readers re-renders with the error."""
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [], CONF_READERS: []}
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "at_least_one_lock_or_reader"}
+    # The refusal comes back holding the name the user typed.
+    assert _suggested_values(result)[CONF_NAME] == "test"
+
+
+async def test_options_flow_adds_reader_to_existing_entry(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The options flow splits stored readers out for display and re-merges."""
+    reader = _register_reader(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+        },
+    )
+    entry.add_to_hass(hass)
+
+    # The stored entry has no readers, so the readers field starts empty.
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    defaults = _form_defaults(result)
+    assert defaults[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert defaults[CONF_READERS] == []
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_READERS: [reader.entity_id],
+                CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            },
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, reader.entity_id]
+    assert CONF_READERS not in result["data"]
+
+    # Re-opening the form splits the merged list back apart, so the reader
+    # shows up in the readers field rather than among the locks.
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    defaults = _form_defaults(result)
+    assert defaults[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert defaults[CONF_READERS] == [reader.entity_id]
