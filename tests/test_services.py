@@ -677,6 +677,54 @@ async def test_add_user_service_rejects_enabled_without_a_pin(
         )
 
 
+async def test_add_user_service_stores_a_padded_pin_stripped(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A PIN handed to the service with padding is stored without it.
+
+    The service writes the entry's users directly, the way both flows do,
+    so it is the third door onto the same storage -- and a reader strips a
+    submitted code before matching it.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "Newcomer",
+            CONF_PIN: " 9876 ",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["Newcomer"][CONF_PIN] == "9876"
+
+
+async def test_add_user_service_rejects_a_whitespace_only_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """An enabled user whose PIN is only whitespace has nothing to program."""
+    with pytest.raises(ServiceValidationError, match="without a PIN"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Newcomer",
+                CONF_PIN: "   ",
+            },
+            blocking=True,
+        )
+
+
 async def test_add_user_service_allows_a_disabled_user_with_no_pin(
     hass: HomeAssistant,
     mock_lock_config_entry,

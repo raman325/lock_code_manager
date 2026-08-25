@@ -596,7 +596,10 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         schema=_entry_schema(
             {
                 vol.Required(CONF_NAME): cv.string,
-                vol.Optional(CONF_PIN): cv.string,
+                # Stripped here as the config flow strips its own field: a
+                # reader strips a submitted code before matching it, so a
+                # PIN stored with padding matches nothing anybody can type.
+                vol.Optional(CONF_PIN): vol.All(cv.string, str.strip),
                 vol.Optional(CONF_ENABLED, default=True): cv.boolean,
                 vol.Optional(CONF_CONDITION): cv.entity_domain(
                     CONDITION_ENTITY_DOMAINS

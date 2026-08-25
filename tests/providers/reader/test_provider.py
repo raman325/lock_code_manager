@@ -11,7 +11,13 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import ATTR_STATE, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import (
+    ATTR_STATE,
+    CONF_ENABLED,
+    CONF_PIN,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -23,6 +29,9 @@ from custom_components.lock_code_manager.const import (
     ATTR_REASON,
     ATTR_USER,
     ATTR_VALID,
+    CONF_LOCKS,
+    CONF_READERS,
+    CONF_USERS,
     DOMAIN,
     EVENT_CODE_VALIDATION_FAILED,
     EVENT_LOCK_STATE_CHANGED,
@@ -567,6 +576,38 @@ async def test_padded_stored_pin_validates_at_the_reader(
 
     coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
     await coordinator.async_request_pin_update(" 4321 ")
+    await hass.async_block_till_done()
+
+    hass.states.async_set(READER_ENTITY_ID, "4321")
+    await hass.async_block_till_done()
+
+    assert [event.data[ATTR_CODE_SLOT] for event in usage_events] == [1]
+    assert not failure_events
+
+
+async def test_a_pin_typed_with_padding_in_the_editor_opens_the_keypad(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    A padded PIN saved through the users editor is one a keypad can match.
+
+    The editor writes the entry's users itself, so the stored side has to
+    be normalized where it enters; the reader can only strip what is
+    submitted to it.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    result = await hass.config_entries.options.async_init(lcm_config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_LOCKS: [],
+            CONF_READERS: [READER_ENTITY_ID],
+            CONF_USERS: {"alice": {CONF_ENABLED: True, CONF_PIN: " 4321 "}},
+        },
+    )
+    assert result["type"] == "create_entry"
     await hass.async_block_till_done()
 
     hass.states.async_set(READER_ENTITY_ID, "4321")
