@@ -8,7 +8,7 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from custom_components.lock_code_manager.const import CONF_SLOTS, DOMAIN
+from custom_components.lock_code_manager.const import CONF_SLOTS, DOMAIN, REDACTED
 from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
@@ -180,8 +180,8 @@ async def test_sensitive_entities_redacted(
         all_entities.extend(lock_diag.get("entities", []))
 
     # _is_sensitive checks unique_id for |pin and |code markers, which
-    # results in **REDACTED** state. Verify at least one entity is redacted.
-    redacted = [e for e in all_entities if e["state"] == "**REDACTED**"]
+    # redacts the state. Verify at least one entity is redacted.
+    redacted = [e for e in all_entities if e["state"] == REDACTED]
     assert len(redacted) > 0, "Expected at least one redacted entity"
 
     for entity in redacted:
