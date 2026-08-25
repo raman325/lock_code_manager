@@ -848,6 +848,48 @@ describe('generateView', () => {
         expect(lockEntityIds).toEqual(['lock.a_front', 'lock.z_back']);
     });
 
+    it('does not badge a credential reader anchor', async () => {
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [
+                { entity_id: 'lock.front', name: 'Front Lock' },
+                { entity_id: 'sensor.keypad_last_pin', name: 'Keypad' }
+            ],
+            slots: { 1: { condition: null, name: 'Raman' } }
+        };
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: false
+        });
+
+        const badgedEntityIds = result.badges
+            .filter(
+                (badge): badge is { entity: string; type: string } =>
+                    typeof badge === 'object' && badge !== null && 'entity' in badge
+            )
+            .map((badge) => badge.entity);
+        expect(badgedEntityIds).toContain('lock.front');
+        // A reader's state is the credential someone just typed.
+        expect(badgedEntityIds).not.toContain('sensor.keypad_last_pin');
+    });
+
     it('uses new slot cards when use_slot_cards is true', async () => {
         const configEntryData: LockCodeManagerConfigEntryDataResponse = {
             config_entry: testConfigEntry,

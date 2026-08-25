@@ -65,9 +65,13 @@ export async function generateView(
     // The slot cards already show detailed status (active, sync, conditions)
     const badges: Array<string | object> = [];
 
-    // Lock state badges - show each lock with its current state
-    // Entity badges automatically show friendly name and lock/unlock state
+    // A badge renders its entity's state, and `locks` also carries credential
+    // readers, whose state IS the credential last submitted at the keypad --
+    // badging one would put a PIN on the dashboard in cleartext. Only the
+    // `lock` domain has a lock state to show; a reader gets no badge, and the
+    // slot cards already carry its per-slot status.
     configEntryData.locks
+        .filter((lock) => lock.entity_id.split('.')[0] === 'lock')
         .sort((a, b) => a.entity_id.localeCompare(b.entity_id))
         .forEach((lock) => {
             badges.push({
