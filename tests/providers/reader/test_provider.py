@@ -22,6 +22,9 @@ from custom_components.lock_code_manager.const import (
     REASON_UNKNOWN_CODE,
     REDACTED,
 )
+from custom_components.lock_code_manager.diagnostics import (
+    async_get_config_entry_diagnostics,
+)
 from custom_components.lock_code_manager.providers.reader import ReaderLock
 
 from .conftest import READER_ENTITY_ID
@@ -328,6 +331,31 @@ async def test_second_entry_still_validates_after_first_unloads(
     # The state-change dispatcher swallows a listener's exception, so a
     # crash would show up only here.
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+async def test_diagnostics_never_contain_the_submitted_code(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    The anchor's state is redacted in the diagnostics bundle.
+
+    Diagnostics redact by unique id, which only ever matches this
+    integration's own entities; the anchor belongs to esphome, so its state
+    -- the last credential typed -- would ride along into the file users
+    attach to bug reports.
+    """
+    hass.states.async_set(READER_ENTITY_ID, "1234")
+    await hass.async_block_till_done()
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, lcm_config_entry)
+
+    anchor = next(
+        entity
+        for entity in diagnostics["locks"][READER_ENTITY_ID]["entities"]
+        if entity["entity_id"] == READER_ENTITY_ID
+    )
+    assert anchor["state"] == REDACTED
+    assert "1234" not in str(diagnostics)
 
 
 async def test_dispatched_end_to_end_as_reader(

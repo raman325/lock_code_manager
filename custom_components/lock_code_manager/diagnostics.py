@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import DOMAIN
+from .const import DOMAIN, REDACTED
 from .domain.config import build_slot_device_identifier
 from .domain.credentials import pin_address
 from .domain.models import SlotCode, SlotCredential
@@ -39,8 +40,23 @@ def _mask_code(
 _SENSITIVE_UNIQUE_ID_MARKERS = ("|pin", "|code")
 
 
-def _is_sensitive(entry: er.RegistryEntry) -> bool:
+def _credential_bearing_entity_ids(locks: Iterable[BaseLock]) -> frozenset[str]:
+    """
+    Return the entity IDs whose own state is a credential.
+
+    A credential reader anchors on somebody else's entity -- an esphome
+    sensor, say -- so the unique-id rule below, which only ever recognises
+    this integration's own entities, cannot see it.
+    """
+    return frozenset(lock.lock.entity_id for lock in locks if lock.state_is_credential)
+
+
+def _is_sensitive(
+    entry: er.RegistryEntry, credential_entity_ids: frozenset[str]
+) -> bool:
     """Return True if the entity may expose a PIN or code in its state."""
+    if entry.entity_id in credential_entity_ids:
+        return True
     uid = entry.unique_id or ""
     return entry.platform == DOMAIN and any(
         m in uid for m in _SENSITIVE_UNIQUE_ID_MARKERS
@@ -51,12 +67,14 @@ def _entity_states_for_device(
     hass: HomeAssistant,
     ent_reg: er.EntityRegistry,
     device_id: str,
+    credential_entity_ids: frozenset[str],
 ) -> list[dict[str, Any]]:
     """
     Return entity states for all entities on a device.
 
-    Sensitive entities (PIN text, code sensor) have their state and
-    attributes redacted to avoid leaking PINs in diagnostics output.
+    Sensitive entities (PIN text, code sensor, reader anchor) have their
+    state and attributes redacted to avoid leaking PINs in diagnostics
+    output.
     """
     entities: list[dict[str, Any]] = []
     for entry in er.async_entries_for_device(ent_reg, device_id):
@@ -64,13 +82,13 @@ def _entity_states_for_device(
         friendly_name = (
             state.attributes.get("friendly_name") if state else entry.original_name
         )
-        if _is_sensitive(entry):
+        if _is_sensitive(entry, credential_entity_ids):
             entities.append(
                 {
                     "entity_id": entry.entity_id,
                     "friendly_name": friendly_name,
                     "platform": entry.platform,
-                    "state": "**REDACTED**",
+                    "state": REDACTED,
                     "attributes": {},
                 }
             )
@@ -120,7 +138,7 @@ def _lock_diagnostic(
 
     if lock.device_entry:
         result["entities"] = _entity_states_for_device(
-            hass, ent_reg, lock.device_entry.id
+            hass, ent_reg, lock.device_entry.id, _credential_bearing_entity_ids([lock])
         )
 
     return result
@@ -172,7 +190,9 @@ def _slot_diagnostic(
     )
     device = dev_reg.async_get_device(identifiers={slot_identifier})
     if device:
-        result["entities"] = _entity_states_for_device(hass, ent_reg, device.id)
+        result["entities"] = _entity_states_for_device(
+            hass, ent_reg, device.id, _credential_bearing_entity_ids(locks.values())
+        )
 
     return result
 

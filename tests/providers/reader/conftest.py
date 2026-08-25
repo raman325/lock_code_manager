@@ -9,7 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     CONF_ENABLED,
@@ -61,12 +61,20 @@ async def reader_entity(
     hass: HomeAssistant, esphome_config_entry: MockConfigEntry
 ) -> er.RegistryEntry:
     """Register a sensor-domain anchor entity under the esphome platform."""
+    # On a real keypad the anchor sits on a device alongside the rest of the
+    # node's entities, which is what puts it in scope for diagnostics.
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=esphome_config_entry.entry_id,
+        identifiers={("esphome", "keypad")},
+        name="Keypad",
+    )
     entity = er.async_get(hass).async_get_or_create(
         "sensor",
         "esphome",
         "keypad_code",
         suggested_object_id="keypad_code",
         config_entry=esphome_config_entry,
+        device_id=device.id,
     )
     assert entity.entity_id == READER_ENTITY_ID
     # A cleared keypad idles on an empty state; set it before LCM subscribes
