@@ -81,6 +81,45 @@ async def test_blank_states_are_ignored(
     assert not failure_events
 
 
+@pytest.mark.parametrize("interrupted_by", [STATE_UNAVAILABLE, STATE_UNKNOWN])
+async def test_republished_code_after_an_outage_is_not_a_submission(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry, interrupted_by: str
+) -> None:
+    """
+    A keypad restoring its last value after an outage has submitted nothing.
+
+    A Wi-Fi blip, an integration reload, or a Home Assistant restart drops
+    the anchor to unavailable or unknown and then republishes whatever it
+    last held. Treating that as a press runs the user's "on credential_used,
+    open the door" automation with nobody standing there.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    for state in (interrupted_by, "1234"):
+        hass.states.async_set(READER_ENTITY_ID, state)
+        await hass.async_block_till_done()
+
+    assert not usage_events
+    assert not failure_events
+
+
+async def test_first_state_after_registration_is_not_a_submission(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """An anchor appearing with a value already set has submitted nothing."""
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    hass.states.async_remove(READER_ENTITY_ID)
+    await hass.async_block_till_done()
+    hass.states.async_set(READER_ENTITY_ID, "1234")
+    await hass.async_block_till_done()
+
+    assert not usage_events
+    assert not failure_events
+
+
 async def test_repeated_code_after_clear(
     hass: HomeAssistant, lcm_config_entry: MockConfigEntry
 ) -> None:

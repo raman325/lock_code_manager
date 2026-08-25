@@ -80,6 +80,15 @@ class ReaderLock(VirtualLock):
             STATE_UNAVAILABLE,
         ):
             return
+        # A submission is a transition WITHIN normal operation, so the old
+        # state has to be a real one too. Coming back from unavailable or
+        # unknown -- a Wi-Fi blip, an integration reload, a restart -- the
+        # device republishes whatever it last held, and counting that as a
+        # press runs the user's "on credential_used, open the door"
+        # automation with nobody standing at the keypad.
+        old_state = event.data["old_state"]
+        if old_state is None or old_state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+            return
         # Provider instances are shared across Lock Code Manager entries, so
         # the entry that ran setup is not the only one this anchor answers
         # to: validate against every entry that contains it, or credentials
