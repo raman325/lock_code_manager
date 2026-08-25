@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_capture_events,
@@ -94,20 +97,27 @@ async def test_repeated_code_after_clear(
 
 
 async def test_unloaded_entry_stops_validating(
-    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """After the entry unloads, anchor state changes fire no events."""
+    """After the entry unloads, anchor state changes fire no events and no errors."""
     usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     failure_events = async_capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
 
     assert await hass.config_entries.async_unload(lcm_config_entry.entry_id)
     await hass.async_block_till_done()
 
+    caplog.clear()
     hass.states.async_set(READER_ENTITY_ID, "1234")
     await hass.async_block_till_done()
 
     assert not usage_events
     assert not failure_events
+    # A still-armed listener would not reach the event assertions: its crash
+    # against the unloaded entry is caught and logged by the state-change
+    # dispatcher, so only the log shows it.
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 async def test_event_entity_available_for_reader_only_entry(
@@ -147,6 +157,7 @@ async def test_provider_reload_after_unload_does_not_rearm(
     hass: HomeAssistant,
     lcm_config_entry: MockConfigEntry,
     esphome_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     A provider reload after LCM unload must not re-arm the reader.
@@ -162,6 +173,7 @@ async def test_provider_reload_after_unload_does_not_rearm(
     assert await hass.config_entries.async_unload(lcm_config_entry.entry_id)
     await hass.async_block_till_done()
 
+    caplog.clear()
     esphome_config_entry.mock_state(hass, ConfigEntryState.LOADED)
     await hass.async_block_till_done()
 
@@ -170,6 +182,10 @@ async def test_provider_reload_after_unload_does_not_rearm(
 
     assert not usage_events
     assert not failure_events
+    # A re-armed reader's crash on the unloaded entry surfaces only as a
+    # logged error: the state-change dispatcher catches it before it can
+    # fail the event assertions.
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 async def test_resetup_does_not_duplicate_validation(
