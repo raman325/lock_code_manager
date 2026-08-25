@@ -154,7 +154,10 @@ validate_code:
       required: true
       selector:
         entity:
-          domain: lock
+          domain:
+            - lock
+            - sensor
+            - text
     code:
       required: true
       selector:

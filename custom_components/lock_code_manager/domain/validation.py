@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID, CONF_CONDITION
 from homeassistant.core import HomeAssistant
@@ -16,10 +17,12 @@ from ..const import (
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
 )
-from ..providers import BaseLock
 from .models import LockCodeManagerConfigEntry
 from .queries import get_entry_config
 from .slot_coordinator import SlotEntityCoordinator
+
+if TYPE_CHECKING:
+    from ..providers import BaseLock
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +70,10 @@ async def async_validate_credential(
     """
     coordinators = config_entry.runtime_data.slot_coordinators
     matches = [c for c in coordinators.values() if c.pin_value == code]
+    # A coordinator whose active state was never computed (``is_active`` is
+    # None, empty inactive reasons) counts as inactive and folds into
+    # condition_not_met -- unreachable after entry setup, stated so a
+    # pre-start caller isn't surprised.
     active = next((c for c in matches if c.is_active), None)
 
     if active is not None:
@@ -80,6 +87,11 @@ async def async_validate_credential(
 
     reason = _failure_reason(matches)
     if fire_events:
+        # Matched codes mask with their slot so the token stays reversible by
+        # the deobfuscation map; unknown codes have no slot and stay opaque.
+        masked = (
+            lock.mask_pin(code, matches[0].slot_num) if matches else lock.mask_pin(code)
+        )
         hass.bus.async_fire(
             EVENT_CODE_VALIDATION_FAILED,
             {
@@ -87,7 +99,7 @@ async def async_validate_credential(
                 ATTR_DEVICE_ID: lock.lock.device_id,
                 ATTR_LCM_CONFIG_ENTRY_ID: config_entry.entry_id,
                 ATTR_REASON: reason,
-                ATTR_CODE: lock.mask_pin(code),
+                ATTR_CODE: masked,
             },
         )
     return ValidationResult(valid=False, user=None, reason=reason)

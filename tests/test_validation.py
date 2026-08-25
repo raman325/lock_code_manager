@@ -134,11 +134,18 @@ async def test_valid_code(hass: HomeAssistant, validation_entry, virtual_lock):
 
 
 async def test_unknown_code(hass: HomeAssistant, validation_entry, virtual_lock):
-    """A code no slot holds is rejected as unknown."""
+    """A code no slot holds is rejected as unknown, with an opaque masked token."""
+    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
     result = await _validate(hass, validation_entry, virtual_lock, "0000")
     assert result == ValidationResult(
         valid=False, user=None, reason=REASON_UNKNOWN_CODE
     )
+
+    # No matched slot to salt with: the token is the slot-0 one, which the
+    # deobfuscation map cannot (and should not) reverse.
+    assert len(failure_events) == 1
+    assert failure_events[0].data[ATTR_CODE] == virtual_lock.mask_pin("0000")
 
 
 async def test_disabled_user(hass: HomeAssistant, validation_entry, virtual_lock):
@@ -206,7 +213,10 @@ async def test_failure_fires_validation_failed(
     data = failure_events[0].data
     assert data[ATTR_REASON] == REASON_USER_DISABLED
     assert "5678" not in data.values()
-    assert data[ATTR_CODE].startswith("pin#")
+    # The code matched slot 2, so the token is salted with that slot -- the
+    # deobfuscation map can reverse it -- rather than the opaque slot-0 token.
+    assert data[ATTR_CODE] == virtual_lock.mask_pin("5678", 2)
+    assert data[ATTR_CODE] != virtual_lock.mask_pin("5678")
     assert not state_events
 
 

@@ -305,7 +305,7 @@
       "fields": {
         "lock_entity_id": {
           "name": "Lock",
-          "description": "The lock the code was submitted to."
+          "description": "The lock, or the reader entity, the code was submitted to."
         },
         "code": {
           "name": "Code",
