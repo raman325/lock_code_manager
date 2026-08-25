@@ -21,6 +21,7 @@ from custom_components.lock_code_manager.const import (
 )
 
 READER_ENTITY_ID = "sensor.keypad_code"
+SECOND_READER_ENTITY_ID = "sensor.keypad_code_2"
 
 # LCM config: one reader anchor, one enabled slot and one disabled slot
 READER_LCM_CONFIG = {
@@ -29,6 +30,13 @@ READER_LCM_CONFIG = {
         1: {CONF_NAME: "alice", CONF_PIN: "1234", CONF_ENABLED: True},
         2: {CONF_NAME: "bob", CONF_PIN: "5678", CONF_ENABLED: False},
     },
+}
+
+# Two anchors on one device: a keypad exposing more than one credential
+# entity, or a lock device that also hosts a sensor used as an anchor.
+TWO_ANCHOR_LCM_CONFIG = {
+    CONF_LOCKS: [READER_ENTITY_ID, SECOND_READER_ENTITY_ID],
+    CONF_SLOTS: {1: {CONF_NAME: "alice", CONF_PIN: "1234", CONF_ENABLED: True}},
 }
 
 # A second entry on the same anchor, with slots and users disjoint from the
@@ -130,3 +138,40 @@ async def second_lcm_config_entry(
 
     if second_entry.state is ConfigEntryState.LOADED:
         await hass.config_entries.async_unload(second_entry.entry_id)
+
+
+@pytest.fixture
+async def second_reader_entity(
+    hass: HomeAssistant, reader_entity: er.RegistryEntry
+) -> er.RegistryEntry:
+    """Register a second anchor entity on the SAME device as the first."""
+    entity = er.async_get(hass).async_get_or_create(
+        "sensor",
+        "esphome",
+        "keypad_code_2",
+        suggested_object_id="keypad_code_2",
+        config_entry=hass.config_entries.async_get_entry(reader_entity.config_entry_id),
+        device_id=reader_entity.device_id,
+    )
+    assert entity.entity_id == SECOND_READER_ENTITY_ID
+    hass.states.async_set(SECOND_READER_ENTITY_ID, "")
+    return entity
+
+
+@pytest.fixture
+async def two_anchor_lcm_config_entry(
+    hass: HomeAssistant,
+    second_reader_entity: er.RegistryEntry,
+) -> AsyncGenerator[MockConfigEntry]:
+    """Set up one LCM entry managing both anchors that share a device."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN, data=TWO_ANCHOR_LCM_CONFIG, unique_id="test_two_readers"
+    )
+    lcm_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield lcm_entry
+
+    if lcm_entry.state is ConfigEntryState.LOADED:
+        await hass.config_entries.async_unload(lcm_entry.entry_id)

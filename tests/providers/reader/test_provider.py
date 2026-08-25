@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import (
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_STATE, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE,
@@ -31,10 +32,11 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
+    async_get_device_diagnostics,
 )
 from custom_components.lock_code_manager.providers.reader import ReaderLock
 
-from .conftest import READER_ENTITY_ID
+from .conftest import READER_ENTITY_ID, SECOND_READER_ENTITY_ID
 
 # Per-user credential_used event entity: entry title slug + user name + key.
 SLOT_1_EVENT_ENTITY = "event.mock_title_alice_credential_used"
@@ -403,3 +405,64 @@ async def test_dispatched_end_to_end_as_reader(
     lock = lcm_config_entry.runtime_data.locks[READER_ENTITY_ID]
     assert isinstance(lock, ReaderLock)
     assert lock.domain == "esphome"
+
+
+async def test_diagnostics_redact_every_anchor_sharing_a_device(
+    hass: HomeAssistant, two_anchor_lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    Neither anchor's code survives a bundle built for one of them.
+
+    The per-lock section dumps every entity on the lock's device, so a
+    device carrying two anchors -- a keypad exposing more than one
+    credential entity, or a lock device that also hosts one -- puts the
+    sibling's state in a bundle whose redaction set was scoped to a single
+    lock.
+    """
+    hass.states.async_set(READER_ENTITY_ID, "4321")
+    hass.states.async_set(SECOND_READER_ENTITY_ID, "8888")
+    await hass.async_block_till_done()
+
+    diagnostics = await async_get_config_entry_diagnostics(
+        hass, two_anchor_lcm_config_entry
+    )
+
+    anchors = [
+        entity
+        for lock_diag in diagnostics["locks"].values()
+        for entity in lock_diag["entities"]
+        if entity["entity_id"] in (READER_ENTITY_ID, SECOND_READER_ENTITY_ID)
+    ]
+    assert len(anchors) == 4
+    assert all(anchor["state"] == REDACTED for anchor in anchors)
+    assert "4321" not in str(diagnostics)
+    assert "8888" not in str(diagnostics)
+
+
+async def test_device_diagnostics_redact_every_anchor_sharing_a_device(
+    hass: HomeAssistant,
+    two_anchor_lcm_config_entry: MockConfigEntry,
+    second_reader_entity: er.RegistryEntry,
+) -> None:
+    """A bundle downloaded from the shared device redacts both anchors."""
+    hass.states.async_set(READER_ENTITY_ID, "4321")
+    hass.states.async_set(SECOND_READER_ENTITY_ID, "8888")
+    await hass.async_block_till_done()
+
+    assert second_reader_entity.device_id
+    device = dr.async_get(hass).async_get(second_reader_entity.device_id)
+    assert device
+
+    diagnostics = await async_get_device_diagnostics(
+        hass, two_anchor_lcm_config_entry, device
+    )
+
+    anchors = [
+        entity
+        for entity in diagnostics["entities"]
+        if entity["entity_id"] in (READER_ENTITY_ID, SECOND_READER_ENTITY_ID)
+    ]
+    assert len(anchors) == 2
+    assert all(anchor["state"] == REDACTED for anchor in anchors)
+    assert "4321" not in str(diagnostics)
+    assert "8888" not in str(diagnostics)
