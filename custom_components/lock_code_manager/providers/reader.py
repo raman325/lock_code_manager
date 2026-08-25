@@ -47,6 +47,11 @@ class ReaderLock(VirtualLock):
         """
         return True
 
+    @property
+    def state_is_credential(self) -> bool:
+        """Return True: the anchor entity's state is the submitted credential."""
+        return True
+
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up slot storage and start watching the anchor entity."""
         await super().async_setup(config_entry)

@@ -107,6 +107,10 @@ REASON_UNKNOWN_CODE = "unknown_code"
 REASON_USER_DISABLED = "user_disabled"
 REASON_CONDITION_NOT_MET = "condition_not_met"
 
+# Stands in for a value withheld from a surface that leaves the integration:
+# the event bus, the recorder, a diagnostics download.
+REDACTED = "**REDACTED**"
+
 # Event data constants
 ATTR_ACTION_TEXT = "action_text"
 ATTR_CODE_SLOT_NAME = "code_slot_name"

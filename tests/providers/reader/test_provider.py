@@ -11,7 +11,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import ATTR_STATE, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import (
@@ -20,6 +20,7 @@ from custom_components.lock_code_manager.const import (
     EVENT_CODE_VALIDATION_FAILED,
     EVENT_LOCK_STATE_CHANGED,
     REASON_UNKNOWN_CODE,
+    REDACTED,
 )
 from custom_components.lock_code_manager.providers.reader import ReaderLock
 
@@ -209,6 +210,32 @@ async def test_resetup_does_not_duplicate_validation(
     await hass.async_block_till_done()
 
     assert len(usage_events) == 1
+
+
+async def test_success_event_never_carries_the_submitted_code(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """
+    A valid submission's usage event redacts the anchor's state.
+
+    For an ordinary lock the anchor state is locked/unlocked; for a reader
+    it is the credential that was just typed, and the usage event lands on
+    the bus, in the recorder, and in the event entity's attributes.
+    """
+    usage_events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    hass.states.async_set(READER_ENTITY_ID, "1234")
+    await hass.async_block_till_done()
+
+    assert len(usage_events) == 1
+    event_data = usage_events[0].data
+    assert event_data[ATTR_STATE] == REDACTED
+    assert "1234" not in event_data.values()
+
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+    assert state.attributes[ATTR_STATE] == REDACTED
+    assert "1234" not in state.attributes.values()
 
 
 async def test_validates_against_every_entry_sharing_the_anchor(
