@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import Event, EventStateChangedData, callback
+from homeassistant.helpers.event import async_track_state_change_event
+
+from ..domain.validation import async_validate_credential
 from .virtual import VirtualLock
 
 
@@ -18,7 +25,50 @@ class ReaderLock(VirtualLock):
     reader like any slot-only lock.
     """
 
+    # A Home Assistant state listener tied to setup/unload, which the base
+    # push-subscription registry explicitly does not manage.
+    _anchor_state_unsub: Callable[[], None] | None = field(
+        default=None, init=False, repr=False
+    )
+
     @property
     def domain(self) -> str:
         """Return the anchor entity's integration domain."""
         return self.lock.platform
+
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """Set up slot storage and start watching the anchor entity."""
+        await super().async_setup(config_entry)
+        # Idempotent across provider-integration reconnects: drop any
+        # previous subscription before re-subscribing.
+        if self._anchor_state_unsub is not None:
+            self._anchor_state_unsub()
+        self._anchor_state_unsub = async_track_state_change_event(
+            self.hass, self.lock.entity_id, self._async_anchor_state_changed
+        )
+
+    async def async_unload(self, remove_permanently: bool) -> None:
+        """Stop watching the anchor entity, then unload slot storage."""
+        if self._anchor_state_unsub is not None:
+            self._anchor_state_unsub()
+            self._anchor_state_unsub = None
+        await super().async_unload(remove_permanently)
+
+    @callback
+    def _async_anchor_state_changed(self, event: Event[EventStateChangedData]) -> None:
+        """Validate the code a new anchor state carries, skipping blank states."""
+        new_state = event.data["new_state"]
+        if new_state is None or new_state.state in (
+            "",
+            STATE_UNKNOWN,
+            STATE_UNAVAILABLE,
+        ):
+            return
+        # async_setup_internal stores the entry before async_setup
+        # subscribes, so a firing listener implies the reference is set.
+        lcm_entry = self._lcm_config_entry
+        assert lcm_entry is not None
+        self.hass.async_create_task(
+            async_validate_credential(self.hass, lcm_entry, self, new_state.state),
+            f"Validate credential submitted via {self.lock.entity_id}",
+        )
