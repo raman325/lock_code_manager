@@ -2339,6 +2339,57 @@ async def test_options_flow_dedupes_entity_in_both_fields(
     assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, reader.entity_id]
 
 
+async def test_options_flow_requires_a_lock_or_reader(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Emptying both entity fields in the options flow is refused, not saved."""
+    flow_id, entry = await _start_options_flow(hass)
+    data_before = dict(entry.data)
+
+    result = await hass.config_entries.options.async_configure(
+        flow_id,
+        {
+            CONF_LOCKS: [],
+            CONF_READERS: [],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    assert result["errors"] == {"base": "at_least_one_lock_or_reader"}
+    assert entry.data == data_before
+    assert not entry.options
+
+
+async def test_reauth_requires_a_lock_or_reader(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Emptying both entity fields in reauth is refused, not written."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+        },
+    )
+    entry.add_to_hass(hass)
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [], CONF_READERS: []}
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "at_least_one_lock_or_reader"}
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+
 async def test_reauth_replaces_a_deleted_reader(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:

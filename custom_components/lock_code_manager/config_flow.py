@@ -140,7 +140,10 @@ def _check_unclaimed_mqtt_locks(
 
     The entity selector filter can only express integration+domain, so
     per-device dispatch has to be enforced here at submit time -- otherwise
-    an unclaimed mqtt lock is accepted and only refused at setup.
+    an unclaimed mqtt lock is accepted and only refused at setup. Callers
+    pass the merged locks+readers list: an unclaimed mqtt lock can be typed
+    into either field, while an mqtt-platform reader anchor resolves to the
+    reader provider and passes harmlessly.
     """
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
@@ -305,11 +308,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             # Checked before the step consumes anything from user_input: a
             # refusal re-renders this form from what was submitted, and the
             # name has to still be in there when it does.
-            if not user_input[CONF_LOCKS] and not user_input[CONF_READERS]:
+            merged_locks = _merge_locks_and_readers(
+                user_input[CONF_LOCKS], user_input[CONF_READERS]
+            )
+            if not merged_locks:
                 errors["base"] = "at_least_one_lock_or_reader"
             else:
                 errors, description_placeholders = _check_unclaimed_mqtt_locks(
-                    self.hass, user_input[CONF_LOCKS]
+                    self.hass, merged_locks
                 )
             if not errors:
                 self.title = user_input.pop(CONF_NAME)
@@ -318,9 +324,8 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # CONF_LOCKS is the single persisted list. A reader is
                 # distinguishable downstream by entity domain alone, so a
                 # separate persisted key would be a second source of truth.
-                user_input[CONF_LOCKS] = _merge_locks_and_readers(
-                    user_input[CONF_LOCKS], user_input.pop(CONF_READERS)
-                )
+                user_input[CONF_LOCKS] = merged_locks
+                del user_input[CONF_READERS]
                 self.data = user_input
                 return await self.async_step_choose_path()
 
@@ -572,7 +577,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 (
                     additional_errors,
                     additional_placeholders,
-                ) = _check_unclaimed_mqtt_locks(self.hass, user_input[CONF_LOCKS])
+                ) = _check_unclaimed_mqtt_locks(self.hass, merged_locks)
             if not additional_errors:
                 additional_errors, additional_placeholders = _check_common_slots(
                     self.hass,
@@ -669,7 +674,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             # short-circuiting it: all refusals render together, so one round
             # trip shows everything wrong with the submission.
             lock_errors, lock_placeholders = _check_unclaimed_mqtt_locks(
-                self.hass, user_input[CONF_LOCKS]
+                self.hass, merged_locks
             )
             errors.update(lock_errors)
             description_placeholders.update(lock_placeholders)

@@ -75,7 +75,7 @@
           "readers": "Code-input entities (e.g. an ESPHome keypad's text sensor) whose submitted codes Lock Code Manager validates against this configuration's users."
         },
         "description": "The entity `{lock}`, in the configuration for `{name}`, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks and/or credential readers that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
-        "title": "Update locks for {name}"
+        "title": "Update locks and readers for {name}"
       }
     }
   },
@@ -159,7 +159,7 @@
         "data_description": {
           "readers": "Code-input entities (e.g. an ESPHome keypad's text sensor) whose submitted codes Lock Code Manager validates against this configuration's users."
         },
-        "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
+        "description": "Update the locks and credential readers that are associated with this config entry and/or the slot configurations.",
         "title": "Lock Code Manager"
       }
     }
