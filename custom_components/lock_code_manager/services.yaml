@@ -147,3 +147,19 @@ deobfuscate_log:
       selector:
         text:
           multiline: true
+
+validate_code:
+  fields:
+    lock_entity_id:
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code:
+      required: true
+      selector:
+        text:
+    fire_events:
+      default: true
+      selector:
+        boolean:

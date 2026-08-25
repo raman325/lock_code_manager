@@ -23,6 +23,7 @@ SERVICE_ADD_USER = "add_user"
 SERVICE_DELETE_USER = "delete_user"
 SERVICE_GENERATE_PIN = "generate_pin"
 SERVICE_DEOBFUSCATE_LOG = "deobfuscate_log"
+SERVICE_VALIDATE_CODE = "validate_code"
 
 ATTR_TEXT = "text"
 
@@ -92,6 +93,17 @@ ATTR_SCHEDULE_NEXT_EVENT = "next_event"
 
 # Events
 EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
+EVENT_CODE_VALIDATION_FAILED = f"{DOMAIN}_code_validation_failed"
+
+# Credential validation
+ATTR_REASON = "reason"
+ATTR_FIRE_EVENTS = "fire_events"
+ATTR_VALID = "valid"
+ATTR_USER = "user"
+
+REASON_UNKNOWN_CODE = "unknown_code"
+REASON_USER_DISABLED = "user_disabled"
+REASON_CONDITION_NOT_MET = "condition_not_met"
 
 # Event data constants
 ATTR_ACTION_TEXT = "action_text"
