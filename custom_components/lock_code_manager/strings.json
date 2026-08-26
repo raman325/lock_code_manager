@@ -301,19 +301,27 @@
     },
     "validate_code": {
       "name": "Validate code",
-      "description": "Check a code against Lock Code Manager's configuration for a lock without touching the lock. Returns whether the code would work, for which user, and the reason when it would not.",
+      "description": "Check a code against a Lock Code Manager entry's users without touching any lock. Returns whether the code would work, for which user, and the reason when it would not.",
       "fields": {
-        "lock_entity_id": {
-          "name": "Lock",
-          "description": "The lock the code was submitted to."
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry to check the code against."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
         },
         "code": {
           "name": "Code",
           "description": "The code to validate."
         },
+        "lock_entity_id": {
+          "name": "Lock",
+          "description": "The lock the code was submitted to, which the success event is attributed to. Must belong to the chosen entry. Leave it out and a valid code returns its answer without firing a success event."
+        },
         "source_entity_id": {
           "name": "Source",
-          "description": "The entity the code came from, such as a keypad's code entity. Included in the fired event so an automation can tell where a code was entered."
+          "description": "The entity the code came from, such as a keypad's code entity. Included in the fired event (in extra_data on success) so an automation can tell where a code was entered."
         },
         "fire_events": {
           "name": "Fire events",

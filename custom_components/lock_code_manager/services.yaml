@@ -150,15 +150,21 @@ deobfuscate_log:
 
 validate_code:
   fields:
-    lock_entity_id:
-      required: true
+    config_entry_id:
       selector:
-        entity:
-          domain: lock
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
     code:
       required: true
       selector:
         text:
+    lock_entity_id:
+      selector:
+        entity:
+          domain: lock
     source_entity_id:
       selector:
         entity:

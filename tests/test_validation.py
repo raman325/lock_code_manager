@@ -122,7 +122,9 @@ async def _validate(
     **kwargs: Any,
 ) -> ValidationResult:
     """Validate a code and flush the event bus."""
-    result = validate_credential(hass, validation_entry, virtual_lock, code, **kwargs)
+    result = validate_credential(
+        hass, validation_entry, code, lock=virtual_lock, **kwargs
+    )
     await hass.async_block_till_done()
     return result
 

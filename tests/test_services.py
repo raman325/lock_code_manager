@@ -10,6 +10,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 import voluptuous as vol
 
 from homeassistant.const import (
+    ATTR_DEVICE_ID,
+    ATTR_ENTITY_ID,
     CONF_CONDITION,
     CONF_ENABLED,
     CONF_ENTITY_ID,
@@ -1090,6 +1092,7 @@ async def test_slot_condition_services_accept_a_title(
 
 VALIDATE_LOCK_ENTITY_ID = "lock.virtual_validate_service"
 VALIDATE_CONDITION_ENTITY_ID = "input_boolean.validate_service_gate"
+OTHER_LOCK_ENTITY_ID = "lock.virtual_validate_other"
 
 # alice validates, bob is disabled, carol waits on a condition that is off.
 VALIDATE_CONFIG = {
@@ -1106,10 +1109,10 @@ VALIDATE_CONFIG = {
     },
 }
 
-# Second entry sharing the same lock entity: betty's code is valid here and
-# unknown to the first entry; bob's disabled code is unknown here.
-SECOND_VALIDATE_CONFIG = {
-    CONF_LOCKS: [VALIDATE_LOCK_ENTITY_ID],
+# A second entry with a lock of its own, so "a lock outside the target entry"
+# is a lock this integration really manages rather than an unknown entity.
+OTHER_VALIDATE_CONFIG = {
+    CONF_LOCKS: [OTHER_LOCK_ENTITY_ID],
     CONF_SLOTS: {
         11: {CONF_NAME: "betty", CONF_PIN: "2468", CONF_ENABLED: True},
     },
@@ -1162,7 +1165,10 @@ async def validate_entry_fixture(hass: HomeAssistant):
     hass.states.async_set(VALIDATE_CONDITION_ENTITY_ID, "off")
 
     lcm_entry = MockConfigEntry(
-        domain=DOMAIN, data=VALIDATE_CONFIG, unique_id="test_validate_service"
+        domain=DOMAIN,
+        title="Validate Service",
+        data=VALIDATE_CONFIG,
+        unique_id="test_validate_service",
     )
     lcm_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(lcm_entry.entry_id)
@@ -1173,12 +1179,27 @@ async def validate_entry_fixture(hass: HomeAssistant):
     await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
-@pytest.fixture(name="second_validate_entry")
-async def second_validate_entry_fixture(hass: HomeAssistant, validate_entry):
-    """Set up a second LCM config entry managing the same virtual lock."""
+@pytest.fixture(name="other_validate_entry")
+async def other_validate_entry_fixture(hass: HomeAssistant, validate_entry):
+    """Set up a second LCM config entry managing a lock of its own."""
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    lock_entity = ent_reg.async_get_or_create(
+        "lock",
+        "virtual",
+        "virtual_validate_other",
+        suggested_object_id="virtual_validate_other",
+        config_entry=virtual_entry,
+    )
+    assert lock_entity.entity_id == OTHER_LOCK_ENTITY_ID
+    hass.states.async_set(OTHER_LOCK_ENTITY_ID, "locked")
+
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
-        data=SECOND_VALIDATE_CONFIG,
+        title="Other Validate Service",
+        data=OTHER_VALIDATE_CONFIG,
         unique_id="test_validate_service_2",
     )
     lcm_entry.add_to_hass(hass)
@@ -1194,7 +1215,18 @@ async def test_validate_code_valid(hass: HomeAssistant, validate_entry) -> None:
     """A valid code returns the user with no failure reason."""
     response = await _call_validate_code(
         hass,
-        {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "1234"},
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
+    )
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+
+
+async def test_validate_code_valid_by_title(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """Either identifier names the same entry, as the sibling actions do."""
+    response = await _call_validate_code(
+        hass,
+        {"config_entry_title": validate_entry.title, ATTR_CODE: "1234"},
     )
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
 
@@ -1203,7 +1235,7 @@ async def test_validate_code_unknown(hass: HomeAssistant, validate_entry) -> Non
     """A code no slot holds is rejected as unknown."""
     response = await _call_validate_code(
         hass,
-        {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "0000"},
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "0000"},
     )
     assert response == {
         ATTR_VALID: False,
@@ -1222,66 +1254,146 @@ async def test_validate_code_failure_reasons(
     """A matched-but-inactive code reports why it did not validate."""
     response = await _call_validate_code(
         hass,
-        {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: code},
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code},
     )
     assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
 
 
-async def test_validate_code_fires_success_event(
-    hass: HomeAssistant, validate_entry
+async def test_validate_code_fires_success_event_on_the_named_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    pin_bearing_source: str,
 ) -> None:
-    """With fire_events defaulted on, a valid code fires one usage event."""
+    """A named lock is where the success is attributed, on the bus and the entity."""
     state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
 
     await _call_validate_code(
         hass,
-        {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "1234"},
+        {
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CODE: "1234",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            ATTR_SOURCE_ENTITY_ID: pin_bearing_source,
+        },
     )
 
     assert len(state_events) == 1
     assert state_events[0].data[ATTR_CODE_SLOT] == 1
+    assert state_events[0].data[ATTR_EXTRA_DATA] == {
+        ATTR_SOURCE_ENTITY_ID: pin_bearing_source
+    }
     assert not failure_events
 
+    # The event entity keys its event type on the lock, which is the whole
+    # reason attribution has to be explicit rather than guessed.
+    event_entity_state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert event_entity_state.attributes["event_type"] == LOCK_1_ENTITY_ID
 
-async def test_validate_code_fires_failure_event(
+
+async def test_validate_code_without_a_lock_fires_no_success_event(
     hass: HomeAssistant, validate_entry
 ) -> None:
-    """With fire_events defaulted on, an invalid code fires one failure event."""
+    """Unattributed, a success is the response alone: no entity could own the event."""
     state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
 
-    await _call_validate_code(
+    response = await _call_validate_code(
         hass,
-        {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "0000"},
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
+    )
+
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+    assert not state_events
+    assert not failure_events
+
+
+async def test_validate_code_rejects_a_lock_outside_the_entry(
+    hass: HomeAssistant, validate_entry, other_validate_entry
+) -> None:
+    """A lock managed by another entry cannot be the one a success is attributed to."""
+    with pytest.raises(ServiceValidationError) as raised:
+        await _call_validate_code(
+            hass,
+            {
+                "config_entry_id": validate_entry.entry_id,
+                ATTR_CODE: "1234",
+                ATTR_LOCK_ENTITY_ID: OTHER_LOCK_ENTITY_ID,
+            },
+        )
+
+    assert OTHER_LOCK_ENTITY_ID in str(raised.value)
+    assert validate_entry.title in str(raised.value)
+
+
+@pytest.mark.parametrize("with_lock", [True, False])
+async def test_validate_code_failure_event_attribution(
+    hass: HomeAssistant, validate_entry, with_lock: bool
+) -> None:
+    """A failure always fires; only a supplied lock puts a lock on the payload."""
+    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    data = {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "5678"}
+    if with_lock:
+        data[ATTR_LOCK_ENTITY_ID] = VALIDATE_LOCK_ENTITY_ID
+    await _call_validate_code(hass, data)
+
+    assert len(failure_events) == 1
+    payload = failure_events[0].data
+    assert payload[ATTR_REASON] == REASON_USER_DISABLED
+    assert payload[ATTR_LCM_CONFIG_ENTRY_ID] == validate_entry.entry_id
+    # Masking survives having no lock: the token is salted with the matched
+    # slot either way, so deobfuscate_log can still reverse it.
+    assert payload[ATTR_CODE] == mask_pin("5678", 2, hass.data[DOMAIN]["instance_id"])
+    assert (ATTR_ENTITY_ID in payload) is with_lock
+    assert (ATTR_DEVICE_ID in payload) is with_lock
+    if with_lock:
+        assert payload[ATTR_ENTITY_ID] == VALIDATE_LOCK_ENTITY_ID
+
+
+async def test_validate_code_failure_event_masks_an_unknown_code_opaquely(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """No matched slot means the slot-0 token, which the map cannot reverse."""
+    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
+
+    await _call_validate_code(
+        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "0000"}
     )
 
     assert len(failure_events) == 1
     assert failure_events[0].data[ATTR_REASON] == REASON_UNKNOWN_CODE
-    assert not state_events
+    assert failure_events[0].data[ATTR_CODE] == mask_pin(
+        "0000", 0, hass.data[DOMAIN]["instance_id"]
+    )
 
 
+@pytest.mark.parametrize("with_lock", [True, False])
 async def test_validate_code_fire_events_false(
-    hass: HomeAssistant, validate_entry
+    hass: HomeAssistant, validate_entry, with_lock: bool
 ) -> None:
-    """With fire_events off neither outcome fires any event."""
+    """With fire_events off neither outcome fires any event, lock or no lock."""
     state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
 
+    lock_field = {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID} if with_lock else {}
     success = await _call_validate_code(
         hass,
         {
-            ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID,
+            "config_entry_id": validate_entry.entry_id,
             ATTR_CODE: "1234",
             ATTR_FIRE_EVENTS: False,
+            **lock_field,
         },
     )
     failure = await _call_validate_code(
         hass,
         {
-            ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID,
+            "config_entry_id": validate_entry.entry_id,
             ATTR_CODE: "0000",
             ATTR_FIRE_EVENTS: False,
+            **lock_field,
         },
     )
 
@@ -1291,15 +1403,21 @@ async def test_validate_code_fire_events_false(
     assert not failure_events
 
 
-async def test_validate_code_unmanaged_entity(
-    hass: HomeAssistant, validate_entry
+@pytest.mark.parametrize(
+    "selector",
+    [
+        {"config_entry_id": "no_such_entry"},
+        {"config_entry_title": "no such entry"},
+    ],
+)
+async def test_validate_code_rejects_an_unknown_entry(
+    hass: HomeAssistant, validate_entry, selector: dict
 ) -> None:
-    """An entity no loaded entry manages raises a validation error."""
-    with pytest.raises(ServiceValidationError, match="not managed"):
-        await _call_validate_code(
-            hass,
-            {ATTR_LOCK_ENTITY_ID: "lock.nonexistent", ATTR_CODE: "1234"},
-        )
+    """An entry nothing matches is refused the way the sibling actions refuse it."""
+    with pytest.raises(
+        ServiceValidationError, match="No lock code manager config entry"
+    ):
+        await _call_validate_code(hass, {**selector, ATTR_CODE: "1234"})
 
 
 async def test_validate_code_without_return_response(
@@ -1310,61 +1428,16 @@ async def test_validate_code_without_return_response(
 
     response = await _call_validate_code(
         hass,
-        {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "1234"},
+        {
+            "config_entry_id": validate_entry.entry_id,
+            ATTR_CODE: "1234",
+            ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID,
+        },
         return_response=False,
     )
 
     assert response is None
     assert len(state_events) == 1
-
-
-async def test_validate_code_multi_entry_valid_in_second(
-    hass: HomeAssistant, validate_entry, second_validate_entry
-) -> None:
-    """A code valid only in the second entry validates with one success event.
-
-    Exactly one success and zero failure events pins the compute-then-fire
-    design: firing per entry would also emit a failure from the first entry.
-    """
-    state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    response = await _call_validate_code(
-        hass,
-        {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "2468"},
-    )
-
-    assert response == {ATTR_VALID: True, ATTR_USER: "betty", ATTR_REASON: None}
-    assert len(state_events) == 1
-    # betty's slot number proves the second entry is the one that fired.
-    assert state_events[0].data[ATTR_CODE_SLOT] == 11
-    assert not failure_events
-
-
-@pytest.mark.parametrize(
-    ("code", "reason"),
-    [("5678", REASON_USER_DISABLED), ("9999", REASON_CONDITION_NOT_MET)],
-)
-async def test_validate_code_multi_entry_aggregate_reason(
-    hass: HomeAssistant, validate_entry, second_validate_entry, code: str, reason: str
-) -> None:
-    """A code matched-but-inactive in one entry and unknown in the other.
-
-    The entry that recognized the code explains the failure: a match in any
-    entry outranks unknown everywhere.
-    """
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    response = await _call_validate_code(
-        hass,
-        {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: code},
-    )
-
-    assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
-    assert len(failure_events) == 1
-    assert failure_events[0].data[ATTR_REASON] == reason
-    # The entry that recognized the code is the one that fired.
-    assert failure_events[0].data[ATTR_LCM_CONFIG_ENTRY_ID] == validate_entry.entry_id
 
 
 SOURCE_ENTITY_ID = "sensor.keypad_last_code"
@@ -1396,30 +1469,6 @@ def _contains_pin(value: object, pin: str) -> bool:
     return False
 
 
-async def test_validate_code_success_event_carries_the_source(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    pin_bearing_source: str,
-) -> None:
-    """A valid code names its source in the usage event's extra data."""
-    state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
-
-    await _call_validate_code(
-        hass,
-        {
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_CODE: "1234",
-            ATTR_SOURCE_ENTITY_ID: pin_bearing_source,
-        },
-    )
-
-    assert len(state_events) == 1
-    assert state_events[0].data[ATTR_EXTRA_DATA] == {
-        ATTR_SOURCE_ENTITY_ID: pin_bearing_source
-    }
-
-
 async def test_validate_code_failure_event_carries_the_source(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1432,7 +1481,7 @@ async def test_validate_code_failure_event_carries_the_source(
     await _call_validate_code(
         hass,
         {
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
             ATTR_CODE: "0000",
             ATTR_SOURCE_ENTITY_ID: pin_bearing_source,
         },
@@ -1454,7 +1503,12 @@ async def test_validate_code_omits_an_unsupplied_source(
     failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
 
     await _call_validate_code(
-        hass, {ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID, ATTR_CODE: code}
+        hass,
+        {
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CODE: code,
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+        },
     )
 
     for event in [*state_events, *failure_events]:
@@ -1489,8 +1543,9 @@ async def test_validate_code_never_publishes_the_source_state(
     await _call_validate_code(
         hass,
         {
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
             ATTR_CODE: code,
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_SOURCE_ENTITY_ID: pin_bearing_source,
         },
     )

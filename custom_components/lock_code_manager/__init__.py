@@ -677,11 +677,13 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     )
 
     async def _validate_code(call: ServiceCall) -> ServiceResponse:
-        """Validate a code against the entries managing a lock."""
+        """Validate a code against one entry's users."""
         return await async_validate_code(
             hass,
-            call.data[ATTR_LOCK_ENTITY_ID],
             call.data[ATTR_CODE],
+            config_entry_id=call.data.get("config_entry_id"),
+            config_entry_title=call.data.get("config_entry_title"),
+            lock_entity_id=call.data.get(ATTR_LOCK_ENTITY_ID),
             fire_events=call.data[ATTR_FIRE_EVENTS],
             source_entity_id=call.data.get(ATTR_SOURCE_ENTITY_ID),
         )
@@ -690,12 +692,16 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         DOMAIN,
         SERVICE_VALIDATE_CODE,
         _validate_code,
-        schema=vol.Schema(
+        schema=_entry_schema(
             {
-                vol.Required(ATTR_LOCK_ENTITY_ID): cv.entity_domain("lock"),
                 vol.Required(ATTR_CODE): vol.All(
                     cv.string, str.strip, vol.Length(min=1)
                 ),
+                # Attribution for the success event rather than the target:
+                # a slot's event entity accepts only its own locks' entity
+                # IDs as event types, so a success nobody named a lock for
+                # has nowhere to land and fires nothing.
+                vol.Optional(ATTR_LOCK_ENTITY_ID): cv.entity_domain("lock"),
                 vol.Optional(ATTR_FIRE_EVENTS, default=True): cv.boolean,
                 # Unrestricted by domain: whatever collected the code -- a
                 # keypad's text sensor, an NFC tag entity, a dashboard

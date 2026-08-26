@@ -24,7 +24,7 @@ from .config import EntryConfig
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry
-from .validation import validate_across_entries
+from .validation import validate_credential
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -94,24 +94,43 @@ async def async_clear_usercode(
 
 async def async_validate_code(
     hass: HomeAssistant,
-    lock_entity_id: str,
     code: str,
     *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+    lock_entity_id: str | None = None,
     fire_events: bool = True,
     source_entity_id: str | None = None,
 ) -> dict[str, Any]:
-    """Validate a code against every loaded entry managing the target lock."""
-    result = validate_across_entries(
+    """
+    Validate a code against one entry's users.
+
+    The entry is the target because its users are what a code is checked
+    against; a lock only ever stood in for the entries behind it.
+    ``lock_entity_id`` names which of the entry's locks a success is
+    attributed to, and must be one of them -- attributing a success to a
+    lock the entry does not manage would name an event type no slot's event
+    entity accepts.
+    """
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
+
+    lock = None
+    if lock_entity_id is not None:
+        lock = config_entry.runtime_data.locks.get(lock_entity_id)
+        if lock is None:
+            raise ServiceValidationError(
+                f"Lock {lock_entity_id} is not managed by config entry "
+                f"{config_entry.title}"
+            )
+
+    result = validate_credential(
         hass,
-        lock_entity_id,
+        config_entry,
         code,
+        lock=lock,
         fire_events=fire_events,
         source_entity_id=source_entity_id,
     )
-    if result is None:
-        raise ServiceValidationError(
-            f"Lock {lock_entity_id} is not managed by Lock Code Manager"
-        )
 
     return {
         ATTR_VALID: result.valid,
