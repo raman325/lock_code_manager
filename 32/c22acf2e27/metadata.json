@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "32c22acf2e27",
+  "strategy": "manual-commit",
+  "branch": "shared-lock-unload",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/32/c22acf2e27/0/metadata.json",
+      "transcript": "/32/c22acf2e27/0/full.jsonl",
+      "compact_transcript": "/32/c22acf2e27/0/transcript.jsonl",
+      "content_hash": "/32/c22acf2e27/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 73715,
+    "cache_read_tokens": 2449119,
+    "output_tokens": 17337,
+    "api_call_count": 35
+  }
+}
