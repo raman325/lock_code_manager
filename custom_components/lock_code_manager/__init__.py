@@ -811,32 +811,6 @@ def _lock_managed_by_other_entry(
     )
 
 
-def _lock_managed_by_other_loaded_entry(
-    hass: HomeAssistant,
-    config_entry: LockCodeManagerConfigEntry,
-    lock_entity_id: str,
-) -> bool:
-    """
-    Return True if another *loaded* LCM entry manages the lock.
-
-    Teardown has to match ``_find_shared_lock_instance``, which only reuses
-    an instance from a loaded entry. An entry that exists but is unloaded
-    (setup retrying, mid-reload, disabled entry re-added) will build its own
-    instance when it next loads, so keeping this one alive on its behalf
-    leaves an ownerless BaseLock whose push subscription and config-entry
-    state listener both keep firing -- and a second instance alongside it
-    once anything reloads, which doubles every code-slot event.
-    """
-    return any(
-        entry.entry_id != config_entry.entry_id
-        and entry.state is ConfigEntryState.LOADED
-        and get_entry_config(entry).has_lock(lock_entity_id)
-        for entry in hass.config_entries.async_entries(
-            DOMAIN, include_disabled=False, include_ignore=False
-        )
-    )
-
-
 def _find_shared_lock_instance(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -864,6 +838,25 @@ def _find_shared_lock_instance(
     )
 
 
+def _lock_still_owned_by_another_entry(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_id: str,
+) -> bool:
+    """
+    Return True if another entry still holds the shared instance for this lock.
+
+    Teardown is the exact inverse of acquisition, so it asks by calling the
+    acquiring side rather than restating its rule: any predicate that drifts
+    from ``_find_shared_lock_instance`` leaves an ownerless BaseLock whose
+    push subscription and config-entry state listener keep firing, plus a
+    second instance beside it on the next setup that doubles every code-slot
+    event. Config membership is not the question -- a loaded entry that
+    dropped this lock during setup lists it but does not own it.
+    """
+    return _find_shared_lock_instance(hass, config_entry, lock_entity_id) is not None
+
+
 async def async_unload_lock(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -879,8 +872,18 @@ async def async_unload_lock(
         lock = runtime_data.locks.pop(_lock_entity_id, None)
         if lock is None:
             continue
-        if not _lock_managed_by_other_loaded_entry(hass, config_entry, _lock_entity_id):
-            await lock.async_unload(remove_permanently)
+        if not _lock_still_owned_by_another_entry(hass, config_entry, _lock_entity_id):
+            # ``remove_permanently`` discards state that deliberately outlives
+            # an unload -- the per-lock setup-failed repair, the provider's
+            # stored codes. Only a lock leaving Lock Code Manager altogether
+            # should lose those, so an entry that still manages it downgrades
+            # this to a plain teardown even while that entry is unloaded.
+            await lock.async_unload(
+                remove_permanently
+                and not _lock_managed_by_other_entry(
+                    hass, config_entry, _lock_entity_id
+                )
+            )
             if lock.coordinator is not None:
                 await lock.coordinator.async_shutdown()
 

@@ -727,7 +727,7 @@ async def test_shared_lock_unloads_when_only_sibling_is_unloaded(
     shared_lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
     assert shared_lock is entry_b.runtime_data.locks[LOCK_1_ENTITY_ID]
 
-    # B goes away while A still uses the lock: the instance must survive.
+    # B goes away while A still owns the lock: the instance must survive.
     await hass.config_entries.async_unload(entry_b.entry_id)
     await hass.async_block_till_done()
     assert shared_lock._config_entry_state_unsub is not None
@@ -791,6 +791,74 @@ async def test_reload_with_loaded_sibling_keeps_sharing_the_instance(
 
     for entry in (entry_a, entry_b):
         await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_loaded_sibling_without_an_instance_does_not_block_teardown(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """A sibling that dropped its lock during setup does not own it anymore."""
+    entry_b = _entry_with_shared_lock("Dropped B", 3)
+    entry_b.add_to_hass(hass)
+    # No provider claims the lock for this setup, so _async_setup_new_locks
+    # drops it and reports it -- while the entry itself still loads.
+    with patch.dict(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {},
+        clear=True,
+    ):
+        assert await hass.config_entries.async_setup(entry_b.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry_b.state is ConfigEntryState.LOADED
+    assert LOCK_1_ENTITY_ID not in entry_b.runtime_data.locks
+
+    entry_a = _entry_with_shared_lock("Dropped A", 1)
+    entry_a.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry_a.entry_id)
+    await hass.async_block_till_done()
+
+    shared_lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    # B is loaded and still lists the lock in its config, but holds no
+    # instance -- so it cannot be the reason to keep this one alive.
+    await hass.config_entries.async_unload(entry_a.entry_id)
+    await hass.async_block_till_done()
+    assert shared_lock._config_entry_state_unsub is None
+
+    await hass.config_entries.async_unload(entry_b.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_lock_leaving_one_entry_is_not_removed_permanently(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Another entry still managing the lock means it is not leaving LCM."""
+    entry_a = _entry_with_shared_lock("Keeper A", 1)
+    entry_b = _entry_with_shared_lock("Keeper B", 3)
+    for entry in (entry_a, entry_b):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    shared_lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_unload(entry_b.entry_id)
+    await hass.async_block_till_done()
+
+    # Dropping the lock from A's options tears the instance down, but B still
+    # manages it, so the state that outlives a reload -- the per-lock
+    # setup-failed repair, the provider's stored codes -- has to survive.
+    await async_unload_lock(
+        hass, entry_a, lock_entity_id=LOCK_1_ENTITY_ID, remove_permanently=True
+    )
+    await hass.async_block_till_done()
+
+    assert shared_lock.service_calls["unload"] == [(False,)]
+
+    await hass.config_entries.async_unload(entry_a.entry_id)
     await hass.async_block_till_done()
 
 
