@@ -22,6 +22,9 @@ for additional setup guides and examples.
    - [Credential Used](#credential-used) *(automation)*
 1. Setup Helpers
    - [Condition Linker](#condition-linker) *(automation)*
+1. Reference
+   - [Finding a slot number](#finding-a-slot-number)
+   - [Credential used entity attributes](#credential-used-entity-attributes)
 
 ---
 
@@ -35,14 +38,16 @@ Optionally resets the counter when the user is re-enabled.
 
 - Set counter to **-1** for unlimited uses
 - Set counter to **0** to disable on next use
-- Requires a lock that reports credential use
+- The optional lock filter matches the use's `target` — the lock that
+  reported it, or whatever `lock_code_manager.use_credential` was told the
+  credential acted on
 
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fslot_usage_limiter.yaml)
 
 | Input | Description | Default |
 | ----- | ----------- | ------- |
 | Credential used event entity | The user's event entity, which fires when their credential is used | Required |
-| Locks (optional) | Only count uses on these locks | All locks |
+| Locks (optional) | Only count uses whose target is one of these | All targets |
 | Slot enabled switch | The user's Enabled switch, turned off when the counter runs out | Required |
 | Uses counter | `input_number` helper tracking remaining uses | Required |
 | Initial uses on re-enable | Number of uses to reset to when the user is re-enabled (0 = no reset) | 0 |
@@ -57,6 +62,19 @@ their PIN is active.
 
 - Filter by event title, description, or location using Jinja2 templates
 - Supports any HA calendar integration (local, Google, CalDAV, etc.)
+- Template variables: `message`, `description`, `location`, `start_time`,
+  `end_time`, `all_day`, `slot_number`, `config_entry_title`, `name_state`
+
+> **Breaking: `lock_entity_ids` is gone.** It came from the credential used
+> event entity, which no longer lists the config entry's locks as its event
+> types, and nothing else exposes a config entry's locks to a template. A
+> condition template that still references it fails to render and the binary
+> sensor goes unavailable — visibly, rather than silently flipping
+> `{{ 'lock.front_door' in lock_entity_ids }}` to false and quietly
+> deactivating the PIN. The list was identical for every slot in the config
+> entry, so that example could only ever be constantly true or constantly
+> false: a condition entity gates a *user* across every lock in the entry, and
+> never one lock. Delete the reference to fix the sensor.
 
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Ftemplate%2Flock_code_manager%2Fcalendar_condition.yaml)
 
@@ -153,8 +171,10 @@ has closed while the lock is unlocked.
 Runs actions when a user's credential is used on a lock. Use it to
 send notifications, trigger scripts, or run any HA action.
 
-- Requires a lock that reports credential use
 - Template variables: `slot_name`, `slot_num`, `lock_name`, `timestamp`
+- `lock_name` and the optional lock filter both read the use's `target` —
+  the lock that reported it, or whatever `lock_code_manager.use_credential`
+  was told the credential acted on
 - Uses `mode: queued` to handle rapid successive uses
 
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fslot_usage_notifier.yaml)
@@ -162,7 +182,7 @@ send notifications, trigger scripts, or run any HA action.
 | Input | Description | Default |
 | ----- | ----------- | ------- |
 | Credential used event entities | One or more users' event entities | Required |
-| Locks (optional) | Only run for uses on these locks | All locks |
+| Locks (optional) | Only run for uses whose target is one of these | All targets |
 | Actions | HA actions to run (notifications, scripts, etc.) | Required |
 
 ### Credential Used
@@ -176,13 +196,14 @@ Manager saw it happen on a lock or was told about it through the
 - Every filter is optional; leave them all empty to act on every use
 - Uses `mode: queued` to handle rapid successive uses
 
-Slot Usage Notifier and Slot Usage Limiter trigger on a user's
-credential used *entity*, so they only see uses recorded there — uses
-against a lock in the same configuration. A use reported through
-`lock_code_manager.use_credential` with any other target has no
-per-user entity to record against, so those two never see it. This
-blueprint triggers on the `lock_code_manager_credential_used` event
-instead and sees every credential use.
+Slot Usage Notifier and Slot Usage Limiter trigger on one user's
+credential used *entity*, so each automation covers the users you point
+it at. This blueprint triggers on the `lock_code_manager_credential_used`
+event instead, so one automation covers every user in every
+configuration, and its filters narrow from there. All three see the same
+uses: whether Lock Code Manager watched a lock report one or was told
+about it through `lock_code_manager.use_credential`, and whatever the
+use was against.
 
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fcredential_used.yaml)
 
@@ -230,3 +251,31 @@ look at its `code_slot` attribute. In a template:
 ```jinja
 {{ state_attr('text.raman_pin', 'code_slot') }}
 ```
+
+---
+
+## Credential used entity attributes
+
+Every user has a `credential_used` event entity. Its state is the
+timestamp of their last recorded use, and its attributes are what a
+template or blueprint reads about that use:
+
+| Attribute | Meaning |
+| --------- | ------- |
+| `event_type` | Always `credential_used`. It says *what* happened, never where |
+| `name` | The user whose credential was used |
+| `target` | What the credential was used against — a lock that reported the use, or whatever `lock_code_manager.use_credential` was told it acted on |
+| `source` | Where the credential was entered. Same entity as `target` when a lock observed the use itself |
+| `config_entry_id` | The Lock Code Manager configuration holding the user |
+| `config_entry_title` | That configuration's title |
+| `code_slot` | The user's slot number |
+| `slot_field` | Always `credential_used` |
+
+> **Breaking:** the entity used to publish the older lock-shaped payload
+> and set `event_type` to the lock entity ID. Templates reading
+> `event_type` as a lock must read `target` instead, and
+> `lock_code_manager_config_entry_id`, `code_slot_name`, `action_text`,
+> `notification_source`, `from`, `to`, `state`, `entity_id`, `device_id`,
+> `extra_data`, `credential_type` and `lock_config_entry_id` are gone from
+> the entity. They all still travel on the deprecated
+> `lock_code_manager_lock_state_changed` bus event, which keeps firing.

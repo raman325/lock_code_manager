@@ -131,10 +131,14 @@ actions:
       - conditions:
           - condition: trigger
             id: pin_used
+          # `target` is what the credential was used against. `event_type`
+          # is the fixed word `credential_used` and names nothing, so
+          # reading it here left every non-empty lock filter blocking
+          # everything.
           - condition: template
             value_template: >-
               {{ locks | count == 0
-                 or state_attr(trigger.entity_id, 'event_type') in locks }}
+                 or state_attr(trigger.entity_id, 'target') in locks }}
         sequence:
           - variables:
               current: >
@@ -175,7 +179,7 @@ actions:
                         {{ _config_entry_title }} code slot {{ _slot_number }}
                         has been disabled after reaching the usage limit.
                         Last used on lock
-                        {{ state_attr(trigger.entity_id, 'event_type')
+                        {{ state_attr(trigger.entity_id, 'target')
                            | default('unknown') }}
                         at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}.
       - conditions:

@@ -32,6 +32,7 @@ from homeassistant.core import Event, HomeAssistant
 from custom_components.lock_code_manager.const import (
     ATTR_ACTION_TEXT,
     ATTR_CODE_SLOT,
+    ATTR_TARGET,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOTS,
@@ -418,6 +419,7 @@ class TestKeypadEvents:
         self,
         hass: HomeAssistant,
         synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
     ) -> None:
         """
         A keypad unlock names the slot that opened the lock, all the way out.
@@ -441,10 +443,13 @@ class TestKeypadEvents:
         await hass.async_block_till_done()
 
         assert [event.data[ATTR_CODE_SLOT] for event in events] == [1]
+        assert [event.data[ATTR_ACTION_TEXT] for event in events] == [
+            "Keypad_unlock_operation"
+        ]
         state = hass.states.get(event_entity_id)
         assert state.state != STATE_UNKNOWN
         assert state.attributes[ATTR_CODE_SLOT] == 1
-        assert state.attributes[ATTR_ACTION_TEXT] == "Keypad_unlock_operation"
+        assert state.attributes[ATTR_TARGET] == zui_lock.lock.entity_id
 
 
 class TestApiOnlyManualGateway:

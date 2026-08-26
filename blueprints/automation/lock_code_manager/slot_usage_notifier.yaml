@@ -96,20 +96,25 @@ variables:
   # `trigger.to_state` access against the entity-removal case
   # (`to_state is None`) — otherwise the variable rendering errors
   # out before the conditions below can block the action.
+
+  # `event_type` is the fixed word `credential_used` and names nothing;
+  # `target` is what the credential was used against, which is a lock when
+  # a lock observed the use and can be anything at all when the
+  # `use_credential` action reported one.
   lock_entity_id: >-
-    {{ state_attr(trigger.entity_id, 'event_type') }}
-  # A use the lock observed carries `code_slot_name`; one reported through
-  # the `use_credential` action carries the unified payload, which names the
-  # user in `name` instead.
+    {{ state_attr(trigger.entity_id, 'target') }}
   slot_name: >-
-    {{ trigger.to_state.attributes.code_slot_name
-       | default(trigger.to_state.attributes.name | default('Unknown slot'))
+    {{ trigger.to_state.attributes.name | default('Unknown slot')
        if trigger.to_state is not none else 'Unknown slot' }}
   slot_num: >-
     {{ trigger.to_state.attributes.code_slot | default('?')
        if trigger.to_state is not none else '?' }}
+  # A target can be an entity Home Assistant holds no state for at all --
+  # a gate, a door controller with no integration -- so falling back to the
+  # target's own id says more than 'Unknown lock' ever would.
   lock_name: >-
-    {{ state_attr(lock_entity_id, 'friendly_name') | default('Unknown lock')
+    {{ state_attr(lock_entity_id, 'friendly_name')
+       | default(lock_entity_id, true)
        if lock_entity_id is not none else 'Unknown lock' }}
   timestamp: >-
     {{ (trigger.to_state.last_updated | as_local

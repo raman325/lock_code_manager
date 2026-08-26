@@ -106,6 +106,9 @@ def test_zigbee2mqtt_provider_properties_and_no_device_entry_resolves_no_topic()
     lock = _minimal_lock()
     assert lock.domain == MQTT_DOMAIN
     assert lock.supports_push is True
+    # Zigbee2MQTT publishes the used slot on the same device topic the push
+    # updates arrive on, so a lock that pushes also reports uses.
+    assert lock.supports_code_slot_events is True
     assert lock.usercode_scan_interval == timedelta(minutes=5)
     assert lock.hard_refresh_interval == timedelta(hours=1)
     assert lock.connection_check_interval == timedelta(seconds=30)

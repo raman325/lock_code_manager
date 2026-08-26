@@ -27,6 +27,7 @@ from homeassistant.const import (
     CONF_PIN,
     MATCH_ALL,
     STATE_ON,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
@@ -1523,8 +1524,9 @@ async def test_use_credential_records_against_an_in_entry_lock(
 
     state = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert state
-    assert state.attributes[ATTR_EVENT_TYPE] == VALIDATE_LOCK_ENTITY_ID
+    assert state.attributes[ATTR_EVENT_TYPE] == EVENT_CREDENTIAL_USED
     assert state.attributes[ATTR_TARGET] == VALIDATE_LOCK_ENTITY_ID
+    assert state.attributes[ATTR_SOURCE] == VALIDATE_SOURCE_ENTITY_ID
     assert [
         record for record in caplog.records if record.levelno >= logging.ERROR
     ] == []
@@ -1551,7 +1553,7 @@ async def test_use_credential_records_only_for_the_named_user(
     assert hass.states.get(bob_event_entity_id) == before
     alice = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert alice
-    assert alice.attributes[ATTR_EVENT_TYPE] == VALIDATE_LOCK_ENTITY_ID
+    assert alice.attributes[ATTR_TARGET] == VALIDATE_LOCK_ENTITY_ID
 
 
 async def test_use_credential_ignores_an_entry_that_is_not_ours(
@@ -1587,20 +1589,21 @@ async def test_use_credential_against_an_event_blind_lock_in_the_entry(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
-    An entry lock that cannot fire code slot events is not an event type.
+    A lock that reports nothing itself still gets uses recorded against it.
 
-    Schlage and Akuvox never fire them, and zwave-js-ui does not until it
-    has learned it can, so this is an ordinary target rather than a
-    mistake. Recording against it would raise inside Home Assistant's
-    ``EventEntity`` and land as an ERROR in the log, which is exactly what
-    the absence of ERROR records here pins down.
+    Schlage and Akuvox never fire code slot events, and zwave-js-ui does not
+    until it has learned it can. Whether the lock could have told us is
+    beside the point when somebody else did: the credential is alice's, and
+    what it acted on is payload rather than vocabulary.
     """
     entry = validate_entry_with_event_blind_lock
     event_entity_id = _slot_event_entity_id(hass, entry, 1)
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
     before = hass.states.get(event_entity_id)
     assert before
-    assert EVENT_BLIND_LOCK_ENTITY_ID not in before.attributes["event_types"]
+    assert before.state == STATE_UNKNOWN
+    blind_lock = entry.runtime_data.locks[EVENT_BLIND_LOCK_ENTITY_ID]
+    assert blind_lock.supports_code_slot_events is False
 
     with caplog.at_level(logging.DEBUG):
         response = await _call_use_credential(
@@ -1617,7 +1620,10 @@ async def test_use_credential_against_an_event_blind_lock_in_the_entry(
     assert [event.data[ATTR_TARGET] for event in unified] == [
         EVENT_BLIND_LOCK_ENTITY_ID
     ]
-    assert hass.states.get(event_entity_id) == before
+    recorded = hass.states.get(event_entity_id)
+    assert recorded.state != STATE_UNKNOWN
+    assert recorded.attributes[ATTR_EVENT_TYPE] == EVENT_CREDENTIAL_USED
+    assert recorded.attributes[ATTR_TARGET] == EVENT_BLIND_LOCK_ENTITY_ID
     assert [
         record for record in caplog.records if record.levelno >= logging.ERROR
     ] == []
@@ -1627,18 +1633,19 @@ async def test_use_credential_with_a_target_outside_the_entry(
     hass: HomeAssistant, validate_entry, caplog: pytest.LogCaptureFixture
 ) -> None:
     """
-    A target Lock Code Manager does not manage is announced, not refused.
+    A target Lock Code Manager does not manage records like any other.
 
-    Only the unified event fires: there is no entity of ours to record
-    against, and the caller knows their setup better than we do. The
-    absence of ERROR records is the load-bearing half -- routing this into
-    the slot's event entity would trip its unknown-event-type check, and
-    Home Assistant would swallow that into a log line rather than raise.
+    A cover is not a lock, is not in the entry, and could never be named by
+    anything the entry knows -- and it is still alice's credential being
+    used, so her entity is where that belongs. Only the unified event
+    fires: the deprecated lock-shaped one would have to claim a from/to
+    transition that never happened.
     """
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
     deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     before = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert before
+    assert before.state == STATE_UNKNOWN
 
     with caplog.at_level(logging.DEBUG):
         response = await _call_use_credential(
@@ -1654,7 +1661,9 @@ async def test_use_credential_with_a_target_outside_the_entry(
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
     assert [event.data[ATTR_TARGET] for event in unified] == ["cover.some_other_door"]
     assert deprecated == []
-    assert hass.states.get(VALIDATE_EVENT_ENTITY_ID) == before
+    recorded = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert recorded.state != STATE_UNKNOWN
+    assert recorded.attributes[ATTR_TARGET] == "cover.some_other_door"
     assert [
         record for record in caplog.records if record.levelno >= logging.ERROR
     ] == []

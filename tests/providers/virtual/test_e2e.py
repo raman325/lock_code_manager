@@ -11,7 +11,7 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from homeassistant.components.event import ATTR_EVENT_TYPES
+from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES
 from homeassistant.components.text import (
     ATTR_VALUE,
     DOMAIN as TEXT_DOMAIN,
@@ -28,7 +28,13 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from custom_components.lock_code_manager.const import (
+    ATTR_TARGET,
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+    EVENT_CREDENTIAL_USED,
+)
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
@@ -36,7 +42,6 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.sync import TICK_INTERVAL
-from custom_components.lock_code_manager.event import ATTR_UNSUPPORTED_LOCKS
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
@@ -294,23 +299,33 @@ class TestStoredPaddingNeverReachesTheLock:
 class TestCredentialUseRecording:
     """A virtual lock is the surface for uses Lock Code Manager cannot watch."""
 
-    async def test_event_entity_accepts_the_virtual_lock(
+    async def test_event_entity_records_against_the_virtual_lock(
         self,
         hass: HomeAssistant,
         lcm_config_entry,
     ) -> None:
         """
-        The per-slot event entity lists the virtual lock and is available.
+        A virtual-only entry records a use without the lock claiming anything.
 
-        The entity refuses an event type it does not list, so a virtual-only
-        entry could not record a use at all until the lock advertised
-        support for code slot events.
+        The virtual lock observes nothing and says so
+        (``supports_code_slot_events`` is False). Recording a use against it
+        anyway is what a virtual lock is for: it is the surface somebody adds
+        for uses Lock Code Manager cannot watch.
         """
         state = hass.states.get(SLOT_1_EVENT_ENTITY)
         assert state
         assert state.state != STATE_UNAVAILABLE
-        assert state.attributes[ATTR_EVENT_TYPES] == [VIRTUAL_LOCK_ENTITY_ID]
-        assert ATTR_UNSUPPORTED_LOCKS not in state.attributes
+        assert state.attributes[ATTR_EVENT_TYPES] == [EVENT_CREDENTIAL_USED]
+        lock = get_virtual_lock(hass, lcm_config_entry)
+        assert lock.supports_code_slot_events is False
+
+        lock.async_fire_code_slot_event(1, False, "Keypad unlock")
+        await hass.async_block_till_done()
+
+        recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
+        assert recorded.state != state.state
+        assert recorded.attributes[ATTR_EVENT_TYPE] == EVENT_CREDENTIAL_USED
+        assert recorded.attributes[ATTR_TARGET] == VIRTUAL_LOCK_ENTITY_ID
 
     @pytest.mark.parametrize("pin", ["1", "9" * 64])
     async def test_advertised_capabilities_reject_no_pin_length(

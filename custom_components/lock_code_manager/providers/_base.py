@@ -634,14 +634,12 @@ class BaseLock:
     @property
     def supports_code_slot_events(self) -> bool:
         """
-        Return whether this lock supports code slot events.
+        Return whether this lock reports which code slot was used.
 
-        When True, the lock can fire events indicating which code slot was used
-        to lock/unlock. This affects the event entity's event_types - locks that
-        support this will have their entity_id included in event_types.
-
-        Locks that don't support this will be listed in the unsupported_locks
-        attribute on the event entity.
+        Diagnostics only. Nothing gates on it: a use is recorded against the
+        user whose credential it was, and where it happened is payload rather
+        than capability, so a lock that never reports one costs nothing
+        anywhere else.
         """
         return True
 

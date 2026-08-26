@@ -85,6 +85,7 @@ from .const import (
     ATTR_SLOT,
     ATTR_SLOT_NUM,
     ATTR_SYNC_STATUS,
+    ATTR_TARGET,
     ATTR_USER_ENTITY_ID,
     ATTR_USERCODE,
     CONDITION_ENTITY_DOMAINS,
@@ -857,11 +858,13 @@ def _get_last_used_info(
     hass: HomeAssistant, event_entity_id: str | None
 ) -> tuple[str | None, str | None]:
     """
-    Get last-used timestamp and lock name from an event entity.
+    Get the last-used timestamp and the name of what it was used against.
 
-    Returns a tuple of (last_used_timestamp, last_used_lock_name).
-    The event entity's state is the ISO timestamp of the last event,
-    and its event_type attribute is the lock entity ID where the PIN was used.
+    The event entity's state is the ISO timestamp of the last recorded use.
+    Where that use happened is the ``target`` attribute -- not ``event_type``,
+    which is the fixed word ``credential_used`` and names nothing. A target
+    with no state of its own (an entity outside Home Assistant's reach, or
+    one since removed) leaves the name unset and the card says only when.
     """
     if not event_entity_id:
         return None, None
@@ -870,11 +873,11 @@ def _get_last_used_info(
         return None, None
     last_used = event_state.state
     last_used_lock_name: str | None = None
-    if (last_used_lock_id := event_state.attributes.get("event_type")) and (
-        lock_state := hass.states.get(last_used_lock_id)
+    if (target_entity_id := event_state.attributes.get(ATTR_TARGET)) and (
+        target_state := hass.states.get(target_entity_id)
     ):
-        last_used_lock_name = lock_state.attributes.get(
-            ATTR_FRIENDLY_NAME, last_used_lock_id
+        last_used_lock_name = target_state.attributes.get(
+            ATTR_FRIENDLY_NAME, target_entity_id
         )
     return last_used, last_used_lock_name
 
