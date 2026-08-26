@@ -657,3 +657,55 @@ Confirmed no non-test consumer: the only references anywhere are `validation.py`
 Files: `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/event.py`, `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/providers/_base.py`, `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/strings.json`, `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/blueprints/automation/lock_code_manager/slot_usage_notifier.yaml`</result>
 <usage><subagent_tokens>95036</subagent_tokens><tool_uses>39</tool_uses><duration_ms>433414</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>adeed454ad859f2aa</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/adeed454ad859f2aa.output</output-file>
+<status>completed</status>
+<summary>Agent "Close two review edges" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three fixes are committed on `reader-provider` as `fb269aad` (not pushed — say the word and I'll push to update PR #1475).
+
+## Fix 1 — notifier said "Unknown slot" for reported uses
+
+`/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/blueprints/automation/lock_code_manager/slot_usage_notifier.yaml`
+
+`slot_name` now falls back to the `name` attribute, keeping the file's `| default(...)` idiom and the `to_state is None` guard:
+
+```yaml
+    {{ trigger.to_state.attributes.code_slot_name
+       | default(trigger.to_state.attributes.name | default('Unknown slot'))
+       if trigger.to_state is not none else 'Unknown slot' }}
+```
+
+The inner `default` is safe under eager evaluation: a missing `name` resolves to Undefined, not an error.
+
+**Test:** `test_notifier_names_the_user_for_a_reported_use` in `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/tests/test_blueprint_behavior.py`. It drives the real service (`_use_credential` with `target=LOCK_1_ENTITY_ID`, source the external keypad) so the attributes are genuinely produced by the unified path, then asserts `slot_name == "test1"`, `slot_num == 1`, `lock_name == "test_1"`. It also asserts `code_slot_name` is *absent* from the recorded state, so if the payload ever gains that field the test fails loudly rather than silently stopping exercising the fallback.
+
+I generalized the existing `_use_credential` helper with a `target` parameter and moved it (plus `EXTERNAL_KEYPAD` / `EXTERNAL_TARGET`) up to the shared-helper section, since two blueprint sections now use it.
+
+**Mutation evidence:** reverting the template to the single-attribute read gave `1 failed, 30 passed` — `AssertionError: assert 'Unknown slot' == 'test1'`, and only the new test failed.
+
+## Fix 2 — `source != target` requirement documented
+
+`strings.json` and `translations/en.json` (both under `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/`), appended to the `source` field description:
+
+&gt; It should name a different entity from the target: a use whose source and target are the same entity is treated as one the lock observed itself, and is not recorded again.
+
+`diff` confirms the two files remain byte-identical. No runtime log added.
+
+## Fix 3 — comment states both conditions
+
+`/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/event.py`, `_credential_used_filter` docstring now spells out that recording needs *both* an event-capable entry lock as the target (checked in `_handle_credential_used`) *and* `source != target`, and notes that naming one entity for both records nothing — matching the new strings wording.
+
+## Verification
+
+- Full suite: **2238 passed, 3 skipped** (baseline 2237 + the one new test), 88s.
+- Coverage: `TOTAL 6792 0 100%` on `custom_components/lock_code_manager/`.
+- `prek run --all-files`: all pass. `ruff-format` reformatted one line in the new test on the first run; re-ran clean, and the commit hook run passed with no modifications.
+- `git -C /Users/raman/projects/lock_code_manager status --short` → ` M .entire/.gitignore` only. No `git stash` command was run at any point; `README.md` untouched.</result>
+<usage><subagent_tokens>60606</subagent_tokens><tool_uses>29</tool_uses><duration_ms>516340</duration_ms></usage>
+</task-notification>
