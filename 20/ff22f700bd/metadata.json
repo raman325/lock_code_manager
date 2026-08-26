@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "20ff22f700bd",
+  "strategy": "manual-commit",
+  "branch": "pr4-codeless-locks",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/domain/config.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/20/ff22f700bd/0/metadata.json",
+      "transcript": "/20/ff22f700bd/0/full.jsonl",
+      "compact_transcript": "/20/ff22f700bd/0/transcript.jsonl",
+      "content_hash": "/20/ff22f700bd/0/content_hash.txt",
+      "prompt": "/20/ff22f700bd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 838466,
+    "cache_read_tokens": 25859757,
+    "output_tokens": 27137,
+    "api_call_count": 32,
+    "subagent_tokens": {
+      "input_tokens": 483,
+      "cache_creation_tokens": 633513,
+      "cache_read_tokens": 44680561,
+      "output_tokens": 226266,
+      "api_call_count": 242
+    }
+  }
+}
