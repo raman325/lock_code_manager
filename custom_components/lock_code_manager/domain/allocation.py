@@ -69,6 +69,7 @@ def build_lock_instance(
     hass: HomeAssistant,
     dev_reg: dr.DeviceRegistry,
     ent_reg: er.EntityRegistry,
+    config_entry: ConfigEntry | None,
     lock_entity_id: str,
 ) -> Any:
     """
@@ -77,11 +78,22 @@ def build_lock_instance(
     Performs setup-time checks (entity in registry, a provider claims it,
     parent config entry exists) and instantiates the provider class.
     Raises ``LockQuerySkipped`` if any setup-time check fails.
+
+    ``config_entry`` is the Lock Code Manager entry the lock is being read
+    for, and is ``None`` only while the entry that will own it is still
+    being created. What this factory decides about a lock -- above all
+    whether an unbuildable one is still one credentials get written to --
+    is a question about that entry's configuration, not about the lock
+    alone, so the entry has to be reachable from here.
     """
+    # Locks are shared between entries, so a skipped read names the entry
+    # that asked as well as the lock it gave up on.
+    asked_by = config_entry.entry_id if config_entry else "New entry"
     lock_entry = ent_reg.async_get(lock_entity_id)
     if not lock_entry:
         _LOGGER.warning(
-            "Entity %s not found in registry; skipping usercode check",
+            "%s: entity %s not found in registry; skipping usercode check",
+            asked_by,
             lock_entity_id,
         )
         raise LockQuerySkipped(lock_entity_id, managed=True)
@@ -91,7 +103,8 @@ def build_lock_instance(
         # no provider speaks: either way nothing is ever written there, so
         # the lock constrains no numbering.
         _LOGGER.debug(
-            "No provider claims lock %s (platform %s); skipping usercode check",
+            "%s: no provider claims lock %s (platform %s); skipping usercode check",
+            asked_by,
             lock_entity_id,
             lock_entry.platform,
         )
@@ -99,7 +112,8 @@ def build_lock_instance(
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
     if lock_config_entry is None:
         _LOGGER.warning(
-            "Config entry for lock %s not found; skipping usercode check",
+            "%s: config entry for lock %s not found; skipping usercode check",
+            asked_by,
             lock_entity_id,
         )
         raise LockQuerySkipped(lock_entity_id, managed=True)
@@ -109,6 +123,7 @@ def build_lock_instance(
 
 async def async_check_slot_capacity(
     hass: HomeAssistant,
+    config_entry: ConfigEntry | None,
     locks: Iterable[str],
     slots_list: Iterable[int | str],
 ) -> None:
@@ -125,6 +140,9 @@ async def async_check_slot_capacity(
     capabilities need the lock awake, and a sleeping battery lock must not
     make the config flow unusable. The same check runs at write time, where
     it can suspend the affected slot precisely.
+
+    ``config_entry`` is the entry the locks are being read for, on the terms
+    ``build_lock_instance`` describes.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
@@ -132,7 +150,9 @@ async def async_check_slot_capacity(
     for lock_entity_id in locks:
         try:
             async with borrowed_lock_instance(
-                build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
+                build_lock_instance(
+                    hass, dev_reg, ent_reg, config_entry, lock_entity_id
+                )
             ) as lock_instance:
                 if not lock_instance.credential_index_follows_slot:
                     continue
@@ -169,10 +189,9 @@ async def async_check_slot_capacity(
 
 async def async_read_occupancy(
     hass: HomeAssistant,
+    config_entry: ConfigEntry | None,
     locks: Sequence[str],
     indices: Collection[int],
-    *,
-    excluding: ConfigEntry | None = None,
 ) -> Occupancy:
     """
     Ask every lock in ``locks`` which of ``indices`` it holds.
@@ -183,16 +202,20 @@ async def async_read_occupancy(
     to answer has to arrive that way, including the ones no provider
     promised.
 
-    ``excluding`` is the entry being edited, whose own numbers do not
-    constrain it: kept ones are held by tenure, released ones are free for
-    whoever comes next.
+    ``config_entry`` is the entry being allocated for, which is also the
+    one entry whose numbers do not constrain the answer: kept ones are held
+    by tenure, released ones are free for whoever comes next. ``None`` is
+    an entry still being created, which by the same rule holds nothing and
+    so excludes nothing.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
     lock_occupancies: list[LockOccupancy] = []
     for lock_entity_id in locks:
         try:
-            lock_instance = build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
+            lock_instance = build_lock_instance(
+                hass, dev_reg, ent_reg, config_entry, lock_entity_id
+            )
         except LockQuerySkipped as skipped:
             lock_occupancies.append(
                 LockOccupancy(
@@ -255,7 +278,7 @@ async def async_read_occupancy(
         claimed_by_other_entries=frozenset(
             slot
             for lock_entity_id in locks
-            for slot in get_managed_slots(hass, lock_entity_id, excluding=excluding)
+            for slot in get_managed_slots(hass, lock_entity_id, excluding=config_entry)
         ),
     )
 
@@ -305,7 +328,7 @@ def _too_far(
 
 
 async def async_max_slot(
-    hass: HomeAssistant, locks: Sequence[str]
+    hass: HomeAssistant, config_entry: ConfigEntry | None, locks: Sequence[str]
 ) -> tuple[int, str | None]:
     """
     Return how far a search for free numbers may go across these locks.
@@ -319,6 +342,9 @@ async def async_max_slot(
     A lock of ``None`` means nothing here could say and the limit is this
     integration's own -- which a message must not describe as a capacity
     some lock reported.
+
+    ``config_entry`` is the entry the locks are being read for, on the terms
+    ``build_lock_instance`` describes.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
@@ -326,7 +352,9 @@ async def async_max_slot(
     for lock_entity_id in locks:
         try:
             async with borrowed_lock_instance(
-                build_lock_instance(hass, dev_reg, ent_reg, lock_entity_id)
+                build_lock_instance(
+                    hass, dev_reg, ent_reg, config_entry, lock_entity_id
+                )
             ) as lock_instance:
                 if not lock_instance.credential_index_follows_slot:
                     continue
@@ -352,10 +380,9 @@ async def async_max_slot(
 
 async def async_allocate_for(
     hass: HomeAssistant,
+    config_entry: ConfigEntry | None,
     locks: Sequence[str],
     num_users: int,
-    *,
-    excluding: ConfigEntry | None = None,
 ) -> frozenset[int]:
     """
     Find numbers for ``num_users``, reading only as far as it has to.
@@ -374,15 +401,18 @@ async def async_allocate_for(
     Returns the numbers allocation must avoid, verified across a window
     wide enough to hold everyone. The users are numbered from it later,
     once they have names.
+
+    ``config_entry`` is the entry the numbers are being allocated for, on the
+    terms ``build_lock_instance`` describes.
     """
     try:
-        await async_check_slot_capacity(hass, locks, [num_users])
+        await async_check_slot_capacity(hass, config_entry, locks, [num_users])
     except SlotAllocationError as err:
         raise SlotAllocationError(
             "too_many_users", {**err.placeholders, "num_users": str(num_users)}
         ) from err
 
-    max_slot, limiting_lock = await async_max_slot(hass, locks)
+    max_slot, limiting_lock = await async_max_slot(hass, config_entry, locks)
     if num_users > max_slot:
         # Before the first read, not just before each widening: a count
         # past the range walks off the end of the lock on the way in, and
@@ -397,7 +427,7 @@ async def async_allocate_for(
         # each pass would cost a nearly-full lock several times its own
         # capacity to place a couple of users.
         occupancy = await async_read_occupancy(
-            hass, locks, range(read_up_to + 1, window + 1), excluding=excluding
+            hass, config_entry, locks, range(read_up_to + 1, window + 1)
         )
         if not occupancy.is_known:
             # Unreadable is not free: issuing a number could overwrite a
@@ -415,7 +445,7 @@ async def async_allocate_for(
         # Every number in the way pushes the last user one further out.
         wider = num_users + taken_in_window
         try:
-            await async_check_slot_capacity(hass, locks, [wider])
+            await async_check_slot_capacity(hass, config_entry, locks, [wider])
         except SlotAllocationError as err:
             # Distinct from the count being too large: the count fits,
             # and the numbers needed to reach around what is already

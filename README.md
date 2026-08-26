@@ -47,7 +47,7 @@ Supported lock integrations:
 | [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs write-only per spec |
 | [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | ✅ | ❌ | ❌ | Local API, polling-based |
-| [Virtual][wiki-virtual]¹ | ✅ | ❌ | ❌ | For testing only |
+| [Virtual][wiki-virtual]¹ | ✅ | ❌ | ✅ | A credential store rather than a device: records uses reported by the `use_credential` action, and lets you try Lock Code Manager without a real lock |
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])

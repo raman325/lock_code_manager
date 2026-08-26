@@ -222,7 +222,7 @@ async def test_allocation_skips_unclaimed_mqtt_lock(
 
     with pytest.raises(LockQuerySkipped) as raised:
         build_lock_instance(
-            hass, dr.async_get(hass), er.async_get(hass), lock_entry.entity_id
+            hass, dr.async_get(hass), er.async_get(hass), None, lock_entry.entity_id
         )
 
     assert raised.value.managed is False
