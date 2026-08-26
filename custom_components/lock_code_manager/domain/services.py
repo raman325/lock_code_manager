@@ -112,7 +112,7 @@ async def async_validate_code(
     programmed with still has an answer here.
     """
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
-    result = validate_credential(hass, config_entry, code)
+    result = validate_credential(config_entry, code)
 
     return {
         ATTR_VALID: result.valid,

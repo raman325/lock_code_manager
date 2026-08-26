@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from homeassistant.const import CONF_CONDITION
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 
 from ..const import (
     REASON_CONDITION_NOT_MET,
@@ -54,7 +54,6 @@ def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
 
 @callback
 def validate_credential(
-    hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     code: str,
 ) -> ValidationResult:
@@ -63,7 +62,9 @@ def validate_credential(
 
     A pure query: it reports what the entry's configuration says about the
     code and does nothing else -- no lock is contacted, nothing is written,
-    and no event is fired. The active check is the slot coordinator's own
+    and no event is fired. It deliberately takes no ``hass``: firing an event
+    or reaching a device would need one, so its absence keeps this a question
+    rather than something that can grow side effects. The active check is the slot coordinator's own
     derived state -- the same predicate the active binary sensor renders --
     so a validation and the dashboard can never disagree about whether a
     credential works.

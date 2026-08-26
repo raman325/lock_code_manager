@@ -115,7 +115,7 @@ async def _assert_validation_matches_sensors(
     ]
     expected = any(sensor_on[slot_num] for slot_num in matched)
 
-    result = validate_credential(hass, lcm_entry, code)
+    result = validate_credential(lcm_entry, code)
 
     assert result.valid == expected
     if expected:
