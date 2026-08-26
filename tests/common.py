@@ -37,28 +37,6 @@ from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 
-
-@contextmanager
-def reading_for():
-    """
-    Record the entry every lock read allocation performs is made on behalf of.
-
-    The real factory still runs, so the caller under test behaves exactly as
-    it would unwatched; only the entry it was handed is captured.
-    """
-    read_for: list[ConfigEntry | None] = []
-
-    def _spy(hass, dev_reg, ent_reg, config_entry, lock_entity_id):
-        read_for.append(config_entry)
-        return build_lock_instance(hass, dev_reg, ent_reg, config_entry, lock_entity_id)
-
-    with patch(
-        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
-        _spy,
-    ):
-        yield read_for
-
-
 LOCK_1_ENTITY_ID = "lock.test_1"
 LOCK_2_ENTITY_ID = "lock.test_2"
 
@@ -80,6 +58,27 @@ BASE_CONFIG = {
 
 UNCLAIMED_IDENTIFIER = "somebridge_1"
 UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
+
+
+@contextmanager
+def reading_for():
+    """
+    Record the entry every lock read allocation performs is made on behalf of.
+
+    The real factory still runs, so the caller under test behaves exactly as
+    it would unwatched; only the entry it was handed is captured.
+    """
+    read_for: list[ConfigEntry | None] = []
+
+    def _spy(hass, dev_reg, ent_reg, config_entry, lock_entity_id):
+        read_for.append(config_entry)
+        return build_lock_instance(hass, dev_reg, ent_reg, config_entry, lock_entity_id)
+
+    with patch(
+        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        _spy,
+    ):
+        yield read_for
 
 
 async def async_discover_unclaimed_mqtt_lock(

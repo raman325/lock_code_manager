@@ -338,7 +338,8 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             # Settled before a single name is collected. Which users get
             # configured does not change which numbers allocation issues, so
             # the count alone decides whether they fit -- and a refusal here
-            # is one the user can still act on.
+            # is one the user can still act on. The ``None`` is the entry the
+            # lock reads are made for: this flow is what creates it.
             (
                 unavailable,
                 errors,
@@ -461,7 +462,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 assert users is not None
                 # Same allocation the guided path uses, against the same
                 # occupancy: nobody picks a number on either route, so
-                # neither can land on one a lock already holds.
+                # neither can land on one a lock already holds. The ``None``
+                # is the entry the lock reads are made for, which this flow
+                # has not created yet.
                 (
                     unavailable,
                     allocation_errors,

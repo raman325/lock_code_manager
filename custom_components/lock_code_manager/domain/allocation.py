@@ -140,6 +140,9 @@ async def async_check_slot_capacity(
     capabilities need the lock awake, and a sleeping battery lock must not
     make the config flow unusable. The same check runs at write time, where
     it can suspend the affected slot precisely.
+
+    ``config_entry`` is the entry the locks are being read for, on the terms
+    ``build_lock_instance`` describes.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
@@ -339,6 +342,9 @@ async def async_max_slot(
     A lock of ``None`` means nothing here could say and the limit is this
     integration's own -- which a message must not describe as a capacity
     some lock reported.
+
+    ``config_entry`` is the entry the locks are being read for, on the terms
+    ``build_lock_instance`` describes.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
@@ -395,6 +401,9 @@ async def async_allocate_for(
     Returns the numbers allocation must avoid, verified across a window
     wide enough to hold everyone. The users are numbered from it later,
     once they have names.
+
+    ``config_entry`` is the entry the numbers are being allocated for, on the
+    terms ``build_lock_instance`` describes.
     """
     try:
         await async_check_slot_capacity(hass, config_entry, locks, [num_users])

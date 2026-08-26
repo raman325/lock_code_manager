@@ -1,6 +1,7 @@
 """Config flow tests."""
 
 import json
+import logging
 from pathlib import Path
 import re
 from unittest.mock import AsyncMock, PropertyMock, patch
@@ -1980,6 +1981,45 @@ async def test_a_lock_that_cannot_be_built_says_whether_it_is_ours(
         build_lock_instance(hass, dr.async_get(hass), ent_reg, None, entity_id)
 
     assert raised.value.managed is managed
+
+
+async def test_a_skipped_lock_read_names_the_entry_that_asked(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Giving up on a lock has to say who gave up on it.
+
+    Locks are shared between entries, so the lock alone does not identify
+    the read that stopped: whoever reads the log has to be able to tell
+    which entry's configuration to go and look at. Setup is the one caller
+    with honestly nobody to name.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    def _asked_by(config_entry) -> str:
+        caplog.clear()
+        with caplog.at_level(logging.WARNING), pytest.raises(LockQuerySkipped):
+            build_lock_instance(
+                hass, dev_reg, ent_reg, config_entry, "lock.never_registered"
+            )
+        [record] = [
+            record
+            for record in caplog.records
+            if record.name.endswith("domain.allocation")
+        ]
+        asked_by, lock_entity_id = record.args
+        assert lock_entity_id == "lock.never_registered"
+        return asked_by
+
+    assert (
+        _asked_by(lock_code_manager_config_entry)
+        == lock_code_manager_config_entry.entry_id
+    )
+    assert _asked_by(None) == "New entry"
 
 
 async def test_setup_refuses_when_a_lock_cannot_be_read(
