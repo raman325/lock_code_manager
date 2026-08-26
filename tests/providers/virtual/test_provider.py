@@ -147,16 +147,17 @@ async def test_async_unload_remove_permanently_removes_store(
     assert await _fresh_store().async_load() is None
 
 
-async def test_virtual_lock_supports_code_slot_events(
+async def test_virtual_lock_reports_no_code_slot_events(
     virtual_lock: VirtualLock,
 ):
-    """A virtual lock accepts credential-use events recorded against it.
+    """A virtual lock observes nothing, and says so.
 
-    It observes nothing itself, but it is the surface somebody adds to
-    record uses Lock Code Manager cannot watch, so the per-slot event
-    entity has to list it.
+    It is the surface somebody adds to record uses Lock Code Manager cannot
+    watch, not a device that reports them. Recording a use against it does
+    not need this to claim otherwise -- see the E2E test that does exactly
+    that with this answering False.
     """
-    assert virtual_lock.supports_code_slot_events is True
+    assert virtual_lock.supports_code_slot_events is False
 
 
 async def test_virtual_lock_capabilities_advertise_no_limits(

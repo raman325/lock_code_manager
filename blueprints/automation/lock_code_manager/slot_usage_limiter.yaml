@@ -17,11 +17,23 @@ blueprint:
     - Set the counter to **0** to immediately disable the slot on next use.
 
 
-    **Requirements**
+    **What spends a use**
 
-    This blueprint requires at least one lock that supports code slot events
-    (i.e. produces credential-used events). If none of your locks
-    support this, the counter will never decrement.
+    The credential used event entity records every use of the user's
+    credential and says what the device did with it: `unlock`, `lock`, or
+    `unknown` when nothing reported which.
+
+
+    By default `unlock` and `unknown` spend a use and `lock` does not, so a
+    guest who unlocks with their PIN and locks up behind them with the same
+    PIN spends one use rather than two — on a 1-use code, being polite would
+    otherwise lock them out. Uses reported through the
+    `lock_code_manager.use_credential` action are always `unknown`, because
+    Lock Code Manager never actuates a lock and so never sees what happened
+    next; leaving `unknown` selected is what keeps those counting at all.
+
+
+    Widen or narrow that with **Operations that spend a use**.
 
 
     **Setup**
@@ -48,6 +60,35 @@ blueprint:
         entity:
           domain: event
           integration: lock_code_manager
+    counted_operations:
+      name: Operations that spend a use
+      description: >
+        Which recorded uses decrement the counter, by what the device did
+        with the credential.
+
+
+        `unlock` — the credential unlocked something.
+
+
+        `lock` — it locked something. Off by default: a guest who unlocks
+        with their PIN and locks up behind them with the same PIN would
+        otherwise spend two uses.
+
+
+        `unknown` — nothing reported what the device did. Every use reported
+        through `lock_code_manager.use_credential` is one of these, as is
+        any lock notification the provider could not classify, so clearing
+        this stops those counting entirely.
+      default:
+        - unlock
+        - unknown
+      selector:
+        select:
+          multiple: true
+          options:
+            - unlock
+            - lock
+            - unknown
     locks:
       name: Locks (optional)
       description: >
@@ -117,6 +158,7 @@ variables:
   uses_counter: !input uses_counter
   notify_target: !input notify_target
   locks: !input locks
+  counted_operations: !input counted_operations
   pin_used_entity_id: !input pin_used_entity
   _config_entry: >-
     {{ config_entry_id(pin_used_entity_id) }}
@@ -131,10 +173,18 @@ actions:
       - conditions:
           - condition: trigger
             id: pin_used
+          # Read off the trigger's own snapshot rather than the entity's
+          # live state: `mode: queued` runs this behind up to nine other
+          # uses, and a live read would judge this trigger by whatever use
+          # arrived last. `target` is what the credential was used against;
+          # `event_type` is the kind of credential and names no entity.
           - condition: template
             value_template: >-
-              {{ locks | count == 0
-                 or state_attr(trigger.entity_id, 'event_type') in locks }}
+              {{ trigger.to_state is not none
+                 and trigger.to_state.attributes.operation
+                     in counted_operations
+                 and (locks | count == 0
+                      or trigger.to_state.attributes.target in locks) }}
         sequence:
           - variables:
               current: >
@@ -175,7 +225,7 @@ actions:
                         {{ _config_entry_title }} code slot {{ _slot_number }}
                         has been disabled after reaching the usage limit.
                         Last used on lock
-                        {{ state_attr(trigger.entity_id, 'event_type')
+                        {{ trigger.to_state.attributes.target
                            | default('unknown') }}
                         at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}.
       - conditions:

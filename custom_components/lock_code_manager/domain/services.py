@@ -21,7 +21,11 @@ from ..const import (
 )
 from .allocation import SlotAllocationError, async_allocate_for
 from .config import EntryConfig
-from .events import async_fire_credential_used
+from .credentials import CredentialType
+from .events import (
+    CredentialOperation,
+    async_fire_credential_used,
+)
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry
@@ -125,15 +129,25 @@ async def async_use_credential(
     # rather than ``valid`` is also what tells the type checker it is there.
     if result.user is not None:
         # One event, whatever the target is. The entry's per-slot event
-        # entity reads this off the bus and records the use itself when the
-        # target is one of its event-capable locks, so nothing here has to
-        # know which targets are recordable.
+        # entity reads this off the bus and records every use it names, so
+        # nothing here has to know what a target is or whether Lock Code
+        # Manager manages it.
         #
         # ``source`` and ``target`` are data. Nothing here dereferences them,
         # looks them up in a registry, or reads their state: a code source's
         # state can be the cleartext credential that was just typed.
         async_fire_credential_used(
-            hass, config_entry, name=result.user, source=source, target=target
+            hass,
+            config_entry,
+            name=result.user,
+            source=source,
+            target=target,
+            # A PIN is what this action validates against.
+            credential_type=CredentialType.PIN,
+            # Nothing here observed a lock move. Lock Code Manager never
+            # actuates, so claiming an unlock would state a fact nobody saw;
+            # a caller that later needs to say gets a parameter for it.
+            operation=CredentialOperation.UNKNOWN,
         )
 
     return {

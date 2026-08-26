@@ -60,7 +60,7 @@ from ..domain.credentials import (
     pin_address,
     user_from_slot,
 )
-from ..domain.events import async_fire_credential_used
+from ..domain.events import CredentialOperation, async_fire_credential_used
 from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
@@ -634,14 +634,12 @@ class BaseLock:
     @property
     def supports_code_slot_events(self) -> bool:
         """
-        Return whether this lock supports code slot events.
+        Return whether this lock reports which code slot was used.
 
-        When True, the lock can fire events indicating which code slot was used
-        to lock/unlock. This affects the event entity's event_types - locks that
-        support this will have their entity_id included in event_types.
-
-        Locks that don't support this will be listed in the unsupported_locks
-        attribute on the event entity.
+        Diagnostics only. Nothing gates on it: a use is recorded against the
+        user whose credential it was, and where it happened is payload rather
+        than capability, so a lock that never reports one costs nothing
+        anywhere else.
         """
         return True
 
@@ -2144,6 +2142,10 @@ class BaseLock:
 
         notification_source, extra_data = _serialize_source_data(source_data)
         slot_name = name_state.state if name_state else ""
+        # Only PIN is exercised today, but a consumer that reads it now keeps
+        # working when another kind arrives. Both payloads carry the same
+        # value, so they cannot drift.
+        credential_type = CredentialType.PIN
 
         event_data = {
             ATTR_NOTIFICATION_SOURCE: notification_source,
@@ -2155,9 +2157,7 @@ class BaseLock:
             ),
             ATTR_ACTION_TEXT: action_text,
             ATTR_CODE_SLOT: code_slot or 0,
-            # Only PIN is exercised today, but a consumer that reads it
-            # now keeps working when another kind arrives.
-            ATTR_CREDENTIAL_TYPE: CredentialType.PIN,
+            ATTR_CREDENTIAL_TYPE: credential_type,
             ATTR_CODE_SLOT_NAME: slot_name,
             ATTR_FROM: from_state,
             ATTR_TO: to_state,
@@ -2171,8 +2171,9 @@ class BaseLock:
         # what happened ("a credential belonging to this user was used") rather
         # than where. Retained for backward compatibility while consumers
         # migrate: both events fire, no removal version is set, and nothing
-        # warns at runtime. The per-slot event entity still listens to this
-        # one.
+        # warns at runtime. Nothing inside this integration reads it any
+        # more -- the per-slot event entity records off the unified event
+        # alone -- so it exists purely for consumers.
         self.hass.bus.async_fire(EVENT_LOCK_STATE_CHANGED, event_data=event_data)
 
         # Attribution is the whole content of the unified event, and every
@@ -2190,4 +2191,9 @@ class BaseLock:
                 # was entered and what it acted on.
                 source=lock_entity_id,
                 target=lock_entity_id,
+                credential_type=credential_type,
+                # The direction the lock reported moving, which every
+                # provider already hands this method. A provider that could
+                # not classify the notification passes None and says so.
+                operation=CredentialOperation.from_to_locked(to_locked),
             )

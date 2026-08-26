@@ -29,14 +29,40 @@ blueprint:
 
     - `name_state` — the current name of the code slot
 
-    - `lock_entity_ids` — list of lock entity IDs that support code slot events for this slot
+
+    **Removed: `lock_entity_ids`**
+
+
+    This variable no longer exists. It was read off the credential used event
+    entity, which used to list the config entry's lock entity IDs as its event
+    types and now records one fixed event type instead. Nothing else in Home
+    Assistant exposes a config entry's locks to a template, so there is no
+    replacement.
+
+
+    A condition template that still references it fails quietly. Home
+    Assistant treats an undefined template variable as empty rather than as
+    an error, so the binary sensor stays available, reads `off`, and the PIN
+    never activates. The one signal is a line in the Home Assistant log:
+    `Template variable warning: 'lock_entity_ids' is undefined when rendering
+    ...`. Check the log after upgrading — nothing else will tell you.
+
+
+    Nothing here can make that louder, and there is nothing worth stubbing
+    the variable to: the sensor cannot tell an undefined variable from a
+    condition that is honestly false. Nor was the variable worth keeping. The
+    list was the same for every slot in the config entry, so
+    `{{ 'lock.front_door' in lock_entity_ids }}` could only ever be constantly
+    true or constantly false. A Lock Code Manager condition entity gates a
+    *user* across every lock in the entry; it cannot gate one lock. Remove the
+    reference to fix the sensor.
 
 
     **Example condition templates**
 
     - Allow when event title contains "Guest": `{{ 'Guest' in message }}`
 
-    - Allow only for a specific lock: `{{ 'lock.front_door' in lock_entity_ids }}`
+    - Allow when the slot is named for a known guest: `{{ name_state == 'Guest' }}`
 
 
     **Note:** The condition template and calendar attributes are evaluated when the
@@ -123,14 +149,6 @@ variables:
        | map(attribute='entity_id') | first | default('') }}
   name_state: >
     {{ states(_name_entity) if _name_entity else '' }}
-  _event_entity: >
-    {{ expand(_all_entities)
-       | selectattr('attributes.slot_field', 'defined')
-       | selectattr('attributes.slot_field', 'eq', 'credential_used')
-       | selectattr('attributes.code_slot', 'eq', slot_number | int)
-       | map(attribute='entity_id') | first | default('') }}
-  lock_entity_ids: >
-    {{ state_attr(_event_entity, 'event_types') | default([]) }}
   _condition_result: !input condition_template
 
 binary_sensor:

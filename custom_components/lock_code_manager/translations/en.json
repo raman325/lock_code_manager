@@ -95,7 +95,12 @@
         "state_attributes": {
           "event_type": {
             "state": {
-              "credential_used": "PIN used"
+              "face": "Face",
+              "fingerprint": "Fingerprint",
+              "nfc": "NFC",
+              "password": "Password",
+              "pin": "PIN",
+              "rfid": "RFID"
             }
           }
         }
@@ -317,11 +322,11 @@
         },
         "source": {
           "name": "Source",
-          "description": "The entity where the credential was entered, such as a keypad. Required. If nothing in Home Assistant represents it, create a template entity to name here. Its state is never read, only its entity ID is reported. It should name a different entity from the target: a use whose source and target are the same entity is treated as one the lock observed itself, and is not recorded again."
+          "description": "The entity where the credential was entered, such as a keypad. Required. If nothing in Home Assistant represents it, create a template entity to name here. Its state is never read, only its entity ID is reported — a code source's state can be the code itself. Naming the same entity as the target is fine, and is what a credential entered and used in one place looks like."
         },
         "target": {
           "name": "Target",
-          "description": "The entity the credential was used against: a lock, a cover, an alarm panel, whatever the use applies to. Required. If nothing in Home Assistant represents it, create an entity to name here, such as a Virtual lock. Its state is never read, only its entity ID is reported. When it happens to be a lock in the chosen entry that can report code slot events, that user's credential used entity records the use as well."
+          "description": "The entity the credential was used against: a lock, a cover, an alarm panel, whatever the use applies to. Required. If nothing in Home Assistant represents it, create an entity to name here, such as a Virtual lock. Its entity ID is reported, and its friendly name is what the slot card shows for where the credential was last used. That user's credential used entity records the use whatever the target is."
         }
       }
     }

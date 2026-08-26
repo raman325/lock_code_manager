@@ -2,31 +2,24 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from homeassistant.components.event import EventEntity
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_NAME
+from homeassistant.const import ATTR_NAME
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     ATTR_CONFIG_ENTRY_ID,
-    ATTR_SOURCE,
-    ATTR_TARGET,
+    ATTR_CREDENTIAL_TYPE,
     BUS_EVENT_CREDENTIAL_USED,
     EVENT_CREDENTIAL_USED,
-    EVENT_LOCK_STATE_CHANGED,
 )
+from .domain.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import get_entry_config
 from .entity import BaseLockCodeManagerEntity
-from .providers import BaseLock
-
-_LOGGER = logging.getLogger(__name__)
-
-ATTR_UNSUPPORTED_LOCKS = "unsupported_locks"
 
 
 async def async_setup_entry(
@@ -58,11 +51,16 @@ async def async_setup_entry(
 
 class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity):
     """
-    Code slot event entity for lock code manager.
+    Records every use of this user's credential, wherever it happened.
 
-    The event_types are the lock entity IDs that support code slot events.
-    When a PIN is used, the event type is the lock entity ID where it was used.
-    Locks that don't support code slot events are listed in unsupported_locks attribute.
+    The event type is the kind of credential that was presented, which is
+    what Home Assistant's ``event_types`` is for: telling kinds of event
+    apart. It is not where the use happened. A vocabulary of lock entity IDs
+    was tried and is what this replaces -- Home Assistant refuses an event
+    type an entity did not declare, so naming the entry's locks made a use
+    against anything else impossible to record at all. Where the credential
+    was used is the payload's ``target``, which nothing has to admit in
+    advance.
     """
 
     _attr_entity_category = None
@@ -80,64 +78,43 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         BaseLockCodeManagerEntity.__init__(
             self, hass, ent_reg, config_entry, slot_num, key
         )
-
-    def _get_supported_locks(self) -> list[BaseLock]:
-        """Get locks that support code slot events."""
-        return [lock for lock in self.locks if lock.supports_code_slot_events]
+        # Types this entity has actually recorded. A use is proof its kind is
+        # possible here, so recording one widens the vocabulary rather than
+        # being refused by it -- see :meth:`event_types`.
+        self._recorded_types: set[CredentialType] = set()
 
     @property
     def event_types(self) -> list[str]:
-        """Return supported event types (lock entity IDs)."""
-        return [lock.lock.entity_id for lock in self._get_supported_locks()]
-
-    @property
-    def available(self) -> bool:
         """
-        Return True if entity is available.
+        Return the credential kinds a use recorded here can be.
 
-        The event entity is unavailable if no locks support code slot events.
+        The union of what the entry's locks advertise and
+        ``MANAGED_CREDENTIAL_TYPES``, which is a floor rather than a cap.
+        Those two sets answer different questions and this entity spans
+        both: the constant is what Lock Code Manager can WRITE, and a lock's
+        advertised types are what it can REPORT. A lock with its own RFID
+        reader reports uses of a credential this integration never wrote,
+        and they are still this user's uses.
+
+        The floor is what makes the answer safe before anything is known.
+        Capabilities are probed lazily, so ``cached_capabilities`` reads
+        ``None`` for a lock that has not been asked yet or cannot be
+        reached, and an empty vocabulary would make ``_trigger_event``
+        refuse everything -- the entity would record nothing at all, for as
+        long as the probe took.
+
+        Read fresh on every state write, because it moves: a probe
+        completing or a lock being added changes it. Home Assistant re-reads
+        capability attributes each write, so a dynamic answer publishes
+        correctly; nothing caches it here, which is deliberate.
         """
-        if not self._get_supported_locks():
-            return False
-        return super().available
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """
-        Return extra state attributes.
-
-        Includes unsupported_locks list for locks that can't fire code slot events.
-        Computed dynamically to reflect any changes in lock capabilities.
-
-        Starts from what the base class publishes: a property shadows
-        ``_attr_extra_state_attributes`` outright, so building a fresh dict
-        here dropped this entity's slot identity and left it the one entity a
-        template could not find by slot.
-        """
-        attrs: dict[str, Any] = dict(self._attr_extra_state_attributes)
-        unsupported = [
-            lock.lock.entity_id
+        advertised = {
+            credential_type
             for lock in self.locks
-            if not lock.supports_code_slot_events
-        ]
-        if unsupported:
-            attrs[ATTR_UNSUPPORTED_LOCKS] = unsupported
-        return attrs
-
-    @callback
-    def _handle_event(self, event: Event) -> None:
-        """
-        Handle event.
-
-        The event type is the lock entity ID where the PIN was used.
-        _trigger_event stores the event type internally in EventEntity.
-        """
-        lock_entity_id = event.data.get(ATTR_ENTITY_ID)
-        if not lock_entity_id:
-            _LOGGER.warning("Received event without lock entity ID: %s", event.data)
-            return
-        self._trigger_event(lock_entity_id, event.data)
-        self.async_write_ha_state()
+            if (caps := lock.cached_capabilities) is not None
+            for credential_type in caps.credential_types
+        }
+        return sorted(advertised | MANAGED_CREDENTIAL_TYPES | self._recorded_types)
 
     @callback
     def _credential_used_filter(self, event_data: dict[str, Any]) -> bool:
@@ -148,55 +125,39 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         occupy, so working out whose entity this is means asking the
         configuration who holds this slot right now.
 
-        A use a lock observed itself arrives here as well as on the
-        deprecated lock-state event, which carries the same use with the
-        richer payload this entity publishes as its attributes. Recording
-        both would fire the entity twice and leave it showing the thinner of
-        the two. ``source`` and ``target`` being the same entity is what
-        marks that case, and this guard retires with the deprecated event.
-
-        So a reported use is recorded only when both hold: the target is a
-        lock in this entry that can fire code slot events (checked in
-        :meth:`_handle_credential_used`), and ``source`` differs from
-        ``target``. Naming the same entity for both silently records
-        nothing, which is what the ``source`` field's description warns.
+        Deliberately says nothing about ``target``. A use against something
+        this integration does not manage -- a cover, an alarm panel, a
+        keypad with no integration of its own -- is still this user's
+        credential being used, and recording it is what this entity is for.
         """
-        return (
-            event_data[ATTR_CONFIG_ENTRY_ID] == self.entry_id
-            and event_data[ATTR_SOURCE] != event_data[ATTR_TARGET]
-            and event_data[ATTR_NAME]
-            == get_entry_config(self.config_entry).name_for(self.slot_num)
+        # Every entry's entities see every entry's events, and resolving who
+        # holds this slot walks the configuration, so the entry has to be
+        # ruled out before that lookup rather than alongside it.
+        if event_data[ATTR_CONFIG_ENTRY_ID] != self.entry_id:
+            return False
+        return event_data[ATTR_NAME] == get_entry_config(self.config_entry).name_for(
+            self.slot_num
         )
 
     @callback
     def _handle_credential_used(self, event: Event) -> None:
         """
-        Record a use reported against one of this entry's locks.
+        Record the use, publishing the unified payload as state attributes.
 
-        The target is the event type, the same as it is for a use a lock
-        observed. Anything else -- a cover, an alarm panel, a lock in the
-        entry that cannot fire code slot events -- is not one of this
-        entity's event types, and ``EventEntity`` raises on an event type it
-        was not told about. That is the ordinary case rather than a mistake:
-        the action's target is whatever the caller says the credential acted
-        on, and only some of those are things this entity can name.
+        The whole payload, unedited: a consumer reads ``target`` for where
+        the credential was used and ``source`` for where it was entered,
+        which for a use a lock observed itself are the same entity.
+
+        A kind the vocabulary does not yet list widens it instead of being
+        dropped. ``_trigger_event`` raises on an undeclared type, and this
+        runs on a bus callback whose exceptions Home Assistant swallows, so
+        refusing would lose the use in silence -- and a use that arrived is
+        better evidence of what is possible here than a capability probe
+        that has not finished.
         """
-        target = event.data[ATTR_TARGET]
-        if target not in self.event_types:
-            return
-        self._trigger_event(target, event.data)
-        self.async_write_ha_state()
-
-    @callback
-    def _handle_add_locks(self, locks: list[BaseLock]) -> None:
-        """Handle lock entities being added."""
-        super()._handle_add_locks(locks)
-        self.async_write_ha_state()
-
-    @callback
-    def _handle_remove_lock(self, lock_entity_id: str) -> None:
-        """Handle lock entity being removed."""
-        super()._handle_remove_lock(lock_entity_id)
+        credential_type = event.data[ATTR_CREDENTIAL_TYPE]
+        self._recorded_types.add(credential_type)
+        self._trigger_event(credential_type, event.data)
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
@@ -205,18 +166,10 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         # EventEntity.async_added_to_hass restores __last_event_type from stored data
         await EventEntity.async_added_to_hass(self)
 
-        # Listen for lock state changed events
-        self.async_on_remove(
-            self.hass.bus.async_listen(
-                EVENT_LOCK_STATE_CHANGED,
-                self._handle_event,
-                self._event_filter,
-            )
-        )
-
-        # And for uses reported from outside, which reach this entity only as
-        # the unified event: the action that reports them fires nothing
-        # lock-shaped, because no lock observed anything.
+        # The unified event is the only source. Every use reaches it --
+        # observed by a lock or reported through the ``use_credential``
+        # action -- so there is one recording path and nothing to
+        # de-duplicate between two of them.
         self.async_on_remove(
             self.hass.bus.async_listen(
                 BUS_EVENT_CREDENTIAL_USED,

@@ -29,8 +29,10 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT_NAME,
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
+    ATTR_CREDENTIAL_TYPE,
     ATTR_EXTRA_DATA,
     ATTR_NOTIFICATION_SOURCE,
+    ATTR_OPERATION,
     ATTR_SOURCE,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
@@ -47,6 +49,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     LockCapabilities,
     pin_address,
 )
+from custom_components.lock_code_manager.domain.events import CredentialOperation
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerProviderError,
@@ -923,6 +926,9 @@ async def test_fire_code_slot_event_fires_both_events(
         ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
         ATTR_SOURCE: LOCK_1_ENTITY_ID,
         ATTR_TARGET: LOCK_1_ENTITY_ID,
+        ATTR_CREDENTIAL_TYPE: CredentialType.PIN,
+        # ``to_locked=False`` is the lock reporting that it opened.
+        ATTR_OPERATION: CredentialOperation.UNLOCK,
     }
 
 

@@ -50,15 +50,13 @@ class VirtualLock(BaseLock):
     @property
     def supports_code_slot_events(self) -> bool:
         """
-        Return True: a virtual lock is a recording surface for credential use.
+        Return False: a virtual lock observes nothing.
 
-        A virtual lock observes nothing on its own, but it is what somebody
-        adds when a credential is used somewhere Lock Code Manager cannot
-        watch -- an external keypad, a door controller with no integration.
-        The ``use_credential`` action records against it, so its per-slot
-        event entity has to accept events attributed to it.
+        It is a recording surface -- somewhere to point a use that happened
+        beyond Home Assistant's reach -- rather than a device that reports
+        one. Recording a use against it does not need this to say otherwise.
         """
-        return True
+        return False
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """

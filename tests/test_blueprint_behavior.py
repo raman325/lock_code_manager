@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 import contextlib
 import pathlib
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -21,6 +22,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from homeassistant.components import automation
 from homeassistant.components.blueprint import models
+from homeassistant.components.template import config as template_config
 from homeassistant.const import ATTR_FRIENDLY_NAME
 from homeassistant.core import Event, HomeAssistant, ServiceCall, State, callback
 from homeassistant.helpers import entity_registry as er, template
@@ -54,12 +56,22 @@ BLUEPRINT_FOLDER = BLUEPRINTS_ROOT / "automation" / "lock_code_manager"
 NOTIFIER_PATH = "slot_usage_notifier.yaml"
 LIMITER_PATH = "slot_usage_limiter.yaml"
 
+# Template blueprints live under a different root, so this one carries the
+# folder its path is relative to.
+CALENDAR_PATH = "lock_code_manager/calendar_condition.yaml"
+
 
 @contextlib.contextmanager
-def patch_blueprint(blueprint_path: str, data_path: pathlib.Path) -> Iterator[None]:
+def patch_blueprint(
+    blueprint_path: str,
+    data_path: pathlib.Path,
+    schema: Any = automation.config.AUTOMATION_BLUEPRINT_SCHEMA,
+) -> Iterator[None]:
     """Intercept blueprint loading so HA reads our repo YAML directly.
 
     Mirrors the helper used in homeassistant.tests.components.automation.test_blueprint.
+    ``schema`` is the blueprint schema of the domain being loaded: the
+    template domain validates its blueprints against its own.
     """
     orig_load = models.DomainBlueprints._load_blueprint
 
@@ -71,7 +83,7 @@ def patch_blueprint(blueprint_path: str, data_path: pathlib.Path) -> Iterator[No
             yaml_util.load_yaml(data_path),
             expected_domain=self.domain,
             path=path,
-            schema=automation.config.AUTOMATION_BLUEPRINT_SCHEMA,
+            schema=schema,
         )
 
     with patch(
@@ -81,29 +93,57 @@ def patch_blueprint(blueprint_path: str, data_path: pathlib.Path) -> Iterator[No
         yield
 
 
-async def _setup_blueprint_automation(
-    hass: HomeAssistant, blueprint_path: str, inputs: dict
+async def _setup_blueprint_automations(
+    hass: HomeAssistant, *automations: tuple[str, dict]
 ) -> None:
-    """Instantiate a blueprint-based automation with the given inputs."""
-    with patch_blueprint(blueprint_path, BLUEPRINT_FOLDER / blueprint_path):
+    """
+    Instantiate several blueprint-based automations in one component setup.
+
+    ``async_setup_component`` is a no-op once the automation domain is up, so
+    every automation a test needs has to arrive in the same call. Setting a
+    second one up on its own leaves it silently nonexistent, and an assertion
+    that it never fired then passes for the wrong reason.
+    """
+    with contextlib.ExitStack() as stack:
+        for blueprint_path, _ in automations:
+            stack.enter_context(
+                patch_blueprint(blueprint_path, BLUEPRINT_FOLDER / blueprint_path)
+            )
         assert await async_setup_component(
             hass,
             "automation",
             {
-                "automation": {
-                    "use_blueprint": {"path": blueprint_path, "input": inputs}
-                }
+                "automation": [
+                    {"use_blueprint": {"path": blueprint_path, "input": inputs}}
+                    for blueprint_path, inputs in automations
+                ]
             },
         )
     await hass.async_block_till_done()
 
 
-def _fire_pin_used(
-    config_entry, lock_entity_id: str, slot: int, action_text: str = "test"
+async def _setup_blueprint_automation(
+    hass: HomeAssistant, blueprint_path: str, inputs: dict
 ) -> None:
-    """Fire a PIN-used event from the named lock on the named slot."""
+    """Instantiate a blueprint-based automation with the given inputs."""
+    await _setup_blueprint_automations(hass, (blueprint_path, inputs))
+
+
+def _fire_pin_used(
+    config_entry,
+    lock_entity_id: str,
+    slot: int,
+    action_text: str = "test",
+    *,
+    to_locked: bool = False,
+) -> None:
+    """Fire a PIN-used event from the named lock on the named slot.
+
+    ``to_locked`` is the direction the lock moved: False for a code that
+    unlocked the door, True for one that locked it.
+    """
     lock: BaseLock = config_entry.runtime_data.locks[lock_entity_id]
-    lock.async_fire_code_slot_event(slot, False, action_text, Event("test_source"))
+    lock.async_fire_code_slot_event(slot, to_locked, action_text, Event("test_source"))
 
 
 # A keypad and a gate Lock Code Manager manages neither of, which is the
@@ -670,6 +710,136 @@ async def test_limiter_decrements_on_pin_use(
     assert float(hass.states.get(counter).state) == 1
 
 
+async def test_limiter_does_not_spend_a_use_on_locking_by_default(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Locking up behind yourself does not cost a use.
+
+    The entity records every use of the credential now, not just the
+    unlocks it used to filter for, so without a filter here a guest who
+    unlocks with their PIN and locks the door behind them with the same PIN
+    would spend two of their uses -- on a 1-use code, locking themselves out
+    for being polite. The blueprint's default counts ``unlock`` and
+    ``unknown`` and not ``lock``, which is the contract this pins.
+    """
+    counter = await _setup_counter(hass, initial=3)
+
+    await _setup_blueprint_automation(
+        hass,
+        LIMITER_PATH,
+        {
+            "pin_used_entity": SLOT_1_EVENT_ENTITY,
+            "enabled_switch": SLOT_1_ENABLED_ENTITY,
+            "uses_counter": counter,
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1, to_locked=False)
+    await hass.async_block_till_done()
+    assert float(hass.states.get(counter).state) == 2
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1, to_locked=True)
+    await hass.async_block_till_done()
+    assert float(hass.states.get(counter).state) == 2
+
+
+async def test_limiter_spends_a_use_on_locking_when_widened(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Selecting ``lock`` makes every touch of the credential cost a use."""
+    counter = await _setup_counter(hass, initial=3)
+
+    await _setup_blueprint_automation(
+        hass,
+        LIMITER_PATH,
+        {
+            "pin_used_entity": SLOT_1_EVENT_ENTITY,
+            "enabled_switch": SLOT_1_ENABLED_ENTITY,
+            "uses_counter": counter,
+            "counted_operations": ["unlock", "lock", "unknown"],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1, to_locked=True)
+    await hass.async_block_till_done()
+    assert float(hass.states.get(counter).state) == 2
+
+
+async def test_limiter_spends_a_use_on_a_reported_use(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A use reported through the action still counts by default.
+
+    ``use_credential`` reports ``unknown`` -- Lock Code Manager never sees
+    what the device did next -- so a default that counted only ``unlock``
+    would silently stop counting every external keypad use the action
+    exists to report.
+    """
+    counter = await _setup_counter(hass, initial=3)
+
+    await _setup_blueprint_automation(
+        hass,
+        LIMITER_PATH,
+        {
+            "pin_used_entity": SLOT_1_EVENT_ENTITY,
+            "enabled_switch": SLOT_1_ENABLED_ENTITY,
+            "uses_counter": counter,
+        },
+    )
+
+    await _use_credential(hass, lock_code_manager_config_entry)
+    await hass.async_block_till_done()
+    assert float(hass.states.get(counter).state) == 2
+
+
+async def test_notifier_runs_when_the_credential_locks_the_door(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    The notifier runs on locking by code and can say that is what happened.
+
+    It has no operation filter on purpose -- a notification about somebody
+    locking up is informative rather than harmful -- so the message is where
+    the distinction has to be available, which is what ``operation`` and
+    ``credential_type`` are for.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [
+                {
+                    "service": "test.captured",
+                    "data": {
+                        "operation": "{{ operation }}",
+                        "credential_type": "{{ credential_type }}",
+                    },
+                }
+            ],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1, to_locked=True)
+    await hass.async_block_till_done()
+
+    assert len(captured) == 1
+    assert captured[0].data["operation"] == "lock"
+    assert captured[0].data["credential_type"] == "pin"
+
+
 async def test_limiter_disables_switch_at_zero(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -791,15 +961,82 @@ async def test_limiter_derives_slot_and_config_entry(
     assert "Slot 1" in title
 
 
+# --------------------------------------------------------------------------- #
+# Calendar Condition
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("condition_template", "expected_state", "expect_warning"),
+    [
+        ("{{ true }}", "on", False),
+        ("{{ 'lock.front_door' in lock_entity_ids }}", "off", True),
+    ],
+    ids=["valid_template", "removed_lock_entity_ids"],
+)
+async def test_calendar_condition_fails_quietly_on_the_removed_variable(
+    hass: HomeAssistant,
+    caplog,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    condition_template: str,
+    expected_state: str,
+    expect_warning: bool,
+) -> None:
+    """
+    A template still naming the removed ``lock_entity_ids`` reads ``off``.
+
+    This is the claim the blueprint's description and BLUEPRINTS.md make to
+    anybody upgrading, so it is pinned rather than reasoned about: Home
+    Assistant renders an undefined template variable as empty instead of
+    raising, which leaves the sensor available, reading ``off``, and the PIN
+    it gates permanently inactive. The only signal is a template variable
+    warning in the log. The valid-template case is what makes the ``off``
+    mean something -- the same calendar, the same setup, reading ``on``.
+    """
+    calendar_entity = "calendar.guest_stay"
+    hass.states.async_set(calendar_entity, "on", {"message": "Guest"})
+    caplog.clear()
+
+    with patch_blueprint(
+        CALENDAR_PATH,
+        BLUEPRINTS_ROOT / "template" / CALENDAR_PATH,
+        schema=template_config.TEMPLATE_BLUEPRINT_SCHEMA,
+    ):
+        assert await async_setup_component(
+            hass,
+            "template",
+            {
+                "template": {
+                    "name": "Guest Condition",
+                    "use_blueprint": {
+                        "path": CALENDAR_PATH,
+                        "input": {
+                            "config_entry": lock_code_manager_config_entry.entry_id,
+                            "calendar_entity": calendar_entity,
+                            "slot_number": 1,
+                            "condition_template": condition_template,
+                        },
+                    },
+                }
+            },
+        )
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.guest_condition")
+    assert state is not None
+    assert state.state == expected_state
+    warned = (
+        "Template variable warning" in caplog.text
+        and "'lock_entity_ids' is undefined" in caplog.text
+    )
+    assert warned is expect_warning
+
+
 @pytest.mark.parametrize(
     ("blueprint", "variable", "slot_field"),
     [
         ("template/lock_code_manager/calendar_condition.yaml", "_name_entity", "name"),
-        (
-            "template/lock_code_manager/calendar_condition.yaml",
-            "_event_entity",
-            "credential_used",
-        ),
         (
             "automation/lock_code_manager/calendar_pin_setter.yaml",
             "pin_entity",
@@ -872,28 +1109,28 @@ def _find_variable(source: dict, name: str) -> str | None:
 CREDENTIAL_USED_PATH = "credential_used.yaml"
 
 
+_CREDENTIAL_USED_INPUTS = {
+    "credential_actions": [
+        {
+            "service": "test.captured",
+            "data": {
+                "name": "{{ name }}",
+                "source": "{{ source }}",
+                "target": "{{ target }}",
+                "config_entry_id": "{{ config_entry_id }}",
+                "config_entry_title": "{{ config_entry_title }}",
+                "timestamp": "{{ timestamp }}",
+            },
+        }
+    ],
+}
+
+
 async def _setup_credential_used(hass: HomeAssistant, **inputs) -> list[ServiceCall]:
     """Instantiate the credential-used blueprint and capture its actions."""
     captured = async_mock_service(hass, "test", "captured")
     await _setup_blueprint_automation(
-        hass,
-        CREDENTIAL_USED_PATH,
-        {
-            **inputs,
-            "credential_actions": [
-                {
-                    "service": "test.captured",
-                    "data": {
-                        "name": "{{ name }}",
-                        "source": "{{ source }}",
-                        "target": "{{ target }}",
-                        "config_entry_id": "{{ config_entry_id }}",
-                        "config_entry_title": "{{ config_entry_title }}",
-                        "timestamp": "{{ timestamp }}",
-                    },
-                }
-            ],
-        },
+        hass, CREDENTIAL_USED_PATH, {**inputs, **_CREDENTIAL_USED_INPUTS}
     )
     return captured
 
@@ -925,29 +1162,42 @@ async def test_credential_used_exposes_the_whole_payload(
     assert data["timestamp"]
 
 
-async def test_credential_used_sees_a_use_the_event_entities_cannot(
+async def test_a_use_against_an_outside_target_reaches_both_blueprints(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ) -> None:
     """
-    A use against a target outside the entry reaches this blueprint alone.
+    A gate the entry knows nothing about notifies the user's blueprint too.
 
-    This is the reason the blueprint exists. ``use_credential`` records on
-    a user's event entity only when the target is a lock in the same
-    entry; with any other target there is no per-user entity to record
-    against, so Slot Usage Notifier and Slot Usage Limiter never fire.
-    The event does, so this does.
+    The per-user event entity records every use of that user's credential
+    whatever it acted on, so Slot Usage Notifier -- which triggers on that
+    entity -- fires for a target no lock in the entry could ever be. This
+    blueprint sees the same use straight off the bus, with the payload.
+
+    Both automations are instantiated together because the automation
+    domain only sets up once; separately, the second one would not exist.
     """
-    captured = await _setup_credential_used(hass)
-    notifier_captured = async_mock_service(hass, "test", "notified")
-    await _setup_blueprint_automation(
+    captured = async_mock_service(hass, "test", "captured")
+    notified = async_mock_service(hass, "test", "notified")
+    await _setup_blueprint_automations(
         hass,
-        NOTIFIER_PATH,
-        {
-            "event_entity": [SLOT_1_EVENT_ENTITY],
-            "notify_actions": [{"service": "test.notified"}],
-        },
+        (CREDENTIAL_USED_PATH, _CREDENTIAL_USED_INPUTS),
+        (
+            NOTIFIER_PATH,
+            {
+                "event_entity": [SLOT_1_EVENT_ENTITY],
+                "notify_actions": [
+                    {
+                        "service": "test.notified",
+                        "data": {
+                            "slot_name": "{{ slot_name }}",
+                            "lock_name": "{{ lock_name }}",
+                        },
+                    }
+                ],
+            },
+        ),
     )
 
     await _use_credential(hass, lock_code_manager_config_entry)
@@ -957,7 +1207,12 @@ async def test_credential_used_sees_a_use_the_event_entities_cannot(
     assert captured[0].data["name"] == "test1"
     assert captured[0].data["source"] == EXTERNAL_KEYPAD
     assert captured[0].data["target"] == EXTERNAL_TARGET
-    assert notifier_captured == []
+
+    assert len(notified) == 1
+    assert notified[0].data["slot_name"] == "test1"
+    # Nothing in Home Assistant holds a state for the gate, so the target's
+    # own id is the most the notification can say about it.
+    assert notified[0].data["lock_name"] == EXTERNAL_TARGET
 
 
 @pytest.mark.parametrize(
