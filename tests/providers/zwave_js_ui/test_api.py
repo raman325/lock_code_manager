@@ -14,6 +14,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
 from homeassistant.components.mqtt import debug_info as mqtt_debug_info
+from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -25,6 +26,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
 from custom_components.lock_code_manager.providers import zwave_js_ui
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
+    REQUEST_ID_KEY,
     ZWAVE_JS_UI_OPERATION_DELAY,
     ZWaveJSUILock,
 )
@@ -84,10 +86,13 @@ def record_transport_events(settle_delay: float) -> Iterator[list[str]]:
     """
     Record subscribes, settle waits, and publishes in the order they happen.
 
-    The settle wait is recognized by its exact duration: ``asyncio.sleep`` is
-    patched process-wide for the block, so Home Assistant's own sleeps would
-    otherwise be indistinguishable from it. ``settle_delay`` therefore has to
-    be a value nothing else passes.
+    The settle wait is recognized by its duration falling in ``(0,
+    settle_delay]``: ``asyncio.sleep`` is patched process-wide for the block,
+    so Home Assistant's own sleeps would otherwise be indistinguishable from
+    it. ``settle_delay`` therefore has to be a value nothing else sleeps at or
+    below. A range rather than an exact match because the provider sleeps out
+    the REMAINDER of a recorded deadline, so whatever it spent between
+    subscribing and publishing has already come off.
     """
     module = "custom_components.lock_code_manager.providers.zwave_js_ui"
     events: list[str] = []
@@ -104,7 +109,7 @@ def record_transport_events(settle_delay: float) -> Iterator[list[str]]:
         return await real_publish(hass, topic, *args, **kw)
 
     async def _sleep(delay: float, *args: Any, **kw: Any) -> Any:
-        if delay == settle_delay:
+        if 0 < delay <= settle_delay:
             events.append("settle")
         return await real_sleep(delay, *args, **kw)
 
@@ -399,6 +404,35 @@ async def test_silent_prefix_is_disconnected(
         await zui_scan_lock_provider._async_resolve_api_base()
 
 
+async def test_a_multi_level_prefix_fails_with_its_own_diagnosis(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    A prefix containing a slash cannot be recovered from the state topic.
+
+    zwave-js-ui permits one: its settings UI lists '/' among the allowed
+    prefix characters and its server validates the field not at all. In
+    ``home/zwave/nodeID_20/98/0/currentMode`` nothing distinguishes the
+    prefix's second segment from a NAMED gateway's location segment, so the
+    scan searches under ``home`` and finds an empty broker. That refusal is
+    indistinguishable from a gateway that is simply down, and the operator
+    cannot guess which -- so the message names the one they can act on.
+    """
+    lock = build_zui_lock(
+        hass,
+        await async_discover_zui_lock(
+            hass, prefix="home/zwave", include_availability=False
+        ),
+    )
+    await lock._async_ensure_api_response_subscription()
+
+    with pytest.raises(LockDisconnected, match="multi-level prefix") as caught:
+        await lock._async_resolve_api_base()
+
+    # The prefix it actually searched, so the wrong guess is visible.
+    assert "home/_CLIENTS" in str(caught.value)
+
+
 async def test_non_gateway_clients_on_the_prefix_are_ignored(
     hass: HomeAssistant, zui_scan_lock_provider: ZWaveJSUILock
 ) -> None:
@@ -595,10 +629,10 @@ async def test_a_gateway_that_stops_answering_sends_the_scan_round_again(
     zui_api_responder: ZWaveJSUIApiResponder,
 ) -> None:
     """
-    A dropped binding drops the shared scan result with it.
+    A gateway that has stopped answering anything drops the shared scan result.
 
-    Keeping the scan's answer past the disconnect that invalidated the
-    instance's would hand the very next call the address nobody answered on,
+    Keeping the scan's answer past a disconnect the gateway itself could not
+    contradict would hand the very next call the address nobody answered on,
     and no lock behind that gateway could ever rediscover it.
     """
     lock = zui_scan_lock_provider
@@ -607,8 +641,9 @@ async def test_a_gateway_that_stops_answering_sends_the_scan_round_again(
     fire_zui_gateway_status(hass)
     assert await task == ZUI_API_BASE
 
-    # The gateway goes quiet: an api call times out, which is what drops the
-    # binding on the real path.
+    # The gateway goes quiet altogether: neither the node command nor the
+    # gateway-local probe that follows it comes back.
+    zui_api_responder.handlers.clear()
     with pytest.raises(LockDisconnected, match="Timed out waiting"):
         await lock.async_get_max_slot()
 
@@ -616,6 +651,90 @@ async def test_a_gateway_that_stops_answering_sends_the_scan_round_again(
     # nothing to find -- which is the proof that it did reopen.
     with pytest.raises(LockDisconnected, match="published a client status"):
         await lock._async_resolve_api_base()
+
+
+async def test_a_slow_node_behind_a_live_gateway_keeps_the_shared_binding(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A node timing out says nothing about the gateway that relayed the command.
+
+    ``sendCommand`` waits on the mesh, so a FLiRS lock that misses its wake
+    window times it out routinely. Treating that as a stale gateway binding
+    threw away the scan every lock on the broker shares and sent them all
+    rescanning into the same queue that was already too slow to answer. The
+    gateway is asked directly instead, out of its own memory, and a gateway
+    that answers keeps its binding.
+    """
+    lock = zui_scan_lock_provider
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    task = await async_start_gateway_resolution(hass, lock)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+
+    with pytest.raises(LockDisconnected, match="Timed out waiting"):
+        await lock.async_get_max_slot()
+
+    # No status is published now, so re-resolving would fail outright if the
+    # shared scan result had been thrown away.
+    assert await lock._async_resolve_api_base() == ZUI_API_BASE
+
+
+async def test_a_released_transport_leaves_the_shared_scan_alone(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    Releasing one instance's transport is not evidence about the gateway.
+
+    Every borrowed provider -- a config flow read, the unmanaged sweep --
+    releases on the way out, and a connection blip releases too. Wiping the
+    cross-lock scan on each of those made a sweep of N locks pay N full
+    three-second scan windows instead of one.
+    """
+    lock = zui_scan_lock_provider
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    task = await async_start_gateway_resolution(hass, lock)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+
+    lock.teardown_push_subscription()
+    assert lock._api_base is None
+
+    # Nothing publishes a status, so binding at all proves the scan survived.
+    await lock._async_ensure_api_response_subscription()
+    assert await lock._async_resolve_api_base() == ZUI_API_BASE
+
+
+async def test_a_disconnect_with_no_transport_left_invalidates_nothing_shared(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    With the response channel gone there is no probe, and so no evidence.
+
+    A call whose transport is released under it fails as a disconnect, and
+    the gateway cannot be asked about it -- so the shared answer is left for
+    whoever can ask.
+    """
+    lock = zui_scan_lock_provider
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    task = await async_start_gateway_resolution(hass, lock)
+    fire_zui_gateway_status(hass)
+    assert await task == ZUI_API_BASE
+
+    pending = asyncio.create_task(lock._async_api_call("getUsersCount", []))
+    await hass.async_block_till_done()
+    lock._release_api_subscription()
+    with pytest.raises(LockDisconnected, match="transport released"):
+        await pending
+
+    await lock._async_ensure_api_response_subscription()
+    assert await lock._async_resolve_api_base() == ZUI_API_BASE
 
 
 async def test_lock_without_an_identifier_cannot_be_resolved() -> None:
@@ -667,21 +786,36 @@ async def test_responses_for_other_callers_are_ignored(
     zwave-js-ui UI and other automations publish their own answers onto it.
     The trailing duplicate is the gateway retransmitting an answer already
     delivered, which must not disturb the settled call.
+
+    Every decoy carries the request id somewhere, because the bytes prefilter
+    would otherwise drop it before any of these guards ran -- and a decoy
+    that never reaches the guard it is aimed at proves nothing about it.
     """
     topic = f"{ZUI_API_BASE}/api/getInfo"
 
     def _handler(_api_base: str, request: dict[str, Any]) -> dict[str, Any]:
         answer = {"success": True, "result": "ours", "origin": request}
         for payload in (
-            "not json at all",
-            json.dumps([1, 2, 3]),
-            json.dumps({"success": True, "result": "no origin at all"}),
-            json.dumps({"success": True, "result": "origin with no id", "origin": {}}),
+            f"not json at all, but mentions {REQUEST_ID_KEY}",
+            json.dumps([REQUEST_ID_KEY, 2, 3]),
+            json.dumps(
+                {"success": True, "result": f"no origin, only {REQUEST_ID_KEY}"}
+            ),
+            json.dumps(
+                {"success": True, "result": REQUEST_ID_KEY, "origin": {}},
+            ),
+            json.dumps(
+                {
+                    "success": True,
+                    "result": "a nonce that is not a string",
+                    "origin": {REQUEST_ID_KEY: 7},
+                }
+            ),
             json.dumps(
                 {
                     "success": True,
                     "result": "somebody else's",
-                    "origin": {"lcmRequestId": "not-our-nonce"},
+                    "origin": {REQUEST_ID_KEY: "not-our-nonce"},
                 }
             ),
             json.dumps(answer),
@@ -890,12 +1024,18 @@ async def test_node_commands_wait_on_the_mesh_budget(
     UsersNumberGet addressed to the lock (node-zwave-js
     ``UserCodeCCAPI.getUsersCount``), so it queues behind the same wake
     schedule as a code read and must not be cut short.
+
+    Asserted as an ordering rather than as an absence: the timeout is
+    followed by the gateway-local probe that decides whether the binding or
+    only the node is at fault, so both budgets are spent and which came first
+    is what says the node command got the mesh one.
     """
     with record_wait_budgets() as budgets, pytest.raises(LockDisconnected):
         await zui_gateway_resolved._async_user_code_command(method, [])
 
-    assert FAST_API_CALL_TIMEOUT in budgets
-    assert FAST_GATEWAY_LOCAL_TIMEOUT not in budgets
+    assert budgets.index(FAST_API_CALL_TIMEOUT) < budgets.index(
+        FAST_GATEWAY_LOCAL_TIMEOUT
+    )
 
 
 def test_operations_are_paced_wider_than_the_base_default() -> None:
@@ -1099,6 +1239,53 @@ async def test_the_response_subscription_is_established_by_setup(
     assert lock._api_response_unsub is not None
 
 
+async def test_two_concurrent_ensures_make_one_subscription(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    Two callers arriving together must not both subscribe.
+
+    The idempotence guard reads the live topic and the subscribe that follows
+    awaits, so a second caller entering that window passes the guard too:
+    both subscribe, and whichever finishes second overwrites the other's
+    unsub. The lost one is leaked -- nothing else holds a reference to it --
+    so the broker keeps delivering into a handler for the rest of the run. It
+    is reachable in ordinary operation: the deferred-setup retry task and an
+    in-flight poll both re-ensure.
+    """
+    lock = zui_lock_provider
+    opened: list[str] = []
+    released: list[str] = []
+    real_subscribe = ZWaveJSUILock._async_subscribe
+
+    async def _spy(self: ZWaveJSUILock, topic: str, *args: Any, **kw: Any) -> Any:
+        # Home Assistant's own subscribe awaits, which is what opens the
+        # window. Yielding here makes the interleaving deterministic instead
+        # of dependent on how the mocked broker happens to schedule.
+        await asyncio.sleep(0)
+        unsub = await real_subscribe(self, topic, *args, **kw)
+        opened.append(topic)
+
+        def _release() -> None:
+            released.append(topic)
+            unsub()
+
+        return _release
+
+    with patch.object(ZWaveJSUILock, "_async_subscribe", _spy):
+        await asyncio.gather(
+            lock._async_ensure_api_response_subscription(),
+            lock._async_ensure_api_response_subscription(),
+        )
+
+    assert opened == [f"{ZUI_PREFIX}/_CLIENTS/+/api/+"]
+
+    # Teardown can only release the one unsub the instance kept, so anything
+    # opened beyond it is unreachable for the rest of the run.
+    lock.teardown_push_subscription()
+    assert released == opened
+
+
 async def test_the_response_subscription_is_established_at_most_once(
     hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
 ) -> None:
@@ -1179,6 +1366,120 @@ async def test_a_fresh_subscription_settles_before_anything_is_published(
         assert await lock.async_get_max_slot() == 30
 
     assert events.index("subscribe") < events.index("settle") < events.index("publish")
+
+
+async def test_a_subscription_nobody_publishes_into_costs_no_settle(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    The settling window is the publisher's cost, so a non-publisher pays none.
+
+    Setup subscribes and returns, and every borrowed instance -- a config
+    flow allocation read, the unmanaged sweep -- may turn out to need no call
+    at all. Sleeping the whole window at subscribe time charged all of them
+    for a guarantee only a publish needs.
+    """
+    lock = zui_lock_provider
+
+    with record_transport_events(0.0123) as events:
+        await lock.async_setup(MagicMock())
+
+    assert "subscribe" in events
+    assert "settle" not in events
+    assert "publish" not in events
+
+
+async def test_time_already_spent_counts_towards_the_settle(
+    hass: HomeAssistant,
+    zui_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A deadline already in the past is nothing left to wait for.
+
+    Resolution can spend a whole discovery window between subscribing and the
+    first publish, and re-sleeping the full delay on top of that is time the
+    broker did not need.
+    """
+    lock = zui_lock_provider
+    zui_api_responder.set_result("sendCommand", 30)
+    await lock._async_ensure_api_response_subscription()
+    lock._settle_deadline = asyncio.get_running_loop().time() - 1
+
+    with record_transport_events(0.0123) as events:
+        assert await lock.async_get_max_slot() == 30
+
+    assert "publish" in events
+    assert "settle" not in events
+
+
+async def test_other_clients_traffic_is_rejected_before_it_is_parsed(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    The api topics carry every client's traffic, and some of it is enormous.
+
+    The gateway's own user interface polls ``getNodes``, whose response can
+    run to megabytes, on the same wildcard this correlates its calls on.
+    Building a dict out of each one to discover it was never ours is work
+    proportional to somebody else's payload; the request id only ever appears
+    in the echo of one of our own requests, so a substring scan settles it.
+    """
+    lock = zui_lock_provider
+    await lock._async_ensure_api_response_subscription()
+    loop = asyncio.get_running_loop()
+    lock._pending_api_calls["nonce"] = loop.create_future()
+
+    with patch.object(zwave_js_ui.json, "loads", side_effect=AssertionError) as parse:
+        async_fire_mqtt_message(
+            hass,
+            f"{ZUI_API_BASE}/api/getNodes",
+            json.dumps({"success": True, "result": [{"id": 20}]}),
+        )
+        await hass.async_block_till_done()
+
+    parse.assert_not_called()
+
+    # And an echo of one of our own still gets through to correlation.
+    async_fire_mqtt_message(
+        hass,
+        f"{ZUI_API_BASE}/api/getInfo",
+        json.dumps({"success": True, "origin": {REQUEST_ID_KEY: "nonce"}}),
+    )
+    await hass.async_block_till_done()
+
+    assert lock._pending_api_calls["nonce"].done()
+
+
+async def test_the_prefilter_reads_a_bytes_payload(
+    hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
+) -> None:
+    """
+    Home Assistant hands a subscriber either text or raw bytes.
+
+    Which one depends on the subscription's encoding, and a marker compared
+    against the wrong type never matches -- so a provider that assumed text
+    would silently correlate nothing on a broker serving bytes. Delivered
+    straight to the handler, because the type is exactly what the mocked
+    broker normalizes away; every other test here covers the text side.
+    """
+    lock = zui_lock_provider
+    loop = asyncio.get_running_loop()
+    lock._pending_api_calls["nonce"] = loop.create_future()
+    body = json.dumps({"success": True, "origin": {REQUEST_ID_KEY: "nonce"}})
+
+    lock._api_response_received(
+        ReceiveMessage(
+            topic=f"{ZUI_API_BASE}/api/getInfo",
+            payload=body.encode(),
+            qos=0,
+            retain=False,
+            subscribed_topic=f"{ZUI_PREFIX}/_CLIENTS/+/api/+",
+            timestamp=0.0,
+        )
+    )
+
+    assert lock._pending_api_calls["nonce"].done()
 
 
 async def test_resolution_fails_loud_when_no_subscription_can_be_established(

@@ -37,6 +37,7 @@ from ..domain.credentials import (
 from ..domain.exceptions import CodeRejectedError, LockDisconnected
 from ..domain.models import SlotCredential
 from ._base import BaseLock
+from ._util import is_masked_code
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -401,9 +402,19 @@ class ZHALock(BaseLock):
             # Everything else holds something untrustworthy: claiming its
             # value would read as in sync while the code does not open the
             # door, and claiming it empty would hand it to allocation.
+            #
+            # An Enabled slot whose code comes back masked is untrustworthy
+            # in the same way: a lock withholding its codes answers with an
+            # asterisk per digit, which can never equal the configured PIN,
+            # so confirming it makes sync reprogram the slot on every tick
+            # forever.
             if user_status == DoorLock.UserStatus.Available:
                 slot_states[slot_num] = SlotCredential.empty()
-            elif user_status == DoorLock.UserStatus.Enabled and pin_code:
+            elif (
+                user_status == DoorLock.UserStatus.Enabled
+                and pin_code
+                and not is_masked_code(pin_code)
+            ):
                 slot_states[slot_num] = SlotCredential.known(pin_code)
             else:
                 slot_states[slot_num] = SlotCredential.unreadable()

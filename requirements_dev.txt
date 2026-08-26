@@ -1,12 +1,12 @@
 -r requirements_lint.txt
 -r requirements_test.txt
-aioesphomeapi==45.12.0
+aioesphomeapi==45.13.1
 aiofiles==25.1.0
 aiousbwatcher==1.1.2
 colorlog==6.12.0
 debugpy==1.8.21
 ha-silabs-firmware-client==0.3.0
-homeassistant>=2026.8.2
+homeassistant>=2026.8.3
 matter-python-client==1.4.0
 pyserial==3.5
 pyudev==0.24.4

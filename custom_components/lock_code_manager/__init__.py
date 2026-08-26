@@ -102,7 +102,11 @@ from .domain.config import (
     parse_slot_device_identifier,
     parse_slot_unique_id,
 )
-from .domain.exceptions import LockDisconnected, LockOperationFailed
+from .domain.exceptions import (
+    LockDisconnected,
+    LockOperationFailed,
+    UnclaimedLockError,
+)
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
@@ -821,9 +825,43 @@ def _lock_managed_by_other_entry(
     config_entry: LockCodeManagerConfigEntry,
     lock_entity_id: str,
 ) -> bool:
-    """Return True if another (non-disabled, non-ignored) LCM entry manages the lock."""
+    """
+    Return True if another (non-disabled, non-ignored) LCM entry manages the lock.
+
+    This asks about entry *presence*, which is what the persistent per-lock
+    repair issues care about: they outlive unloads and reloads, so an entry
+    that is merely between loads still needs its issue kept. Anything that
+    tears down live objects wants ``_lock_managed_by_other_loaded_entry``
+    instead.
+    """
     return any(
         entry.entry_id != config_entry.entry_id
+        and get_entry_config(entry).has_lock(lock_entity_id)
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+    )
+
+
+def _lock_managed_by_other_loaded_entry(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_id: str,
+) -> bool:
+    """
+    Return True if another *loaded* LCM entry manages the lock.
+
+    Teardown has to match ``_find_shared_lock_instance``, which only reuses
+    an instance from a loaded entry. An entry that exists but is unloaded
+    (setup retrying, mid-reload, disabled entry re-added) will build its own
+    instance when it next loads, so keeping this one alive on its behalf
+    leaves an ownerless BaseLock whose push subscription and config-entry
+    state listener both keep firing -- and a second instance alongside it
+    once anything reloads, which doubles every code-slot event.
+    """
+    return any(
+        entry.entry_id != config_entry.entry_id
+        and entry.state is ConfigEntryState.LOADED
         and get_entry_config(entry).has_lock(lock_entity_id)
         for entry in hass.config_entries.async_entries(
             DOMAIN, include_disabled=False, include_ignore=False
@@ -873,7 +911,7 @@ async def async_unload_lock(
         lock = runtime_data.locks.pop(_lock_entity_id, None)
         if lock is None:
             continue
-        if not _lock_managed_by_other_entry(hass, config_entry, _lock_entity_id):
+        if not _lock_managed_by_other_loaded_entry(hass, config_entry, _lock_entity_id):
             await lock.async_unload(remove_permanently)
             if lock.coordinator is not None:
                 await lock.coordinator.async_shutdown()
@@ -1371,10 +1409,10 @@ async def async_remove_config_entry_device(
 
 @callback
 def _async_report_dropped_lock(
-    hass: HomeAssistant, lock_entity_id: str, err: BaseException
+    hass: HomeAssistant, lock_entity_id: str, err: UnclaimedLockError
 ) -> None:
     """
-    Raise a repair for a configured lock that could not be set up at all.
+    Raise a repair for a configured lock no provider claims.
 
     Distinct from ``lock_setup_failed``, which describes a lock that is
     still in the entry with its entities present but unavailable. This
@@ -1386,6 +1424,11 @@ def _async_report_dropped_lock(
     before selection-time validation existed, holding an mqtt lock whose
     bridge no provider speaks. Nobody ever told those users, so the
     repair names the entity and quotes what refused it.
+
+    Narrowly typed on purpose. The text diagnoses an unsupported bridge and
+    asks the user to remove the entity, which is only the right advice for
+    that one failure; raised on any exception that escaped setup it told
+    users with a perfectly good lock and a provider bug to throw the lock out.
     """
     async_create_issue(
         hass,
@@ -1462,6 +1505,14 @@ async def _async_setup_new_locks(
 
     added_locks: list[BaseLock] = []
     for lock_entity_id, result in zip(locks_to_add, setup_results, strict=True):
+        if isinstance(result, asyncio.CancelledError):
+            # ``return_exceptions=True`` aggregates a cancelled child rather
+            # than propagating it, so cancellation has to be re-raised by hand
+            # or Home Assistant shutting down looks exactly like a lock that
+            # could not be set up -- and left a persistent repair blaming an
+            # unsupported bridge, surviving the restart that cleared the
+            # actual condition.
+            raise result
         if isinstance(result, BaseException):
             # Transport failures degrade inside async_setup_internal, and
             # structural validation failures are logged there and kept
@@ -1479,7 +1530,12 @@ async def _async_setup_new_locks(
                 exc_info=result,
             )
             runtime_data.locks.pop(lock_entity_id, None)
-            _async_report_dropped_lock(hass, lock_entity_id, result)
+            if isinstance(result, UnclaimedLockError):
+                # Only this failure has a diagnosis and an action to offer.
+                # Any other exception is a bug in a provider LCM does speak,
+                # and a repair telling that user their bridge is unsupported
+                # sends them to remove a lock that works.
+                _async_report_dropped_lock(hass, lock_entity_id, result)
             continue
 
         added_locks.append(result)

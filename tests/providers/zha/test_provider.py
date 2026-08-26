@@ -1045,6 +1045,47 @@ async def test_only_available_means_the_slot_is_free(
     assert not codes[2].is_readable
 
 
+@pytest.mark.parametrize(
+    ("code", "readable"),
+    [
+        pytest.param("****", False, id="masked"),
+        pytest.param("1234", True, id="digits"),
+        # Asterisks mixed with digits are not a shape any lock produces, and
+        # guessing at partial masking would discard a code that is there.
+        pytest.param("12**", True, id="partially_masked"),
+    ],
+)
+async def test_a_masked_code_is_unreadable_not_known(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+    code: str,
+    readable: bool,
+) -> None:
+    """
+    A lock withholding its codes answers with an asterisk per digit.
+
+    The reply arrives and the slot is plainly Enabled, but the asterisks can
+    never equal the configured PIN -- confirming them as the code makes sync
+    reprogram the slot on every tick, forever. Same Zigbee hardware, same
+    behaviour, and the same guard the Zigbee2MQTT read path applies.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(
+        return_value=type(
+            "Response",
+            (),
+            {"user_status": DoorLock.UserStatus.Enabled, "code": code},
+        )()
+    )
+
+    codes = await zha_lock.async_get_usercodes(range(1, 2))
+
+    assert codes[1].is_present
+    assert codes[1].is_readable is readable
+
+
 async def test_available_is_an_empty_slot(
     hass: HomeAssistant,
     zha_lock: ZHALock,

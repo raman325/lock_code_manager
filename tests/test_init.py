@@ -3,7 +3,7 @@
 import asyncio
 import copy
 import logging
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -40,6 +40,7 @@ from homeassistant.util import slugify
 
 from custom_components.lock_code_manager import (
     _async_reclaim_entities_from_foreign_devices,
+    _async_setup_new_locks,
     _setup_entry_after_start,
     async_remove_config_entry_device,
     async_remove_entry,
@@ -74,6 +75,7 @@ from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 from custom_components.lock_code_manager.domain.user_migration import migrate_to_users
+from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,
@@ -689,6 +691,107 @@ async def test_overlapping_locks_both_entries_get_entities(
         assert lock.coordinator is not None
 
     await hass.config_entries.async_unload(entry_2.entry_id)
+
+
+def _entry_with_shared_lock(unique_id: str, slot_num: int) -> MockConfigEntry:
+    """Build an unloaded LCM entry managing LOCK_1 on its own slot."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                slot_num: {
+                    CONF_NAME: f"shared{slot_num}",
+                    CONF_PIN: "0123",
+                    CONF_ENABLED: True,
+                },
+            },
+        },
+        unique_id=unique_id,
+        title=unique_id,
+    )
+
+
+async def test_shared_lock_unloads_when_only_sibling_is_unloaded(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """The last loaded entry tears the shared lock down, ignoring unloaded siblings."""
+    entry_a = _entry_with_shared_lock("Shared A", 1)
+    entry_b = _entry_with_shared_lock("Shared B", 3)
+    for entry in (entry_a, entry_b):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    shared_lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert shared_lock is entry_b.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    # B goes away while A still uses the lock: the instance must survive.
+    await hass.config_entries.async_unload(entry_b.entry_id)
+    await hass.async_block_till_done()
+    assert shared_lock._config_entry_state_unsub is not None
+
+    # Now nothing loaded uses the lock. B merely *existing* must not keep the
+    # provider's listeners alive with no owner.
+    await hass.config_entries.async_unload(entry_a.entry_id)
+    await hass.async_block_till_done()
+    assert shared_lock._config_entry_state_unsub is None
+
+
+async def test_reload_with_unloaded_sibling_does_not_leave_two_instances(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Reloading past an unloaded sibling replaces the shared lock, not duplicates it."""
+    entry_a = _entry_with_shared_lock("Reload A", 1)
+    entry_b = _entry_with_shared_lock("Reload B", 3)
+    for entry in (entry_a, entry_b):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    original_lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_unload(entry_b.entry_id)
+    await hass.async_block_till_done()
+
+    await hass.config_entries.async_reload(entry_a.entry_id)
+    await hass.async_block_till_done()
+
+    # The reload builds a fresh instance because no loaded entry holds one, so
+    # the pre-reload instance must have been torn down -- two live instances
+    # means two push subscriptions and duplicate events per physical code use.
+    assert entry_a.runtime_data.locks[LOCK_1_ENTITY_ID] is not original_lock
+    assert original_lock._config_entry_state_unsub is None
+
+    await hass.config_entries.async_unload(entry_a.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_reload_with_loaded_sibling_keeps_sharing_the_instance(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """A loaded sibling still keeps the shared lock alive across a reload."""
+    entry_a = _entry_with_shared_lock("Keep A", 1)
+    entry_b = _entry_with_shared_lock("Keep B", 3)
+    for entry in (entry_a, entry_b):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    shared_lock = entry_b.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_reload(entry_a.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry_a.runtime_data.locks[LOCK_1_ENTITY_ID] is shared_lock
+    assert shared_lock._config_entry_state_unsub is not None
+
+    for entry in (entry_a, entry_b):
+        await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 @pytest.mark.parametrize("config", [{}])
@@ -3112,6 +3215,82 @@ async def test_a_lock_no_provider_claims_raises_its_own_repair(
     assert unclaimed.entity_id in issue.translation_placeholders["error"]
     # The rest of the entry is untouched: one bad lock is not a failed setup.
     assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_a_provider_bug_during_setup_raises_no_repair(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Only an unclaimed lock gets the repair that says the bridge is unsupported.
+
+    Every other exception escaping setup is a bug in a provider LCM does
+    speak, and that repair is persistent, survives restarts, and tells the
+    user to remove a lock that works. The log line it already had is the
+    right amount of noise for a bug.
+    """
+    config = {CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_SLOTS: BASE_CONFIG[CONF_SLOTS]}
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="provider_bug")
+    entry.add_to_hass(hass)
+
+    with patch.object(
+        BaseLock, "async_setup_internal", side_effect=ValueError("provider bug")
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"lock_dropped_{LOCK_1_ENTITY_ID}")
+        is None
+    )
+    assert list(entry.runtime_data.locks) == []
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_cancellation_during_setup_is_never_swallowed(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Shutting Home Assistant down must not look like a lock that could not load.
+
+    ``asyncio.gather(return_exceptions=True)`` hands a cancelled child back as
+    a result rather than propagating it, so cancellation reached the same
+    branch as a real failure: the lock was dropped and a persistent repair
+    blamed an unsupported bridge -- outliving the restart that ended the
+    condition, on a lock that was never unsupported at all.
+    """
+    config = {CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_SLOTS: BASE_CONFIG[CONF_SLOTS]}
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="cancelled")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Driven through the setup pass directly: Home Assistant's own config
+    # entry machinery absorbs whatever a setup raises, so going through it
+    # would assert on that absorption rather than on this loop.
+    with (
+        patch.object(
+            BaseLock, "async_setup_internal", side_effect=asyncio.CancelledError
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _async_setup_new_locks(
+            hass,
+            entry,
+            [LOCK_2_ENTITY_ID],
+            get_entry_config(entry),
+            MagicMock(),
+            er.async_get(hass),
+        )
+
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"lock_dropped_{LOCK_2_ENTITY_ID}")
+        is None
+    )
 
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
