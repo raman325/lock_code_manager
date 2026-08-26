@@ -2165,8 +2165,10 @@ class BaseLock:
 
         # Deprecated in favour of the unified credential-used event, which says
         # what happened ("a credential belonging to this user was used") rather
-        # than where. Still fired, with no removal version set, so automations
-        # built against it keep working while their authors migrate.
+        # than where. Retained for backward compatibility while consumers
+        # migrate: both events fire, no removal version is set, and nothing
+        # warns at runtime. The per-slot event entity still listens to this
+        # one.
         self.hass.bus.async_fire(EVENT_LOCK_STATE_CHANGED, event_data=event_data)
 
         # Attribution is the whole content of the unified event, and every

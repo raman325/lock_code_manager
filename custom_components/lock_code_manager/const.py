@@ -104,8 +104,10 @@ ATTR_TARGET = "target"
 # nothing.
 BUS_EVENT_CREDENTIAL_USED = f"{DOMAIN}_credential_used"
 
-# Kept alongside the unified event above for consumers that have not migrated;
-# see the fire site in providers/_base.py.
+# The older, lock-shaped event. Retained for backward compatibility while
+# consumers migrate to the unified event above: both fire, no removal version
+# is set, and nothing warns at runtime. See the fire site in
+# providers/_base.py.
 EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
 
 # Credential validation response keys

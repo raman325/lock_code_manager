@@ -113,7 +113,15 @@ entities.
 5. When slot config changes (name, PIN, enabled), sync calls
    `BaseLock.async_set_usercode()` / `async_clear_usercode()`, which drive the
    provider's credential primitives
-6. Provider fires `EVENT_LOCK_STATE_CHANGED` events when locks are operated with PINs
+6. Provider fires `BUS_EVENT_CREDENTIAL_USED`
+   (`lock_code_manager_credential_used`) when a credential is used, carrying
+   the user's name, the config entry, and the `source`/`target` entities. This
+   is the event consumers should build on.
+7. The same call also fires `EVENT_LOCK_STATE_CHANGED`
+   (`lock_code_manager_lock_state_changed`), the older lock-shaped event. It is
+   retained for backward compatibility while consumers migrate to the unified
+   event above, with no removal version set and no runtime deprecation
+   warning; the per-slot `credential_used` event entity still listens to it.
 
 ### Sync State Machine (`sync.py`)
 
