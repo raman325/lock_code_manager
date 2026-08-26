@@ -9,26 +9,33 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import (
+    CONF_CODELESS,
+    CONF_LOCKS,
+    CONF_MEMBERS,
+    DOMAIN,
+)
 from custom_components.lock_code_manager.domain.allocation import (
     LockQuerySkipped,
     build_lock_instance,
 )
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.providers import (
-    CONFIG_FLOW_PLATFORMS,
-    INTEGRATIONS_CLASS_MAP,
     Zigbee2MQTTLock,
     ZWaveJSLock,
     ZWaveJSUILock,
     resolve_provider_class,
 )
+from custom_components.lock_code_manager.providers.codeless import CodelessLock
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     parse_zwave_js_ui_identifier,
 )
 
-from ..common import async_discover_unclaimed_mqtt_lock
-from ..conftest import TEST_DOMAIN
+from ..common import (
+    LOCK_1_ENTITY_ID,
+    async_discover_unclaimed_mqtt_lock,
+    register_codeless_lock,
+)
 
 
 def test_single_provider_platform_ignores_device():
@@ -184,16 +191,6 @@ async def test_mqtt_dispatch_skips_malformed_identifier(hass: HomeAssistant) -> 
     assert resolve_provider_class("mqtt", malformed_only) is None
 
 
-def test_config_flow_platforms():
-    """CONFIG_FLOW_PLATFORMS covers every shipped map key plus mqtt exactly once."""
-    # The harness injects a mock provider into the map at runtime, while
-    # CONFIG_FLOW_PLATFORMS is a tuple built from it at import. Only the
-    # shipped platforms have to be selectable.
-    assert set(INTEGRATIONS_CLASS_MAP) - {TEST_DOMAIN} <= set(CONFIG_FLOW_PLATFORMS)
-    assert "mqtt" in CONFIG_FLOW_PLATFORMS
-    assert len(CONFIG_FLOW_PLATFORMS) == len(set(CONFIG_FLOW_PLATFORMS))
-
-
 async def test_factory_rejects_unclaimed_mqtt_lock(
     hass: HomeAssistant, mqtt_mock, mqtt_teardown
 ) -> None:
@@ -226,3 +223,112 @@ async def test_allocation_skips_unclaimed_mqtt_lock(
         )
 
     assert raised.value.managed is False
+
+
+def _entry_declaring(
+    hass: HomeAssistant, lock_entry: er.RegistryEntry, **declared: bool
+) -> MockConfigEntry:
+    """Return an entry that manages a lock and declares what it was told."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=f"declaring-{lock_entry.entity_id}",
+        data={
+            CONF_LOCKS: [lock_entry.entity_id],
+            CONF_MEMBERS: {lock_entry.id: declared},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    return lcm_entry
+
+
+async def test_a_declared_member_resolves_to_the_codeless_provider(
+    hass: HomeAssistant,
+) -> None:
+    """A lock nothing claims is buildable once its entry declares it."""
+    lock_entry = register_codeless_lock(hass)
+    lcm_entry = _entry_declaring(hass, lock_entry, **{CONF_CODELESS: True})
+
+    lock = async_create_lock_instance(
+        hass, dr.async_get(hass), er.async_get(hass), lcm_entry, lock_entry.entity_id
+    )
+
+    assert isinstance(lock, CodelessLock)
+    assert lock.lock.entity_id == lock_entry.entity_id
+
+
+async def test_allocation_reads_a_declared_member(hass: HomeAssistant) -> None:
+    """
+    Allocation builds the same provider the entry's own setup will.
+
+    Skipping it instead would issue slot numbers against a member Lock Code
+    Manager is about to start writing credentials to.
+    """
+    lock_entry = register_codeless_lock(hass)
+    lcm_entry = _entry_declaring(hass, lock_entry, **{CONF_CODELESS: True})
+
+    lock = build_lock_instance(
+        hass, dr.async_get(hass), er.async_get(hass), lcm_entry, lock_entry.entity_id
+    )
+
+    assert isinstance(lock, CodelessLock)
+
+
+async def test_an_undeclared_lock_nothing_claims_is_still_refused(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Never guessing is the rule the declaration is an exception to.
+
+    Only somebody answering makes a lock codeless; a lock somebody meant to
+    reach through a provider Lock Code Manager has not been taught yet has
+    to keep failing loudly.
+    """
+    lock_entry = register_codeless_lock(hass)
+    lcm_entry = _entry_declaring(hass, lock_entry)
+
+    with pytest.raises(
+        HomeAssistantError, match="No Lock Code Manager provider claims"
+    ):
+        async_create_lock_instance(
+            hass,
+            dr.async_get(hass),
+            er.async_get(hass),
+            lcm_entry,
+            lock_entry.entity_id,
+        )
+
+    with pytest.raises(LockQuerySkipped) as raised:
+        build_lock_instance(
+            hass,
+            dr.async_get(hass),
+            er.async_get(hass),
+            lcm_entry,
+            lock_entry.entity_id,
+        )
+
+    assert raised.value.managed is False
+
+
+async def test_a_declaration_outranks_platform_dispatch(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The declaration is read first, and the order is the point.
+
+    Should Lock Code Manager ever gain a provider for a platform somebody
+    already declared codeless, letting that provider win would move a
+    member's credentials out of this integration's store and onto a device
+    the user never agreed to write to, silently, on a version upgrade.
+    """
+    lock_entry = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    assert lock_entry is not None
+    # Claimed by platform dispatch on its own.
+    assert resolve_provider_class(lock_entry.platform, None) is not None
+
+    lcm_entry = _entry_declaring(hass, lock_entry, **{CONF_CODELESS: True})
+
+    lock = async_create_lock_instance(
+        hass, dr.async_get(hass), er.async_get(hass), lcm_entry, LOCK_1_ENTITY_ID
+    )
+
+    assert isinstance(lock, CodelessLock)

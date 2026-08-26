@@ -11,6 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
+    CONF_CODELESS,
     CONF_LOCKS,
     CONF_MEMBERS,
     CONF_SLOTS,
@@ -22,6 +23,7 @@ from custom_components.lock_code_manager.domain.config import (
     EntryConfigDiff,
     build_slot_device_identifier,
     build_slot_unique_id,
+    declare_codeless,
     parse_slot_device_identifier,
     parse_slot_unique_id,
 )
@@ -1104,3 +1106,94 @@ def test_from_entry_falls_back_to_data_for_member_declarations() -> None:
     )
 
     assert EntryConfig.from_entry(entry).member(_member_entry(_MEMBER_A)) == _DECLARED
+
+
+# --- Codeless declarations (issue #1484) ---
+
+
+def test_a_member_is_codeless_only_when_it_says_so() -> None:
+    """
+    Nothing infers the field, so anything short of it reads as False.
+
+    The answer decides which provider a member gets, and getting it wrong in
+    this direction hands a lock with real credential storage to a provider
+    that writes to a file instead.
+    """
+    config = EntryConfig.from_mapping(
+        {
+            CONF_MEMBERS: {
+                _MEMBER_A: {CONF_CODELESS: True},
+                _MEMBER_B: {"something_else": True},
+                _MEMBER_C: {},
+            }
+        }
+    )
+
+    assert config.is_codeless(_member_entry(_MEMBER_A))
+    assert not config.is_codeless(_member_entry(_MEMBER_B))
+    assert not config.is_codeless(_member_entry(_MEMBER_C))
+    # A member nothing was ever said about.
+    assert not config.is_codeless(_member_entry("0dddddddddddddddddddddddddddddddd"))
+
+
+def test_declaring_codeless_survives_a_write() -> None:
+    """
+    What the flow records is what dispatch reads back.
+
+    ``declare_codeless`` writes storage and ``is_codeless`` reads it; the two
+    disagreeing is invisible until a member silently resolves to the wrong
+    provider.
+    """
+    stored = declare_codeless({}, {_MEMBER_A: True})
+
+    config = EntryConfig.from_mapping(
+        EntryConfig.from_mapping({CONF_MEMBERS: stored}).to_dict()
+    )
+
+    assert config.is_codeless(_member_entry(_MEMBER_A))
+
+
+def test_declaring_codeless_leaves_every_other_field_alone() -> None:
+    """
+    One field is recorded, not the whole declaration.
+
+    A member's declaration is not a fixed record, so writing this field by
+    replacing the mapping would silently drop whatever else the member
+    carries -- including fields a later version adds.
+    """
+    declared = declare_codeless(
+        {_MEMBER_A: {"something_else": "kept"}, _MEMBER_B: {"untouched": True}},
+        {_MEMBER_A: True},
+    )
+
+    assert declared == {
+        _MEMBER_A: {"something_else": "kept", CONF_CODELESS: True},
+        _MEMBER_B: {"untouched": True},
+    }
+
+
+def test_declining_takes_the_declaration_back() -> None:
+    """
+    Declining has to erase, because it is how a declaration is undone.
+
+    A member left holding nothing else goes with it: an empty declaration
+    and no declaration mean the same thing to every reader, so storing one
+    would leave a husk behind for every member anybody ever declined about.
+    """
+    declared = declare_codeless(
+        {
+            _MEMBER_A: {CONF_CODELESS: True},
+            _MEMBER_B: {CONF_CODELESS: True, "something_else": "kept"},
+        },
+        {_MEMBER_A: False, _MEMBER_B: False},
+    )
+
+    assert declared == {_MEMBER_B: {"something_else": "kept"}}
+    assert not EntryConfig.from_mapping({CONF_MEMBERS: declared}).is_codeless(
+        _member_entry(_MEMBER_A)
+    )
+
+
+def test_declining_a_member_nobody_declared_about_stores_nothing() -> None:
+    """An answer of no, for a member with nothing recorded, is not a record."""
+    assert declare_codeless({}, {_MEMBER_A: False}) == {}

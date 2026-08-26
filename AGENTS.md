@@ -65,9 +65,15 @@ entities.
 - `zigbee2mqtt.py`: Zigbee2MQTT lock implementation (via MQTT)
 - `zwave_js_ui.py`: zwave-js-ui lock implementation (via MQTT, api-driven)
 - `virtual.py`: Virtual lock implementation -- a credential store rather than a device.
-  Advertises every credential type with no limits, and reports code slot events so it can be
-  the recording surface for credentials used where Lock Code Manager observes nothing
-  (`use_credential`). Also the way to try Lock Code Manager without a real lock.
+  Advertises every credential type with no limits. It observes nothing
+  (`supports_code_slot_events` is False); uses reach it through `use_credential`, which asks
+  nothing of the member it names. Also the way to try Lock Code Manager without a real lock.
+- `codeless.py`: `CodelessLock`, a `VirtualLock` pointed at a REAL lock entity that has no
+  credential storage (ESPHome and similar). Everything but `domain` is inherited. Never
+  reached by platform dispatch: it answers only for a member the entry declares codeless
+  (`EntryConfig.is_codeless`), and `domain.locks.resolve_member_provider_class` is what
+  reads that declaration -- declaration first, so a provider added later cannot silently
+  take a member's credentials off Lock Code Manager and onto a device.
 - Each provider implements: `async_get_users()`, `async_set_credential()`, `async_delete_credential()`,
   `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
@@ -96,6 +102,13 @@ entities.
 - Multi-step flow: select locks → configure slots → configure individual slot properties
 - Validates slots aren't already configured across other config entries
 - Supports YAML object mode for advanced slot configuration
+- The lock picker accepts ANY `lock` entity. A submitted lock no provider claims (mqtt
+  excepted -- it keeps its own refusal) goes to the `codeless` menu step, which asks
+  whether Lock Code Manager should hold that lock's codes. `CodelessDeclarationFlow` is
+  mixed into the config, reauth and options flows, and either answer re-submits what was
+  asked about: confirming saves through the ordinary path, declining lands back on the
+  form with `codeless_declined`. Asked about every unclaimed lock in a submission, not
+  only new ones, so a declaration can be taken back
 
 ### Entities
 
@@ -331,6 +344,7 @@ Each provider package has a `conftest.py`, a `test_provider.py`, and (except
 ```text
 tests/providers/
   akuvox/          # conftest, test_provider, test_e2e
+  codeless/        # conftest, test_provider, test_e2e
   matter/          # + helpers, fixtures/, test_sdk_exception_translation
   schlage/
   virtual/

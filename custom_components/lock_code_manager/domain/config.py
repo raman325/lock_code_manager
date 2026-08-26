@@ -12,7 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_PIN
 from homeassistant.helpers import entity_registry as er
 
-from ..const import CONF_LOCKS, CONF_MEMBERS, CONF_SLOTS, CONF_USERS
+from ..const import CONF_CODELESS, CONF_LOCKS, CONF_MEMBERS, CONF_SLOTS, CONF_USERS
 from .names import normalize_name
 from .slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
@@ -106,6 +106,32 @@ def _member_declarations(raw: Any) -> Mapping[str, Mapping[str, Any]]:
             continue
         declarations[registry_id] = MappingProxyType(dict(declared))
     return MappingProxyType(declarations)
+
+
+def declare_codeless(
+    members: Mapping[str, Mapping[str, Any]], answers: Mapping[str, bool]
+) -> dict[str, dict[str, Any]]:
+    """
+    Return the declarations with an answer recorded about each named member.
+
+    Keyed by ``er.RegistryEntry.id``, like the declarations themselves, and
+    merged into each member's own rather than replacing it: recording this
+    one field must not erase another field the same member carries.
+
+    A False answer removes the field, and a declaration left holding nothing
+    goes with it. "Nothing declared" is already what every reader treats as
+    the default, so a stored ``codeless: false`` would mean exactly what an
+    absent key means while looking different in storage -- and every member
+    anybody ever declined about would leave a husk behind.
+    """
+    declared = {registry_id: dict(fields) for registry_id, fields in members.items()}
+    for registry_id, codeless in answers.items():
+        member = declared.setdefault(registry_id, {})
+        if codeless:
+            member[CONF_CODELESS] = True
+        else:
+            member.pop(CONF_CODELESS, None)
+    return {registry_id: fields for registry_id, fields in declared.items() if fields}
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +347,24 @@ class EntryConfig:
         and nothing declared about it.
         """
         return self.members.get(lock_entry.id, _EMPTY_MEMBER)
+
+    def is_codeless(self, lock_entry: er.RegistryEntry) -> bool:
+        """
+        Return whether this entry holds this member's credentials itself.
+
+        The field dispatch keys on. A member declared this way has no
+        credential storage of its own -- an ESPHome lock, or any other lock
+        entity that is real and actuatable but keeps no codes -- so nothing
+        is ever written to the device and Lock Code Manager keeps the
+        credentials in a store of its own.
+
+        Never inferred. The config and options flows ask about exactly the
+        members no provider claims, and only an answer puts this here: a
+        lock somebody meant to reach through a provider Lock Code Manager
+        has not been taught yet must keep failing loudly rather than
+        quietly becoming a lock nothing is written to.
+        """
+        return bool(self.member(lock_entry).get(CONF_CODELESS))
 
     def name_for(self, slot_num: int | str) -> str | None:
         """Return the user occupying a slot, or None if it is unoccupied."""

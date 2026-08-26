@@ -18,7 +18,8 @@
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
       "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
-      "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true"
+      "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true",
+      "codeless_declined": "Lock Code Manager has no way to manage codes on {locks}. Remove them from the list, or go back and let Lock Code Manager hold their codes."
     },
     "step": {
       "choose_path": {
@@ -67,6 +68,14 @@
         },
         "description": "The lock `{lock}`, in the configuration for `{name}`, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
         "title": "Update locks for {name}"
+      },
+      "codeless": {
+        "title": "Locks with no code storage",
+        "description": "Lock Code Manager can't read or write codes on {locks}.\n\nIt can still manage codes for these locks: it stores them itself, and checks codes you report with the `use_credential` action against your users and their schedules, recording each use like any other. The locks themselves are never written to, so a code set up here does not open them on its own -- something else has to check it, such as a keypad automation calling `use_credential`.\n\nChoose \"No\" to go back and change which locks you selected.",
+        "menu_options": {
+          "codeless_confirm": "Yes, Lock Code Manager holds the codes for these locks",
+          "codeless_decline": "No, don't manage codes for these locks"
+        }
       }
     }
   },
@@ -142,7 +151,8 @@
       "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
       "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
-      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}"
+      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
+      "codeless_declined": "Lock Code Manager has no way to manage codes on {locks}. Remove them from the list, or go back and let Lock Code Manager hold their codes."
     },
     "step": {
       "init": {
@@ -152,6 +162,14 @@
         },
         "description": "Update the locks that are associated with this config entry and/or the users.",
         "title": "Lock Code Manager"
+      },
+      "codeless": {
+        "title": "Locks with no code storage",
+        "description": "Lock Code Manager can't read or write codes on {locks}.\n\nIt can still manage codes for these locks: it stores them itself, and checks codes you report with the `use_credential` action against your users and their schedules, recording each use like any other. The locks themselves are never written to, so a code set up here does not open them on its own -- something else has to check it, such as a keypad automation calling `use_credential`.\n\nChoose \"No\" to go back and change which locks you selected.",
+        "menu_options": {
+          "codeless_confirm": "Yes, Lock Code Manager holds the codes for these locks",
+          "codeless_decline": "No, don't manage codes for these locks"
+        }
       }
     }
   },

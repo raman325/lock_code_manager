@@ -15,6 +15,11 @@ from .zigbee2mqtt import Z2M_IDENTIFIER_PREFIX, Zigbee2MQTTLock
 from .zwave_js import ZWaveJSLock
 from .zwave_js_ui import ZWaveJSUILock, parse_zwave_js_ui_identifier
 
+# Platform dispatch, and the whole of it. ``CodelessLock`` is deliberately
+# absent -- and not imported here either: it answers for the members an entry
+# declares it holds the credentials for, which is a fact about that entry's
+# configuration rather than about a platform, so the factory that reads the
+# declaration imports it. See ``domain.locks.resolve_member_provider_class``.
 INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "local_akuvox": AkuvoxLock,
     "matter": MatterLock,
@@ -23,9 +28,6 @@ INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "zha": ZHALock,
     "zwave_js": ZWaveJSLock,
 }
-
-# Selector allowlist; wider than what resolves, because mqtt is per-device.
-CONFIG_FLOW_PLATFORMS: tuple[str, ...] = (*INTEGRATIONS_CLASS_MAP, MQTT_DOMAIN)
 
 
 def resolve_provider_class(

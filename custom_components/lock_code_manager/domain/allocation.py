@@ -19,12 +19,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import MAX_SEARCHED_SLOT
-from ..providers import resolve_provider_class_for_entity
+from .config import EntryConfig
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
-from .locks import borrowed_lock_instance
+from .locks import borrowed_lock_instance, resolve_member_provider_class
 from .occupancy import LockOccupancy, Occupancy
-from .queries import get_managed_slots
+from .queries import get_entry_config, get_managed_slots
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,8 +75,9 @@ def build_lock_instance(
     """
     Build a temporary lock provider instance for ``lock_entity_id``.
 
-    Performs setup-time checks (entity in registry, a provider claims it,
-    parent config entry exists) and instantiates the provider class.
+    Performs setup-time checks (entity in registry, a provider claims it or
+    the entry declares it codeless, parent config entry exists) and
+    instantiates the provider class.
     Raises ``LockQuerySkipped`` if any setup-time check fails.
 
     ``config_entry`` is the Lock Code Manager entry the lock is being read
@@ -97,11 +98,17 @@ def build_lock_instance(
             lock_entity_id,
         )
         raise LockQuerySkipped(lock_entity_id, managed=True)
-    lock_cls = resolve_provider_class_for_entity(dev_reg, lock_entry)
+    # An entry still being created has nothing to read a declaration from.
+    # A member it is about to declare codeless is also one this integration
+    # holds no credentials for yet, and a codeless member advertises no
+    # capacity, so the numbering is unconstrained either way.
+    config = get_entry_config(config_entry) if config_entry else EntryConfig.empty()
+    lock_cls = resolve_member_provider_class(dev_reg, config, lock_entry)
     if lock_cls is None:
-        # Covers both an unsupported platform and an mqtt lock whose bridge
-        # no provider speaks: either way nothing is ever written there, so
-        # the lock constrains no numbering.
+        # Covers an unsupported platform, and an mqtt lock whose bridge no
+        # provider speaks, and a lock nothing claims that nobody declared
+        # about: either way nothing is ever written there, so the lock
+        # constrains no numbering.
         _LOGGER.debug(
             "%s: no provider claims lock %s (platform %s); skipping usercode check",
             asked_by,

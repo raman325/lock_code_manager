@@ -11,11 +11,14 @@ import json
 from typing import Literal
 from unittest.mock import patch
 
-from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_mqtt_message,
+)
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
-from homeassistant.components.lock import LockEntity
+from homeassistant.components.lock import LockEntity, LockState
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
@@ -118,6 +121,28 @@ async def async_discover_unclaimed_mqtt_lock(
     assert entity_id is not None, "discovery did not create the lock entity"
     lock_entry = ent_reg.async_get(entity_id)
     assert lock_entry is not None
+    return lock_entry
+
+
+def register_codeless_lock(
+    hass: HomeAssistant, unique_id: str = "keypad_door"
+) -> er.RegistryEntry:
+    """
+    Register a real lock entity from an integration no provider claims.
+
+    ESPHome is the shape this feature exists for: a lock that genuinely
+    locks and unlocks and has no notion of a code, so nothing in
+    ``INTEGRATIONS_CLASS_MAP`` can ever claim it and only a declaration can
+    say what to do with it. Nothing about the integration is mocked -- what
+    dispatch reads is the registry row, and what everything else reads is
+    the state.
+    """
+    provider_entry = MockConfigEntry(domain="esphome", title="ESPHome")
+    provider_entry.add_to_hass(hass)
+    lock_entry = er.async_get(hass).async_get_or_create(
+        "lock", "esphome", unique_id, config_entry=provider_entry
+    )
+    hass.states.async_set(lock_entry.entity_id, LockState.LOCKED)
     return lock_entry
 
 

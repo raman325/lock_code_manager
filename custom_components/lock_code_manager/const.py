@@ -151,6 +151,10 @@ CONF_LOCKS = "locks"
 # Per-member declarations, keyed by entity registry entry id, alongside the
 # CONF_LOCKS roster. See EntryConfig.member().
 CONF_MEMBERS = "members"
+# A member declaration field: the user told Lock Code Manager this member has
+# no credential storage of its own, so Lock Code Manager holds them instead.
+# See EntryConfig.is_codeless().
+CONF_CODELESS = "codeless"
 CONF_SLOTS = "slots"
 CONF_USERS = "users"
 CONF_NUM_USERS = "num_users"

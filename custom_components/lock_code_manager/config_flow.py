@@ -25,6 +25,7 @@ from homeassistant.util import slugify
 from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
+    CONF_MEMBERS,
     CONF_NUM_USERS,
     CONF_USERS,
     DEFAULT_NUM_USERS,
@@ -36,11 +37,11 @@ from .domain.allocation import (
     async_allocate_for,
     async_check_slot_capacity,
 )
-from .domain.config import EntryConfig
+from .domain.config import EntryConfig, declare_codeless
 from .domain.names import name_error, normalize_name, validate_user_names
 from .domain.queries import get_entry_config
 from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
-from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
+from .providers import resolve_provider_class_for_entity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,12 +91,14 @@ USER_SCHEMA = vol.Schema(
 
 USERS_SCHEMA = vol.All(vol.Schema({cv.string: USER_SCHEMA}), enabled_requires_pin)
 
-LOCKS_FILTER_CONFIG = [
-    sel.EntityFilterSelectorConfig(integration=platform, domain=LOCK_DOMAIN)
-    for platform in CONFIG_FLOW_PLATFORMS
-]
+# Every lock entity, from any integration. Not an allowlist of the
+# platforms that resolve to a provider: a lock nothing claims may still be
+# one Lock Code Manager can manage codes for by holding them itself, and the
+# user is asked about exactly those after they submit. Filtering them out of
+# the picker instead would make the question unaskable -- a lock that cannot
+# be selected cannot be declared about.
 LOCK_ENTITY_SELECTOR = sel.EntitySelector(
-    sel.EntitySelectorConfig(filter=LOCKS_FILTER_CONFIG, multiple=True)
+    sel.EntitySelectorConfig(domain=LOCK_DOMAIN, multiple=True)
 )
 SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
 
@@ -137,6 +140,157 @@ def _check_unclaimed_mqtt_locks(
     if unclaimed:
         return {CONF_LOCKS: "unsupported_mqtt_lock"}, {"locks": ", ".join(unclaimed)}
     return {}, {}
+
+
+def _codeless_candidates(
+    hass: HomeAssistant, lock_entity_ids: Iterable[str]
+) -> list[er.RegistryEntry]:
+    """
+    Return the selected locks that only a declaration can account for.
+
+    A lock no provider claims is not necessarily a lock this integration
+    cannot manage: if it keeps no codes of its own, Lock Code Manager can
+    hold them itself and treat the entity as the thing being locked. Which
+    of the two it is, is not derivable from anything here -- so these are
+    the locks the user is asked about.
+
+    mqtt is left out, and keeps the refusal it already has. Its dispatch is
+    per DEVICE, so an unclaimed one means "this bridge is not one of the two
+    Lock Code Manager speaks" -- a gap that may close in a later version,
+    not a statement that the lock has no code storage. Offering the
+    declaration there answers a question nobody asked, and taking it would
+    strand that lock's credentials in a Lock Code Manager store on the day
+    its bridge became supported.
+
+    An entity missing from the registry is left out too: a declaration is
+    keyed by registry id, so there is nothing to key one by, and setup
+    refuses that lock on its own.
+    """
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    return [
+        lock_entry
+        for entity_id in lock_entity_ids
+        if (lock_entry := ent_reg.async_get(entity_id)) is not None
+        and lock_entry.platform != MQTT_DOMAIN
+        and resolve_provider_class_for_entity(dev_reg, lock_entry) is None
+    ]
+
+
+class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
+    """
+    The step that asks whether Lock Code Manager should hold a lock's codes.
+
+    Mixed into every flow that picks locks, because any of them can pick one
+    no provider claims, and none of them may store a lock nobody was asked
+    about.
+
+    The question is asked after a submission has otherwise been accepted,
+    and the submission is held rather than acted on. Either answer then
+    re-submits it: the answer changes what the same validation makes of the
+    same input, so confirming saves through exactly the path that would have
+    run without the detour, and declining lands back on the form with the
+    refusal that names the locks -- somewhere the lock selection can be
+    changed, rather than a dead end.
+
+    Asked about every lock nothing claims, not only the ones nobody has
+    answered for yet, so a declaration made earlier can be taken back. Once
+    per flow, because an answer suppresses the question for the re-submission
+    it caused.
+
+    Based on the class the config and options flows already share, so the
+    steps here are typed against the same flow surface they run on rather
+    than asserting one exists.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing asked and nothing answered."""
+        super().__init__()
+        # Answers given in THIS flow, keyed by entity registry id, laid over
+        # whatever the entry already holds. They reach storage only when the
+        # flow that collected them writes its entry.
+        self._codeless_answers: dict[str, bool] = {}
+        # The step the pending answer belongs to, and what was submitted to
+        # it.
+        self._codeless_origin: str = ""
+        self._codeless_input: dict[str, Any] = {}
+        self._codeless_locks: list[er.RegistryEntry] = []
+
+    async def _async_check_codeless(
+        self, origin: str, user_input: dict[str, Any], config: EntryConfig
+    ) -> tuple[dict[str, Any] | None, dict[str, str], dict[str, Any]]:
+        """
+        Ask about, or refuse, the locks in a submission that nothing claims.
+
+        Returns the flow result to return when the question still has to be
+        asked, alongside the form error and placeholders for a submission
+        that cannot be saved as it stands. ``config`` is what the entry
+        already declares, which this flow's own answers override.
+        """
+        candidates = _codeless_candidates(self.hass, user_input[CONF_LOCKS])
+        if unanswered := [
+            lock_entry
+            for lock_entry in candidates
+            if lock_entry.id not in self._codeless_answers
+        ]:
+            self._codeless_origin = origin
+            # Copied: the step this comes back to consumes what it is given.
+            self._codeless_input = dict(user_input)
+            self._codeless_locks = unanswered
+            return await self.async_step_codeless(), {}, {}
+        if undeclared := [
+            lock_entry
+            for lock_entry in candidates
+            if not self._is_codeless(config, lock_entry)
+        ]:
+            return (
+                None,
+                {CONF_LOCKS: "codeless_declined"},
+                {"locks": ", ".join(entry.entity_id for entry in undeclared)},
+            )
+        return None, {}, {}
+
+    def _is_codeless(self, config: EntryConfig, lock_entry: er.RegistryEntry) -> bool:
+        """Return the answer that stands for a member: this flow's, else the entry's."""
+        return self._codeless_answers.get(lock_entry.id, config.is_codeless(lock_entry))
+
+    def _declared_members(self, config: EntryConfig) -> dict[str, dict[str, Any]]:
+        """Return what to store about this entry's members, answers applied."""
+        return declare_codeless(config.members, self._codeless_answers)
+
+    async def async_step_codeless(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Explain what declaring these locks means, and offer both answers."""
+        return self.async_show_menu(
+            step_id="codeless",
+            menu_options=["codeless_confirm", "codeless_decline"],
+            description_placeholders={
+                "locks": ", ".join(entry.entity_id for entry in self._codeless_locks)
+            },
+        )
+
+    async def async_step_codeless_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Record that Lock Code Manager holds these locks' credentials."""
+        return await self._async_answer_codeless(True)
+
+    async def async_step_codeless_decline(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Record that it does not, which is also how a declaration is undone."""
+        return await self._async_answer_codeless(False)
+
+    async def _async_answer_codeless(self, codeless: bool) -> dict[str, Any]:
+        """Record one answer for every lock the step named, and re-submit."""
+        self._codeless_answers.update(
+            dict.fromkeys((entry.id for entry in self._codeless_locks), codeless)
+        )
+        # Resolved by name, the way the flow manager resolves every step.
+        return await getattr(self, f"async_step_{self._codeless_origin}")(
+            dict(self._codeless_input)
+        )
 
 
 def _check_common_slots(
@@ -263,7 +417,9 @@ async def _allocate_for(
     return unavailable, {}, {}
 
 
-class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
+class LockCodeManagerFlowHandler(
+    CodelessDeclarationFlow, config_entries.ConfigFlow, domain=DOMAIN
+):
     """Config flow for Lock Code Manager."""
 
     VERSION = 4
@@ -271,6 +427,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialize config flow."""
+        super().__init__()
         self.data: dict[str, Any] = {}
         self.title: str = ""
         self.ent_reg: er.EntityRegistry = None
@@ -298,6 +455,20 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             errors, description_placeholders = _check_unclaimed_mqtt_locks(
                 self.hass, user_input[CONF_LOCKS]
             )
+            if not errors:
+                # A new entry declares nothing yet, so every lock nothing
+                # claims is one this step has to ask about. Asked before the
+                # name is consumed, because a refusal re-renders this form
+                # from what was submitted.
+                (
+                    ask,
+                    errors,
+                    description_placeholders,
+                ) = await self._async_check_codeless(
+                    "user", user_input, EntryConfig.empty()
+                )
+                if ask is not None:
+                    return ask
             if not errors:
                 self.title = user_input.pop(CONF_NAME)
                 await self.async_set_unique_id(slugify(self.title))
@@ -439,6 +610,18 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             self.data[CONF_USERS], start=1, unavailable=self._unavailable
         )
         self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
+        return self._create_entry()
+
+    def _create_entry(self) -> dict[str, Any]:
+        """
+        Create the entry, carrying what this flow was told about its members.
+
+        The key is left out entirely when nothing was declared, rather than
+        written empty: an entry that was never asked anything should not
+        read as one that answered nothing.
+        """
+        if members := self._declared_members(EntryConfig.empty()):
+            self.data[CONF_MEMBERS] = members
         return self.async_create_entry(title=self.title, data=self.data)
 
     async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
@@ -485,7 +668,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     users, start=1, unavailable=unavailable
                 )
                 self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
-                return self.async_create_entry(title=self.title, data=self.data)
+                return self._create_entry()
 
         return self.async_show_form(
             step_id="yaml",
@@ -562,6 +745,21 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 except SlotAllocationError as err:
                     additional_errors = {"base": err.translation_key}
                     additional_placeholders = err.placeholders
+            if not additional_errors:
+                # Reauth renders the same picker as the other two flows, so
+                # it is a third way to put a lock nothing claims into the
+                # entry, and needs the same question. Left out, a user
+                # repairing one broken lock could swap in a codeless one and
+                # land straight back in reauth.
+                (
+                    ask,
+                    additional_errors,
+                    additional_placeholders,
+                ) = await self._async_check_codeless(
+                    "reauth_confirm", user_input, entry_config
+                )
+                if ask is not None:
+                    return ask
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
@@ -577,8 +775,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 self.hass.config_entries.async_update_entry(
                     config_entry,
                     data={
-                        **get_entry_config(config_entry).to_dict(),
+                        **entry_config.to_dict(),
                         **user_input,
+                        CONF_MEMBERS: self._declared_members(entry_config),
                     },
                     options={},
                 )
@@ -609,7 +808,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         return LockCodeManagerOptionsFlow()
 
 
-class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
+class LockCodeManagerOptionsFlow(CodelessDeclarationFlow, config_entries.OptionsFlow):
     """Options flow for Lock Code Manager."""
 
     async def async_step_init(
@@ -663,26 +862,39 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                     description_placeholders.update(allocation_placeholders)
                 else:
                     config = get_entry_config(self.config_entry)
-                    # Reconciled against what the entry already holds, so a
-                    # user who was here before keeps their number and only
-                    # newcomers are issued one. Moving somebody would rewrite
-                    # their credential on every lock.
-                    assignment = config.assignment.reconcile(
-                        users, start=1, unavailable=unavailable
-                    )
-                    # Written through EntryConfig so whatever else the entry
-                    # carries survives the edit. Building the dict by hand
-                    # drops every key this form does not ask about.
-                    return self.async_create_entry(
-                        title="",
-                        data=EntryConfig(
-                            locks=tuple(user_input[CONF_LOCKS]),
-                            members=config.members,
-                            users=users,
-                            assignment=assignment,
-                            extra=config.extra,
-                        ).to_dict(),
-                    )
+                    # Asked here, where the submission is otherwise ready to
+                    # save, so nobody is asked to declare something about a
+                    # submission that was never going to be stored.
+                    (
+                        ask,
+                        codeless_errors,
+                        codeless_placeholders,
+                    ) = await self._async_check_codeless("init", user_input, config)
+                    if ask is not None:
+                        return ask
+                    errors.update(codeless_errors)
+                    description_placeholders.update(codeless_placeholders)
+                    if not errors:
+                        # Reconciled against what the entry already holds, so a
+                        # user who was here before keeps their number and only
+                        # newcomers are issued one. Moving somebody would rewrite
+                        # their credential on every lock.
+                        assignment = config.assignment.reconcile(
+                            users, start=1, unavailable=unavailable
+                        )
+                        # Written through EntryConfig so whatever else the entry
+                        # carries survives the edit. Building the dict by hand
+                        # drops every key this form does not ask about.
+                        return self.async_create_entry(
+                            title="",
+                            data=EntryConfig(
+                                locks=tuple(user_input[CONF_LOCKS]),
+                                members=self._declared_members(config),
+                                users=users,
+                                assignment=assignment,
+                                extra=config.extra,
+                            ).to_dict(),
+                        )
 
         config = get_entry_config(self.config_entry)
         # Plain dict/list, because the form selectors cannot serialize the

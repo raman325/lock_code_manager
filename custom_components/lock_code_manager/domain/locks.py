@@ -19,10 +19,45 @@ from homeassistant.helpers import (
 )
 
 from ..providers import BaseLock, resolve_provider_class_for_entity
+from ..providers.codeless import CodelessLock
+from .config import EntryConfig
 from .exceptions import UnclaimedLockError
-from .queries import iter_loaded_lcm_entries
+from .queries import get_entry_config, iter_loaded_lcm_entries
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def resolve_member_provider_class(
+    dev_reg: dr.DeviceRegistry,
+    config: EntryConfig,
+    lock_entry: er.RegistryEntry,
+) -> type[BaseLock] | None:
+    """
+    Resolve the provider for one of an entry's members, declaration first.
+
+    Platform dispatch (``providers.resolve_provider_class_for_entity``)
+    answers for a lock whose integration Lock Code Manager speaks. It cannot
+    answer for a lock that keeps no codes at all, because that is not a
+    property of the integration -- ESPHome will happily expose a lock with a
+    keypad and a lock without one -- which is why the user is asked and the
+    answer is stored per member.
+
+    The declaration is read FIRST, and the ordering is the point. Should
+    Lock Code Manager ever gain a provider for a platform somebody already
+    declared codeless, letting that provider win would move a member's
+    credentials out of this integration's store and onto a device the user
+    never agreed to write to, silently, on a version upgrade. Keeping the
+    declaration means the only thing that changes an answer is somebody
+    answering again.
+
+    This is what every factory has to call, and why neither factory may go
+    through platform dispatch alone: a declared member that resolved to
+    nothing would be refused at setup and would issue slot numbers against
+    a lock nothing ever read.
+    """
+    if config.is_codeless(lock_entry):
+        return CodelessLock
+    return resolve_provider_class_for_entity(dev_reg, lock_entry)
 
 
 @callback
@@ -37,7 +72,9 @@ def async_create_lock_instance(
     lock_entry = ent_reg.async_get(lock_entity_id)
     assert lock_entry
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
-    lock_cls = resolve_provider_class_for_entity(dev_reg, lock_entry)
+    lock_cls = resolve_member_provider_class(
+        dev_reg, get_entry_config(config_entry), lock_entry
+    )
     if lock_cls is None:
         # Selection-time validation and this guard share one rule: never
         # guess a provider for an unclaimed lock.
