@@ -423,6 +423,27 @@ class EntryConfig:
             return NotImplemented
         return EntryConfigDiff(old=self, new=other)
 
+    def with_members(self, members: Mapping[str, Mapping[str, Any]]) -> EntryConfig:
+        """
+        Return a copy declaring these members instead of the stored ones.
+
+        For reading a submission's locks through the answers it carries
+        before any of it is written: what a member resolves to decides which
+        credential store gets read, so validation that consults the stored
+        declaration is answering about the wrong lock.
+
+        Normalized on the way in, like every other construction path, so a
+        plain dict handed in here cannot make an instance that is only
+        shallowly read-only.
+        """
+        return EntryConfig(
+            locks=self.locks,
+            members=_member_declarations(members),
+            users=self.users,
+            assignment=self.assignment,
+            extra=self.extra,
+        )
+
     def with_user_renamed(self, old: str, new: str) -> EntryConfig:
         """
         Return a copy with a user re-keyed, keeping their slot.

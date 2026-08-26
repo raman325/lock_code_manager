@@ -99,11 +99,20 @@ entities.
   differently is treated like one that left and came back
 - Two entries holding one lock share a single `BaseLock`, keyed on the entity id AND the
   provider class each entry resolves -- entries that disagree about a declaration get one
-  instance each. Release is by object identity, so each entry lets go of its own
+  instance each. Release is by object identity, so each entry lets go of its own.
+  `BaseLock` defines no `__eq__`/`__hash__` for the same reason: two providers over one
+  entity are two credential stores, and equality by entity id collapsed them
+- Entity-id-addressed lookups live in `domain.locks`. `get_managed_locks_for_entity`
+  returns every provider for a lock; `get_locks_from_targets` returns all of them, so an
+  action aimed at a lock reaches both stores; `get_managed_lock` returns THE provider and
+  refuses when there are two, because its callers (set/clear usercode, the unmanaged-code
+  repair, the lock-codes subscription) name a lock and nothing else
 - `async_remove_entry()`: entry deletion only. Clears the persistent per-lock repairs and
   retires the credentials a provider keeps off the lock (`async_remove_stored_credentials`,
   the virtual/codeless store). Unload deliberately SAVES that store instead, so deletion is
-  the only place it can be collected -- skipped for a lock another entry still holds
+  the only place it can be collected -- skipped only when another entry RESOLVES THE SAME
+  provider class for that lock (`_lock_store_held_by_another_entry`), since a sibling on a
+  different provider never reads the store and would block collection forever
 - Uses dispatcher signals to notify entities of changes (e.g., `{DOMAIN}_{entry_id}_add_lock_slot`)
 - Registers Lovelace strategy resource for dashboard UI
 
@@ -114,23 +123,31 @@ entities.
 - Supports YAML object mode for advanced slot configuration
 - The lock picker accepts ANY `lock` entity, so `_check_lock_selection` enforces at
   submit time what the selector cannot express: an entity with no entity registry row
-  is refused outright (`lock_not_registered` -- the same predicate `async_setup_entry`
-  refuses on, and not grandfathered, because an entry holding one does not load), and
-  a newly selected unclaimed mqtt lock is refused with `unsupported_mqtt_lock`
-  (grandfathered, because that entry does load). A submitted lock no provider claims (mqtt
-  excepted -- it keeps its own refusal) goes to the `codeless` menu step, which asks
-  whether Lock Code Manager should hold that lock's codes. `CodelessDeclarationFlow` is
-  mixed into the config, reauth and options flows, and either answer re-submits what was
-  asked about: confirming saves through the ordinary path, declining lands back on the
-  form with `codeless_declined`. Asked about every unclaimed lock in a submission, not
-  only new ones, and about every member the entry already declares codeless whatever
-  dispatch now makes of it -- so a declaration always has a way back, including for a
-  member whose platform has since gained a provider (declining that one hands it to the
-  provider instead of refusing the submission). One answer per flow: a declined lock
-  keeps being refused until it is dropped from the selection or the flow is restarted.
-  On write, `declare_codeless` prunes anything about members the submission no longer
-  holds -- a stored declaration AND an answer just given, since a yes outlives a
-  re-submission refused for some other reason -- so re-adding a lock is asked about afresh
+  is refused outright (`base: lock_not_registered` -- the same predicate
+  `async_setup_entry` refuses on, and not grandfathered, because an entry holding one does
+  not load), and a newly selected unclaimed mqtt lock is refused with
+  `locks: unsupported_mqtt_lock` (grandfathered, because that entry does load). Both
+  accumulate, on separate error keys and separate placeholders so one submission renders
+  both. A submitted lock no provider claims (mqtt excepted -- it keeps its own refusal)
+  goes to the `codeless` menu step, which asks whether Lock Code Manager should hold that
+  lock's codes. `CodelessDeclarationFlow` is mixed into the config, reauth and options
+  flows, and either answer re-submits what was asked about: confirming saves through the
+  ordinary path, declining lands back on the form with `codeless_declined`
+- ONE member per question, and an answer applies to that member alone -- the
+  re-submission finds the next unanswered member and asks again. A single Yes/No over the
+  whole set let an answer aimed at a newly added lock strip the declaration off an
+  unrelated member. Which of two menu steps is shown depends on the population:
+  `codeless` for a lock nothing claims (declining refuses the submission),
+  `codeless_reconsider` for a member the entry already declares that something now claims
+  (declining hands the lock to that provider and saves). Every declared member is asked
+  about whatever dispatch now makes of it, so a declaration always has a way back
+- Everything that reads a lock during a flow reads it through `_pending_config` -- the
+  entry's configuration as this submission would leave it, answers included -- so
+  capacity and allocation size a member against the provider it is about to become rather
+  than the one it is leaving. On write, `declare_codeless` prunes anything about members
+  the submission no longer holds -- a stored declaration AND an answer just given, since a
+  yes outlives a re-submission refused for some other reason -- so re-adding a lock is
+  asked about afresh
 
 ### Entities
 

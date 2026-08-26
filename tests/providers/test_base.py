@@ -837,8 +837,16 @@ async def test_clear_usercode_refreshes_coordinator_on_change(
         assert refresh_count[0] == 1  # Still 1, no new refresh
 
 
-async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
-    """Test that __eq__ returns False when comparing with non-BaseLock object."""
+async def test_two_providers_over_one_entity_are_not_one_lock(hass: HomeAssistant):
+    """
+    A provider is equal only to itself, and a set of them keeps both.
+
+    Equality used to key on the lock entity id, which said two instances
+    wrapping one entity were the same logical lock. Two entries can resolve
+    one entity to different providers, and those hold different credential
+    stores -- so a collection of providers silently kept one of them, and
+    whichever it kept decided where a Personal Identification Number went.
+    """
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
@@ -850,45 +858,13 @@ async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
         config_entry=config_entry,
     )
 
-    lock = BaseLock(
-        hass,
-        dr.async_get(hass),
-        entity_reg,
-        config_entry,
-        lock_entity,
-    )
-
-    # Comparing to non-BaseLock objects should return False
-    assert lock != "not a lock"
-    assert lock != 123
-    assert (lock == None) is False  # noqa: E711 - Intentionally testing __eq__ with None
-    assert lock != {"entity_id": lock_entity.entity_id}
-
-
-async def test_lock_equality_with_same_entity_id(hass: HomeAssistant):
-    """Two BaseLock instances wrapping the same lock entity are equal.
-
-    __hash__ is defined by entity ID alone, so __eq__ must agree: any two
-    BaseLock objects (even different provider classes or instances) that
-    wrap the same lock.entity_id are the same logical lock.
-    """
-    entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "test",
-        "test_lock_eq_same",
-        config_entry=config_entry,
-    )
-
     lock_a = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
     lock_b = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
 
-    assert lock_a is not lock_b
-    assert lock_a == lock_b
-    assert lock_a == lock_a  # noqa: PLR0124 - Intentionally testing reflexive __eq__
+    assert lock_a != lock_b
+    assert lock_a == lock_a  # noqa: PLR0124 - a provider is still itself
+    assert len({lock_a, lock_b}) == 2
+    assert lock_a != "not a lock"
 
 
 async def test_fire_code_slot_event_fires_both_events(

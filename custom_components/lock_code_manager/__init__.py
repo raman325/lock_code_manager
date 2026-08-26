@@ -857,6 +857,42 @@ def _lock_managed_by_other_entry(
     )
 
 
+def _lock_store_held_by_another_entry(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entry: er.RegistryEntry,
+    lock_cls: type[BaseLock],
+) -> bool:
+    """
+    Return True if another entry resolves this lock to the same provider.
+
+    What guards discarding a provider's stored credentials. Presence is the
+    wrong question: a sibling entry that lists the lock but resolves a
+    DIFFERENT provider class never opens the store being discarded, and
+    treating it as a holder blocks collection forever -- leaving cleartext
+    Personal Identification Numbers on disk with nothing left in the
+    configuration that could ever read them back.
+
+    Same class, not the same instance: an entry that is merely between loads
+    holds no instance and would still read this store on its next load.
+
+    Takes the registry entry rather than an entity id, because the
+    declaration a sibling is resolved through is keyed by
+    ``RegistryEntry.id``. Every caller holds one already -- a provider keeps
+    its own, and the sweep looks one up before it can name a store at all --
+    so there is no case here where the row is missing.
+    """
+    dev_reg = dr.async_get(hass)
+    return any(
+        entry.entry_id != config_entry.entry_id
+        and (sibling := get_entry_config(entry)).has_lock(lock_entry.entity_id)
+        and resolve_member_provider_class(dev_reg, sibling, lock_entry) is lock_cls
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+    )
+
+
 def _find_shared_lock_instance(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -912,10 +948,8 @@ def _lock_still_owned_by_another_entry(
 
     Identity, not entity id: two entries that resolve one lock to different
     providers hold two instances, and each has to be able to release its own.
-    ``BaseLock`` equality keys on the entity id, so ``in`` and ``==`` would
-    both answer about the other entry's instance. Config membership is not
-    the question either -- a loaded entry that dropped this lock during setup
-    lists it but does not own it.
+    Config membership is not the question either -- a loaded entry that
+    dropped this lock during setup lists it but does not own it.
     """
     return any(
         entry.entry_id != config_entry.entry_id
@@ -946,12 +980,13 @@ async def async_unload_lock(
             # ``remove_permanently`` discards state that deliberately outlives
             # an unload -- the per-lock setup-failed repair, the provider's
             # stored codes. Only a lock leaving Lock Code Manager altogether
-            # should lose those, so an entry that still manages it downgrades
-            # this to a plain teardown even while that entry is unloaded.
+            # should lose those, so an entry that still reads THIS provider's
+            # store downgrades this to a plain teardown even while that entry
+            # is unloaded.
             await lock.async_unload(
                 remove_permanently
-                and not _lock_managed_by_other_entry(
-                    hass, config_entry, _lock_entity_id
+                and not _lock_store_held_by_another_entry(
+                    hass, config_entry, lock.lock, type(lock)
                 )
             )
             if lock.coordinator is not None:
@@ -1077,17 +1112,14 @@ async def _async_discard_stored_credentials(
     Instances are built fresh because the entry's own are gone by now, and
     only to name the store: nothing here reaches the lock.
 
-    A lock another entry still holds keeps its store, which is the same gate
-    ``async_unload_lock`` puts on ``remove_permanently``. Conservative on
-    purpose: presence, not the provider that entry resolves, so the rare case
-    of two entries disagreeing about a lock leaves a store behind rather than
-    deleting one the other entry is still reading.
+    A store another entry still reads is kept, which is the same gate
+    ``async_unload_lock`` puts on ``remove_permanently``. The question is
+    whether a sibling resolves THIS provider, not whether one lists the lock
+    -- see :func:`_lock_store_held_by_another_entry`.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
     for lock_entity_id in config.locks:
-        if _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
-            continue
         lock_entry = ent_reg.async_get(lock_entity_id)
         if lock_entry is None:
             # The entity went before the entry did. Its store is named after
@@ -1097,6 +1129,8 @@ async def _async_discard_stored_credentials(
         if lock_cls is None:
             # Nothing claimed it and nothing was declared about it, so no
             # provider ever ran and no provider ever wrote a store.
+            continue
+        if _lock_store_held_by_another_entry(hass, config_entry, lock_entry, lock_cls):
             continue
         lock = lock_cls(
             hass,

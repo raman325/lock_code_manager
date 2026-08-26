@@ -529,3 +529,53 @@ async def test_deleting_one_entry_leaves_a_sibling_entrys_credentials_alone(
     assert hass_storage[store_key]["data"]["1"]["code"] == "1111"
 
     await hass.config_entries.async_unload(keeping.entry_id)
+
+
+async def test_a_sibling_on_a_different_provider_does_not_keep_the_store(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    mock_lock_config_entry,
+) -> None:
+    """
+    Only an entry that would READ this store keeps it from being collected.
+
+    Two entries can disagree about one lock: one declares it codeless and
+    keeps its codes in Lock Code Manager, the other declares nothing and
+    writes them to the device. Gating collection on presence -- any entry
+    still listing the lock -- meant the sibling blocked it forever, even
+    though it never opens this file. The cleartext Personal Identification
+    Numbers the sweep exists to remove survived the deletion, with nothing
+    left that could ever read them back.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    declaring = await _entry_for(
+        hass,
+        unique_id="declaring_entry",
+        slot_num=1,
+        pin=USER_PIN,
+        holding=[LOCK_1_ENTITY_ID],
+        declaring=[claimed],
+    )
+    sibling = await _entry_for(
+        hass,
+        unique_id="sibling_entry",
+        slot_num=2,
+        pin="2222",
+        holding=[LOCK_1_ENTITY_ID],
+    )
+    assert isinstance(sibling.runtime_data.locks[LOCK_1_ENTITY_ID], MockLCMLock)
+    await _settle_sync(hass)
+
+    # A reload is the cheapest way to reach the save unload performs, which
+    # is what puts the credential on disk in the first place.
+    assert await hass.config_entries.async_reload(declaring.entry_id)
+    await hass.async_block_till_done()
+    store_key = f"codeless_{DOMAIN}_{LOCK_1_ENTITY_ID}"
+    assert hass_storage[store_key]["data"]["1"]["code"] == USER_PIN
+
+    await hass.config_entries.async_remove(declaring.entry_id)
+    await hass.async_block_till_done()
+
+    assert store_key not in hass_storage
+
+    await hass.config_entries.async_unload(sibling.entry_id)

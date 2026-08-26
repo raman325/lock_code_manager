@@ -391,17 +391,12 @@ class BaseLock:
         """Return a string representation."""
         return f"{self.__class__.__name__}(domain={self.domain}, lock={self.lock.entity_id})"
 
-    @final
-    def __hash__(self) -> int:
-        """Hash by lock entity ID (one BaseLock instance per physical lock)."""
-        return hash(self.lock.entity_id)
-
-    @final
-    def __eq__(self, other: Any) -> bool:
-        """Two BaseLock instances are equal when they wrap the same lock entity."""
-        if not isinstance(other, BaseLock):
-            return False
-        return self.lock.entity_id == other.lock.entity_id
+    # No __eq__ or __hash__: a provider is only ever equal to itself. Keying
+    # either on the lock entity id would say two instances over the same
+    # entity are the same lock, and two entries can resolve one entity to
+    # different providers -- two credential stores with nothing in common. A
+    # collection of providers would silently keep one of them, and whichever
+    # it kept would decide where a Personal Identification Number goes.
 
     @final
     def _raise_not_implemented(self, method_name: str, guidance: str = "") -> NoReturn:

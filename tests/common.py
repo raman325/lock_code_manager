@@ -73,9 +73,11 @@ def reading_for():
     """
     read_for: list[ConfigEntry | None] = []
 
-    def _spy(hass, dev_reg, ent_reg, config_entry, lock_entity_id):
+    def _spy(hass, dev_reg, ent_reg, config_entry, lock_entity_id, config=None):
         read_for.append(config_entry)
-        return build_lock_instance(hass, dev_reg, ent_reg, config_entry, lock_entity_id)
+        return build_lock_instance(
+            hass, dev_reg, ent_reg, config_entry, lock_entity_id, config
+        )
 
     with patch(
         "custom_components.lock_code_manager.domain.allocation.build_lock_instance",

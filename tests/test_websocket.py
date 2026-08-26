@@ -7,6 +7,7 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from homeassistant.components.calendar import (
@@ -64,11 +65,13 @@ from custom_components.lock_code_manager.const import (
     ATTR_USER_ENTITY_ID,
     ATTR_USERCODE,
     BACKOFF_FAILURE_THRESHOLD,
+    CONF_CODELESS,
     CONF_CONDITIONS,
     CONF_CONFIG_ENTRY,
     CONF_ENABLED,
     CONF_ENTITIES,
     CONF_LOCKS,
+    CONF_MEMBERS,
     CONF_PIN,
     CONF_SLOTS,
     CONF_USERS,
@@ -677,6 +680,55 @@ async def test_subscribe_lock_codes_lock_not_found(
     msg = await ws_client.receive_json()
     assert not msg["success"]
     assert msg["error"]["code"] == "not_found"
+
+
+async def test_subscribe_lock_codes_refuses_a_lock_two_entries_disagree_about(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    A lock with two credential stores behind it is not displayed arbitrarily.
+
+    One entry declares the lock codeless, so Lock Code Manager holds its
+    codes; the other declares nothing, so its platform provider does.
+    Showing either store's contents would put codes on screen that a
+    subsequent edit does not touch -- and the edit refuses for the same
+    reason, so the card would offer an action that cannot run.
+    """
+    lock_entry = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    for unique_id, members, user, slot in (
+        ("declaring", {lock_entry.id: {CONF_CODELESS: True}}, "Ada", 1),
+        ("plain", {}, "Bea", 2),
+    ):
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            title=unique_id,
+            data={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_MEMBERS: members,
+                CONF_USERS: {user: {CONF_PIN: "1234", CONF_ENABLED: True}},
+                CONF_SLOT_ASSIGNMENT: {user.casefold(): slot},
+            },
+            unique_id=unique_id,
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+        }
+    )
+
+    msg = await ws_client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_supported"
+    assert "more than one" in msg["error"]["message"]
 
 
 async def test_subscribe_code_slot_state_change(

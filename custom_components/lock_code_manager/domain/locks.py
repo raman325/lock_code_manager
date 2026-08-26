@@ -118,47 +118,82 @@ async def borrowed_lock_instance(lock: BaseLock) -> AsyncIterator[BaseLock]:
         lock.unsubscribe_push_updates()
 
 
-def get_managed_locks(hass: HomeAssistant) -> dict[str, BaseLock]:
+def get_managed_locks_for_entity(
+    hass: HomeAssistant, lock_entity_id: str
+) -> list[BaseLock]:
     """
-    Return the union of locks across all loaded Lock Code Manager entries.
+    Return every provider the loaded entries hold for one lock entity.
 
-    When two entries share the same physical lock they hold the same
-    ``BaseLock`` instance, so a flat ``entity_id -> BaseLock`` mapping is
-    well-defined.
+    One entity does not mean one credential store, which is why this
+    answers with a list. Two entries can resolve the same lock differently
+    -- a member one entry declares codeless resolves to the Lock Code
+    Manager store, while the same lock in an entry that declares nothing
+    resolves to whatever platform dispatch claims -- and those two providers
+    have no more to do with each other than two separate locks would. A
+    caller that can act on only one of them has to say which, or refuse.
+
+    Two entries sharing one instance is the common case, and it is listed
+    once however many entries hold it.
     """
-    return {
-        entity_id: lock
-        for entry in iter_loaded_lcm_entries(hass)
-        for entity_id, lock in entry.runtime_data.locks.items()
-    }
+    instances: list[BaseLock] = []
+    for entry in iter_loaded_lcm_entries(hass):
+        lock = entry.runtime_data.locks.get(lock_entity_id)
+        if lock is not None and lock not in instances:
+            instances.append(lock)
+    return instances
 
 
 def get_managed_lock(hass: HomeAssistant, lock_entity_id: str) -> BaseLock:
-    """Get a managed lock by entity ID, raising if not found."""
-    lock = next(
-        (
-            entry.runtime_data.locks[lock_entity_id]
-            for entry in iter_loaded_lcm_entries(hass)
-            if lock_entity_id in entry.runtime_data.locks
-        ),
-        None,
-    )
-    if not lock:
+    """
+    Return the one provider that holds a lock's credentials, or refuse.
+
+    For the callers that name a lock by entity id and nothing else: the
+    set and clear usercode actions, the unmanaged-code repair, and the
+    websocket subscription that shows what a lock holds. Every one of them
+    reads or writes a single credential store, and none of them carries a
+    config entry that could say which.
+
+    So more than one is refused rather than picked. Choosing arbitrarily is
+    not a harmless tie-break here: writing to the device when the caller
+    meant the Lock Code Manager store, or the reverse, puts the Personal
+    Identification Number somewhere nobody will look for it, and the
+    displayed codes then belong to a different store than the one an edit
+    lands in. The refusal names both providers, which is also the shortest
+    route to the configuration that has to be reconciled.
+    """
+    locks = get_managed_locks_for_entity(hass, lock_entity_id)
+    if not locks:
         raise ServiceValidationError(
             f"Lock {lock_entity_id} is not managed by Lock Code Manager"
         )
-    return lock
+    if len(locks) > 1:
+        raise ServiceValidationError(
+            f"Lock {lock_entity_id} is managed by more than one Lock Code Manager "
+            "configuration, and they do not agree on where its credentials live "
+            f"({', '.join(sorted(lock.domain for lock in locks))}). Make them agree "
+            "before managing this lock's codes directly."
+        )
+    return locks[0]
 
 
 def get_locks_from_targets(
     hass: HomeAssistant, target_data: dict[str, Any]
-) -> set[BaseLock]:
-    """Get lock(s) from target IDs."""
+) -> list[BaseLock]:
+    """
+    Get lock(s) from target IDs.
+
+    Every provider for every targeted lock, not one per entity: a lock two
+    entries resolve differently has two credential stores, and an action
+    aimed at "this lock" means both of them.
+    """
     area_ids: list[str] = cv.ensure_list(target_data.get(ATTR_AREA_ID, []))
     device_ids: list[str] = cv.ensure_list(target_data.get(ATTR_DEVICE_ID, []))
     entity_ids: list[str] = cv.ensure_list(target_data.get(ATTR_ENTITY_ID, []))
-    managed_locks = get_managed_locks(hass)
-    lcm_lock_entity_ids = managed_locks.keys()
+    lcm_lock_entity_ids = {
+        entity_id
+        for entry in iter_loaded_lcm_entries(hass)
+        for entity_id in entry.runtime_data.locks
+    }
     lock_entity_ids: set[str] = set()
     ent_reg = er.async_get(hass)
     lock_entity_ids.update(
@@ -199,8 +234,8 @@ def get_locks_from_targets(
             ", ".join(unmanaged_entities),
         )
 
-    return {
+    return [
         lock
-        for ent_id in (lock_entity_ids & lcm_lock_entity_ids)
-        if (lock := managed_locks.get(ent_id))
-    }
+        for ent_id in sorted(lock_entity_ids & lcm_lock_entity_ids)
+        for lock in get_managed_locks_for_entity(hass, ent_id)
+    ]

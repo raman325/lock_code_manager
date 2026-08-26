@@ -71,6 +71,7 @@ def build_lock_instance(
     ent_reg: er.EntityRegistry,
     config_entry: ConfigEntry | None,
     lock_entity_id: str,
+    config: EntryConfig | None = None,
 ) -> Any:
     """
     Build a temporary lock provider instance for ``lock_entity_id``.
@@ -86,6 +87,10 @@ def build_lock_instance(
     whether an unbuildable one is still one credentials get written to --
     is a question about that entry's configuration, not about the lock
     alone, so the entry has to be reachable from here.
+
+    ``config`` overrides what that entry currently declares, and is how a
+    config flow reads a lock through an answer it has collected but not yet
+    written. Omitted, the entry's own stored configuration stands.
     """
     # Locks are shared between entries, so a skipped read names the entry
     # that asked as well as the lock it gave up on.
@@ -102,7 +107,8 @@ def build_lock_instance(
     # A member it is about to declare codeless is also one this integration
     # holds no credentials for yet, and a codeless member advertises no
     # capacity, so the numbering is unconstrained either way.
-    config = get_entry_config(config_entry) if config_entry else EntryConfig.empty()
+    if config is None:
+        config = get_entry_config(config_entry) if config_entry else EntryConfig.empty()
     lock_cls = resolve_member_provider_class(dev_reg, config, lock_entry)
     if lock_cls is None:
         # Covers an unsupported platform, and an mqtt lock whose bridge no
@@ -133,6 +139,7 @@ async def async_check_slot_capacity(
     config_entry: ConfigEntry | None,
     locks: Iterable[str],
     slots_list: Iterable[int | str],
+    config: EntryConfig | None = None,
 ) -> None:
     """
     Reject slot numbers no lock in the set could ever hold.
@@ -148,7 +155,8 @@ async def async_check_slot_capacity(
     make the config flow unusable. The same check runs at write time, where
     it can suspend the affected slot precisely.
 
-    ``config_entry`` is the entry the locks are being read for, on the terms
+    ``config_entry`` and ``config`` are the entry the locks are being read
+    for and what it declares about them, on the terms
     ``build_lock_instance`` describes.
     """
     dev_reg = dr.async_get(hass)
@@ -158,7 +166,7 @@ async def async_check_slot_capacity(
         try:
             async with borrowed_lock_instance(
                 build_lock_instance(
-                    hass, dev_reg, ent_reg, config_entry, lock_entity_id
+                    hass, dev_reg, ent_reg, config_entry, lock_entity_id, config
                 )
             ) as lock_instance:
                 if not lock_instance.credential_index_follows_slot:
@@ -199,6 +207,7 @@ async def async_read_occupancy(
     config_entry: ConfigEntry | None,
     locks: Sequence[str],
     indices: Collection[int],
+    config: EntryConfig | None = None,
 ) -> Occupancy:
     """
     Ask every lock in ``locks`` which of ``indices`` it holds.
@@ -221,7 +230,7 @@ async def async_read_occupancy(
     for lock_entity_id in locks:
         try:
             lock_instance = build_lock_instance(
-                hass, dev_reg, ent_reg, config_entry, lock_entity_id
+                hass, dev_reg, ent_reg, config_entry, lock_entity_id, config
             )
         except LockQuerySkipped as skipped:
             lock_occupancies.append(
@@ -335,7 +344,10 @@ def _too_far(
 
 
 async def async_max_slot(
-    hass: HomeAssistant, config_entry: ConfigEntry | None, locks: Sequence[str]
+    hass: HomeAssistant,
+    config_entry: ConfigEntry | None,
+    locks: Sequence[str],
+    config: EntryConfig | None = None,
 ) -> tuple[int, str | None]:
     """
     Return how far a search for free numbers may go across these locks.
@@ -350,7 +362,8 @@ async def async_max_slot(
     integration's own -- which a message must not describe as a capacity
     some lock reported.
 
-    ``config_entry`` is the entry the locks are being read for, on the terms
+    ``config_entry`` and ``config`` are the entry the locks are being read
+    for and what it declares about them, on the terms
     ``build_lock_instance`` describes.
     """
     dev_reg = dr.async_get(hass)
@@ -360,7 +373,7 @@ async def async_max_slot(
         try:
             async with borrowed_lock_instance(
                 build_lock_instance(
-                    hass, dev_reg, ent_reg, config_entry, lock_entity_id
+                    hass, dev_reg, ent_reg, config_entry, lock_entity_id, config
                 )
             ) as lock_instance:
                 if not lock_instance.credential_index_follows_slot:
@@ -390,6 +403,7 @@ async def async_allocate_for(
     config_entry: ConfigEntry | None,
     locks: Sequence[str],
     num_users: int,
+    config: EntryConfig | None = None,
 ) -> frozenset[int]:
     """
     Find numbers for ``num_users``, reading only as far as it has to.
@@ -409,17 +423,18 @@ async def async_allocate_for(
     wide enough to hold everyone. The users are numbered from it later,
     once they have names.
 
-    ``config_entry`` is the entry the numbers are being allocated for, on the
-    terms ``build_lock_instance`` describes.
+    ``config_entry`` and ``config`` are the entry the numbers are being
+    allocated for and what it declares about its locks, on the terms
+    ``build_lock_instance`` describes.
     """
     try:
-        await async_check_slot_capacity(hass, config_entry, locks, [num_users])
+        await async_check_slot_capacity(hass, config_entry, locks, [num_users], config)
     except SlotAllocationError as err:
         raise SlotAllocationError(
             "too_many_users", {**err.placeholders, "num_users": str(num_users)}
         ) from err
 
-    max_slot, limiting_lock = await async_max_slot(hass, config_entry, locks)
+    max_slot, limiting_lock = await async_max_slot(hass, config_entry, locks, config)
     if num_users > max_slot:
         # Before the first read, not just before each widening: a count
         # past the range walks off the end of the lock on the way in, and
@@ -434,7 +449,7 @@ async def async_allocate_for(
         # each pass would cost a nearly-full lock several times its own
         # capacity to place a couple of users.
         occupancy = await async_read_occupancy(
-            hass, config_entry, locks, range(read_up_to + 1, window + 1)
+            hass, config_entry, locks, range(read_up_to + 1, window + 1), config
         )
         if not occupancy.is_known:
             # Unreadable is not free: issuing a number could overwrite a
@@ -452,7 +467,7 @@ async def async_allocate_for(
         # Every number in the way pushes the last user one further out.
         wider = num_users + taken_in_window
         try:
-            await async_check_slot_capacity(hass, config_entry, locks, [wider])
+            await async_check_slot_capacity(hass, config_entry, locks, [wider], config)
         except SlotAllocationError as err:
             # Distinct from the count being too large: the count fits,
             # and the numbers needed to reach around what is already
