@@ -64,7 +64,10 @@ entities.
 - `zha.py`: Zigbee Home Automation lock implementation
 - `zigbee2mqtt.py`: Zigbee2MQTT lock implementation (via MQTT)
 - `zwave_js_ui.py`: zwave-js-ui lock implementation (via MQTT, api-driven)
-- `virtual.py`: Virtual lock implementation for testing
+- `virtual.py`: Virtual lock implementation -- a credential store rather than a device.
+  Advertises every credential type with no limits, and reports code slot events so it can be
+  the recording surface for credentials used where Lock Code Manager observes nothing
+  (`use_credential`). Also the way to try Lock Code Manager without a real lock.
 - Each provider implements: `async_get_users()`, `async_set_credential()`, `async_delete_credential()`,
   `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`

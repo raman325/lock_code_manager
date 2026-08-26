@@ -241,7 +241,7 @@ async def async_add_user(
 
     try:
         unavailable = await async_allocate_for(
-            hass, config.locks, len(config.users) + 1, excluding=config_entry
+            hass, config_entry, config.locks, len(config.users) + 1
         )
     except SlotAllocationError as err:
         raise ServiceValidationError(
