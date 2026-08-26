@@ -6,13 +6,21 @@ import logging
 from typing import Any
 
 from homeassistant.components.event import EventEntity
-from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_NAME
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import EVENT_CREDENTIAL_USED, EVENT_LOCK_STATE_CHANGED
+from .const import (
+    ATTR_CONFIG_ENTRY_ID,
+    ATTR_SOURCE,
+    ATTR_TARGET,
+    BUS_EVENT_CREDENTIAL_USED,
+    EVENT_CREDENTIAL_USED,
+    EVENT_LOCK_STATE_CHANGED,
+)
 from .domain.models import LockCodeManagerConfigEntry
+from .domain.queries import get_entry_config
 from .entity import BaseLockCodeManagerEntity
 from .providers import BaseLock
 
@@ -132,6 +140,54 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         self.async_write_ha_state()
 
     @callback
+    def _credential_used_filter(self, event_data: dict[str, Any]) -> bool:
+        """
+        Keep the unified events this slot's entity is the one to record.
+
+        The unified event names the person rather than the slot number they
+        occupy, so working out whose entity this is means asking the
+        configuration who holds this slot right now.
+
+        A use a lock observed itself arrives here as well as on the
+        deprecated lock-state event, which carries the same use with the
+        richer payload this entity publishes as its attributes. Recording
+        both would fire the entity twice and leave it showing the thinner of
+        the two. ``source`` and ``target`` being the same entity is what
+        marks that case, and this guard retires with the deprecated event.
+
+        So a reported use is recorded only when both hold: the target is a
+        lock in this entry that can fire code slot events (checked in
+        :meth:`_handle_credential_used`), and ``source`` differs from
+        ``target``. Naming the same entity for both silently records
+        nothing, which is what the ``source`` field's description warns.
+        """
+        return (
+            event_data[ATTR_CONFIG_ENTRY_ID] == self.entry_id
+            and event_data[ATTR_SOURCE] != event_data[ATTR_TARGET]
+            and event_data[ATTR_NAME]
+            == get_entry_config(self.config_entry).name_for(self.slot_num)
+        )
+
+    @callback
+    def _handle_credential_used(self, event: Event) -> None:
+        """
+        Record a use reported against one of this entry's locks.
+
+        The target is the event type, the same as it is for a use a lock
+        observed. Anything else -- a cover, an alarm panel, a lock in the
+        entry that cannot fire code slot events -- is not one of this
+        entity's event types, and ``EventEntity`` raises on an event type it
+        was not told about. That is the ordinary case rather than a mistake:
+        the action's target is whatever the caller says the credential acted
+        on, and only some of those are things this entity can name.
+        """
+        target = event.data[ATTR_TARGET]
+        if target not in self.event_types:
+            return
+        self._trigger_event(target, event.data)
+        self.async_write_ha_state()
+
+    @callback
     def _handle_add_locks(self, locks: list[BaseLock]) -> None:
         """Handle lock entities being added."""
         super()._handle_add_locks(locks)
@@ -155,5 +211,16 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
                 EVENT_LOCK_STATE_CHANGED,
                 self._handle_event,
                 self._event_filter,
+            )
+        )
+
+        # And for uses reported from outside, which reach this entity only as
+        # the unified event: the action that reports them fires nothing
+        # lock-shaped, because no lock observed anything.
+        self.async_on_remove(
+            self.hass.bus.async_listen(
+                BUS_EVENT_CREDENTIAL_USED,
+                self._handle_credential_used,
+                self._credential_used_filter,
             )
         )

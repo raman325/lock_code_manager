@@ -60,6 +60,7 @@ from ..domain.credentials import (
     pin_address,
     user_from_slot,
 )
+from ..domain.events import async_fire_credential_used
 from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
@@ -71,7 +72,11 @@ from ..domain.exceptions import (
     ProviderNotImplementedError,
 )
 from ..domain.models import SlotCredential
-from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
+from ..domain.queries import (
+    find_entry_for_lock_slot,
+    get_entry_config,
+    get_managed_slots,
+)
 from ..domain.util import lock_display_name, mask_pin, per_lock_issue_id
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
@@ -2089,16 +2094,25 @@ class BaseLock:
         source_data: Event | State | dict[str, Any] | None = None,
     ) -> None:
         """
-        Fire a code slot event.
+        Record that a credential on this lock was used.
 
         Sub-classes should call this whenever a code slot is used. source_data can
         include any data that is JSON serializable if the source is not a Home
         Assistant event or state.
+
+        The single funnel every provider goes through, so it is also where the
+        unified ``BUS_EVENT_CREDENTIAL_USED`` is fired: every provider gets it
+        without a provider-side change. A lock that observed a use is both
+        ends of the unified event's attribution, and only a lock reaches
+        here -- a use reported from outside is announced by the
+        ``use_credential`` action itself.
         """
         name_state: State | None = None
         lock_entity_id = self.lock.entity_id
         lock_device_id = self.lock.device_id
+        config_entry: ConfigEntry | None = None
         config_entry_id: str | None = None
+        credential_user: str | None = None
 
         if code_slot is not None and (
             config_entry := find_entry_for_lock_slot(
@@ -2106,6 +2120,11 @@ class BaseLock:
             )
         ):
             config_entry_id = config_entry.entry_id
+            # The unified event's user comes from the configuration, not from
+            # the name text entity below: that entity can be disabled, and it
+            # reads ``unknown`` until it restores after a reload, either of
+            # which would announce a name no consumer can match a user to.
+            credential_user = get_entry_config(config_entry).name_for(int(code_slot))
             name_entity_id = self.ent_reg.async_get_entity_id(
                 TEXT_DOMAIN,
                 DOMAIN,
@@ -2124,6 +2143,7 @@ class BaseLock:
             to_state = LockState.UNLOCKED
 
         notification_source, extra_data = _serialize_source_data(source_data)
+        slot_name = name_state.state if name_state else ""
 
         event_data = {
             ATTR_NOTIFICATION_SOURCE: notification_source,
@@ -2138,7 +2158,7 @@ class BaseLock:
             # Only PIN is exercised today, but a consumer that reads it
             # now keeps working when another kind arrives.
             ATTR_CREDENTIAL_TYPE: CredentialType.PIN,
-            ATTR_CODE_SLOT_NAME: name_state.state if name_state else "",
+            ATTR_CODE_SLOT_NAME: slot_name,
             ATTR_FROM: from_state,
             ATTR_TO: to_state,
             ATTR_EXTRA_DATA: extra_data,
@@ -2147,4 +2167,27 @@ class BaseLock:
         if self.lock_config_entry:
             event_data[ATTR_LOCK_CONFIG_ENTRY_ID] = self.lock_config_entry.entry_id
 
+        # Deprecated in favour of the unified credential-used event, which says
+        # what happened ("a credential belonging to this user was used") rather
+        # than where. Retained for backward compatibility while consumers
+        # migrate: both events fire, no removal version is set, and nothing
+        # warns at runtime. The per-slot event entity still listens to this
+        # one.
         self.hass.bus.async_fire(EVENT_LOCK_STATE_CHANGED, event_data=event_data)
+
+        # Attribution is the whole content of the unified event, and every
+        # field of it is required, so a use this integration cannot pin to an
+        # entry -- a code in a slot no entry manages -- announces nothing
+        # here. The deprecated event above still carries it. The two
+        # conditions move together: an entry only matches a slot somebody
+        # occupies, so a matched entry always names its user.
+        if config_entry is not None and credential_user is not None:
+            async_fire_credential_used(
+                self.hass,
+                config_entry,
+                name=credential_user,
+                # A lock that observed the use is both where the credential
+                # was entered and what it acted on.
+                source=lock_entity_id,
+                target=lock_entity_id,
+            )

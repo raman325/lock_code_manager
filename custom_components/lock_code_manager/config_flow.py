@@ -44,10 +44,16 @@ from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
 _LOGGER = logging.getLogger(__name__)
 
+# Stripped where it enters rather than where it is read: every consumer
+# compares a submitted code stripped, so a PIN stored with padding is one
+# nothing anybody can type will ever match. Not vol.Length(min=1) -- an
+# empty PIN is how a user without one is expressed.
+STRIPPED_PIN = vol.All(cv.string, str.strip)
+
 CODE_SLOT_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_NAME): cv.string,
-        vol.Optional(CONF_PIN): cv.string,
+        vol.Optional(CONF_PIN): STRIPPED_PIN,
         vol.Required(CONF_ENABLED, default=True): cv.boolean,
         vol.Optional(CONF_CONDITION): sel.EntitySelector(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
@@ -74,7 +80,7 @@ def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
 # that way.
 USER_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_PIN): cv.string,
+        vol.Optional(CONF_PIN): STRIPPED_PIN,
         vol.Required(CONF_ENABLED, default=True): cv.boolean,
         vol.Optional(CONF_CONDITION): sel.EntitySelector(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)

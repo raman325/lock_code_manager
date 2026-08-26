@@ -8,9 +8,14 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 
+from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_NAME, CONF_NAME, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import (
@@ -20,11 +25,19 @@ from homeassistant.helpers import (
 )
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CODE_SLOT,
+    ATTR_CODE_SLOT_NAME,
+    ATTR_CONFIG_ENTRY_ID,
+    ATTR_CONFIG_ENTRY_TITLE,
     ATTR_EXTRA_DATA,
     ATTR_NOTIFICATION_SOURCE,
+    ATTR_SOURCE,
+    ATTR_TARGET,
+    BUS_EVENT_CREDENTIAL_USED,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
@@ -873,6 +886,137 @@ async def test_lock_equality_with_same_entity_id(hass: HomeAssistant):
     assert lock_a is not lock_b
     assert lock_a == lock_b
     assert lock_a == lock_a  # noqa: PLR0124 - Intentionally testing reflexive __eq__
+
+
+async def test_fire_code_slot_event_fires_both_events(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A provider-observed use fires the legacy and the unified event alike.
+
+    Every provider funnels through this one method, so this is the whole
+    proof that the unified event reaches all of them.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    legacy = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+    lock_provider.async_fire_code_slot_event(
+        code_slot=1,
+        to_locked=False,
+        action_text="Keypad unlock",
+    )
+    await hass.async_block_till_done()
+
+    assert len(legacy) == 1
+    assert legacy[0].data[ATTR_CODE_SLOT] == 1
+    assert legacy[0].data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
+
+    assert len(unified) == 1
+    # The whole payload, so a key added or dropped has to be deliberate. The
+    # lock that observed the use is both source and target of it.
+    assert unified[0].data == {
+        ATTR_NAME: "test1",
+        ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+        ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
+        ATTR_SOURCE: LOCK_1_ENTITY_ID,
+        ATTR_TARGET: LOCK_1_ENTITY_ID,
+    }
+
+
+@pytest.mark.parametrize("wipe", ["remove", "unknown"])
+async def test_fire_code_slot_event_names_the_user_from_the_configuration(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    wipe: str,
+):
+    """The unified event names the user even with the name entity gone.
+
+    The name used to be read off the slot's name text entity, so disabling
+    that entity announced an empty name on every use on every provider, and
+    a reload announced ``unknown`` until the entity restored. The
+    configuration is the thing that actually knows who holds the slot.
+
+    The deprecated event keeps deriving ``code_slot_name`` from the entity:
+    that payload is frozen.
+    """
+    name_entity_id = er.async_get(hass).async_get_entity_id(
+        TEXT_DOMAIN,
+        DOMAIN,
+        build_slot_unique_id(lock_code_manager_config_entry.entry_id, 1, CONF_NAME),
+    )
+    assert name_entity_id
+    if wipe == "remove":
+        hass.states.async_remove(name_entity_id)
+        expected_legacy_name = ""
+    else:
+        hass.states.async_set(name_entity_id, STATE_UNKNOWN)
+        expected_legacy_name = STATE_UNKNOWN
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    legacy = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+    lock_provider.async_fire_code_slot_event(
+        code_slot=1, to_locked=False, action_text="Keypad unlock"
+    )
+    await hass.async_block_till_done()
+
+    assert unified[0].data[ATTR_NAME] == "test1"
+    assert legacy[0].data[ATTR_CODE_SLOT_NAME] == expected_legacy_name
+
+
+async def test_fire_code_slot_event_takes_no_attribution_arguments(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Attribution is not something a caller of this may override.
+
+    A lock that observed a use is both ends of it. The ``use_credential``
+    action fires the unified event itself rather than borrowing a lock's
+    funnel, so nothing needs to redirect the attribution here.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    with pytest.raises(TypeError):
+        lock_provider.async_fire_code_slot_event(
+            code_slot=1,
+            to_locked=False,
+            source="sensor.keypad",
+            target="cover.garage",
+        )
+
+
+async def test_fire_code_slot_event_omits_the_unified_event_when_unattributed(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A use on a slot no entry manages announces no user.
+
+    Providers fire for every slot the lock reports, managed or not. The
+    unified event says whose credential was used, so there is nothing for it
+    to say here; the deprecated lock-shaped event still carries it.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    legacy = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+    lock_provider.async_fire_code_slot_event(
+        code_slot=99,
+        to_locked=False,
+        action_text="Keypad unlock",
+    )
+    await hass.async_block_till_done()
+
+    assert len(legacy) == 1
+    assert legacy[0].data[ATTR_CODE_SLOT] == 99
+    assert unified == []
 
 
 async def test_fire_code_slot_event_with_state_source(

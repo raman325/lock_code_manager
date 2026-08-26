@@ -27,6 +27,9 @@ Features:
   from automations
 - [Blueprints](https://github.com/raman325/lock_code_manager/wiki/Blueprints)
   for advanced use cases like usage limiting, calendar-driven PINs, and more
+- Check codes entered somewhere Lock Code Manager doesn't control — a
+  do-it-yourself ESPHome keypad, an intercom — against the same users and
+  schedules, and record the use like any other
 - [Guest and rental workflows](https://github.com/raman325/lock_code_manager/wiki/Managing-Guests-and-Rentals)
   — rotate a standing user per booking, or add and remove them per stay
 - Dashboard strategies and custom cards for managing codes and viewing lock
@@ -131,6 +134,8 @@ input tables, and import buttons.
 - **Auto Re-lock** — Re-lock after a delay with day/night support
 - **Lock on Door Close** — Lock when a door sensor detects closure
 - **Slot Usage Notifier** — Notify when someone's credential is used
+- **Credential Used** — Run any actions when a credential is used, from a
+  lock's own keypad or an external one
 - **Condition Linker** — Assign a condition entity to a user via UI
 
 ## Learn More

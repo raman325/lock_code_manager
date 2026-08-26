@@ -28,9 +28,14 @@ from homeassistant.setup import async_setup_component
 from homeassistant.util import yaml as yaml_util
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CODE,
     ATTR_CODE_SLOT,
+    ATTR_CODE_SLOT_NAME,
     ATTR_SLOT_FIELD,
+    ATTR_SOURCE,
+    ATTR_TARGET,
     DOMAIN,
+    SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.providers import BaseLock
 
@@ -101,6 +106,29 @@ def _fire_pin_used(
     lock.async_fire_code_slot_event(slot, False, action_text, Event("test_source"))
 
 
+# A keypad and a gate Lock Code Manager manages neither of, which is the
+# point: a use entered on one of these is one no lock in the entry observed.
+EXTERNAL_KEYPAD = "sensor.side_gate_keypad"
+EXTERNAL_TARGET = "cover.side_gate"
+
+
+async def _use_credential(
+    hass: HomeAssistant, config_entry, target: str = EXTERNAL_TARGET
+) -> None:
+    """Report a credential use whose source and target are different entities."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_USE_CREDENTIAL,
+        {
+            "config_entry_id": config_entry.entry_id,
+            ATTR_CODE: "1234",
+            ATTR_SOURCE: EXTERNAL_KEYPAD,
+            ATTR_TARGET: target,
+        },
+        blocking=True,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Slot Usage Notifier
 # --------------------------------------------------------------------------- #
@@ -141,6 +169,54 @@ async def test_notifier_fires_for_single_entity(
     assert int(call.data["slot_num"]) == 1
     assert call.data["slot_name"] == "test1"
     # MockLockEntity registers with friendly name = "test_1"
+    assert call.data["lock_name"] == "test_1"
+
+
+async def test_notifier_names_the_user_for_a_reported_use(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A use reported through ``use_credential`` still names the user.
+
+    Such a use records the unified payload, which names the user in `name`
+    and has no `code_slot_name` at all, so reading only the latter left
+    every keypad notification saying "Unknown slot".
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [
+                {
+                    "service": "test.captured",
+                    "data": {
+                        "slot_num": "{{ slot_num }}",
+                        "slot_name": "{{ slot_name }}",
+                        "lock_name": "{{ lock_name }}",
+                    },
+                }
+            ],
+        },
+    )
+
+    # Targets a lock in the entry, which is what makes the slot entity record
+    # it; the source is the keypad, so this is not a use the lock observed.
+    await _use_credential(hass, lock_code_manager_config_entry, target=LOCK_1_ENTITY_ID)
+    await hass.async_block_till_done()
+
+    # Should the payload ever gain `code_slot_name`, this test stops
+    # exercising the fallback and should be rewritten rather than pass on.
+    recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert ATTR_CODE_SLOT_NAME not in recorded.attributes
+
+    assert len(captured) == 1
+    call: ServiceCall = captured[0]
+    assert call.data["slot_name"] == "test1"
+    assert int(call.data["slot_num"]) == 1
     assert call.data["lock_name"] == "test_1"
 
 
@@ -787,3 +863,155 @@ def _find_variable(source: dict, name: str) -> str | None:
             if (found := _find_variable(item, name)) is not None:
                 return found
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Credential Used
+# --------------------------------------------------------------------------- #
+
+CREDENTIAL_USED_PATH = "credential_used.yaml"
+
+
+async def _setup_credential_used(hass: HomeAssistant, **inputs) -> list[ServiceCall]:
+    """Instantiate the credential-used blueprint and capture its actions."""
+    captured = async_mock_service(hass, "test", "captured")
+    await _setup_blueprint_automation(
+        hass,
+        CREDENTIAL_USED_PATH,
+        {
+            **inputs,
+            "credential_actions": [
+                {
+                    "service": "test.captured",
+                    "data": {
+                        "name": "{{ name }}",
+                        "source": "{{ source }}",
+                        "target": "{{ target }}",
+                        "config_entry_id": "{{ config_entry_id }}",
+                        "config_entry_title": "{{ config_entry_title }}",
+                        "timestamp": "{{ timestamp }}",
+                    },
+                }
+            ],
+        },
+    )
+    return captured
+
+
+async def test_credential_used_exposes_the_whole_payload(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """With no filters set, any credential use runs the actions.
+
+    Asserts every documented template variable at once, because the
+    blueprint's contract with its users is the variable list -- one that
+    stops rendering is a silent break in somebody's notification text.
+    """
+    captured = await _setup_credential_used(hass)
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+
+    assert len(captured) == 1
+    data = captured[0].data
+    assert data["name"] == "test1"
+    # A lock that observed the use is both ends of it.
+    assert data["source"] == LOCK_1_ENTITY_ID
+    assert data["target"] == LOCK_1_ENTITY_ID
+    assert data["config_entry_id"] == lock_code_manager_config_entry.entry_id
+    assert data["config_entry_title"] == lock_code_manager_config_entry.title
+    assert data["timestamp"]
+
+
+async def test_credential_used_sees_a_use_the_event_entities_cannot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A use against a target outside the entry reaches this blueprint alone.
+
+    This is the reason the blueprint exists. ``use_credential`` records on
+    a user's event entity only when the target is a lock in the same
+    entry; with any other target there is no per-user entity to record
+    against, so Slot Usage Notifier and Slot Usage Limiter never fire.
+    The event does, so this does.
+    """
+    captured = await _setup_credential_used(hass)
+    notifier_captured = async_mock_service(hass, "test", "notified")
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.notified"}],
+        },
+    )
+
+    await _use_credential(hass, lock_code_manager_config_entry)
+    await hass.async_block_till_done()
+
+    assert len(captured) == 1
+    assert captured[0].data["name"] == "test1"
+    assert captured[0].data["source"] == EXTERNAL_KEYPAD
+    assert captured[0].data["target"] == EXTERNAL_TARGET
+    assert notifier_captured == []
+
+
+@pytest.mark.parametrize(
+    ("inputs", "expected"),
+    [
+        pytest.param({"users": ["test1"]}, 1, id="users-match"),
+        pytest.param({"users": ["someone-else"]}, 0, id="users-miss"),
+        pytest.param({"sources": [EXTERNAL_KEYPAD]}, 1, id="sources-match"),
+        pytest.param({"sources": [EXTERNAL_TARGET]}, 0, id="sources-crosswired"),
+        pytest.param({"targets": [EXTERNAL_TARGET]}, 1, id="targets-match"),
+        pytest.param({"targets": [EXTERNAL_KEYPAD]}, 0, id="targets-crosswired"),
+    ],
+)
+async def test_credential_used_filters(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    inputs: dict,
+    expected: int,
+) -> None:
+    """Each optional filter narrows on its own field and nothing else.
+
+    Driven through ``use_credential`` rather than a lock-observed use so
+    that source and target are DIFFERENT entities. A lock that saw the use
+    itself is both ends of it, which would let a filter read the wrong
+    field and still pass every case. The crosswired parameters feed each
+    filter the other field's value and require a miss.
+    """
+    captured = await _setup_credential_used(hass, **inputs)
+
+    await _use_credential(hass, lock_code_manager_config_entry)
+    await hass.async_block_till_done()
+
+    assert len(captured) == expected
+
+
+@pytest.mark.parametrize("matches", [True, False], ids=["match", "miss"])
+async def test_credential_used_config_entry_filter(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    matches: bool,
+) -> None:
+    """The config entry filter narrows to one configuration.
+
+    Held apart from the list filters because it is a scalar with an empty
+    string rather than an empty list for "no filter".
+    """
+    entry_id = lock_code_manager_config_entry.entry_id
+    captured = await _setup_credential_used(
+        hass, config_entry=entry_id if matches else "some_other_entry"
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+
+    assert len(captured) == (1 if matches else 0)

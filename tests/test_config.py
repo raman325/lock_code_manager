@@ -772,3 +772,69 @@ def test_parse_slot_unique_id_rejects_what_it_did_not_build() -> None:
     # Aliases of a number that the builder would never emit.
     assert parse_slot_unique_id("abc123", "abc123|+1|in_sync") is None
     assert parse_slot_unique_id("abc123", "abc123|1_0|in_sync") is None
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (" 4321 ", "4321"),
+        ("\t4321\n", "4321"),
+        ("4321", "4321"),
+        ("   ", ""),
+        ("", ""),
+    ],
+)
+def test_stored_pin_is_stripped_on_read(stored: str, expected: str) -> None:
+    """
+    A padded PIN already in storage reads back stripped.
+
+    Stripping only on write would leave the invariant dependent on when a
+    value happened to be written: config hand-edited in .storage, restored
+    from a backup, or written by an older version all still carry padding.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: [], CONF_SLOTS: {1: {"name": "u", "pin": stored, "enabled": True}}}
+    )
+    assert config.slot(1)["pin"] == expected
+    assert config.users["u"]["pin"] == expected
+
+
+def test_whitespace_only_stored_pin_reads_as_no_pin() -> None:
+    """
+    A whitespace-only stored PIN normalizes to empty, not to a matchable value.
+
+    Empty means "this user has no PIN"; a surviving "  " would be a truthy
+    credential nobody can enter.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: [], CONF_SLOTS: {1: {"name": "u", "pin": "   ", "enabled": True}}}
+    )
+    assert not config.slot(1)["pin"]
+
+
+def test_stored_pin_stripping_survives_the_user_keyed_shape() -> None:
+    """Both stored shapes normalize: the slot-keyed input and the user-keyed one."""
+    config = EntryConfig.from_mapping(
+        {
+            CONF_LOCKS: [],
+            CONF_USERS: {"alice": {"pin": " 4321 ", "enabled": True}},
+            CONF_SLOT_ASSIGNMENT: {"alice": 1},
+        }
+    )
+    assert config.slot(1)["pin"] == "4321"
+
+
+def test_a_non_string_stored_pin_is_left_alone() -> None:
+    """
+    A PIN that is not a string passes through unchanged.
+
+    Hand-edited storage can hold ``pin: 1234`` as a number. Coercing it to
+    text here would paper over a malformed entry, and calling ``.strip()``
+    on it unguarded would raise from the read every layer depends on --
+    taking entry setup down over one bad field.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: [], CONF_SLOTS: {1: {"name": "u", "pin": 1234, "enabled": True}}}
+    )
+    assert config.slot(1)["pin"] == 1234
+    assert not isinstance(config.slot(1)["pin"], str)

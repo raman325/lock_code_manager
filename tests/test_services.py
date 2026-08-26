@@ -3,17 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 import voluptuous as vol
 
+from homeassistant.components.event import (
+    ATTR_EVENT_TYPE,
+    DOMAIN as EVENT_DOMAIN,
+)
 from homeassistant.const import (
+    ATTR_NAME,
     CONF_CONDITION,
     CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
+    MATCH_ALL,
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant
@@ -22,13 +34,29 @@ from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_CLEAR_CREDENTIALS,
+    ATTR_CODE,
     ATTR_CODE_SLOT,
+    ATTR_CONFIG_ENTRY_ID,
+    ATTR_CONFIG_ENTRY_TITLE,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
+    ATTR_REASON,
     ATTR_SLOT,
+    ATTR_SOURCE,
+    ATTR_TARGET,
     ATTR_TEXT,
+    ATTR_USER,
     ATTR_USERCODE,
+    ATTR_VALID,
+    BUS_EVENT_CREDENTIAL_USED,
+    CONF_LOCKS,
+    CONF_SLOTS,
     DOMAIN,
+    EVENT_CREDENTIAL_USED,
+    EVENT_LOCK_STATE_CHANGED,
+    REASON_CONDITION_NOT_MET,
+    REASON_UNKNOWN_CODE,
+    REASON_USER_DISABLED,
     SERVICE_ADD_USER,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
@@ -37,6 +65,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_GENERATE_PIN,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
+    SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.domain import services
 from custom_components.lock_code_manager.domain.allocation import SlotAllocationError
@@ -45,6 +74,11 @@ from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_p
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
 from custom_components.lock_code_manager.domain.util import mask_pin
+from custom_components.lock_code_manager.providers.schlage import (
+    SCHLAGE_DOMAIN,
+    SchlageLock,
+)
+from tests.providers.helpers import register_mock_service
 
 from .common import LOCK_1_ENTITY_ID
 
@@ -661,6 +695,54 @@ async def test_add_user_service_rejects_enabled_without_a_pin(
         )
 
 
+async def test_add_user_service_stores_a_padded_pin_stripped(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A PIN handed to the service with padding is stored without it.
+
+    The service writes the entry's users directly, the way both flows do,
+    so it is the third door onto the same storage -- and a submitted code
+    is stripped before it is matched.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "Newcomer",
+            CONF_PIN: " 9876 ",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["Newcomer"][CONF_PIN] == "9876"
+
+
+async def test_add_user_service_rejects_a_whitespace_only_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """An enabled user whose PIN is only whitespace has nothing to program."""
+    with pytest.raises(ServiceValidationError, match="without a PIN"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Newcomer",
+                CONF_PIN: "   ",
+            },
+            blocking=True,
+        )
+
+
 async def test_add_user_service_allows_a_disabled_user_with_no_pin(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1021,3 +1103,631 @@ async def test_slot_condition_services_accept_a_title(
     assert CONF_CONDITION not in get_entry_config(
         hass.config_entries.async_get_entry(entry.entry_id)
     ).slot(1)
+
+
+VALIDATE_LOCK_ENTITY_ID = "lock.virtual_validate_service"
+VALIDATE_CONDITION_ENTITY_ID = "input_boolean.validate_service_gate"
+VALIDATE_EVENT_ENTITY_ID = "event.validate_service_alice_credential_used"
+# A Schlage lock: a real provider whose ``supports_code_slot_events`` is False.
+EVENT_BLIND_LOCK_ENTITY_ID = "lock.schlage_use_credential"
+
+# alice validates, bob is disabled, carol waits on a condition that is off.
+VALIDATE_CONFIG = {
+    CONF_LOCKS: [VALIDATE_LOCK_ENTITY_ID],
+    CONF_SLOTS: {
+        1: {CONF_NAME: "alice", CONF_PIN: "1234", CONF_ENABLED: True},
+        2: {CONF_NAME: "bob", CONF_PIN: "5678", CONF_ENABLED: False},
+        3: {
+            CONF_NAME: "carol",
+            CONF_PIN: "9999",
+            CONF_ENABLED: True,
+            CONF_CONDITION: VALIDATE_CONDITION_ENTITY_ID,
+        },
+    },
+}
+
+
+# Stands for the keypad the credential was typed on: an entity Lock Code
+# Manager knows nothing about, which is the whole point of the action.
+VALIDATE_SOURCE_ENTITY_ID = "sensor.front_door_keypad"
+
+
+async def _call_use_credential(
+    hass: HomeAssistant, data: dict, *, return_response: bool = True
+) -> dict | None:
+    """Call the use_credential action, defaulting the attribution fields."""
+    return await hass.services.async_call(
+        DOMAIN,
+        SERVICE_USE_CREDENTIAL,
+        {
+            ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
+            ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+            **data,
+        },
+        blocking=True,
+        return_response=return_response,
+    )
+
+
+@pytest.fixture(name="validate_entry")
+async def validate_entry_fixture(hass: HomeAssistant):
+    """Set up a full LCM config entry managing a virtual lock."""
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    lock_entity = ent_reg.async_get_or_create(
+        "lock",
+        "virtual",
+        "virtual_validate_service",
+        suggested_object_id="virtual_validate_service",
+        config_entry=virtual_entry,
+    )
+    assert lock_entity.entity_id == VALIDATE_LOCK_ENTITY_ID
+    hass.states.async_set(VALIDATE_LOCK_ENTITY_ID, "locked")
+    hass.states.async_set(VALIDATE_CONDITION_ENTITY_ID, "off")
+
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Validate Service",
+        data=VALIDATE_CONFIG,
+        unique_id="test_validate_service",
+    )
+    lcm_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield lcm_entry
+
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+def _slot_event_entity_id(
+    hass: HomeAssistant, config_entry: MockConfigEntry, slot_num: int
+) -> str:
+    """Resolve a slot's credential-used entity by unique ID."""
+    entity_id = er.async_get(hass).async_get_entity_id(
+        EVENT_DOMAIN,
+        DOMAIN,
+        build_slot_unique_id(config_entry.entry_id, slot_num, EVENT_CREDENTIAL_USED),
+    )
+    assert entity_id
+    return entity_id
+
+
+@pytest.fixture(name="validate_entry_with_event_blind_lock")
+async def validate_entry_with_event_blind_lock_fixture(hass: HomeAssistant):
+    """
+    Set up an entry holding one event-capable lock and one that is not.
+
+    The blind one is a real Schlage lock rather than a doctored capability:
+    ``supports_code_slot_events`` is the provider's own answer, and a
+    monkeypatched one would only prove this test's idea of it.
+    """
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+    schlage_entry = MockConfigEntry(domain=SCHLAGE_DOMAIN)
+    schlage_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    lock_entity = ent_reg.async_get_or_create(
+        "lock",
+        "virtual",
+        "virtual_blind_pair",
+        suggested_object_id="virtual_validate_service",
+        config_entry=virtual_entry,
+    )
+    assert lock_entity.entity_id == VALIDATE_LOCK_ENTITY_ID
+    schlage_entity = ent_reg.async_get_or_create(
+        "lock",
+        SCHLAGE_DOMAIN,
+        "schlage_blind_pair",
+        suggested_object_id="schlage_use_credential",
+        config_entry=schlage_entry,
+    )
+    assert schlage_entity.entity_id == EVENT_BLIND_LOCK_ENTITY_ID
+    hass.states.async_set(VALIDATE_LOCK_ENTITY_ID, "locked")
+    hass.states.async_set(EVENT_BLIND_LOCK_ENTITY_ID, "locked")
+    hass.states.async_set(VALIDATE_CONDITION_ENTITY_ID, "off")
+
+    for service_name, response in (
+        ("get_codes", {EVENT_BLIND_LOCK_ENTITY_ID: {}}),
+        ("add_code", None),
+        ("delete_code", None),
+    ):
+        register_mock_service(
+            hass, SCHLAGE_DOMAIN, service_name, AsyncMock(return_value=response)
+        )
+
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Validate Service",
+        data={
+            **VALIDATE_CONFIG,
+            CONF_LOCKS: [VALIDATE_LOCK_ENTITY_ID, EVENT_BLIND_LOCK_ENTITY_ID],
+        },
+        unique_id="test_validate_blind_pair",
+    )
+    lcm_entry.add_to_hass(hass)
+    with patch.object(SchlageLock, "async_is_integration_connected", return_value=True):
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+
+        yield lcm_entry
+
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+async def test_use_credential_valid(hass: HomeAssistant, validate_entry) -> None:
+    """A valid code returns the user with no failure reason."""
+    response = await _call_use_credential(
+        hass,
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
+    )
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+
+
+async def test_use_credential_valid_by_title(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """Either identifier names the same entry, as the sibling actions do."""
+    response = await _call_use_credential(
+        hass,
+        {"config_entry_title": validate_entry.title, ATTR_CODE: "1234"},
+    )
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+
+
+async def test_use_credential_unknown(hass: HomeAssistant, validate_entry) -> None:
+    """A code no slot holds is rejected as unknown."""
+    response = await _call_use_credential(
+        hass,
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "0000"},
+    )
+    assert response == {
+        ATTR_VALID: False,
+        ATTR_USER: None,
+        ATTR_REASON: REASON_UNKNOWN_CODE,
+    }
+
+
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [("5678", REASON_USER_DISABLED), ("9999", REASON_CONDITION_NOT_MET)],
+)
+async def test_use_credential_failure_reasons(
+    hass: HomeAssistant, validate_entry, code: str, reason: str
+) -> None:
+    """A matched-but-inactive code reports why it did not validate."""
+    response = await _call_use_credential(
+        hass,
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code},
+    )
+    assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        {"config_entry_id": "no_such_entry"},
+        {"config_entry_title": "no such entry"},
+    ],
+)
+async def test_use_credential_rejects_an_unknown_entry(
+    hass: HomeAssistant, validate_entry, selector: dict
+) -> None:
+    """An entry nothing matches is refused the way the sibling actions refuse it."""
+    with pytest.raises(
+        ServiceValidationError, match="No lock code manager config entry"
+    ):
+        await _call_use_credential(hass, {**selector, ATTR_CODE: "1234"})
+
+
+async def test_use_credential_without_return_response(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    Asking without wanting the answer is allowed, and is then a no-op.
+
+    The response is the action's only output, so OPTIONAL rather than ONLY
+    is what keeps a caller that omits ``return_response`` from erroring.
+    """
+    response = await _call_use_credential(
+        hass,
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
+        return_response=False,
+    )
+
+    assert response is None
+
+
+@pytest.mark.parametrize("code", ["   ", "\t\n"])
+async def test_use_credential_refuses_a_whitespace_only_code(
+    hass: HomeAssistant, validate_entry, code: str
+) -> None:
+    """
+    A code that is only padding is refused by the schema, not answered.
+
+    The schema strips before length-checking, so whitespace collapses to
+    the empty string the sibling write actions already refuse. Answering
+    it instead would report every entry with no PIN set as a match.
+    """
+    with pytest.raises(vol.Invalid):
+        await _call_use_credential(
+            hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code}
+        )
+
+
+async def test_use_credential_strips_padding_at_the_schema(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    A padded code validates: the schema strips it before the action sees it.
+
+    Distinct from the strip inside ``validate_credential`` -- this one is
+    what makes the length check reject padding-only input, so it has to be
+    shown not to reject a real code that merely arrives padded.
+    """
+    response = await _call_use_credential(
+        hass,
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: " 1234 "},
+    )
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        pytest.param(
+            {"config_entry_id": "an_id", "config_entry_title": "a title"}, id="both"
+        ),
+        pytest.param({}, id="neither"),
+    ],
+)
+async def test_use_credential_requires_exactly_one_entry_selector(
+    hass: HomeAssistant, validate_entry, selector: dict
+) -> None:
+    """
+    The entry is named by id or by title, never both and never neither.
+
+    Accepting both would leave the action free to pick, and the two can
+    disagree; accepting neither has no entry to answer about.
+    """
+    with pytest.raises(vol.Invalid):
+        await _call_use_credential(hass, {**selector, ATTR_CODE: "1234"})
+
+
+async def test_use_credential_on_an_entry_with_no_slots(hass: HomeAssistant) -> None:
+    """
+    An entry configuring no users answers unknown_code rather than erroring.
+
+    Nothing can match, which is the same shape as a code no slot holds --
+    a caller polling an entry mid-setup gets an answer, not an exception.
+    """
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+    lock_entity = er.async_get(hass).async_get_or_create(
+        "lock",
+        "virtual",
+        "virtual_validate_no_slots",
+        suggested_object_id="virtual_validate_no_slots",
+        config_entry=virtual_entry,
+    )
+    hass.states.async_set(lock_entity.entity_id, "locked")
+
+    empty_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="No Slots",
+        data={CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: {}},
+        unique_id="test_validate_no_slots",
+    )
+    empty_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(empty_entry.entry_id)
+    await hass.async_block_till_done()
+
+    response = await _call_use_credential(
+        hass, {"config_entry_id": empty_entry.entry_id, ATTR_CODE: "1234"}
+    )
+
+    assert response == {
+        ATTR_VALID: False,
+        ATTR_USER: None,
+        ATTR_REASON: REASON_UNKNOWN_CODE,
+    }
+
+    await hass.config_entries.async_unload(empty_entry.entry_id)
+
+
+async def test_use_credential_matches_a_padded_stored_pin(hass: HomeAssistant) -> None:
+    """
+    A PIN already stored with padding validates against the code as entered.
+
+    The config is written directly, which is the point: this simulates data
+    that predates the write-path strip -- hand-edited .storage, a restored
+    backup, or an older version -- so it cannot be produced through a path
+    that would normalize it on the way in.
+    """
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+    lock_entity = er.async_get(hass).async_get_or_create(
+        "lock",
+        "virtual",
+        "virtual_validate_padded",
+        suggested_object_id="virtual_validate_padded",
+        config_entry=virtual_entry,
+    )
+    hass.states.async_set(lock_entity.entity_id, "locked")
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Padded",
+        data={
+            CONF_LOCKS: [lock_entity.entity_id],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "dana", CONF_PIN: " 4321 ", CONF_ENABLED: True},
+                2: {CONF_NAME: "blank", CONF_PIN: "   ", CONF_ENABLED: True},
+            },
+        },
+        unique_id="test_validate_padded",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert await _call_use_credential(
+        hass, {"config_entry_id": entry.entry_id, ATTR_CODE: "4321"}
+    ) == {ATTR_VALID: True, ATTR_USER: "dana", ATTR_REASON: None}
+
+    # The whitespace-only slot holds no PIN, so nothing can match it -- least
+    # of all a submission that is itself only padding.
+    assert entry.runtime_data.slot_coordinators[2].pin_value is None
+    with pytest.raises(vol.Invalid):
+        await _call_use_credential(
+            hass, {"config_entry_id": entry.entry_id, ATTR_CODE: "   "}
+        )
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_use_credential_records_against_an_in_entry_lock(
+    hass: HomeAssistant, validate_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    A lock in the entry gets the use recorded on the slot's event entity.
+
+    The recording is the event entity's own reading of the unified event,
+    not a lock-shaped detour: the action reports something no lock
+    observed, so the deprecated lock-state event -- which would have to
+    claim a from/to state transition that never happened -- stays silent.
+    """
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    with caplog.at_level(logging.DEBUG):
+        response = await _call_use_credential(
+            hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
+        )
+        await hass.async_block_till_done()
+
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+    assert [event.data for event in unified] == [
+        {
+            ATTR_NAME: "alice",
+            ATTR_CONFIG_ENTRY_ID: validate_entry.entry_id,
+            ATTR_CONFIG_ENTRY_TITLE: validate_entry.title,
+            ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
+            ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+        }
+    ]
+    assert deprecated == []
+
+    state = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert state
+    assert state.attributes[ATTR_EVENT_TYPE] == VALIDATE_LOCK_ENTITY_ID
+    assert state.attributes[ATTR_TARGET] == VALIDATE_LOCK_ENTITY_ID
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
+
+
+async def test_use_credential_records_only_for_the_named_user(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    One user's use does not show up on another user's entity.
+
+    The unified event names the person, not the slot they occupy, so the
+    per-slot entity has to work out for itself whether the use is its own.
+    """
+    bob_event_entity_id = _slot_event_entity_id(hass, validate_entry, 2)
+    before = hass.states.get(bob_event_entity_id)
+    assert before
+
+    await _call_use_credential(
+        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(bob_event_entity_id) == before
+    alice = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert alice
+    assert alice.attributes[ATTR_EVENT_TYPE] == VALIDATE_LOCK_ENTITY_ID
+
+
+async def test_use_credential_ignores_an_entry_that_is_not_ours(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    A unified event from another entry is not this entry's to record.
+
+    Two entries can manage the same lock, and both entities would see this
+    event on the bus.
+    """
+    before = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert before
+
+    hass.bus.async_fire(
+        BUS_EVENT_CREDENTIAL_USED,
+        event_data={
+            ATTR_NAME: "alice",
+            ATTR_CONFIG_ENTRY_ID: "some_other_entry",
+            ATTR_CONFIG_ENTRY_TITLE: "Some Other Entry",
+            ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
+            ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(VALIDATE_EVENT_ENTITY_ID) == before
+
+
+async def test_use_credential_against_an_event_blind_lock_in_the_entry(
+    hass: HomeAssistant,
+    validate_entry_with_event_blind_lock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    An entry lock that cannot fire code slot events is not an event type.
+
+    Schlage and Akuvox never fire them, and zwave-js-ui does not until it
+    has learned it can, so this is an ordinary target rather than a
+    mistake. Recording against it would raise inside Home Assistant's
+    ``EventEntity`` and land as an ERROR in the log, which is exactly what
+    the absence of ERROR records here pins down.
+    """
+    entry = validate_entry_with_event_blind_lock
+    event_entity_id = _slot_event_entity_id(hass, entry, 1)
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+    before = hass.states.get(event_entity_id)
+    assert before
+    assert EVENT_BLIND_LOCK_ENTITY_ID not in before.attributes["event_types"]
+
+    with caplog.at_level(logging.DEBUG):
+        response = await _call_use_credential(
+            hass,
+            {
+                "config_entry_id": entry.entry_id,
+                ATTR_CODE: "1234",
+                ATTR_TARGET: EVENT_BLIND_LOCK_ENTITY_ID,
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+    assert [event.data[ATTR_TARGET] for event in unified] == [
+        EVENT_BLIND_LOCK_ENTITY_ID
+    ]
+    assert hass.states.get(event_entity_id) == before
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
+
+
+async def test_use_credential_with_a_target_outside_the_entry(
+    hass: HomeAssistant, validate_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    A target Lock Code Manager does not manage is announced, not refused.
+
+    Only the unified event fires: there is no entity of ours to record
+    against, and the caller knows their setup better than we do. The
+    absence of ERROR records is the load-bearing half -- routing this into
+    the slot's event entity would trip its unknown-event-type check, and
+    Home Assistant would swallow that into a log line rather than raise.
+    """
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    before = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert before
+
+    with caplog.at_level(logging.DEBUG):
+        response = await _call_use_credential(
+            hass,
+            {
+                "config_entry_id": validate_entry.entry_id,
+                ATTR_CODE: "1234",
+                ATTR_TARGET: "cover.some_other_door",
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+    assert [event.data[ATTR_TARGET] for event in unified] == ["cover.some_other_door"]
+    assert deprecated == []
+    assert hass.states.get(VALIDATE_EVENT_ENTITY_ID) == before
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
+
+
+@pytest.mark.parametrize(
+    "code", ["0000", "5678", "9999"], ids=["unknown", "disabled", "condition"]
+)
+async def test_use_credential_announces_nothing_when_invalid(
+    hass: HomeAssistant, validate_entry, code: str
+) -> None:
+    """
+    A code that does not validate is not a use, however it failed.
+
+    The response is the whole answer, so an automation reacting to a
+    rejection reads it there rather than from an event anyone could see.
+    """
+    fired = async_capture_events(hass, MATCH_ALL)
+
+    response = await _call_use_credential(
+        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code}
+    )
+    await hass.async_block_till_done()
+
+    assert response[ATTR_VALID] is False
+    assert [
+        event.event_type for event in fired if event.event_type.startswith(DOMAIN)
+    ] == []
+
+
+async def test_use_credential_never_publishes_the_source_entity_state(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    Naming a source whose state is the code does not publish the code.
+
+    ``source`` and ``target`` are data: nothing looks them up or reads
+    them. A keypad entity that exposes what was typed is exactly the
+    surface that has leaked cleartext PINs here before.
+    """
+    hass.states.async_set(VALIDATE_SOURCE_ENTITY_ID, "1234")
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    await _call_use_credential(
+        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
+    )
+    await hass.async_block_till_done()
+
+    assert unified
+    for event in [*unified, *deprecated]:
+        assert "1234" not in json.dumps(event.data, default=str)
+
+
+@pytest.mark.parametrize("missing", [ATTR_SOURCE, ATTR_TARGET])
+async def test_use_credential_requires_both_attribution_fields(
+    hass: HomeAssistant, validate_entry, missing: str
+) -> None:
+    """
+    Neither end of the attribution is optional.
+
+    Every consumer of the unified event can read both without a key test
+    only because the schema refuses a call that omits either one.
+    """
+    data = {
+        ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
+        ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+        "config_entry_id": validate_entry.entry_id,
+        ATTR_CODE: "1234",
+    }
+    del data[missing]
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_USE_CREDENTIAL, data, blocking=True
+        )

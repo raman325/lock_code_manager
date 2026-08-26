@@ -14,6 +14,9 @@ from ..const import DOMAIN
 from ..domain.credentials import (
     Credential,
     CredentialRef,
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
     User,
     WriteResult,
     user_from_slot,
@@ -46,8 +49,45 @@ class VirtualLock(BaseLock):
 
     @property
     def supports_code_slot_events(self) -> bool:
-        """Return whether this lock supports code slot events."""
-        return False
+        """
+        Return True: a virtual lock is a recording surface for credential use.
+
+        A virtual lock observes nothing on its own, but it is what somebody
+        adds when a credential is used somewhere Lock Code Manager cannot
+        watch -- an external keypad, a door controller with no integration.
+        The ``use_credential`` action records against it, so its per-slot
+        event entity has to accept events attributed to it.
+        """
+        return True
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        """
+        Advertise every credential type with no limits of any kind.
+
+        A virtual lock is backed by a dictionary, so it genuinely has no
+        capacity and no value-length range to report. Every field follows
+        the ``CredentialTypeCapability`` convention that a non-positive
+        number means "not advertised": ``num_slots`` 0 leaves the slot
+        capacity checks skipped, and 0 length bounds mean any credential
+        already saved against a virtual lock stays saveable.
+
+        Not a user-managing lock, so ``supports_user_management`` stays
+        False and the base orchestration keeps addressing the credential by
+        slot -- this class implements no user primitives.
+        """
+        return LockCapabilities(
+            supports_user_management=False,
+            max_users=0,
+            credential_types={
+                credential_type: CredentialTypeCapability(
+                    num_slots=0,
+                    min_length=0,
+                    max_length=0,
+                    supports_learn=False,
+                )
+                for credential_type in CredentialType
+            },
+        )
 
     async def async_is_integration_connected(self) -> bool:
         """Virtual locks are always connected."""
@@ -62,6 +102,12 @@ class VirtualLock(BaseLock):
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
+        # Chain the base teardown before touching the store: it releases the
+        # config-entry-state listener on the lock's provider entry. Left in
+        # place, a later provider reload re-runs async_setup against the
+        # unloaded Lock Code Manager entry, and anything that then consults
+        # the entry crashes on its missing runtime data.
+        await super().async_unload(remove_permanently)
         if remove_permanently:
             await self._store.async_remove()
         else:

@@ -2,17 +2,47 @@
 
 from __future__ import annotations
 
-from homeassistant.core import HomeAssistant
+import logging
+from unittest.mock import patch
 
+import pytest
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
+
+from homeassistant.components.event import ATTR_EVENT_TYPES
+from homeassistant.components.text import (
+    ATTR_VALUE,
+    DOMAIN as TEXT_DOMAIN,
+    SERVICE_SET_VALUE,
+)
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    STATE_UNAVAILABLE,
+)
+from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
+
+from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.sync import TICK_INTERVAL
+from custom_components.lock_code_manager.event import ATTR_UNSUPPORTED_LOCKS
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
-from .conftest import VIRTUAL_LOCK_ENTITY_ID
+from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
+
+SLOT_1_EVENT_ENTITY = "event.mock_title_slot1_credential_used"
+SLOT_1_PIN_ENTITY = "text.mock_title_slot1_pin"
 
 
 class TestFullSetupLifecycle:
@@ -173,3 +203,143 @@ class TestSetAndGetUsercodes:
         assert user_map[1].pin_credentials[0].state == SlotCredential.known("5555")
         assert 2 in user_map
         assert user_map[2].active is False
+
+
+class TestUnloadReleasesBaseListeners:
+    """Unloading Lock Code Manager must leave nothing armed on the lock's entry."""
+
+    async def test_provider_reload_after_unload_does_not_rearm(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+        virtual_provider_entry: MockConfigEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        A provider reload after a Lock Code Manager unload must not re-run setup.
+
+        The base config-entry-state listener watches the lock's own config
+        entry, and only the base teardown releases it. A provider that
+        unloads without chaining ``super()`` leaves it armed, so the lock's
+        entry reaching LOADED re-runs provider setup against the unloaded
+        Lock Code Manager entry -- and anything reached from there finds no
+        runtime data on it.
+
+        The spy, not the log, is the detector: what a re-setup goes on to
+        break is provider-specific, so the assertion has to be that it does
+        not happen at all.
+        """
+        lock = get_virtual_lock(hass, lcm_config_entry)
+
+        assert await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        caplog.clear()
+        with patch.object(lock, "async_setup", wraps=lock.async_setup) as resetup:
+            virtual_provider_entry.mock_state(hass, ConfigEntryState.LOADED)
+            await hass.async_block_till_done()
+
+        assert resetup.call_count == 0
+        # The re-setup runs in a task, so a crash inside it never reaches the
+        # caller; the log would be the only place it surfaced.
+        assert not [
+            record for record in caplog.records if record.levelno >= logging.ERROR
+        ]
+
+
+class TestStoredPaddingNeverReachesTheLock:
+    """A PIN stored with padding must not be programmed onto a device padded."""
+
+    async def test_a_padded_stored_pin_is_written_stripped(
+        self,
+        hass: HomeAssistant,
+        virtual_lock_entity,
+    ) -> None:
+        """
+        The sync writes the stripped PIN, not what storage happened to hold.
+
+        Written straight into the entry config on purpose: this is data that
+        predates the write-path strip, so no path that would normalize it can
+        be used to set it up. The device store is the assertion because that
+        is the last place the padding could still be observed -- a caller who
+        types the PIN on the keypad has no way to reproduce the padding.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [VIRTUAL_LOCK_ENTITY_ID],
+                CONF_SLOTS: {
+                    1: {CONF_NAME: "padded", CONF_PIN: " 4321 ", CONF_ENABLED: True}
+                },
+            },
+            unique_id="test_virtual_padded_storage",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # The first tick loads initial state; the write happens on the next.
+        for tick in range(2):
+            async_fire_time_changed(
+                hass, dt_util.utcnow() + TICK_INTERVAL * (tick + 1) * 2
+            )
+            await hass.async_block_till_done()
+
+        lock = get_virtual_lock(hass, entry)
+        assert lock._data["1"]["code"] == "4321"
+
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestCredentialUseRecording:
+    """A virtual lock is the surface for uses Lock Code Manager cannot watch."""
+
+    async def test_event_entity_accepts_the_virtual_lock(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+    ) -> None:
+        """
+        The per-slot event entity lists the virtual lock and is available.
+
+        The entity refuses an event type it does not list, so a virtual-only
+        entry could not record a use at all until the lock advertised
+        support for code slot events.
+        """
+        state = hass.states.get(SLOT_1_EVENT_ENTITY)
+        assert state
+        assert state.state != STATE_UNAVAILABLE
+        assert state.attributes[ATTR_EVENT_TYPES] == [VIRTUAL_LOCK_ENTITY_ID]
+        assert ATTR_UNSUPPORTED_LOCKS not in state.attributes
+
+    @pytest.mark.parametrize("pin", ["1", "9" * 64])
+    async def test_advertised_capabilities_reject_no_pin_length(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+        pin: str,
+    ) -> None:
+        """
+        Advertising capabilities must not start rejecting lengths.
+
+        Virtual entries had no advertised bounds at all, so any PIN a user
+        already stored has to keep saving. The write below is what populates
+        the capabilities cache the length gate reads -- without it the gate
+        skips every lock and this proves nothing, so the cache is asserted
+        before the lengths are tried.
+        """
+        lock = get_virtual_lock(hass, lcm_config_entry)
+        await lock.async_internal_set_usercode(1, "1234")
+        assert lock.cached_capabilities is not None
+
+        await hass.services.async_call(
+            TEXT_DOMAIN,
+            SERVICE_SET_VALUE,
+            service_data={ATTR_VALUE: pin},
+            target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+            blocking=True,
+        )
+
+        state = hass.states.get(SLOT_1_PIN_ENTITY)
+        assert state
+        assert state.state == pin

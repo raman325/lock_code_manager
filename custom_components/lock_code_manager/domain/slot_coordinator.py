@@ -246,6 +246,9 @@ class SlotEntityCoordinator:
         Normalizing whitespace and the empty-PIN side effect (disabling
         the slot on an active slot whose PIN was cleared) live here so
         entities do not have to coordinate sibling state themselves.
+        Stripping applies to every PIN, not just the whitespace-only one:
+        a submitted code is stripped before it is matched, so padding kept
+        on the stored side makes a credential nothing typed can match.
 
         A non-empty PIN is validated against every bound lock's advertised
         length range before it is written; an empty PIN clears the slot and
@@ -256,8 +259,7 @@ class SlotEntityCoordinator:
         advertising a limit tighter than it really accepts cannot silently
         stop the keystrokes with no message at all.
         """
-        if not value.strip():
-            value = ""
+        value = value.strip()
 
         if value:
             self._validate_credential_length(value, CredentialType.PIN)

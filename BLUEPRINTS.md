@@ -19,6 +19,7 @@ for additional setup guides and examples.
    - [Lock on Door Close](#lock-on-door-close) *(automation)*
 1. Notifications
    - [Slot Usage Notifier](#slot-usage-notifier) *(automation)*
+   - [Credential Used](#credential-used) *(automation)*
 1. Setup Helpers
    - [Condition Linker](#condition-linker) *(automation)*
 
@@ -162,6 +163,35 @@ send notifications, trigger scripts, or run any HA action.
 | ----- | ----------- | ------- |
 | Credential used event entities | One or more users' event entities | Required |
 | Locks (optional) | Only run for uses on these locks | All locks |
+| Actions | HA actions to run (notifications, scripts, etc.) | Required |
+
+### Credential Used
+
+Runs actions every time a credential is used, whether Lock Code
+Manager saw it happen on a lock or was told about it through the
+`lock_code_manager.use_credential` action.
+
+- Template variables: `name`, `source`, `target`, `config_entry_id`,
+  `config_entry_title`, `timestamp`
+- Every filter is optional; leave them all empty to act on every use
+- Uses `mode: queued` to handle rapid successive uses
+
+Slot Usage Notifier and Slot Usage Limiter trigger on a user's
+credential used *entity*, so they only see uses recorded there — uses
+against a lock in the same configuration. A use reported through
+`lock_code_manager.use_credential` with any other target has no
+per-user entity to record against, so those two never see it. This
+blueprint triggers on the `lock_code_manager_credential_used` event
+instead and sees every credential use.
+
+[![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fcredential_used.yaml)
+
+| Input | Description | Default |
+| ----- | ----------- | ------- |
+| Lock Code Manager config entry (optional) | Only run for uses in this configuration | All configurations |
+| Users (optional) | Only run for these users, by name | All users |
+| Sources (optional) | Only run for credentials entered on these entities | Any source |
+| Targets (optional) | Only run for credentials used against these entities | Any target |
 | Actions | HA actions to run (notifications, scripts, etc.) | Required |
 
 ---

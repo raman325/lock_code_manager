@@ -298,6 +298,32 @@
           "description": "The PIN to write."
         }
       }
+    },
+    "use_credential": {
+      "name": "Use credential",
+      "description": "Report that a credential was used, for the keypads and door controllers Lock Code Manager cannot watch itself. The response says whether the code would work, for which user, and the reason when it would not. A valid code fires the Lock Code Manager credential used event; an invalid one fires nothing, so react to a rejection from the response. It touches no lock and changes nothing. It performs no rate limiting and no logging, and the reason tells a real credential that is merely inactive apart from one that is unknown, so do not expose it to untrusted input.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry to check the code against."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "code": {
+          "name": "Code",
+          "description": "The code that was used."
+        },
+        "source": {
+          "name": "Source",
+          "description": "The entity where the credential was entered, such as a keypad. Required. If nothing in Home Assistant represents it, create a template entity to name here. Its state is never read, only its entity ID is reported. It should name a different entity from the target: a use whose source and target are the same entity is treated as one the lock observed itself, and is not recorded again."
+        },
+        "target": {
+          "name": "Target",
+          "description": "The entity the credential was used against: a lock, a cover, an alarm panel, whatever the use applies to. Required. If nothing in Home Assistant represents it, create an entity to name here, such as a Virtual lock. Its state is never read, only its entity ID is reported. When it happens to be a lock in the chosen entry that can report code slot events, that user's credential used entity records the use as well."
+        }
+      }
     }
   },
   "issues": {

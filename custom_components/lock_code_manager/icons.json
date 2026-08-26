@@ -49,6 +49,7 @@
     "generate_pin": "mdi:dice-multiple",
     "hard_refresh_usercodes": "mdi:refresh",
     "set_slot_condition": "mdi:calendar-edit",
-    "set_usercode": "mdi:key-plus"
+    "set_usercode": "mdi:key-plus",
+    "use_credential": "mdi:shield-key"
   }
 }

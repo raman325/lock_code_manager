@@ -12,12 +12,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
-from ..const import DOMAIN, EXCLUDED_CONDITION_PLATFORMS
+from ..const import (
+    ATTR_REASON,
+    ATTR_USER,
+    ATTR_VALID,
+    DOMAIN,
+    EXCLUDED_CONDITION_PLATFORMS,
+)
 from .allocation import SlotAllocationError, async_allocate_for
 from .config import EntryConfig
+from .events import async_fire_credential_used
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry
+from .validation import validate_credential
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +91,56 @@ async def async_clear_usercode(
     """Clear a usercode from a lock slot."""
     lock = get_managed_lock(hass, lock_entity_id)
     await lock.async_internal_clear_usercode(code_slot)
+
+
+async def async_use_credential(
+    hass: HomeAssistant,
+    code: str,
+    *,
+    source: str,
+    target: str,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> dict[str, Any]:
+    """
+    Report a credential use to one entry, and answer whether it was valid.
+
+    For the keypads and door controllers Lock Code Manager cannot watch: the
+    caller says what was entered and where, and this answers the same
+    question the entry's own dashboard would while recording the use.
+
+    A valid code announces itself on the unified credential-used event. An
+    invalid one announces nothing at all -- the response is the whole answer,
+    so an automation that wants to react to a rejection does so from the
+    response rather than from an event anyone else could see.
+
+    The entry is the target rather than a lock because an entry's users are
+    what a code is checked against, and a code that no lock has ever been
+    programmed with still has an answer here.
+    """
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
+    result = validate_credential(config_entry, code)
+
+    # ``user`` is set exactly when the credential validated; reading it
+    # rather than ``valid`` is also what tells the type checker it is there.
+    if result.user is not None:
+        # One event, whatever the target is. The entry's per-slot event
+        # entity reads this off the bus and records the use itself when the
+        # target is one of its event-capable locks, so nothing here has to
+        # know which targets are recordable.
+        #
+        # ``source`` and ``target`` are data. Nothing here dereferences them,
+        # looks them up in a registry, or reads their state: a code source's
+        # state can be the cleartext credential that was just typed.
+        async_fire_credential_used(
+            hass, config_entry, name=result.user, source=source, target=target
+        )
+
+    return {
+        ATTR_VALID: result.valid,
+        ATTR_USER: result.user,
+        ATTR_REASON: result.reason,
+    }
 
 
 def _async_validate_condition(hass: HomeAssistant, condition: str) -> None:

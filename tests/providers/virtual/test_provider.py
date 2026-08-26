@@ -147,11 +147,37 @@ async def test_async_unload_remove_permanently_removes_store(
     assert await _fresh_store().async_load() is None
 
 
-async def test_virtual_lock_does_not_support_code_slot_events(
+async def test_virtual_lock_supports_code_slot_events(
     virtual_lock: VirtualLock,
 ):
-    """Test that virtual locks do not support code slot events."""
-    assert virtual_lock.supports_code_slot_events is False
+    """A virtual lock accepts credential-use events recorded against it.
+
+    It observes nothing itself, but it is the surface somebody adds to
+    record uses Lock Code Manager cannot watch, so the per-slot event
+    entity has to list it.
+    """
+    assert virtual_lock.supports_code_slot_events is True
+
+
+async def test_virtual_lock_capabilities_advertise_no_limits(
+    virtual_lock: VirtualLock,
+):
+    """Every credential type is advertised, and nothing is bounded.
+
+    A dictionary-backed lock has no capacity and no length range to
+    report, and every consumer of these numbers reads a non-positive one
+    as "not advertised" -- so no PIN already saved against a virtual lock
+    can start failing to save.
+    """
+    capabilities = await virtual_lock.async_get_capabilities()
+
+    assert set(capabilities.credential_types) == set(CredentialType)
+    for credential_type in CredentialType:
+        assert capabilities.bounded_slot_count(credential_type) is None
+        assert capabilities.length_bounds(credential_type) == (0, None)
+    assert capabilities.supports_user_management is False
+    assert capabilities.max_users == 0
+    assert capabilities.max_user_name_length == 0
 
 
 async def test_get_users_returns_empty_for_cleared_slots(

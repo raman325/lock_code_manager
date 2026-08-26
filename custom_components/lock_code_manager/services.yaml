@@ -147,3 +147,25 @@ deobfuscate_log:
       selector:
         text:
           multiline: true
+
+use_credential:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
+    code:
+      required: true
+      selector:
+        text:
+    source:
+      required: true
+      selector:
+        entity:
+    target:
+      required: true
+      selector:
+        entity:

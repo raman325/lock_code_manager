@@ -98,8 +98,12 @@ variables:
   # out before the conditions below can block the action.
   lock_entity_id: >-
     {{ state_attr(trigger.entity_id, 'event_type') }}
+  # A use the lock observed carries `code_slot_name`; one reported through
+  # the `use_credential` action carries the unified payload, which names the
+  # user in `name` instead.
   slot_name: >-
-    {{ trigger.to_state.attributes.code_slot_name | default('Unknown slot')
+    {{ trigger.to_state.attributes.code_slot_name
+       | default(trigger.to_state.attributes.name | default('Unknown slot'))
        if trigger.to_state is not none else 'Unknown slot' }}
   slot_num: >-
     {{ trigger.to_state.attributes.code_slot | default('?')

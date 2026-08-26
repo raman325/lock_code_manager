@@ -346,6 +346,91 @@ async def test_config_flow_yaml_error(hass: HomeAssistant):
     assert result["errors"] == {"base": "invalid_config"}
 
 
+async def test_config_flow_ui_stores_a_padded_pin_stripped(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    A PIN typed with surrounding whitespace is persisted without it.
+
+    A submitted code is stripped before it is matched, so padding kept on
+    the stored side makes a credential nothing anybody can type will ever
+    match -- and the guided form is where a stray space gets typed.
+    """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NUM_USERS: 1}
+    )
+    assert result["step_id"] == "code_slot"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: " 1234 "}
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_USERS] == {
+        "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}
+    }
+
+
+async def test_config_flow_ui_rejects_a_whitespace_only_pin(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    An enabled user whose PIN is only whitespace is refused, not stored.
+
+    Stripping happens before the enabled-needs-a-PIN check, so a PIN that
+    is empty once stripped fails that check rather than being written as a
+    credential no keypad can produce.
+    """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+    await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "   "}
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "code_slot"
+    assert result["errors"] == {CONF_PIN: "missing_pin_if_enabled"}
+
+
+async def test_config_flow_yaml_stores_a_padded_pin_stripped(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A pasted block's padded PIN is persisted stripped, as the form's is."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    with _holding():
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: " 1234 "}}},
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_USERS] == {
+        "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}
+    }
+
+
+async def test_config_flow_yaml_rejects_a_whitespace_only_pin(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """A pasted block's whitespace-only PIN on an enabled user is refused."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    with _holding():
+        result = await hass.config_entries.flow.async_configure(
+            flow_id,
+            {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "   "}}},
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "yaml"
+    assert result["errors"] == {"base": "invalid_config"}
+
+
 async def test_options_flow(hass: HomeAssistant, mock_lock_config_entry):
     """Test options flow."""
     entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")

@@ -23,6 +23,7 @@ SERVICE_ADD_USER = "add_user"
 SERVICE_DELETE_USER = "delete_user"
 SERVICE_GENERATE_PIN = "generate_pin"
 SERVICE_DEOBFUSCATE_LOG = "deobfuscate_log"
+SERVICE_USE_CREDENTIAL = "use_credential"
 
 ATTR_TEXT = "text"
 
@@ -90,8 +91,43 @@ ATTR_CONDITION_ENTITY_NAME = "friendly_name"
 ATTR_SCHEDULE = "schedule"
 ATTR_SCHEDULE_NEXT_EVENT = "next_event"
 
-# Events
+# Unified credential-used event payload keys. ``source`` is the entity where
+# the credential was entered and ``target`` the entity it was used against --
+# any entity, of any domain, not necessarily a lock. Both are always present,
+# and a caller with no natural entity for one of them is expected to make one.
+ATTR_SOURCE = "source"
+ATTR_TARGET = "target"
+
+# Bus events. The ``BUS_EVENT_`` prefix is load-bearing: ``EVENT_CREDENTIAL_USED``
+# further down is an entity key with a bare, undomained value, and firing that
+# on the bus (or listening for this one as an entity key) would silently do
+# nothing.
+BUS_EVENT_CREDENTIAL_USED = f"{DOMAIN}_credential_used"
+
+# The older, lock-shaped event. Retained for backward compatibility while
+# consumers migrate to the unified event above: both fire, no removal version
+# is set, and nothing warns at runtime. See the fire site in
+# providers/_base.py.
 EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
+
+# Credential validation response keys
+ATTR_REASON = "reason"
+ATTR_VALID = "valid"
+ATTR_USER = "user"
+
+REASON_UNKNOWN_CODE = "unknown_code"
+REASON_USER_DISABLED = "user_disabled"
+REASON_CONDITION_NOT_MET = "condition_not_met"
+
+# Failure reasons ordered least to most restrictive. Only the last two are
+# ever ranked against each other: a user held back by more than a condition
+# outranks one merely waiting on its condition. An unknown code is returned
+# outright, without consulting this, because there is no user to rank.
+REASON_PRECEDENCE = (
+    REASON_UNKNOWN_CODE,
+    REASON_CONDITION_NOT_MET,
+    REASON_USER_DISABLED,
+)
 
 # Event data constants
 ATTR_ACTION_TEXT = "action_text"
@@ -100,7 +136,8 @@ ATTR_NOTIFICATION_SOURCE = "notification_source"
 
 # Event entity event type
 # The entity key, and so the last part of its unique ID. Renamed from
-# "pin_used" in version 4; the migration rewrites the stored ones.
+# "pin_used" in version 4; the migration rewrites the stored ones. Not a bus
+# event -- that is ``BUS_EVENT_CREDENTIAL_USED``.
 EVENT_CREDENTIAL_USED = "credential_used"
 LEGACY_EVENT_PIN_USED = "pin_used"
 

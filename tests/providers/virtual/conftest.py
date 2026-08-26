@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -92,15 +93,31 @@ async def virtual_lock_with_slots(hass: HomeAssistant) -> VirtualLock:
 
 
 @pytest.fixture
-async def virtual_lock_entity(hass: HomeAssistant) -> er.RegistryEntry:
+async def virtual_provider_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Create the lock entity's own (provider) config entry."""
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+
+    yield virtual_entry
+
+    # A test that drove this mock entry to LOADED must not leave it there:
+    # hass teardown would then genuinely try to unload the virtual
+    # integration, which was never set up.
+    if virtual_entry.state is not ConfigEntryState.NOT_LOADED:
+        virtual_entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
+
+
+@pytest.fixture
+async def virtual_lock_entity(
+    hass: HomeAssistant, virtual_provider_entry: MockConfigEntry
+) -> er.RegistryEntry:
     """
-    Create a virtual config entry and lock entity.
+    Create a virtual lock entity on the provider config entry.
 
     The lock entity is registered under the "virtual" platform so that
     LCM's INTEGRATIONS_CLASS_MAP lookup finds it as a VirtualLock.
     """
-    virtual_entry = MockConfigEntry(domain="virtual")
-    virtual_entry.add_to_hass(hass)
+    virtual_entry = virtual_provider_entry
 
     ent_reg = er.async_get(hass)
     lock_entity = ent_reg.async_get_or_create(
