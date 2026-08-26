@@ -169,3 +169,7 @@ BTW one thing is esphome users may have a lock entity represented in esphome. Tw
 ---
 
 does actuate mean it flips? locked -> unlocked and vice versa?
+
+---
+
+one note is that we will probably want to support a cover and anything else that actuates between two final states (on/off). Potentially even a light or switch
