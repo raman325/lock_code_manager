@@ -3306,3 +3306,294 @@ async def test_both_lock_refusals_render_from_one_submission(
     # Named apart, so one flat mapping renders both messages.
     assert result["description_placeholders"]["unregistered_locks"] == "lock.yaml_only"
     assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+
+
+# --- One lock, one answer, however many configurations manage it ---
+
+
+def _sibling_declaring(
+    hass: HomeAssistant, lock_entry: er.RegistryEntry, *, declares: bool
+) -> MockConfigEntry:
+    """
+    Add a second entry that holds a lock, declaring it or not.
+
+    Its user sits well clear of the slot numbers the entries under test use,
+    so what refuses a submission here is the disagreement about the lock
+    rather than the slot both entries wanted.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Upstairs Codes",
+        unique_id="upstairs_codes",
+        data={
+            CONF_LOCKS: [lock_entry.entity_id],
+            CONF_MEMBERS: {lock_entry.id: {CONF_CODELESS: True}} if declares else {},
+            CONF_USERS: {"Ada": {CONF_PIN: "1111", CONF_ENABLED: True}},
+            CONF_SLOT_ASSIGNMENT: {"ada": 9},
+        },
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_a_lock_another_entry_declares_is_asked_about_here_too(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Agreeing has to be an answer this entry can give.
+
+    A lock a provider claims is otherwise never asked about, so an entry
+    adding one that another entry declares codeless could only ever
+    contradict it -- and would then be refused with no answer available that
+    was not. The question is asked because a sibling already answered it,
+    not because dispatch came up empty.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    _sibling_declaring(hass, claimed, declares=True)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    await _menu_about(result, claimed, "codeless_reconsider")
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "codeless_confirm"}
+    )
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+    await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
+    with _holding():
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "Bea", CONF_ENABLED: True, CONF_PIN: "1234"}
+        )
+
+    assert result["type"] == "create_entry"
+    # Read the way dispatch reads it: the entry agrees with its sibling
+    # about what the member IS, not merely about what to store.
+    assert (
+        resolve_member_provider_class(
+            dr.async_get(hass), EntryConfig.from_mapping(result["data"]), claimed
+        )
+        is CodelessLock
+    )
+
+
+async def test_a_second_configuration_may_not_contradict_the_first(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Two entries answering differently is refused, and the other one is named.
+
+    Whether a lock keeps codes of its own is a fact about the device, so the
+    disagreement is not a configuration but a contradiction -- and one with
+    teeth, because the two answers resolve to two credential stores over one
+    entity and a Personal Identification Number lands in whichever the
+    caller happened to reach. The refusal names the other configuration
+    because reconciling it is the only way through.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    _sibling_declaring(hass, claimed, declares=True)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "codeless_decline"}
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_LOCKS: "codeless_conflict"}
+    assert result["description_placeholders"] == {
+        "locks": f"{LOCK_1_ENTITY_ID} (Upstairs Codes)"
+    }
+    # Nothing was created, so there is no second store for the refusal to
+    # have been merely cosmetic about.
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_declaring_a_lock_another_entry_holds_undeclared_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The refusal runs in both directions, because the contradiction does.
+
+    A lock another entry manages through its own integration is one that has
+    code storage, whatever this entry is about to say -- so declaring it here
+    would leave the same entity resolving two ways round. The sibling is
+    built by hand because no flow will produce this pair; it is the shape
+    storage can still carry, and the guard has to hold for it.
+    """
+    codeless = register_codeless_lock(hass)
+    _sibling_declaring(hass, codeless, declares=False)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [codeless.entity_id]}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "codeless_confirm"}
+    )
+
+    assert result["errors"] == {CONF_LOCKS: "codeless_conflict"}
+    assert result["description_placeholders"] == {
+        "locks": f"{codeless.entity_id} (Upstairs Codes)"
+    }
+
+
+async def test_the_options_flow_may_not_take_back_what_a_sibling_declares(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Handing a shared lock back is a decision both configurations have to make.
+
+    Taking the declaration back here alone would leave the sibling holding
+    the lock's codes in Lock Code Manager while this entry started writing
+    them to the device -- the same entity, two stores. Removing the lock
+    from one of the two is the way through, which is what the refusal says.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    _sibling_declaring(hass, claimed, declares=True)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={**BASE_CONFIG, CONF_MEMBERS: {claimed.id: {CONF_CODELESS: True}}},
+    )
+    entry.add_to_hass(hass)
+    users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    flow_id = started["flow_id"]
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
+        )
+    await _menu_about(result, claimed, "codeless_reconsider")
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id, {"next_step_id": "codeless_decline"}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_LOCKS: "codeless_conflict"}
+    # The declaration is still the one the entry runs on, so the member
+    # keeps resolving to the store the sibling is also reading.
+    assert get_entry_config(entry).is_codeless(claimed)
+
+
+async def test_the_entry_being_edited_does_not_contradict_itself(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    An entry's own stored answer is the one being replaced, not an obstacle.
+
+    The sibling scan reads every OTHER entry; reading this one too would
+    refuse every answer that changed anything, so a declaration could never
+    be taken back at all -- the exit the menu exists to offer.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={**BASE_CONFIG, CONF_MEMBERS: {claimed.id: {CONF_CODELESS: True}}},
+    )
+    entry.add_to_hass(hass)
+    users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    flow_id = started["flow_id"]
+    with _holding():
+        await hass.config_entries.options.async_configure(
+            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
+        )
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id, {"next_step_id": "codeless_decline"}
+        )
+
+    assert result["type"] == "create_entry"
+    assert (
+        resolve_member_provider_class(
+            dr.async_get(hass), EntryConfig.from_mapping(result["data"]), claimed
+        )
+        is MockLCMLock
+    )
+
+
+async def test_reauth_may_not_contradict_a_sibling_either(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Reauth renders the same picker, so it is a third way to introduce the pair.
+
+    The entry being repaired is left out of the scan the way the edited entry
+    is -- it is the one whose answer is being rewritten -- so what refuses
+    here is genuinely another configuration.
+    """
+    codeless = register_codeless_lock(hass)
+    _sibling_declaring(hass, codeless, declares=False)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+        },
+    )
+    entry.add_to_hass(hass)
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+
+    await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [codeless.entity_id]}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {"next_step_id": "codeless_confirm"}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_LOCKS: "codeless_conflict"}
+    # The repair did not land, so the entry still holds the lock it came in
+    # with rather than one two configurations disagree about.
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+
+async def test_a_configuration_that_does_not_manage_the_lock_has_no_say(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Only entries that HOLD the member answer for it.
+
+    A declaration left behind by an entry that no longer lists the lock is
+    not an opinion about anything -- nothing resolves it -- so reading one
+    would refuse an answer no live provider contradicts, and a lock nothing
+    else manages could never be declared while any other configuration
+    existed.
+    """
+    codeless = register_codeless_lock(hass)
+    elsewhere = MockConfigEntry(
+        domain=DOMAIN,
+        title="Garage Codes",
+        unique_id="garage_codes",
+        data={
+            CONF_LOCKS: [LOCK_2_ENTITY_ID],
+            CONF_USERS: {"Ada": {CONF_PIN: "1111", CONF_ENABLED: True}},
+            CONF_SLOT_ASSIGNMENT: {"ada": 9},
+        },
+    )
+    elsewhere.add_to_hass(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [codeless.entity_id]}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "codeless_confirm"}
+    )
+
+    assert result["type"] == "menu"
+    assert result["step_id"] == "choose_path"

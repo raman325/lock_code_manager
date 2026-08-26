@@ -100,7 +100,7 @@ from .const import (
 )
 from .domain.config import parse_slot_unique_id
 from .domain.credentials import pin_address
-from .domain.locks import get_managed_locks_for_entity
+from .domain.locks import find_managed_lock
 from .domain.models import SlotCode, SlotCredential
 from .domain.queries import (
     find_config_entry_by_title,
@@ -723,29 +723,14 @@ async def subscribe_lock_codes(
     """
     lock_entity_id = msg[ATTR_LOCK_ENTITY_ID]
     reveal = msg["reveal"]
-    locks = get_managed_locks_for_entity(hass, lock_entity_id)
-    if not locks:
+    lock = find_managed_lock(hass, lock_entity_id)
+    if lock is None:
         connection.send_error(
             msg["id"],
             websocket_api.const.ERR_NOT_FOUND,
             f"Lock {lock_entity_id} is not managed by Lock Code Manager",
         )
         return
-    if len(locks) > 1:
-        # Two entries resolving this lock to different providers hold two
-        # credential stores. Showing one of them would put codes on screen
-        # that a subsequent edit does not touch, so this says so instead of
-        # picking. The message is the one the actions give, so the card and
-        # the actions agree about what is wrong.
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_NOT_SUPPORTED,
-            f"Lock {lock_entity_id} is managed by more than one Lock Code "
-            "Manager configuration, and they do not agree on where its "
-            f"credentials live ({', '.join(sorted(lock.domain for lock in locks))})",
-        )
-        return
-    lock = locks[0]
 
     coordinator = lock.coordinator
 

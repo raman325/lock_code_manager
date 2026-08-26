@@ -97,22 +97,24 @@ entities.
   Locks are torn down and rebuilt on a roster change AND on a declaration change: the
   declaration is what picks the provider, so a member the entry keeps but now resolves
   differently is treated like one that left and came back
-- Two entries holding one lock share a single `BaseLock`, keyed on the entity id AND the
-  provider class each entry resolves -- entries that disagree about a declaration get one
-  instance each. Release is by object identity, so each entry lets go of its own.
-  `BaseLock` defines no `__eq__`/`__hash__` for the same reason: two providers over one
-  entity are two credential stores, and equality by entity id collapsed them
-- Entity-id-addressed lookups live in `domain.locks`. `get_managed_locks_for_entity`
-  returns every provider for a lock; `get_locks_from_targets` returns all of them, so an
-  action aimed at a lock reaches both stores; `get_managed_lock` returns THE provider and
-  refuses when there are two, because its callers (set/clear usercode, the unmanaged-code
-  repair, the lock-codes subscription) name a lock and nothing else
+- One lock entity resolves to one provider across every entry, because whether a lock keeps
+  codes of its own is a fact about the DEVICE. The config, options and reauth flows refuse a
+  submission whose answer contradicts another entry that manages the same member
+  (`_sibling_declarations`, error `codeless_conflict`), and ask about a member a sibling
+  declares so that agreeing is an answer this entry can give
+- Two entries holding one lock therefore share a single `BaseLock`, keyed on the entity id.
+  Release is by object identity, so it stays the exact inverse of the share; `BaseLock`
+  defines no `__eq__`/`__hash__` so a stale instance a reload replaced can never pass for
+  the live one
+- Entity-id-addressed lookups live in `domain.locks`. `find_managed_lock` returns the
+  provider a lock has, or None; `get_managed_lock` raises for callers that name a lock and
+  nothing else (set/clear usercode, the unmanaged-code repair, the lock-codes subscription)
 - `async_remove_entry()`: entry deletion only. Clears the persistent per-lock repairs and
   retires the credentials a provider keeps off the lock (`async_remove_stored_credentials`,
   the virtual/codeless store). Unload deliberately SAVES that store instead, so deletion is
-  the only place it can be collected -- skipped only when another entry RESOLVES THE SAME
-  provider class for that lock (`_lock_store_held_by_another_entry`), since a sibling on a
-  different provider never reads the store and would block collection forever
+  the only place it can be collected -- skipped only when another entry still lists the lock
+  (`_lock_managed_by_other_entry`), which is the same question because every entry holding a
+  lock reads the same store
 - Uses dispatcher signals to notify entities of changes (e.g., `{DOMAIN}_{entry_id}_add_lock_slot`)
 - Registers Lovelace strategy resource for dashboard UI
 
@@ -138,9 +140,11 @@ entities.
   whole set let an answer aimed at a newly added lock strip the declaration off an
   unrelated member. Which of two menu steps is shown depends on the population:
   `codeless` for a lock nothing claims (declining refuses the submission),
-  `codeless_reconsider` for a member the entry already declares that something now claims
-  (declining hands the lock to that provider and saves). Every declared member is asked
-  about whatever dispatch now makes of it, so a declaration always has a way back
+  `codeless_reconsider` for a member already declared -- by this entry or by another one --
+  that something now claims (declining hands the lock to that provider and saves). Every
+  declared member is asked about whatever dispatch now makes of it, so a declaration always
+  has a way back, and an answer that contradicts another entry managing the same member is
+  refused with `codeless_conflict` naming it
 - Everything that reads a lock during a flow reads it through `_pending_config` -- the
   entry's configuration as this submission would leave it, answers included -- so
   capacity and allocation size a member against the provider it is about to become rather

@@ -391,12 +391,12 @@ class BaseLock:
         """Return a string representation."""
         return f"{self.__class__.__name__}(domain={self.domain}, lock={self.lock.entity_id})"
 
-    # No __eq__ or __hash__: a provider is only ever equal to itself. Keying
-    # either on the lock entity id would say two instances over the same
-    # entity are the same lock, and two entries can resolve one entity to
-    # different providers -- two credential stores with nothing in common. A
-    # collection of providers would silently keep one of them, and whichever
-    # it kept would decide where a Personal Identification Number goes.
+    # No __eq__ or __hash__: a provider is only ever equal to itself. One
+    # lock entity means one live instance, shared by every entry that holds
+    # it, and teardown asks whether a sibling still holds THIS object.
+    # Keying equality on the entity id would answer yes for a stale instance
+    # a reload replaced, so the entry would walk away from the live one --
+    # leaving its push subscription firing with nothing owning it.
 
     @final
     def _raise_not_implemented(self, method_name: str, guidance: str = "") -> NoReturn:

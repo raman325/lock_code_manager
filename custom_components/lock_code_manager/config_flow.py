@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Container, Iterable, Mapping, Sequence
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 import voluptuous as vol
 
@@ -172,8 +172,74 @@ def _check_lock_selection(
     return errors, placeholders
 
 
+class _SiblingAnswer(NamedTuple):
+    """What another entry that manages a member already says about it."""
+
+    codeless: bool
+    entry_title: str
+
+
+def _sibling_declarations(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry | None,
+    lock_entries: Iterable[er.RegistryEntry],
+) -> dict[str, _SiblingAnswer]:
+    """
+    Return what another entry already says about each of these members.
+
+    Whether a lock has credential storage is a fact about the DEVICE, not
+    about a configuration: an ESPHome lock with no keypad has none no matter
+    how many entries manage it. Two entries answering differently is
+    therefore not a configuration but a contradiction, and one with teeth --
+    the two answers resolve to two providers over one entity, so a Personal
+    Identification Number lands in whichever store the caller happened to
+    reach. Every surface that records an answer consults this and refuses to
+    add a second opinion.
+
+    Keyed by ``er.RegistryEntry.id``, the same handle the declarations
+    themselves are keyed by, so "the same lock" is an exact key match rather
+    than anything inferred from an entity id that a rename can move. The
+    value carries the entry's title alongside its answer, because a refusal
+    that does not name the other configuration leaves the user with nowhere
+    to go.
+
+    Only entries that HOLD the member answer for it. A declaration left
+    behind by an entry that no longer lists the lock is not an opinion about
+    anything -- nothing resolves it -- and reading one would refuse an
+    answer no live provider contradicts.
+
+    ``config_entry`` is the entry being edited, left out because its own
+    stored answer is the one being replaced. A flow that is still creating
+    its entry passes ``None`` and excludes nothing.
+
+    Every entry is consulted, disabled ones included. A disabled entry holds
+    its configuration and resolves it again the moment it is re-enabled, so
+    an answer that contradicts it is a contradiction deferred rather than
+    avoided.
+
+    The first holder found answers for a member. Siblings cannot disagree
+    with each other -- this is what stops them -- so which one is arbitrary
+    only in the sense that they all say the same thing.
+    """
+    declarations: dict[str, _SiblingAnswer] = {}
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if config_entry is not None and entry.entry_id == config_entry.entry_id:
+            continue
+        sibling = get_entry_config(entry)
+        for lock_entry in lock_entries:
+            if sibling.has_lock(lock_entry.entity_id):
+                declarations.setdefault(
+                    lock_entry.id,
+                    _SiblingAnswer(sibling.is_codeless(lock_entry), entry.title),
+                )
+    return declarations
+
+
 def _codeless_candidates(
-    hass: HomeAssistant, lock_entity_ids: Iterable[str], config: EntryConfig
+    hass: HomeAssistant,
+    lock_entries: Iterable[er.RegistryEntry],
+    config: EntryConfig,
+    siblings: Mapping[str, _SiblingAnswer],
 ) -> tuple[list[er.RegistryEntry], list[er.RegistryEntry]]:
     """
     Return the selected locks to ask about, and those nothing else can manage.
@@ -185,15 +251,17 @@ def _codeless_candidates(
     the locks the user is asked about, and, unless the answer is yes, the
     ones the submission is refused over.
 
-    Every member the entry ALREADY declares codeless is asked about too,
-    whatever platform dispatch now makes of it. The declaration wins over a
-    provider, deliberately and permanently
-    (``domain.locks.resolve_member_provider_class``), so a member whose
-    platform gained a provider after it was declared would otherwise keep
-    resolving to the Lock Code Manager store with no form that so much as
-    mentions it. It is asked about but never refused over: something does
-    claim it now, so declining hands it to that provider rather than
-    leaving a lock nothing can manage.
+    Every member ALREADY declared codeless is asked about too, whatever
+    platform dispatch now makes of it, and whether this entry or another one
+    declared it. The declaration wins over a provider, deliberately and
+    permanently (``domain.locks.resolve_member_provider_class``), so a
+    member whose platform gained a provider after it was declared would
+    otherwise keep resolving to the Lock Code Manager store with no form
+    that so much as mentions it. Reading a SIBLING'S declaration here is
+    what leaves room to agree with it: a lock something claims is otherwise
+    never asked about, so an entry adding one another entry declares could
+    only ever contradict it, and would be refused with no answer available
+    that was not.
 
     mqtt is never asked about on dispatch alone, and keeps the refusal it
     already has. Its dispatch is per DEVICE, so an unclaimed one means "this
@@ -214,28 +282,21 @@ def _codeless_candidates(
     it has a keypad, the question says what declaring means, and since the
     menu also offers every member already declared, a wrong answer is one
     the same form takes back.
-
-    Every selected entity is in the registry by the time this runs:
-    :func:`_check_lock_selection` refuses the whole submission over one that
-    is not, and runs first at every call site. Asserted rather than skipped,
-    the way the lock factory asserts the same thing -- a declaration is keyed
-    by registry id, so an entity that got here without a row would be one
-    this function silently declined to ask about.
     """
-    ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
     ask: list[er.RegistryEntry] = []
     unmanageable: list[er.RegistryEntry] = []
-    for entity_id in lock_entity_ids:
-        lock_entry = ent_reg.async_get(entity_id)
-        assert lock_entry
+    for lock_entry in lock_entries:
+        sibling = siblings.get(lock_entry.id)
         if (
             lock_entry.platform != MQTT_DOMAIN
             and resolve_provider_class_for_entity(dev_reg, lock_entry) is None
         ):
             unmanageable.append(lock_entry)
             ask.append(lock_entry)
-        elif config.is_codeless(lock_entry):
+        elif config.is_codeless(lock_entry) or (
+            sibling is not None and sibling.codeless
+        ):
             ask.append(lock_entry)
     return ask, unmanageable
 
@@ -295,7 +356,11 @@ class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
         self._codeless_lock: er.RegistryEntry | None = None
 
     async def _async_check_codeless(
-        self, origin: str, user_input: dict[str, Any], config: EntryConfig
+        self,
+        origin: str,
+        user_input: dict[str, Any],
+        config: EntryConfig,
+        config_entry: ConfigEntry | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, str], dict[str, Any]]:
         """
         Ask about, or refuse, the locks in a submission that nothing claims.
@@ -303,10 +368,26 @@ class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
         Returns the flow result to return when the question still has to be
         asked, alongside the form error and placeholders for a submission
         that cannot be saved as it stands. ``config`` is what the entry
-        already declares, which this flow's own answers override.
+        already declares, which this flow's own answers override, and
+        ``config_entry`` is that entry -- left out of the sibling scan
+        because its own answer is the one being replaced.
+
+        Every selected entity is in the registry by the time this runs:
+        :func:`_check_lock_selection` refuses the whole submission over one
+        that is not, and runs first at every call site. Asserted rather than
+        skipped, the way the lock factory asserts the same thing -- a
+        declaration is keyed by registry id, so an entity that got here
+        without a row would be one this silently declined to ask about.
         """
+        ent_reg = er.async_get(self.hass)
+        lock_entries: list[er.RegistryEntry] = []
+        for entity_id in user_input[CONF_LOCKS]:
+            lock_entry = ent_reg.async_get(entity_id)
+            assert lock_entry
+            lock_entries.append(lock_entry)
+        siblings = _sibling_declarations(self.hass, config_entry, lock_entries)
         ask, unmanageable = _codeless_candidates(
-            self.hass, user_input[CONF_LOCKS], config
+            self.hass, lock_entries, config, siblings
         )
         if pending := next(
             (
@@ -326,6 +407,21 @@ class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
                 else "codeless_reconsider"
             )
             return await getattr(self, f"async_step_{step}")(), {}, {}
+        # Checked before the refusal below, and it is the more specific of
+        # the two: a lock nothing claims that a sibling already declares IS
+        # manageable, so "there is no way to manage codes on this" would be
+        # false, and the sibling is the thing the user has to reconcile.
+        if contradicted := [
+            f"{lock_entry.entity_id} ({sibling.entry_title})"
+            for lock_entry in lock_entries
+            if (sibling := siblings.get(lock_entry.id)) is not None
+            and sibling.codeless != self._is_codeless(config, lock_entry)
+        ]:
+            return (
+                None,
+                {CONF_LOCKS: "codeless_conflict"},
+                {"locks": ", ".join(contradicted)},
+            )
         if undeclared := [
             lock_entry
             for lock_entry in unmanageable
@@ -932,7 +1028,7 @@ class LockCodeManagerFlowHandler(
                     additional_errors,
                     additional_placeholders,
                 ) = await self._async_check_codeless(
-                    "reauth_confirm", user_input, entry_config
+                    "reauth_confirm", user_input, entry_config, config_entry
                 )
                 if ask is not None:
                     return ask
@@ -1051,7 +1147,9 @@ class LockCodeManagerOptionsFlow(CodelessDeclarationFlow, config_entries.Options
                         ask,
                         codeless_errors,
                         codeless_placeholders,
-                    ) = await self._async_check_codeless("init", user_input, stored)
+                    ) = await self._async_check_codeless(
+                        "init", user_input, stored, self.config_entry
+                    )
                     if ask is not None:
                         return ask
                     errors.update(codeless_errors)

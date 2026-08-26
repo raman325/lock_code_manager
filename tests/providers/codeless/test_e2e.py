@@ -5,14 +5,19 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
 )
 
 from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES
-from homeassistant.const import CONF_ENABLED, CONF_PIN, STATE_UNAVAILABLE
+from homeassistant.config_entries import SOURCE_USER
+from homeassistant.const import (
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    STATE_UNAVAILABLE,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -23,6 +28,7 @@ from custom_components.lock_code_manager.const import (
     CONF_CODELESS,
     CONF_LOCKS,
     CONF_MEMBERS,
+    CONF_NUM_USERS,
     CONF_USERS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
@@ -276,92 +282,28 @@ async def test_taking_the_declaration_back_hands_the_lock_to_its_provider(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.parametrize("declare_first", [True, False])
-async def test_the_entry_that_declared_the_lock_does_not_share_a_provider(
-    hass: HomeAssistant, mock_lock_config_entry, declare_first: bool
-) -> None:
-    """
-    Two entries that disagree about a lock get the provider each asked for.
-
-    A shared instance was keyed on the lock alone, so an entry that declared
-    a member codeless and one that did not were handed whichever instance
-    loaded first, and the declaration decided nothing beyond load order.
-    Loaded the wrong way round it wrote a user's Personal Identification
-    Number to a device somebody had said must never be written to.
-
-    Both orders are run because load order is exactly what the sharing was
-    sensitive to.
-    """
-    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
-
-    async def _declaring() -> MockConfigEntry:
-        return await _entry_for(
-            hass,
-            unique_id="declaring_entry",
-            slot_num=1,
-            pin="9999",
-            holding=[LOCK_1_ENTITY_ID],
-            declaring=[claimed],
-        )
-
-    async def _plain() -> MockConfigEntry:
-        return await _entry_for(
-            hass,
-            unique_id="plain_entry",
-            slot_num=2,
-            pin="8888",
-            holding=[LOCK_1_ENTITY_ID],
-        )
-
-    first, second = (_declaring, _plain) if declare_first else (_plain, _declaring)
-    await first()
-    await second()
-    await _settle_sync(hass)
-
-    declaring = hass.config_entries.async_entry_for_domain_unique_id(
-        DOMAIN, "declaring_entry"
-    )
-    plain = hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, "plain_entry")
-    declared_lock = declaring.runtime_data.locks[LOCK_1_ENTITY_ID]
-    provider_lock = plain.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    assert isinstance(declared_lock, CodelessLock)
-    assert isinstance(provider_lock, MockLCMLock)
-    # The entry that declared the lock kept its credential off the device;
-    # the entry that did not put its own on it.
-    assert (await declared_lock.async_get_usercodes())[1].readable_pin == "9999"
-    assert provider_lock.codes[2] == "8888"
-    assert provider_lock.codes[1] != "9999"
-
-    for entry in (declaring, plain):
-        await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_a_declaring_entry_releases_the_instance_it_holds(
+async def test_a_second_entry_cannot_end_up_on_a_different_provider(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    Unloading one of two entries tears down the instance THAT entry holds.
+    A lock one entry declares is declared by the next one, through the flow.
 
-    Release inverts the share, so it asks after the object being given up
-    rather than after the entity id. Two entries that resolve one lock to
-    different providers hold two instances, and an entry that read a
-    sibling's entry in the roster as ownership walked away from its own --
-    leaving it running, and skipping the unload that writes the Lock Code
-    Manager store back. For a codeless member that store IS the credential,
-    so every code the entry held would be gone on the next load.
+    Whether a lock keeps codes of its own is a fact about the DEVICE, so two
+    entries answering differently is a contradiction rather than a
+    configuration -- and one with teeth: two providers over one entity are
+    two credential stores, and a Personal Identification Number lands in
+    whichever the caller happened to reach. The second entry is driven
+    through the real config flow here, because the flow is what makes the
+    contradiction unrepresentable, and the assertion is on the provider the
+    entry ends up RUNNING rather than on what it stored.
+
+    Written against a lock a provider does claim, which is the only shape
+    that can go wrong silently: an unclaimed one is asked about anyway.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
-    await _entry_for(
+    first = await _entry_for(
         hass,
-        unique_id="plain_entry",
-        slot_num=2,
-        pin="8888",
-        holding=[LOCK_1_ENTITY_ID],
-    )
-    declaring = await _entry_for(
-        hass,
-        unique_id="declaring_entry",
+        unique_id="first_entry",
         slot_num=1,
         pin="9999",
         holding=[LOCK_1_ENTITY_ID],
@@ -369,16 +311,93 @@ async def test_a_declaring_entry_releases_the_instance_it_holds(
     )
     await _settle_sync(hass)
 
-    assert await hass.config_entries.async_reload(declaring.entry_id)
+    started = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    flow_id = started["flow_id"]
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "second", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+
+    # Asked, rather than quietly handed to the provider that claims the
+    # lock: agreeing has to be an answer the second entry can give.
+    assert result["step_id"] == "codeless_reconsider"
+    assert result["description_placeholders"] == {"lock": LOCK_1_ENTITY_ID}
+
+    await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "codeless_confirm"}
+    )
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+    await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "Bea", CONF_ENABLED: True, CONF_PIN: "8888"}
+    )
+    assert result["type"] == "create_entry"
     await hass.async_block_till_done()
 
-    reloaded = declaring.runtime_data.locks[LOCK_1_ENTITY_ID]
-    assert isinstance(reloaded, CodelessLock)
-    # Read before any tick, so this is what unload wrote rather than what a
-    # sync would put back.
-    assert (await reloaded.async_get_usercodes())[1].readable_pin == "9999"
+    second = hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, "second")
+    # One entity, one provider: the second entry did not merely record the
+    # same answer, it is driving the very instance the first one holds, so
+    # there is no second store for a code to go missing in.
+    assert (
+        second.runtime_data.locks[LOCK_1_ENTITY_ID]
+        is first.runtime_data.locks[LOCK_1_ENTITY_ID]
+    )
+    assert isinstance(second.runtime_data.locks[LOCK_1_ENTITY_ID], CodelessLock)
 
-    for entry in hass.config_entries.async_entries(DOMAIN):
+    for entry in (first, second):
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_lock_leaving_one_entry_leaves_the_sibling_untouched(
+    hass: HomeAssistant, codeless_lock_entity: er.RegistryEntry
+) -> None:
+    """
+    Dropping a shared member from one entry neither kills nor empties it.
+
+    Both entries declare the lock, so both drive one instance and one store.
+    The entry giving it up tears down only what nothing else holds -- release
+    is the inverse of the share, asked about the object rather than about the
+    roster -- and it discards the store only when nothing else reads it. Get
+    either wrong and the sibling is left with a dead provider, or with every
+    code it held gone: for a codeless member that store IS the credential,
+    and there is nowhere else those codes exist.
+    """
+    keeping = await _entry_for(
+        hass,
+        unique_id="keeping_entry",
+        slot_num=2,
+        pin="2222",
+        holding=[codeless_lock_entity.entity_id],
+        declaring=[codeless_lock_entity],
+    )
+    giving_up = await _entry_for(
+        hass,
+        unique_id="giving_up_entry",
+        slot_num=1,
+        pin="1111",
+        holding=[codeless_lock_entity.entity_id],
+        declaring=[codeless_lock_entity],
+    )
+    await _settle_sync(hass)
+    shared = keeping.runtime_data.locks[codeless_lock_entity.entity_id]
+    assert giving_up.runtime_data.locks[codeless_lock_entity.entity_id] is shared
+
+    hass.config_entries.async_update_entry(
+        giving_up, options={**giving_up.data, CONF_LOCKS: [], CONF_MEMBERS: {}}
+    )
+    await hass.async_block_till_done()
+
+    assert keeping.runtime_data.locks[codeless_lock_entity.entity_id] is shared
+    # A reload is what would expose a discarded store: the codes come back
+    # from disk or they do not come back at all. Read before any tick, so
+    # this is what survived rather than what a sync put back.
+    assert await hass.config_entries.async_reload(keeping.entry_id)
+    await hass.async_block_till_done()
+    reloaded = keeping.runtime_data.locks[codeless_lock_entity.entity_id]
+    assert (await reloaded.async_get_usercodes())[2].readable_pin == "2222"
+
+    for entry in (keeping, giving_up):
         await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -531,51 +550,56 @@ async def test_deleting_one_entry_leaves_a_sibling_entrys_credentials_alone(
     await hass.config_entries.async_unload(keeping.entry_id)
 
 
-async def test_a_sibling_on_a_different_provider_does_not_keep_the_store(
+async def test_handing_the_lock_back_discards_the_codes_it_was_holding(
     hass: HomeAssistant,
     hass_storage: dict[str, Any],
     mock_lock_config_entry,
 ) -> None:
     """
-    Only an entry that would READ this store keeps it from being collected.
+    The ``codeless_reconsider`` question promises this in so many words.
 
-    Two entries can disagree about one lock: one declares it codeless and
-    keeps its codes in Lock Code Manager, the other declares nothing and
-    writes them to the device. Gating collection on presence -- any entry
-    still listing the lock -- meant the sibling blocked it forever, even
-    though it never opens this file. The cleartext Personal Identification
-    Numbers the sweep exists to remove survived the deletion, with nothing
-    left that could ever read them back.
+    "The codes Lock Code Manager was holding for it are discarded" is true
+    only through the redeclaration teardown: the roster carries the same
+    entity id on both sides of the edit, so the codes go only because
+    ``locks_redeclared`` feeds ``locks_to_remove`` and that removal is a
+    permanent one. Drop either coupling and the promise silently becomes a
+    lie -- a file of cleartext Personal Identification Numbers left on disk
+    for a lock nothing reads it for any more.
+
+    Driven through the options flow rather than a config write, because the
+    sentence is about what answering "no" does.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
-    declaring = await _entry_for(
+    entry = await _entry_for(
         hass,
-        unique_id="declaring_entry",
+        unique_id="handing_back",
         slot_num=1,
-        pin=USER_PIN,
+        pin="9999",
         holding=[LOCK_1_ENTITY_ID],
         declaring=[claimed],
     )
-    sibling = await _entry_for(
-        hass,
-        unique_id="sibling_entry",
-        slot_num=2,
-        pin="2222",
-        holding=[LOCK_1_ENTITY_ID],
-    )
-    assert isinstance(sibling.runtime_data.locks[LOCK_1_ENTITY_ID], MockLCMLock)
     await _settle_sync(hass)
-
     # A reload is the cheapest way to reach the save unload performs, which
     # is what puts the credential on disk in the first place.
-    assert await hass.config_entries.async_reload(declaring.entry_id)
+    assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     store_key = f"codeless_{DOMAIN}_{LOCK_1_ENTITY_ID}"
-    assert hass_storage[store_key]["data"]["1"]["code"] == USER_PIN
+    assert hass_storage[store_key]["data"]["1"]["code"] == "9999"
 
-    await hass.config_entries.async_remove(declaring.entry_id)
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    flow_id = started["flow_id"]
+    users = {f"{USER_NAME} 1": {CONF_PIN: "9999", CONF_ENABLED: True}}
+    result = await hass.config_entries.options.async_configure(
+        flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
+    )
+    assert result["step_id"] == "codeless_reconsider"
+
+    result = await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": "codeless_decline"}
+    )
+    assert result["type"] == "create_entry"
     await hass.async_block_till_done()
 
     assert store_key not in hass_storage
 
-    await hass.config_entries.async_unload(sibling.entry_id)
+    await hass.config_entries.async_unload(entry.entry_id)

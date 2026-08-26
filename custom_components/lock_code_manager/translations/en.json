@@ -20,6 +20,7 @@
       "lock_not_registered": "Home Assistant has no entity registry entry for {unregistered_locks}, so Lock Code Manager has nothing stable to attach their configuration to and cannot be set up with them. A lock set up in YAML without a unique ID is the usual cause: give it one, or select a different lock.",
       "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
       "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true",
+      "codeless_conflict": "Another Lock Code Manager configuration already manages {locks}, and does not agree about where the codes for it live. A lock either has code storage of its own or it does not, and every configuration that manages it has to say the same thing. Answer the same way here, or remove the lock from one of the two configurations.",
       "codeless_declined": "Lock Code Manager has no way to manage codes on {locks}. Remove them from the list to continue. Your \"no\" stands for the rest of this attempt -- to let Lock Code Manager hold their codes after all, close this dialog and start again."
     },
     "step": {
@@ -162,6 +163,7 @@
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
       "lock_not_registered": "Home Assistant has no entity registry entry for {unregistered_locks}, so Lock Code Manager has nothing stable to attach their configuration to and cannot be set up with them. A lock set up in YAML without a unique ID is the usual cause: give it one, or select a different lock.",
       "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
+      "codeless_conflict": "Another Lock Code Manager configuration already manages {locks}, and does not agree about where the codes for it live. A lock either has code storage of its own or it does not, and every configuration that manages it has to say the same thing. Answer the same way here, or remove the lock from one of the two configurations.",
       "codeless_declined": "Lock Code Manager has no way to manage codes on {locks}. Remove them from the list to continue. Your \"no\" stands for the rest of this attempt -- to let Lock Code Manager hold their codes after all, close this dialog and start again."
     },
     "step": {

@@ -857,64 +857,24 @@ def _lock_managed_by_other_entry(
     )
 
 
-def _lock_store_held_by_another_entry(
-    hass: HomeAssistant,
-    config_entry: LockCodeManagerConfigEntry,
-    lock_entry: er.RegistryEntry,
-    lock_cls: type[BaseLock],
-) -> bool:
-    """
-    Return True if another entry resolves this lock to the same provider.
-
-    What guards discarding a provider's stored credentials. Presence is the
-    wrong question: a sibling entry that lists the lock but resolves a
-    DIFFERENT provider class never opens the store being discarded, and
-    treating it as a holder blocks collection forever -- leaving cleartext
-    Personal Identification Numbers on disk with nothing left in the
-    configuration that could ever read them back.
-
-    Same class, not the same instance: an entry that is merely between loads
-    holds no instance and would still read this store on its next load.
-
-    Takes the registry entry rather than an entity id, because the
-    declaration a sibling is resolved through is keyed by
-    ``RegistryEntry.id``. Every caller holds one already -- a provider keeps
-    its own, and the sweep looks one up before it can name a store at all --
-    so there is no case here where the row is missing.
-    """
-    dev_reg = dr.async_get(hass)
-    return any(
-        entry.entry_id != config_entry.entry_id
-        and (sibling := get_entry_config(entry)).has_lock(lock_entry.entity_id)
-        and resolve_member_provider_class(dev_reg, sibling, lock_entry) is lock_cls
-        for entry in hass.config_entries.async_entries(
-            DOMAIN, include_disabled=False, include_ignore=False
-        )
-    )
-
-
 def _find_shared_lock_instance(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     lock_entity_id: str,
-    lock_cls: type[BaseLock],
 ) -> BaseLock | None:
     """
-    Return another loaded entry's BaseLock for this lock, if it is the same kind.
+    Return another loaded entry's BaseLock for this lock, if there is one.
 
     A single physical lock may be referenced by multiple Lock Code Manager
     entries. We keep one BaseLock instance and share it: when a new entry
     references a lock that another loaded entry is already managing,
     reuse that entry's instance instead of creating a duplicate.
 
-    ``lock_cls`` is what THIS entry resolves the lock to, and two entries can
-    disagree about that. A member one entry declares codeless resolves to the
-    Lock Code Manager store; the same lock in an entry that declares nothing
-    resolves to whatever platform dispatch claims it. Keying the share on the
-    entity id alone handed both entries whichever instance loaded first, so a
-    declaration decided nothing beyond load order and a device somebody said
-    must never be written to got written to. What is shared is a provider for
-    a lock, not a lock.
+    The entity id is the whole of the key, because one lock entity resolves
+    to one provider everywhere. Whether a lock keeps codes of its own is a
+    fact about the device, and the config flow refuses to let two entries
+    answer it differently, so a sibling's instance is never a different kind
+    of store from the one this entry was about to build.
     """
     return next(
         (
@@ -925,7 +885,6 @@ def _find_shared_lock_instance(
             if entry.entry_id != config_entry.entry_id
             and entry.state is ConfigEntryState.LOADED
             and (existing := entry.runtime_data.locks.get(lock_entity_id)) is not None
-            and type(existing) is lock_cls
         ),
         None,
     )
@@ -946,10 +905,15 @@ def _lock_still_owned_by_another_entry(
     state listener keep firing, plus a second instance beside it on the next
     setup that doubles every code-slot event.
 
-    Identity, not entity id: two entries that resolve one lock to different
-    providers hold two instances, and each has to be able to release its own.
-    Config membership is not the question either -- a loaded entry that
-    dropped this lock during setup lists it but does not own it.
+    Config membership is not the question: a loaded entry that dropped this
+    lock during setup lists it but does not own it, and reading the roster
+    as ownership walks away from an instance nothing will ever tear down.
+
+    Identity rather than mere presence, even though one lock entity means
+    one shared instance, so this stays the inverse of acquisition however
+    the sharing is keyed. Value equality on the entity id would be the same
+    drift by another route -- see the note on ``BaseLock`` about why it has
+    no ``__eq__``.
     """
     return any(
         entry.entry_id != config_entry.entry_id
@@ -980,13 +944,15 @@ async def async_unload_lock(
             # ``remove_permanently`` discards state that deliberately outlives
             # an unload -- the per-lock setup-failed repair, the provider's
             # stored codes. Only a lock leaving Lock Code Manager altogether
-            # should lose those, so an entry that still reads THIS provider's
-            # store downgrades this to a plain teardown even while that entry
-            # is unloaded.
+            # should lose those, so an entry that still lists the lock
+            # downgrades this to a plain teardown even while that entry is
+            # unloaded. Presence is the right question because every entry
+            # holding one lock resolves it to one provider, so an entry that
+            # lists it is an entry that reads this same store.
             await lock.async_unload(
                 remove_permanently
-                and not _lock_store_held_by_another_entry(
-                    hass, config_entry, lock.lock, type(lock)
+                and not _lock_managed_by_other_entry(
+                    hass, config_entry, _lock_entity_id
                 )
             )
             if lock.coordinator is not None:
@@ -1113,9 +1079,10 @@ async def _async_discard_stored_credentials(
     only to name the store: nothing here reaches the lock.
 
     A store another entry still reads is kept, which is the same gate
-    ``async_unload_lock`` puts on ``remove_permanently``. The question is
-    whether a sibling resolves THIS provider, not whether one lists the lock
-    -- see :func:`_lock_store_held_by_another_entry`.
+    ``async_unload_lock`` puts on ``remove_permanently``. Listing the lock
+    is the whole of that question: one lock entity resolves to one provider
+    across every entry, so an entry that still holds it is one that still
+    opens this file.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
@@ -1130,7 +1097,7 @@ async def _async_discard_stored_credentials(
             # Nothing claimed it and nothing was declared about it, so no
             # provider ever ran and no provider ever wrote a store.
             continue
-        if _lock_store_held_by_another_entry(hass, config_entry, lock_entry, lock_cls):
+        if _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
             continue
         lock = lock_cls(
             hass,
@@ -1634,11 +1601,11 @@ async def _async_setup_new_locks(
     )
 
     async def _setup_one_lock(lock_entity_id: str) -> BaseLock:
-        # Built before the share is looked for, because what this entry
-        # resolves the lock to is part of what it is looking for, and the
-        # factory is the one place that resolution lives. Construction is a
-        # dataclass and a device registry lookup; everything that talks to
-        # the lock is in async_setup_internal below.
+        # Built before the share is looked for, so an entry that cannot
+        # resolve the lock at all fails here rather than adopting a
+        # sibling's instance for a member it was never able to name.
+        # Construction is a dataclass and a device registry lookup;
+        # everything that talks to the lock is in async_setup_internal below.
         lock = async_create_lock_instance(
             hass,
             dr.async_get(hass),
@@ -1646,9 +1613,7 @@ async def _async_setup_new_locks(
             config_entry,
             lock_entity_id,
         )
-        existing_lock = _find_shared_lock_instance(
-            hass, config_entry, lock_entity_id, type(lock)
-        )
+        existing_lock = _find_shared_lock_instance(hass, config_entry, lock_entity_id)
         if existing_lock is not None:
             _LOGGER.debug(
                 "%s (%s): Reusing lock instance for lock %s",
