@@ -30,6 +30,7 @@ from homeassistant.util import yaml as yaml_util
 from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_CODE_SLOT,
+    ATTR_CODE_SLOT_NAME,
     ATTR_SLOT_FIELD,
     ATTR_SOURCE,
     ATTR_TARGET,
@@ -105,6 +106,29 @@ def _fire_pin_used(
     lock.async_fire_code_slot_event(slot, False, action_text, Event("test_source"))
 
 
+# A keypad and a gate Lock Code Manager manages neither of, which is the
+# point: a use entered on one of these is one no lock in the entry observed.
+EXTERNAL_KEYPAD = "sensor.side_gate_keypad"
+EXTERNAL_TARGET = "cover.side_gate"
+
+
+async def _use_credential(
+    hass: HomeAssistant, config_entry, target: str = EXTERNAL_TARGET
+) -> None:
+    """Report a credential use whose source and target are different entities."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_USE_CREDENTIAL,
+        {
+            "config_entry_id": config_entry.entry_id,
+            ATTR_CODE: "1234",
+            ATTR_SOURCE: EXTERNAL_KEYPAD,
+            ATTR_TARGET: target,
+        },
+        blocking=True,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Slot Usage Notifier
 # --------------------------------------------------------------------------- #
@@ -145,6 +169,54 @@ async def test_notifier_fires_for_single_entity(
     assert int(call.data["slot_num"]) == 1
     assert call.data["slot_name"] == "test1"
     # MockLockEntity registers with friendly name = "test_1"
+    assert call.data["lock_name"] == "test_1"
+
+
+async def test_notifier_names_the_user_for_a_reported_use(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A use reported through ``use_credential`` still names the user.
+
+    Such a use records the unified payload, which names the user in `name`
+    and has no `code_slot_name` at all, so reading only the latter left
+    every keypad notification saying "Unknown slot".
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [
+                {
+                    "service": "test.captured",
+                    "data": {
+                        "slot_num": "{{ slot_num }}",
+                        "slot_name": "{{ slot_name }}",
+                        "lock_name": "{{ lock_name }}",
+                    },
+                }
+            ],
+        },
+    )
+
+    # Targets a lock in the entry, which is what makes the slot entity record
+    # it; the source is the keypad, so this is not a use the lock observed.
+    await _use_credential(hass, lock_code_manager_config_entry, target=LOCK_1_ENTITY_ID)
+    await hass.async_block_till_done()
+
+    # Should the payload ever gain `code_slot_name`, this test stops
+    # exercising the fallback and should be rewritten rather than pass on.
+    recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert ATTR_CODE_SLOT_NAME not in recorded.attributes
+
+    assert len(captured) == 1
+    call: ServiceCall = captured[0]
+    assert call.data["slot_name"] == "test1"
+    assert int(call.data["slot_num"]) == 1
     assert call.data["lock_name"] == "test_1"
 
 
@@ -798,27 +870,6 @@ def _find_variable(source: dict, name: str) -> str | None:
 # --------------------------------------------------------------------------- #
 
 CREDENTIAL_USED_PATH = "credential_used.yaml"
-
-# Nothing Lock Code Manager manages, which is the point: a use entered here
-# and applied to something outside the entry is what the entity-triggered
-# blueprints cannot see.
-EXTERNAL_KEYPAD = "sensor.side_gate_keypad"
-EXTERNAL_TARGET = "cover.side_gate"
-
-
-async def _use_credential(hass: HomeAssistant, config_entry) -> None:
-    """Report a credential use whose source and target are different entities."""
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_USE_CREDENTIAL,
-        {
-            "config_entry_id": config_entry.entry_id,
-            ATTR_CODE: "1234",
-            ATTR_SOURCE: EXTERNAL_KEYPAD,
-            ATTR_TARGET: EXTERNAL_TARGET,
-        },
-        blocking=True,
-    )
 
 
 async def _setup_credential_used(hass: HomeAssistant, **inputs) -> list[ServiceCall]:

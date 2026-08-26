@@ -154,6 +154,12 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         both would fire the entity twice and leave it showing the thinner of
         the two. ``source`` and ``target`` being the same entity is what
         marks that case, and this guard retires with the deprecated event.
+
+        So a reported use is recorded only when both hold: the target is a
+        lock in this entry that can fire code slot events (checked in
+        :meth:`_handle_credential_used`), and ``source`` differs from
+        ``target``. Naming the same entity for both silently records
+        nothing, which is what the ``source`` field's description warns.
         """
         return (
             event_data[ATTR_CONFIG_ENTRY_ID] == self.entry_id

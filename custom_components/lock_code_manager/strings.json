@@ -317,7 +317,7 @@
         },
         "source": {
           "name": "Source",
-          "description": "The entity where the credential was entered, such as a keypad. Required. If nothing in Home Assistant represents it, create a template entity to name here. Its state is never read, only its entity ID is reported."
+          "description": "The entity where the credential was entered, such as a keypad. Required. If nothing in Home Assistant represents it, create a template entity to name here. Its state is never read, only its entity ID is reported. It should name a different entity from the target: a use whose source and target are the same entity is treated as one the lock observed itself, and is not recorded again."
         },
         "target": {
           "name": "Target",
