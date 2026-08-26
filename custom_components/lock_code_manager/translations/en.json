@@ -31,7 +31,7 @@
       },
       "code_slot": {
         "data": {
-          "entity_id": "Condition Entity",
+          "condition": "Condition Entity",
           "enabled": "Enabled",
           "name": "Name",
           "pin": "PIN Code"
@@ -56,10 +56,10 @@
       },
       "yaml": {
         "data": {
-          "slots": "Slots YAML"
+          "users": "Users YAML"
         },
-        "description": "The config is expected to be a dictionary where the key is the slot number. For more information, check the docs.",
-        "title": "Configure slots"
+        "description": "The config is expected to be a dictionary where the key is the user's name. Lock Code Manager picks the code slot each user occupies. For more information, check the docs.",
+        "title": "Configure users"
       },
       "reauth_confirm": {
         "data": {
@@ -143,9 +143,9 @@
       "init": {
         "data": {
           "locks": "Locks",
-          "slots": "Slots YAML"
+          "users": "Users YAML"
         },
-        "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
+        "description": "Update the locks that are associated with this config entry and/or the users.",
         "title": "Lock Code Manager"
       }
     }

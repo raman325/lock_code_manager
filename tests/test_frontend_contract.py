@@ -224,11 +224,14 @@ def test_every_entity_key_has_a_name() -> None:
 
 def test_every_translation_matches_the_strings_it_translates() -> None:
     """
-    A name added to one file and not the other ships untranslated.
+    A string added to one file and not the other ships untranslated.
 
     ``strings.json`` is what Home Assistant uploads for translation and
     ``translations/en.json`` is what it actually renders for an English
-    install, so a name that reaches only the first is a name nobody sees.
+    install, so a string that reaches only the first is one nobody sees.
+    The whole document is compared, not just the entity names: the config
+    flow reads its field labels from here too, and a rename that lands in
+    one file leaves the other naming a key that no longer exists.
     """
     root = (
         pathlib.Path(__file__).resolve().parent.parent
@@ -240,4 +243,4 @@ def test_every_translation_matches_the_strings_it_translates() -> None:
         (root / "translations" / "en.json").read_text(encoding="utf-8")
     )
 
-    assert strings["entity"] == english["entity"]
+    assert strings == english
