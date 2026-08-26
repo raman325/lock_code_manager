@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "b249d7ac1bd4",
+  "strategy": "manual-commit",
+  "branch": "fix/config-flow-field-labels",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b2/49d7ac1bd4/0/metadata.json",
+      "transcript": "/b2/49d7ac1bd4/0/full.jsonl",
+      "compact_transcript": "/b2/49d7ac1bd4/0/transcript.jsonl",
+      "content_hash": "/b2/49d7ac1bd4/0/content_hash.txt",
+      "prompt": "/b2/49d7ac1bd4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 49,
+    "cache_creation_tokens": 31398,
+    "cache_read_tokens": 3370610,
+    "output_tokens": 14499,
+    "api_call_count": 26
+  }
+}
