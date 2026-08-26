@@ -171,6 +171,7 @@ def _check_common_slots(
 
 async def _async_validate_users_yaml(
     hass: HomeAssistant,
+    config_entry: ConfigEntry | None,
     raw_users: dict[Any, Any],
     locks: Iterable[str],
 ) -> tuple[dict | None, dict, dict]:
@@ -181,6 +182,10 @@ async def _async_validate_users_yaml(
     and the numbers are allocated afterwards from whatever the locks leave
     free. What can still fail is a name that is empty or that means the same
     person as another, and a count of users no lock could hold.
+
+    ``config_entry`` is the entry the submission is for, or ``None`` from
+    the flow that is still creating one; it is what the lock reads this
+    performs are made on behalf of.
 
     Returns the parsed users -- or ``None`` when validation failed -- with the
     accumulated errors and description placeholders.
@@ -224,7 +229,7 @@ async def _async_validate_users_yaml(
 
     # The count is what a lock has to hold, now that nobody picks a number.
     try:
-        await async_check_slot_capacity(hass, locks, [len(parsed_users)])
+        await async_check_slot_capacity(hass, config_entry, locks, [len(parsed_users)])
     except SlotAllocationError as err:
         return (
             None,
@@ -236,21 +241,23 @@ async def _async_validate_users_yaml(
 
 async def _allocate_for(
     hass: HomeAssistant,
+    config_entry: ConfigEntry | None,
     locks: Sequence[str],
     num_users: int,
-    *,
-    excluding: ConfigEntry | None = None,
 ) -> tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]:
     """
     Find numbers for ``num_users``, or say why it could not.
 
     Allocation itself lives in ``domain.allocation``, which the services call
     too; this only turns its refusals into the form errors a flow renders.
+
+    ``config_entry`` is the entry being allocated for, whose own numbers do
+    not constrain it: kept ones are held by tenure, released ones are free
+    for whoever comes next. A flow that is still creating its entry passes
+    ``None``, which by the same rule holds nothing.
     """
     try:
-        unavailable = await async_allocate_for(
-            hass, locks, num_users, excluding=excluding
-        )
+        unavailable = await async_allocate_for(hass, config_entry, locks, num_users)
     except SlotAllocationError as err:
         return None, {"base": err.translation_key}, err.placeholders
     return unavailable, {}, {}
@@ -331,12 +338,13 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             # Settled before a single name is collected. Which users get
             # configured does not change which numbers allocation issues, so
             # the count alone decides whether they fit -- and a refusal here
-            # is one the user can still act on.
+            # is one the user can still act on. The ``None`` is the entry the
+            # lock reads are made for: this flow is what creates it.
             (
                 unavailable,
                 errors,
                 description_placeholders,
-            ) = await _allocate_for(self.hass, self.data[CONF_LOCKS], num_users)
+            ) = await _allocate_for(self.hass, None, self.data[CONF_LOCKS], num_users)
             if unavailable is not None:
                 self._users_to_configure = num_users
                 self._unavailable = unavailable
@@ -445,7 +453,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 validation_errors,
                 validation_placeholders,
             ) = await _async_validate_users_yaml(
-                self.hass, user_input[CONF_USERS], self.data[CONF_LOCKS]
+                self.hass, None, user_input[CONF_USERS], self.data[CONF_LOCKS]
             )
             errors.update(validation_errors)
             description_placeholders.update(validation_placeholders)
@@ -454,12 +462,16 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 assert users is not None
                 # Same allocation the guided path uses, against the same
                 # occupancy: nobody picks a number on either route, so
-                # neither can land on one a lock already holds.
+                # neither can land on one a lock already holds. The ``None``
+                # is the entry the lock reads are made for, which this flow
+                # has not created yet.
                 (
                     unavailable,
                     allocation_errors,
                     allocation_placeholders,
-                ) = await _allocate_for(self.hass, self.data[CONF_LOCKS], len(users))
+                ) = await _allocate_for(
+                    self.hass, None, self.data[CONF_LOCKS], len(users)
+                )
                 if unavailable is None:
                     return self.async_show_form(
                         step_id="yaml",
@@ -545,7 +557,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # already-valid slot set can become too large for the new lock.
                 try:
                     await async_check_slot_capacity(
-                        self.hass, user_input[CONF_LOCKS], existing_slots
+                        self.hass, config_entry, user_input[CONF_LOCKS], existing_slots
                     )
                 except SlotAllocationError as err:
                     additional_errors = {"base": err.translation_key}
@@ -626,7 +638,10 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 validation_errors,
                 validation_placeholders,
             ) = await _async_validate_users_yaml(
-                self.hass, user_input[CONF_USERS], user_input[CONF_LOCKS]
+                self.hass,
+                self.config_entry,
+                user_input[CONF_USERS],
+                user_input[CONF_LOCKS],
             )
             errors.update(validation_errors)
             description_placeholders.update(validation_placeholders)
@@ -639,11 +654,9 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                     allocation_placeholders,
                 ) = await _allocate_for(
                     self.hass,
+                    self.config_entry,
                     user_input[CONF_LOCKS],
                     len(users),
-                    # Its own numbers do not constrain it: kept ones are held
-                    # by tenure, released ones are free for whoever comes next.
-                    excluding=self.config_entry,
                 )
                 if unavailable is None:
                     errors.update(allocation_errors)
@@ -664,6 +677,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                         title="",
                         data=EntryConfig(
                             locks=tuple(user_input[CONF_LOCKS]),
+                            members=config.members,
                             users=users,
                             assignment=assignment,
                             extra=config.extra,

@@ -1,6 +1,7 @@
 """Config flow tests."""
 
 import json
+import logging
 from pathlib import Path
 import re
 from unittest.mock import AsyncMock, PropertyMock, patch
@@ -16,6 +17,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
+    CONF_MEMBERS,
     CONF_NUM_USERS,
     CONF_USERS,
     DOMAIN,
@@ -47,6 +49,7 @@ from .common import (
     LOCK_2_ENTITY_ID,
     MockLCMLock,
     async_discover_unclaimed_mqtt_lock,
+    reading_for,
 )
 from .providers.zigbee2mqtt.conftest import async_discover_z2m_lock
 
@@ -935,6 +938,76 @@ async def test_setup_ignores_a_lock_on_an_unsupported_platform(
 
     assert result["type"] == "form"
     assert result["step_id"] == "code_slot"
+
+
+async def test_setup_reads_the_locks_for_no_entry_at_all(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    The flow that creates an entry has none yet, and its reads say so.
+
+    What allocation makes of a lock -- above all whether one it cannot build
+    a provider for is still one credentials get written to -- is settled by
+    the owning entry's configuration, so every read has to carry the entry it
+    is made for. Setup is the one case where there is honestly nobody to
+    name.
+    """
+    flow_id = await _start_config_flow(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+    with reading_for() as read_for:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+
+    assert result["step_id"] == "code_slot"
+    assert read_for, "allocation issued numbers without reading a lock"
+    assert all(entry is None for entry in read_for)
+
+
+async def test_editing_reads_the_locks_for_the_entry_being_edited(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The editor names the entry whose locks it is reading."""
+    flow_id, entry = await _start_options_flow(hass)
+
+    with reading_for() as read_for:
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            {
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_USERS: {
+                    "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
+                    "Newcomer": {CONF_ENABLED: True, CONF_PIN: "9999"},
+                },
+            },
+        )
+
+    assert result["type"] == "create_entry"
+    assert read_for, "the editor allocated numbers without reading a lock"
+    assert all(read is entry for read in read_for)
+
+
+async def test_reauth_reads_the_locks_for_the_entry_it_is_repairing(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """Swapping a lock is still a read the entry being repaired asked for."""
+    lock_code_manager_config_entry.async_start_reauth(
+        hass, context={"lock_entity_id": LOCK_1_ENTITY_ID}
+    )
+    await hass.async_block_till_done()
+    [flow] = lock_code_manager_config_entry.async_get_active_flows(
+        hass, {SOURCE_REAUTH}
+    )
+
+    with reading_for() as read_for:
+        result = await hass.config_entries.flow.async_configure(
+            flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+        )
+
+    assert result["reason"] == "locks_updated"
+    assert read_for, "reauth accepted the new locks without reading them"
+    assert all(read is lock_code_manager_config_entry for read in read_for)
 
 
 async def test_setup_reads_only_as_far_as_it_has_to(
@@ -1906,9 +1979,48 @@ async def test_a_lock_that_cannot_be_built_says_whether_it_is_ours(
         ).entity_id
 
     with pytest.raises(LockQuerySkipped) as raised:
-        build_lock_instance(hass, dr.async_get(hass), ent_reg, entity_id)
+        build_lock_instance(hass, dr.async_get(hass), ent_reg, None, entity_id)
 
     assert raised.value.managed is managed
+
+
+async def test_a_skipped_lock_read_names_the_entry_that_asked(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Giving up on a lock has to say who gave up on it.
+
+    Locks are shared between entries, so the lock alone does not identify
+    the read that stopped: whoever reads the log has to be able to tell
+    which entry's configuration to go and look at. Setup is the one caller
+    with honestly nobody to name.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    def _asked_by(config_entry) -> str:
+        caplog.clear()
+        with caplog.at_level(logging.WARNING), pytest.raises(LockQuerySkipped):
+            build_lock_instance(
+                hass, dev_reg, ent_reg, config_entry, "lock.never_registered"
+            )
+        [record] = [
+            record
+            for record in caplog.records
+            if record.name.endswith("domain.allocation")
+        ]
+        asked_by, lock_entity_id = record.args
+        assert lock_entity_id == "lock.never_registered"
+        return asked_by
+
+    assert (
+        _asked_by(lock_code_manager_config_entry)
+        == lock_code_manager_config_entry.entry_id
+    )
+    assert _asked_by(None) == "New entry"
 
 
 async def test_setup_refuses_when_a_lock_cannot_be_read(
@@ -1971,7 +2083,7 @@ async def test_a_lock_whose_config_entry_is_gone_is_skipped(
     ent_reg.async_update_entity(orphan.entity_id, config_entry_id=None)
 
     with pytest.raises(LockQuerySkipped) as raised:
-        build_lock_instance(hass, dr.async_get(hass), ent_reg, orphan.entity_id)
+        build_lock_instance(hass, dr.async_get(hass), ent_reg, None, orphan.entity_id)
 
     # Ours, so it still bounds the numbers even unread.
     assert raised.value.managed is True
@@ -2419,3 +2531,39 @@ async def test_reauth_completes_around_a_grandfathered_unclaimed_lock(
 
     assert result["type"] == "abort"
     assert result["reason"] == "locks_updated"
+
+
+async def test_options_flow_preserves_member_declarations(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    Editing users through the options flow keeps the member declarations.
+
+    The flow rebuilds the whole entry from an EntryConfig and writes it, and
+    it never asks about members, so anything it does not carry forward is
+    erased by the one write a user reaches from the UI.
+    """
+    ent_reg = er.async_get(hass)
+    lock_1 = ent_reg.async_get(LOCK_1_ENTITY_ID)
+    assert lock_1
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**BASE_CONFIG, CONF_MEMBERS: {lock_1.id: {"placeholder": True}}},
+        unique_id="Mock Title",
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_LOCKS: list(BASE_CONFIG[CONF_LOCKS]),
+                CONF_USERS: {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}},
+            },
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_MEMBERS] == {lock_1.id: {"placeholder": True}}
+    # The edit the declaration had to survive actually landed.
+    assert set(result["data"][CONF_USERS]) == {"test1"}
