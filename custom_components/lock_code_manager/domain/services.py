@@ -21,6 +21,7 @@ from ..const import (
 )
 from .allocation import SlotAllocationError, async_allocate_for
 from .config import EntryConfig
+from .events import async_fire_credential_used
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry
@@ -92,20 +93,26 @@ async def async_clear_usercode(
     await lock.async_internal_clear_usercode(code_slot)
 
 
-async def async_validate_code(
+async def async_use_credential(
     hass: HomeAssistant,
     code: str,
     *,
+    source: str,
+    target: str,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
 ) -> dict[str, Any]:
     """
-    Answer whether a code would work against one entry's users.
+    Report a credential use to one entry, and answer whether it was valid.
 
-    A pure query: the answer is the response and nothing else happens. No
-    lock is contacted, nothing is written, and no event is fired -- a
-    caller that wants to notify or count does so from the automation that
-    made the call.
+    For the keypads and door controllers Lock Code Manager cannot watch: the
+    caller says what was entered and where, and this answers the same
+    question the entry's own dashboard would while recording the use.
+
+    A valid code announces itself on the unified credential-used event. An
+    invalid one announces nothing at all -- the response is the whole answer,
+    so an automation that wants to react to a rejection does so from the
+    response rather than from an event anyone else could see.
 
     The entry is the target rather than a lock because an entry's users are
     what a code is checked against, and a code that no lock has ever been
@@ -113,6 +120,33 @@ async def async_validate_code(
     """
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     result = validate_credential(config_entry, code)
+
+    # ``user`` and ``slot`` are both set exactly when the credential
+    # validated; reading them rather than ``valid`` is also what tells the
+    # type checker they are present.
+    if result.user is not None and result.slot is not None:
+        # ``source`` and ``target`` are data. Nothing here dereferences them,
+        # looks them up in a registry, or reads their state: a code source's
+        # state can be the cleartext credential that was just typed.
+        if (lock := config_entry.runtime_data.locks.get(target)) is not None:
+            # Routing through the provider funnel is what makes the entry's
+            # per-slot event entity record this, exactly as a use the lock
+            # observed itself would. ``to_locked`` has to be False for that:
+            # the event entity records unlock-shaped uses only, so anything
+            # else reaches it and is filtered back out.
+            lock.async_fire_code_slot_event(
+                code_slot=result.slot,
+                to_locked=False,
+                source=source,
+                target=target,
+            )
+        else:
+            # No entity of ours to record against. Not an error and not worth
+            # a warning: the caller knows their setup better than we do, and
+            # naming something outside this entry is the ordinary case.
+            async_fire_credential_used(
+                hass, config_entry, name=result.user, source=source, target=target
+            )
 
     return {
         ATTR_VALID: result.valid,

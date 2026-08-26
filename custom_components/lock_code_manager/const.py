@@ -23,7 +23,7 @@ SERVICE_ADD_USER = "add_user"
 SERVICE_DELETE_USER = "delete_user"
 SERVICE_GENERATE_PIN = "generate_pin"
 SERVICE_DEOBFUSCATE_LOG = "deobfuscate_log"
-SERVICE_VALIDATE_CODE = "validate_code"
+SERVICE_USE_CREDENTIAL = "use_credential"
 
 ATTR_TEXT = "text"
 
@@ -92,9 +92,9 @@ ATTR_SCHEDULE = "schedule"
 ATTR_SCHEDULE_NEXT_EVENT = "next_event"
 
 # Unified credential-used event payload keys. ``source`` is the entity where
-# the credential was entered and ``target`` the entity it was used against;
-# both are always present, and a caller with no natural entity for one of them
-# is expected to supply one (a Virtual lock, a template entity).
+# the credential was entered and ``target`` the entity it was used against --
+# any entity, of any domain, not necessarily a lock. Both are always present,
+# and a caller with no natural entity for one of them is expected to make one.
 ATTR_SOURCE = "source"
 ATTR_TARGET = "target"
 

@@ -2088,6 +2088,9 @@ class BaseLock:
         to_locked: bool | None = None,
         action_text: str | None = None,
         source_data: Event | State | dict[str, Any] | None = None,
+        *,
+        source: str | None = None,
+        target: str | None = None,
     ) -> None:
         """
         Record that a credential on this lock was used.
@@ -2099,6 +2102,12 @@ class BaseLock:
         The single funnel every provider goes through, so it is also where the
         unified ``BUS_EVENT_CREDENTIAL_USED`` is fired: every provider gets it
         without a provider-side change.
+
+        ``source`` and ``target`` are the unified event's attribution and both
+        default to this lock, which is the truth for a use the lock observed
+        itself. The ``use_credential`` action overrides them with the entities
+        its caller named, so that path produces one unified event carrying the
+        caller's attribution instead of a second, lock-shaped one.
         """
         name_state: State | None = None
         lock_entity_id = self.lock.entity_id
@@ -2171,6 +2180,6 @@ class BaseLock:
                 name=slot_name,
                 # A lock that observed the use is both where the credential
                 # was entered and what it acted on.
-                source=lock_entity_id,
-                target=lock_entity_id,
+                source=lock_entity_id if source is None else source,
+                target=lock_entity_id if target is None else target,
             )

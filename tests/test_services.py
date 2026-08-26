@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 import voluptuous as vol
 
+from homeassistant.components.event import ATTR_EVENT_TYPE
 from homeassistant.const import (
+    ATTR_NAME,
     CONF_CONDITION,
     CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
+    MATCH_ALL,
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant
@@ -25,17 +33,23 @@ from custom_components.lock_code_manager.const import (
     ATTR_CLEAR_CREDENTIALS,
     ATTR_CODE,
     ATTR_CODE_SLOT,
+    ATTR_CONFIG_ENTRY_ID,
+    ATTR_CONFIG_ENTRY_TITLE,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_REASON,
     ATTR_SLOT,
+    ATTR_SOURCE,
+    ATTR_TARGET,
     ATTR_TEXT,
     ATTR_USER,
     ATTR_USERCODE,
     ATTR_VALID,
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    EVENT_LOCK_STATE_CHANGED,
     REASON_CONDITION_NOT_MET,
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
@@ -47,7 +61,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_GENERATE_PIN,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
-    SERVICE_VALIDATE_CODE,
+    SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.domain import services
 from custom_components.lock_code_manager.domain.allocation import SlotAllocationError
@@ -1084,6 +1098,7 @@ async def test_slot_condition_services_accept_a_title(
 
 VALIDATE_LOCK_ENTITY_ID = "lock.virtual_validate_service"
 VALIDATE_CONDITION_ENTITY_ID = "input_boolean.validate_service_gate"
+VALIDATE_EVENT_ENTITY_ID = "event.validate_service_alice_credential_used"
 
 # alice validates, bob is disabled, carol waits on a condition that is off.
 VALIDATE_CONFIG = {
@@ -1101,14 +1116,23 @@ VALIDATE_CONFIG = {
 }
 
 
-async def _call_validate_code(
+# Stands for the keypad the credential was typed on: an entity Lock Code
+# Manager knows nothing about, which is the whole point of the action.
+VALIDATE_SOURCE_ENTITY_ID = "sensor.front_door_keypad"
+
+
+async def _call_use_credential(
     hass: HomeAssistant, data: dict, *, return_response: bool = True
 ) -> dict | None:
-    """Call the validate_code action."""
+    """Call the use_credential action, defaulting the attribution fields."""
     return await hass.services.async_call(
         DOMAIN,
-        SERVICE_VALIDATE_CODE,
-        data,
+        SERVICE_USE_CREDENTIAL,
+        {
+            ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
+            ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+            **data,
+        },
         blocking=True,
         return_response=return_response,
     )
@@ -1147,29 +1171,29 @@ async def validate_entry_fixture(hass: HomeAssistant):
     await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
-async def test_validate_code_valid(hass: HomeAssistant, validate_entry) -> None:
+async def test_use_credential_valid(hass: HomeAssistant, validate_entry) -> None:
     """A valid code returns the user with no failure reason."""
-    response = await _call_validate_code(
+    response = await _call_use_credential(
         hass,
         {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
     )
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
 
 
-async def test_validate_code_valid_by_title(
+async def test_use_credential_valid_by_title(
     hass: HomeAssistant, validate_entry
 ) -> None:
     """Either identifier names the same entry, as the sibling actions do."""
-    response = await _call_validate_code(
+    response = await _call_use_credential(
         hass,
         {"config_entry_title": validate_entry.title, ATTR_CODE: "1234"},
     )
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
 
 
-async def test_validate_code_unknown(hass: HomeAssistant, validate_entry) -> None:
+async def test_use_credential_unknown(hass: HomeAssistant, validate_entry) -> None:
     """A code no slot holds is rejected as unknown."""
-    response = await _call_validate_code(
+    response = await _call_use_credential(
         hass,
         {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "0000"},
     )
@@ -1184,11 +1208,11 @@ async def test_validate_code_unknown(hass: HomeAssistant, validate_entry) -> Non
     ("code", "reason"),
     [("5678", REASON_USER_DISABLED), ("9999", REASON_CONDITION_NOT_MET)],
 )
-async def test_validate_code_failure_reasons(
+async def test_use_credential_failure_reasons(
     hass: HomeAssistant, validate_entry, code: str, reason: str
 ) -> None:
     """A matched-but-inactive code reports why it did not validate."""
-    response = await _call_validate_code(
+    response = await _call_use_credential(
         hass,
         {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code},
     )
@@ -1202,17 +1226,17 @@ async def test_validate_code_failure_reasons(
         {"config_entry_title": "no such entry"},
     ],
 )
-async def test_validate_code_rejects_an_unknown_entry(
+async def test_use_credential_rejects_an_unknown_entry(
     hass: HomeAssistant, validate_entry, selector: dict
 ) -> None:
     """An entry nothing matches is refused the way the sibling actions refuse it."""
     with pytest.raises(
         ServiceValidationError, match="No lock code manager config entry"
     ):
-        await _call_validate_code(hass, {**selector, ATTR_CODE: "1234"})
+        await _call_use_credential(hass, {**selector, ATTR_CODE: "1234"})
 
 
-async def test_validate_code_without_return_response(
+async def test_use_credential_without_return_response(
     hass: HomeAssistant, validate_entry
 ) -> None:
     """
@@ -1221,7 +1245,7 @@ async def test_validate_code_without_return_response(
     The response is the action's only output, so OPTIONAL rather than ONLY
     is what keeps a caller that omits ``return_response`` from erroring.
     """
-    response = await _call_validate_code(
+    response = await _call_use_credential(
         hass,
         {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
         return_response=False,
@@ -1231,7 +1255,7 @@ async def test_validate_code_without_return_response(
 
 
 @pytest.mark.parametrize("code", ["   ", "\t\n"])
-async def test_validate_code_refuses_a_whitespace_only_code(
+async def test_use_credential_refuses_a_whitespace_only_code(
     hass: HomeAssistant, validate_entry, code: str
 ) -> None:
     """
@@ -1242,12 +1266,12 @@ async def test_validate_code_refuses_a_whitespace_only_code(
     it instead would report every entry with no PIN set as a match.
     """
     with pytest.raises(vol.Invalid):
-        await _call_validate_code(
+        await _call_use_credential(
             hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code}
         )
 
 
-async def test_validate_code_strips_padding_at_the_schema(
+async def test_use_credential_strips_padding_at_the_schema(
     hass: HomeAssistant, validate_entry
 ) -> None:
     """
@@ -1257,7 +1281,7 @@ async def test_validate_code_strips_padding_at_the_schema(
     what makes the length check reject padding-only input, so it has to be
     shown not to reject a real code that merely arrives padded.
     """
-    response = await _call_validate_code(
+    response = await _call_use_credential(
         hass,
         {"config_entry_id": validate_entry.entry_id, ATTR_CODE: " 1234 "},
     )
@@ -1273,7 +1297,7 @@ async def test_validate_code_strips_padding_at_the_schema(
         pytest.param({}, id="neither"),
     ],
 )
-async def test_validate_code_requires_exactly_one_entry_selector(
+async def test_use_credential_requires_exactly_one_entry_selector(
     hass: HomeAssistant, validate_entry, selector: dict
 ) -> None:
     """
@@ -1283,10 +1307,10 @@ async def test_validate_code_requires_exactly_one_entry_selector(
     disagree; accepting neither has no entry to answer about.
     """
     with pytest.raises(vol.Invalid):
-        await _call_validate_code(hass, {**selector, ATTR_CODE: "1234"})
+        await _call_use_credential(hass, {**selector, ATTR_CODE: "1234"})
 
 
-async def test_validate_code_on_an_entry_with_no_slots(hass: HomeAssistant) -> None:
+async def test_use_credential_on_an_entry_with_no_slots(hass: HomeAssistant) -> None:
     """
     An entry configuring no users answers unknown_code rather than erroring.
 
@@ -1314,7 +1338,7 @@ async def test_validate_code_on_an_entry_with_no_slots(hass: HomeAssistant) -> N
     assert await hass.config_entries.async_setup(empty_entry.entry_id)
     await hass.async_block_till_done()
 
-    response = await _call_validate_code(
+    response = await _call_use_credential(
         hass, {"config_entry_id": empty_entry.entry_id, ATTR_CODE: "1234"}
     )
 
@@ -1327,7 +1351,7 @@ async def test_validate_code_on_an_entry_with_no_slots(hass: HomeAssistant) -> N
     await hass.config_entries.async_unload(empty_entry.entry_id)
 
 
-async def test_validate_code_matches_a_padded_stored_pin(hass: HomeAssistant) -> None:
+async def test_use_credential_matches_a_padded_stored_pin(hass: HomeAssistant) -> None:
     """
     A PIN already stored with padding validates against the code as entered.
 
@@ -1363,7 +1387,7 @@ async def test_validate_code_matches_a_padded_stored_pin(hass: HomeAssistant) ->
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert await _call_validate_code(
+    assert await _call_use_credential(
         hass, {"config_entry_id": entry.entry_id, ATTR_CODE: "4321"}
     ) == {ATTR_VALID: True, ATTR_USER: "dana", ATTR_REASON: None}
 
@@ -1371,8 +1395,153 @@ async def test_validate_code_matches_a_padded_stored_pin(hass: HomeAssistant) ->
     # of all a submission that is itself only padding.
     assert entry.runtime_data.slot_coordinators[2].pin_value is None
     with pytest.raises(vol.Invalid):
-        await _call_validate_code(
+        await _call_use_credential(
             hass, {"config_entry_id": entry.entry_id, ATTR_CODE: "   "}
         )
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_use_credential_records_against_an_in_entry_lock(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    A lock in the entry gets the use recorded on the slot's event entity.
+
+    The action's own attribution survives the routing: the unified event
+    still names the keypad the credential was entered on, not the lock.
+    """
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    response = await _call_use_credential(
+        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
+    )
+    await hass.async_block_till_done()
+
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+    assert [event.data for event in unified] == [
+        {
+            ATTR_NAME: "alice",
+            ATTR_CONFIG_ENTRY_ID: validate_entry.entry_id,
+            ATTR_CONFIG_ENTRY_TITLE: validate_entry.title,
+            ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
+            ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+        }
+    ]
+    assert len(deprecated) == 1
+    assert deprecated[0].data[ATTR_CODE_SLOT] == 1
+
+    state = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert state
+    assert state.attributes[ATTR_EVENT_TYPE] == VALIDATE_LOCK_ENTITY_ID
+
+
+async def test_use_credential_with_a_target_outside_the_entry(
+    hass: HomeAssistant, validate_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    A target Lock Code Manager does not manage is announced, not refused.
+
+    Only the unified event fires: there is no entity of ours to record
+    against, and the caller knows their setup better than we do. The
+    absence of ERROR records is the load-bearing half -- routing this into
+    the slot's event entity would trip its unknown-event-type check, and
+    Home Assistant would swallow that into a log line rather than raise.
+    """
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    before = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert before
+
+    with caplog.at_level(logging.DEBUG):
+        response = await _call_use_credential(
+            hass,
+            {
+                "config_entry_id": validate_entry.entry_id,
+                ATTR_CODE: "1234",
+                ATTR_TARGET: "cover.some_other_door",
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+    assert [event.data[ATTR_TARGET] for event in unified] == ["cover.some_other_door"]
+    assert deprecated == []
+    assert hass.states.get(VALIDATE_EVENT_ENTITY_ID) == before
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
+
+
+@pytest.mark.parametrize(
+    "code", ["0000", "5678", "9999"], ids=["unknown", "disabled", "condition"]
+)
+async def test_use_credential_announces_nothing_when_invalid(
+    hass: HomeAssistant, validate_entry, code: str
+) -> None:
+    """
+    A code that does not validate is not a use, however it failed.
+
+    The response is the whole answer, so an automation reacting to a
+    rejection reads it there rather than from an event anyone could see.
+    """
+    fired = async_capture_events(hass, MATCH_ALL)
+
+    response = await _call_use_credential(
+        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code}
+    )
+    await hass.async_block_till_done()
+
+    assert response[ATTR_VALID] is False
+    assert [
+        event.event_type for event in fired if event.event_type.startswith(DOMAIN)
+    ] == []
+
+
+async def test_use_credential_never_publishes_the_source_entity_state(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    Naming a source whose state is the code does not publish the code.
+
+    ``source`` and ``target`` are data: nothing looks them up or reads
+    them. A keypad entity that exposes what was typed is exactly the
+    surface that has leaked cleartext PINs here before.
+    """
+    hass.states.async_set(VALIDATE_SOURCE_ENTITY_ID, "1234")
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    await _call_use_credential(
+        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
+    )
+    await hass.async_block_till_done()
+
+    assert unified
+    for event in [*unified, *deprecated]:
+        assert "1234" not in json.dumps(event.data, default=str)
+
+
+@pytest.mark.parametrize("missing", [ATTR_SOURCE, ATTR_TARGET])
+async def test_use_credential_requires_both_attribution_fields(
+    hass: HomeAssistant, validate_entry, missing: str
+) -> None:
+    """
+    Neither end of the attribution is optional.
+
+    Every consumer of the unified event can read both without a key test
+    only because the schema refuses a call that omits either one.
+    """
+    data = {
+        ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
+        ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+        "config_entry_id": validate_entry.entry_id,
+        ATTR_CODE: "1234",
+    }
+    del data[missing]
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_USE_CREDENTIAL, data, blocking=True
+        )

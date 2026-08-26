@@ -148,7 +148,7 @@ deobfuscate_log:
         text:
           multiline: true
 
-validate_code:
+use_credential:
   fields:
     config_entry_id:
       selector:
@@ -161,3 +161,11 @@ validate_code:
       required: true
       selector:
         text:
+    source:
+      required: true
+      selector:
+        entity:
+    target:
+      required: true
+      selector:
+        entity:

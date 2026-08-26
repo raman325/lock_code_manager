@@ -35,12 +35,14 @@ def async_fire_credential_used(
 
     All five fields are always present and never empty. ``source`` (where the
     credential was entered) and ``target`` (what it was used against) are the
-    same entity when a lock observed the use itself; a caller with no natural
-    entity for one of them is expected to supply one -- a Virtual lock as a
-    target, a template entity as a source. That is the deliberate trade: a
-    rigid payload every consumer can read without key tests or null checks,
-    with documented escape hatches for the setups that need them. Do not add
-    a default, a fallback, or an optional field here.
+    same entity when a lock observed the use itself. Neither is restricted to
+    a domain: a use can target a lock, a cover, an alarm panel, anything the
+    caller associates it with. A caller with no natural entity for one of
+    them is expected to supply one -- a template entity as a source, a
+    Virtual lock as a target. That is the deliberate trade: a rigid payload
+    every consumer can read without key tests or null checks, with documented
+    escape hatches for the setups that need them. Do not add a default, a
+    fallback, or an optional field here.
 
     Nothing dereferences ``source`` or ``target``: a code source's own state
     can be the cleartext credential that was typed, so both travel as bare

@@ -50,6 +50,6 @@
     "hard_refresh_usercodes": "mdi:refresh",
     "set_slot_condition": "mdi:calendar-edit",
     "set_usercode": "mdi:key-plus",
-    "validate_code": "mdi:shield-key"
+    "use_credential": "mdi:shield-key"
   }
 }

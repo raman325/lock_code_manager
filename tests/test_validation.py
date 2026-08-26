@@ -95,14 +95,14 @@ async def validation_entry_fixture(hass: HomeAssistant) -> MockConfigEntry:
 async def test_valid_code(hass: HomeAssistant, validation_entry):
     """An active slot's PIN validates and reports the configured user name."""
     result = validate_credential(validation_entry, "1234")
-    assert result == ValidationResult(valid=True, user="alice", reason=None)
+    assert result == ValidationResult(valid=True, user="alice", reason=None, slot=1)
 
 
 async def test_unknown_code(hass: HomeAssistant, validation_entry):
     """A code no slot holds is rejected as unknown."""
     result = validate_credential(validation_entry, "0000")
     assert result == ValidationResult(
-        valid=False, user=None, reason=REASON_UNKNOWN_CODE
+        valid=False, user=None, reason=REASON_UNKNOWN_CODE, slot=None
     )
 
 
@@ -110,7 +110,7 @@ async def test_disabled_user(hass: HomeAssistant, validation_entry):
     """A disabled slot's PIN is rejected as user_disabled."""
     result = validate_credential(validation_entry, "5678")
     assert result == ValidationResult(
-        valid=False, user=None, reason=REASON_USER_DISABLED
+        valid=False, user=None, reason=REASON_USER_DISABLED, slot=None
     )
 
 
@@ -118,7 +118,7 @@ async def test_condition_not_met(hass: HomeAssistant, validation_entry):
     """A slot blocked only by its condition entity is rejected as condition_not_met."""
     result = validate_credential(validation_entry, "9999")
     assert result == ValidationResult(
-        valid=False, user=None, reason=REASON_CONDITION_NOT_MET
+        valid=False, user=None, reason=REASON_CONDITION_NOT_MET, slot=None
     )
 
 
@@ -126,7 +126,7 @@ async def test_disabled_and_condition_off(hass: HomeAssistant, validation_entry)
     """A slot both disabled and condition-gated reports the most restrictive reason."""
     result = validate_credential(validation_entry, "4321")
     assert result == ValidationResult(
-        valid=False, user=None, reason=REASON_USER_DISABLED
+        valid=False, user=None, reason=REASON_USER_DISABLED, slot=None
     )
 
 
@@ -134,7 +134,7 @@ async def test_duplicate_code_precedence(hass: HomeAssistant, validation_entry):
     """When two slots share a PIN, one disabled and one condition-gated, disabled wins."""
     result = validate_credential(validation_entry, "7777")
     assert result == ValidationResult(
-        valid=False, user=None, reason=REASON_USER_DISABLED
+        valid=False, user=None, reason=REASON_USER_DISABLED, slot=None
     )
 
 
@@ -144,7 +144,7 @@ async def test_padding_is_stripped_before_matching(
 ):
     """A padded code gets the same answer as the same code without padding."""
     result = validate_credential(validation_entry, submitted)
-    assert result == ValidationResult(valid=True, user="alice", reason=None)
+    assert result == ValidationResult(valid=True, user="alice", reason=None, slot=1)
 
 
 async def test_validation_leaves_the_bus_alone(hass: HomeAssistant, validation_entry):

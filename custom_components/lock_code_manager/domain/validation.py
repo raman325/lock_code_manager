@@ -20,11 +20,19 @@ from .slot_coordinator import SlotEntityCoordinator
 
 @dataclass(frozen=True, slots=True)
 class ValidationResult:
-    """Outcome of validating one submitted credential."""
+    """
+    Outcome of validating one submitted credential.
+
+    ``user`` and ``slot`` are both set exactly when ``valid`` is True, and
+    ``reason`` exactly when it is False. ``slot`` is here for the caller that
+    has to record the use against Lock Code Manager's own per-slot entity; it
+    is not part of any answer a caller outside this integration sees.
+    """
 
     valid: bool
     user: str | None
     reason: str | None
+    slot: int | None
 
 
 def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
@@ -78,7 +86,9 @@ def validate_credential(
     active = next((c for c in matches if c.is_active), None)
 
     if active is None:
-        return ValidationResult(valid=False, user=None, reason=_failure_reason(matches))
+        return ValidationResult(
+            valid=False, user=None, reason=_failure_reason(matches), slot=None
+        )
 
     name = get_entry_config(config_entry).name_for(active.slot_num)
-    return ValidationResult(valid=True, user=name, reason=None)
+    return ValidationResult(valid=True, user=name, reason=None, slot=active.slot_num)

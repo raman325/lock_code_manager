@@ -69,6 +69,8 @@ from .const import (
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
+    ATTR_SOURCE,
+    ATTR_TARGET,
     ATTR_TEXT,
     ATTR_USERCODE,
     CONDITION_ENTITY_DOMAINS,
@@ -90,7 +92,7 @@ from .const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
-    SERVICE_VALIDATE_CODE,
+    SERVICE_USE_CREDENTIAL,
     STRATEGY_FILENAME,
     STRATEGY_PATH,
     Platform,
@@ -127,7 +129,7 @@ from .domain.services import (
     async_delete_user,
     async_set_slot_condition,
     async_set_usercode,
-    async_validate_code,
+    async_use_credential,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
 from .domain.unmanaged import async_sweep_unmanaged_codes
@@ -678,24 +680,32 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         supports_response=SupportsResponse.ONLY,
     )
 
-    async def _validate_code(call: ServiceCall) -> ServiceResponse:
-        """Answer whether a code would work against one entry's users."""
-        return await async_validate_code(
+    async def _use_credential(call: ServiceCall) -> ServiceResponse:
+        """Report a credential use and answer whether the code was valid."""
+        return await async_use_credential(
             hass,
             call.data[ATTR_CODE],
+            source=call.data[ATTR_SOURCE],
+            target=call.data[ATTR_TARGET],
             config_entry_id=call.data.get("config_entry_id"),
             config_entry_title=call.data.get("config_entry_title"),
         )
 
     hass.services.async_register(
         DOMAIN,
-        SERVICE_VALIDATE_CODE,
-        _validate_code,
+        SERVICE_USE_CREDENTIAL,
+        _use_credential,
         schema=_entry_schema(
             {
                 vol.Required(ATTR_CODE): vol.All(
                     cv.string, str.strip, vol.Length(min=1)
                 ),
+                # Any domain, both of them: a credential is rarely entered
+                # on a lock, and what it was used against can be a cover, an
+                # alarm panel, or anything else the caller associates it
+                # with. Nothing here dereferences either one.
+                vol.Required(ATTR_SOURCE): cv.entity_id,
+                vol.Required(ATTR_TARGET): cv.entity_id,
             }
         ),
         # OPTIONAL, not ONLY, even though the response is the only thing
