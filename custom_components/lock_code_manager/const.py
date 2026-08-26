@@ -91,7 +91,21 @@ ATTR_CONDITION_ENTITY_NAME = "friendly_name"
 ATTR_SCHEDULE = "schedule"
 ATTR_SCHEDULE_NEXT_EVENT = "next_event"
 
-# Events
+# Unified credential-used event payload keys. ``source`` is the entity where
+# the credential was entered and ``target`` the entity it was used against;
+# both are always present, and a caller with no natural entity for one of them
+# is expected to supply one (a Virtual lock, a template entity).
+ATTR_SOURCE = "source"
+ATTR_TARGET = "target"
+
+# Bus events. The ``BUS_EVENT_`` prefix is load-bearing: ``EVENT_CREDENTIAL_USED``
+# further down is an entity key with a bare, undomained value, and firing that
+# on the bus (or listening for this one as an entity key) would silently do
+# nothing.
+BUS_EVENT_CREDENTIAL_USED = f"{DOMAIN}_credential_used"
+
+# Kept alongside the unified event above for consumers that have not migrated;
+# see the fire site in providers/_base.py.
 EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
 
 # Credential validation response keys
@@ -119,7 +133,8 @@ ATTR_NOTIFICATION_SOURCE = "notification_source"
 
 # Event entity event type
 # The entity key, and so the last part of its unique ID. Renamed from
-# "pin_used" in version 4; the migration rewrites the stored ones.
+# "pin_used" in version 4; the migration rewrites the stored ones. Not a bus
+# event -- that is ``BUS_EVENT_CREDENTIAL_USED``.
 EVENT_CREDENTIAL_USED = "credential_used"
 LEGACY_EVENT_PIN_USED = "pin_used"
 
