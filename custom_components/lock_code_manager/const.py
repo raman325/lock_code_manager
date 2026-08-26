@@ -93,17 +93,11 @@ ATTR_SCHEDULE_NEXT_EVENT = "next_event"
 
 # Events
 EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
-EVENT_CODE_VALIDATION_FAILED = f"{DOMAIN}_code_validation_failed"
 
-# Credential validation
+# Credential validation response keys
 ATTR_REASON = "reason"
-ATTR_FIRE_EVENTS = "fire_events"
 ATTR_VALID = "valid"
 ATTR_USER = "user"
-# The entity the code came from, when the caller knows it. Carried through
-# to both validation events so an automation can tell a keypad submission
-# from the lock's own keypad, and scope itself to one code source.
-ATTR_SOURCE_ENTITY_ID = "source_entity_id"
 
 REASON_UNKNOWN_CODE = "unknown_code"
 REASON_USER_DISABLED = "user_disabled"
@@ -112,8 +106,6 @@ REASON_CONDITION_NOT_MET = "condition_not_met"
 # Failure reasons ordered least to most restrictive: a code that matched a
 # user somewhere outranks one unknown everywhere, and a user held back by
 # more than a condition outranks one merely waiting on its condition.
-# Choosing among the slots of one entry and choosing among entries sharing
-# a lock are the same choice, so both read their ordering from here.
 REASON_PRECEDENCE = (
     REASON_UNKNOWN_CODE,
     REASON_CONDITION_NOT_MET,

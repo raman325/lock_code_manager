@@ -10,8 +10,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 import voluptuous as vol
 
 from homeassistant.const import (
-    ATTR_DEVICE_ID,
-    ATTR_ENTITY_ID,
     CONF_CONDITION,
     CONF_ENABLED,
     CONF_ENTITY_ID,
@@ -19,7 +17,7 @@ from homeassistant.const import (
     CONF_PIN,
     STATE_ON,
 )
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
@@ -27,14 +25,10 @@ from custom_components.lock_code_manager.const import (
     ATTR_CLEAR_CREDENTIALS,
     ATTR_CODE,
     ATTR_CODE_SLOT,
-    ATTR_EXTRA_DATA,
-    ATTR_FIRE_EVENTS,
-    ATTR_LCM_CONFIG_ENTRY_ID,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_REASON,
     ATTR_SLOT,
-    ATTR_SOURCE_ENTITY_ID,
     ATTR_TEXT,
     ATTR_USER,
     ATTR_USERCODE,
@@ -42,8 +36,6 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_CODE_VALIDATION_FAILED,
-    EVENT_LOCK_STATE_CHANGED,
     REASON_CONDITION_NOT_MET,
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
@@ -65,7 +57,7 @@ from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
 from custom_components.lock_code_manager.domain.util import mask_pin
 
-from .common import LOCK_1_ENTITY_ID, SLOT_1_EVENT_ENTITY
+from .common import LOCK_1_ENTITY_ID
 
 
 async def test_set_usercode_service(
@@ -1092,7 +1084,6 @@ async def test_slot_condition_services_accept_a_title(
 
 VALIDATE_LOCK_ENTITY_ID = "lock.virtual_validate_service"
 VALIDATE_CONDITION_ENTITY_ID = "input_boolean.validate_service_gate"
-OTHER_LOCK_ENTITY_ID = "lock.virtual_validate_other"
 
 # alice validates, bob is disabled, carol waits on a condition that is off.
 VALIDATE_CONFIG = {
@@ -1109,41 +1100,18 @@ VALIDATE_CONFIG = {
     },
 }
 
-# A second entry with a lock of its own, so "a lock outside the target entry"
-# is a lock this integration really manages rather than an unknown entity.
-OTHER_VALIDATE_CONFIG = {
-    CONF_LOCKS: [OTHER_LOCK_ENTITY_ID],
-    CONF_SLOTS: {
-        11: {CONF_NAME: "betty", CONF_PIN: "2468", CONF_ENABLED: True},
-    },
-}
-
-
-def _capture_events(hass: HomeAssistant, event_name: str) -> list[Event]:
-    """Capture events of the given type on the hass event bus."""
-    events: list[Event] = []
-
-    @callback
-    def capture(event: Event) -> None:
-        events.append(event)
-
-    hass.bus.async_listen(event_name, capture)
-    return events
-
 
 async def _call_validate_code(
     hass: HomeAssistant, data: dict, *, return_response: bool = True
 ) -> dict | None:
-    """Call the validate_code service and flush the event bus."""
-    response = await hass.services.async_call(
+    """Call the validate_code action."""
+    return await hass.services.async_call(
         DOMAIN,
         SERVICE_VALIDATE_CODE,
         data,
         blocking=True,
         return_response=return_response,
     )
-    await hass.async_block_till_done()
-    return response
 
 
 @pytest.fixture(name="validate_entry")
@@ -1169,38 +1137,6 @@ async def validate_entry_fixture(hass: HomeAssistant):
         title="Validate Service",
         data=VALIDATE_CONFIG,
         unique_id="test_validate_service",
-    )
-    lcm_entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(lcm_entry.entry_id)
-    await hass.async_block_till_done()
-
-    yield lcm_entry
-
-    await hass.config_entries.async_unload(lcm_entry.entry_id)
-
-
-@pytest.fixture(name="other_validate_entry")
-async def other_validate_entry_fixture(hass: HomeAssistant, validate_entry):
-    """Set up a second LCM config entry managing a lock of its own."""
-    virtual_entry = MockConfigEntry(domain="virtual")
-    virtual_entry.add_to_hass(hass)
-
-    ent_reg = er.async_get(hass)
-    lock_entity = ent_reg.async_get_or_create(
-        "lock",
-        "virtual",
-        "virtual_validate_other",
-        suggested_object_id="virtual_validate_other",
-        config_entry=virtual_entry,
-    )
-    assert lock_entity.entity_id == OTHER_LOCK_ENTITY_ID
-    hass.states.async_set(OTHER_LOCK_ENTITY_ID, "locked")
-
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="Other Validate Service",
-        data=OTHER_VALIDATE_CONFIG,
-        unique_id="test_validate_service_2",
     )
     lcm_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(lcm_entry.entry_id)
@@ -1259,150 +1195,6 @@ async def test_validate_code_failure_reasons(
     assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
 
 
-async def test_validate_code_fires_success_event_on_the_named_lock(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    pin_bearing_source: str,
-) -> None:
-    """A named lock is where the success is attributed, on the bus and the entity."""
-    state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    await _call_validate_code(
-        hass,
-        {
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
-            ATTR_CODE: "1234",
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_SOURCE_ENTITY_ID: pin_bearing_source,
-        },
-    )
-
-    assert len(state_events) == 1
-    assert state_events[0].data[ATTR_CODE_SLOT] == 1
-    assert state_events[0].data[ATTR_EXTRA_DATA] == {
-        ATTR_SOURCE_ENTITY_ID: pin_bearing_source
-    }
-    assert not failure_events
-
-    # The event entity keys its event type on the lock, which is the whole
-    # reason attribution has to be explicit rather than guessed.
-    event_entity_state = hass.states.get(SLOT_1_EVENT_ENTITY)
-    assert event_entity_state.attributes["event_type"] == LOCK_1_ENTITY_ID
-
-
-async def test_validate_code_without_a_lock_fires_no_success_event(
-    hass: HomeAssistant, validate_entry
-) -> None:
-    """Unattributed, a success is the response alone: no entity could own the event."""
-    state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    response = await _call_validate_code(
-        hass,
-        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
-    )
-
-    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
-    assert not state_events
-    assert not failure_events
-
-
-async def test_validate_code_rejects_a_lock_outside_the_entry(
-    hass: HomeAssistant, validate_entry, other_validate_entry
-) -> None:
-    """A lock managed by another entry cannot be the one a success is attributed to."""
-    with pytest.raises(ServiceValidationError) as raised:
-        await _call_validate_code(
-            hass,
-            {
-                "config_entry_id": validate_entry.entry_id,
-                ATTR_CODE: "1234",
-                ATTR_LOCK_ENTITY_ID: OTHER_LOCK_ENTITY_ID,
-            },
-        )
-
-    assert OTHER_LOCK_ENTITY_ID in str(raised.value)
-    assert validate_entry.title in str(raised.value)
-
-
-@pytest.mark.parametrize("with_lock", [True, False])
-async def test_validate_code_failure_event_attribution(
-    hass: HomeAssistant, validate_entry, with_lock: bool
-) -> None:
-    """A failure always fires; only a supplied lock puts a lock on the payload."""
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    data = {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "5678"}
-    if with_lock:
-        data[ATTR_LOCK_ENTITY_ID] = VALIDATE_LOCK_ENTITY_ID
-    await _call_validate_code(hass, data)
-
-    assert len(failure_events) == 1
-    payload = failure_events[0].data
-    assert payload[ATTR_REASON] == REASON_USER_DISABLED
-    assert payload[ATTR_LCM_CONFIG_ENTRY_ID] == validate_entry.entry_id
-    # Masking survives having no lock: the token is salted with the matched
-    # slot either way, so deobfuscate_log can still reverse it.
-    assert payload[ATTR_CODE] == mask_pin("5678", 2, hass.data[DOMAIN]["instance_id"])
-    assert (ATTR_ENTITY_ID in payload) is with_lock
-    assert (ATTR_DEVICE_ID in payload) is with_lock
-    if with_lock:
-        assert payload[ATTR_ENTITY_ID] == VALIDATE_LOCK_ENTITY_ID
-
-
-async def test_validate_code_failure_event_masks_an_unknown_code_opaquely(
-    hass: HomeAssistant, validate_entry
-) -> None:
-    """No matched slot means the slot-0 token, which the map cannot reverse."""
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    await _call_validate_code(
-        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "0000"}
-    )
-
-    assert len(failure_events) == 1
-    assert failure_events[0].data[ATTR_REASON] == REASON_UNKNOWN_CODE
-    assert failure_events[0].data[ATTR_CODE] == mask_pin(
-        "0000", 0, hass.data[DOMAIN]["instance_id"]
-    )
-
-
-@pytest.mark.parametrize("with_lock", [True, False])
-async def test_validate_code_fire_events_false(
-    hass: HomeAssistant, validate_entry, with_lock: bool
-) -> None:
-    """With fire_events off neither outcome fires any event, lock or no lock."""
-    state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    lock_field = {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID} if with_lock else {}
-    success = await _call_validate_code(
-        hass,
-        {
-            "config_entry_id": validate_entry.entry_id,
-            ATTR_CODE: "1234",
-            ATTR_FIRE_EVENTS: False,
-            **lock_field,
-        },
-    )
-    failure = await _call_validate_code(
-        hass,
-        {
-            "config_entry_id": validate_entry.entry_id,
-            ATTR_CODE: "0000",
-            ATTR_FIRE_EVENTS: False,
-            **lock_field,
-        },
-    )
-
-    assert success[ATTR_VALID] is True
-    assert failure[ATTR_REASON] == REASON_UNKNOWN_CODE
-    assert not state_events
-    assert not failure_events
-
-
 @pytest.mark.parametrize(
     "selector",
     [
@@ -1423,139 +1215,16 @@ async def test_validate_code_rejects_an_unknown_entry(
 async def test_validate_code_without_return_response(
     hass: HomeAssistant, validate_entry
 ) -> None:
-    """The service works fire-and-forget, leaving only its events behind."""
-    state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    """
+    Asking without wanting the answer is allowed, and is then a no-op.
 
+    The response is the action's only output, so OPTIONAL rather than ONLY
+    is what keeps a caller that omits ``return_response`` from erroring.
+    """
     response = await _call_validate_code(
         hass,
-        {
-            "config_entry_id": validate_entry.entry_id,
-            ATTR_CODE: "1234",
-            ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID,
-        },
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
         return_response=False,
     )
 
     assert response is None
-    assert len(state_events) == 1
-
-
-SOURCE_ENTITY_ID = "sensor.keypad_last_code"
-
-
-@pytest.fixture(name="pin_bearing_source")
-def pin_bearing_source_fixture(hass: HomeAssistant) -> str:
-    """
-    A code-source entity whose own state is the cleartext PIN.
-
-    That is what a keypad's code entity actually looks like, and it is the
-    only shape under which the source-attribution redaction can be checked.
-    """
-    hass.states.async_set(SOURCE_ENTITY_ID, "1234")
-    return SOURCE_ENTITY_ID
-
-
-def _contains_pin(value: object, pin: str) -> bool:
-    """Return whether ``pin`` appears anywhere inside a nested structure."""
-    if isinstance(value, str):
-        return pin in value
-    if isinstance(value, dict):
-        return any(
-            _contains_pin(key, pin) or _contains_pin(item, pin)
-            for key, item in value.items()
-        )
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return any(_contains_pin(item, pin) for item in value)
-    return False
-
-
-async def test_validate_code_failure_event_carries_the_source(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    pin_bearing_source: str,
-) -> None:
-    """A rejected code names its source too, so a notifier can scope itself."""
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    await _call_validate_code(
-        hass,
-        {
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
-            ATTR_CODE: "0000",
-            ATTR_SOURCE_ENTITY_ID: pin_bearing_source,
-        },
-    )
-
-    assert len(failure_events) == 1
-    assert failure_events[0].data[ATTR_SOURCE_ENTITY_ID] == pin_bearing_source
-
-
-@pytest.mark.parametrize("code", ["1234", "0000"])
-async def test_validate_code_omits_an_unsupplied_source(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    code: str,
-) -> None:
-    """Without a source, neither event carries the key at all."""
-    state_events = _capture_events(hass, EVENT_LOCK_STATE_CHANGED)
-    failure_events = _capture_events(hass, EVENT_CODE_VALIDATION_FAILED)
-
-    await _call_validate_code(
-        hass,
-        {
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
-            ATTR_CODE: code,
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-        },
-    )
-
-    for event in [*state_events, *failure_events]:
-        assert ATTR_SOURCE_ENTITY_ID not in event.data
-    # A dict source_data would otherwise land here; nothing supplied one.
-    for event in state_events:
-        assert event.data[ATTR_EXTRA_DATA] is None
-
-
-@pytest.mark.parametrize(
-    ("code", "event_name"),
-    [("1234", EVENT_LOCK_STATE_CHANGED), ("0000", EVENT_CODE_VALIDATION_FAILED)],
-)
-async def test_validate_code_never_publishes_the_source_state(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    pin_bearing_source: str,
-    code: str,
-    event_name: str,
-) -> None:
-    """
-    The source entity's state -- the cleartext PIN -- never leaves with it.
-
-    Only the entity ID is threaded through. Handing the State object to
-    ``async_fire_code_slot_event`` instead would serialize its state and
-    attributes straight onto the event bus and into the recorder, which is
-    the whole hazard the source field has to avoid.
-    """
-    events = _capture_events(hass, event_name)
-
-    await _call_validate_code(
-        hass,
-        {
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
-            ATTR_CODE: code,
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_SOURCE_ENTITY_ID: pin_bearing_source,
-        },
-    )
-
-    assert len(events) == 1
-    assert hass.states.get(pin_bearing_source).state == "1234"
-    assert not _contains_pin(events[0].data, "1234")
-
-    # The usage event is replayed onto the slot's event entity, whose
-    # attributes the recorder keeps and any dashboard renders.
-    event_entity_state = hass.states.get(SLOT_1_EVENT_ENTITY)
-    assert event_entity_state is not None
-    assert not _contains_pin(dict(event_entity_state.attributes), "1234")

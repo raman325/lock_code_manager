@@ -161,14 +161,3 @@ validate_code:
       required: true
       selector:
         text:
-    lock_entity_id:
-      selector:
-        entity:
-          domain: lock
-    source_entity_id:
-      selector:
-        entity:
-    fire_events:
-      default: true
-      selector:
-        boolean:

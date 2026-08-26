@@ -98,39 +98,21 @@ async def async_validate_code(
     *,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
-    lock_entity_id: str | None = None,
-    fire_events: bool = True,
-    source_entity_id: str | None = None,
 ) -> dict[str, Any]:
     """
-    Validate a code against one entry's users.
+    Answer whether a code would work against one entry's users.
 
-    The entry is the target because its users are what a code is checked
-    against; a lock only ever stood in for the entries behind it.
-    ``lock_entity_id`` names which of the entry's locks a success is
-    attributed to, and must be one of them -- attributing a success to a
-    lock the entry does not manage would name an event type no slot's event
-    entity accepts.
+    A pure query: the answer is the response and nothing else happens. No
+    lock is contacted, nothing is written, and no event is fired -- a
+    caller that wants to notify or count does so from the automation that
+    made the call.
+
+    The entry is the target rather than a lock because an entry's users are
+    what a code is checked against, and a code that no lock has ever been
+    programmed with still has an answer here.
     """
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
-
-    lock = None
-    if lock_entity_id is not None:
-        lock = config_entry.runtime_data.locks.get(lock_entity_id)
-        if lock is None:
-            raise ServiceValidationError(
-                f"Lock {lock_entity_id} is not managed by config entry "
-                f"{config_entry.title}"
-            )
-
-    result = validate_credential(
-        hass,
-        config_entry,
-        code,
-        lock=lock,
-        fire_events=fire_events,
-        source_entity_id=source_entity_id,
-    )
+    result = validate_credential(hass, config_entry, code)
 
     return {
         ATTR_VALID: result.valid,

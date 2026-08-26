@@ -301,7 +301,7 @@
     },
     "validate_code": {
       "name": "Validate code",
-      "description": "Check a code against a Lock Code Manager entry's users without touching any lock. Returns whether the code would work, for which user, and the reason when it would not.",
+      "description": "Ask whether a code would work against a Lock Code Manager entry's users. This action only answers the question: it touches no lock, changes nothing, and fires no event. The response says whether the code would work, for which user, and the reason when it would not.",
       "fields": {
         "config_entry_id": {
           "name": "Config entry",
@@ -314,18 +314,6 @@
         "code": {
           "name": "Code",
           "description": "The code to validate."
-        },
-        "lock_entity_id": {
-          "name": "Lock",
-          "description": "The lock the code was submitted to, which the success event is attributed to. Must belong to the chosen entry. Leave it out and a valid code returns its answer without firing a success event."
-        },
-        "source_entity_id": {
-          "name": "Source",
-          "description": "The entity the code came from, such as a keypad's code entity. Included in the fired event (in extra_data on success) so an automation can tell where a code was entered."
-        },
-        "fire_events": {
-          "name": "Fire events",
-          "description": "Fire the usual lock state changed event on success, or a validation failed event on failure."
         }
       }
     }
