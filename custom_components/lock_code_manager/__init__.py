@@ -789,9 +789,43 @@ def _lock_managed_by_other_entry(
     config_entry: LockCodeManagerConfigEntry,
     lock_entity_id: str,
 ) -> bool:
-    """Return True if another (non-disabled, non-ignored) LCM entry manages the lock."""
+    """
+    Return True if another (non-disabled, non-ignored) LCM entry manages the lock.
+
+    This asks about entry *presence*, which is what the persistent per-lock
+    repair issues care about: they outlive unloads and reloads, so an entry
+    that is merely between loads still needs its issue kept. Anything that
+    tears down live objects wants ``_lock_managed_by_other_loaded_entry``
+    instead.
+    """
     return any(
         entry.entry_id != config_entry.entry_id
+        and get_entry_config(entry).has_lock(lock_entity_id)
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+    )
+
+
+def _lock_managed_by_other_loaded_entry(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_id: str,
+) -> bool:
+    """
+    Return True if another *loaded* LCM entry manages the lock.
+
+    Teardown has to match ``_find_shared_lock_instance``, which only reuses
+    an instance from a loaded entry. An entry that exists but is unloaded
+    (setup retrying, mid-reload, disabled entry re-added) will build its own
+    instance when it next loads, so keeping this one alive on its behalf
+    leaves an ownerless BaseLock whose push subscription and config-entry
+    state listener both keep firing -- and a second instance alongside it
+    once anything reloads, which doubles every code-slot event.
+    """
+    return any(
+        entry.entry_id != config_entry.entry_id
+        and entry.state is ConfigEntryState.LOADED
         and get_entry_config(entry).has_lock(lock_entity_id)
         for entry in hass.config_entries.async_entries(
             DOMAIN, include_disabled=False, include_ignore=False
@@ -841,7 +875,7 @@ async def async_unload_lock(
         lock = runtime_data.locks.pop(_lock_entity_id, None)
         if lock is None:
             continue
-        if not _lock_managed_by_other_entry(hass, config_entry, _lock_entity_id):
+        if not _lock_managed_by_other_loaded_entry(hass, config_entry, _lock_entity_id):
             await lock.async_unload(remove_permanently)
             if lock.coordinator is not None:
                 await lock.coordinator.async_shutdown()
