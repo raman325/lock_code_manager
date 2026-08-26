@@ -1,0 +1,659 @@
+<task-notification>
+<task-id>a623d1e5daa3399b4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a623d1e5daa3399b4.output</output-file>
+<status>completed</status>
+<summary>Agent "Merge main and fix review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Branch `reader-provider` is merged, cleaned, and pushed (`2bc72afa`).
+
+## Step 1 — merge
+
+`git merge main` auto-merged cleanly, no conflicts (commit `67fcab59`). Note the merge bumped `requirements_dev.txt`/`requirements_test.txt`; I reinstalled into the venv before trusting any result.
+
+**How main's unload change interacts with the branch's:** they are complementary and *both independently load-bearing*. I verified this in both directions:
+
+- Branch's mutation (remove `await super().async_unload(...)` from `providers/virtual.py`): `test_provider_reload_after_unload_does_not_rearm` still **fails** post-merge. Restored, tree clean.
+- Main's mutation (revert `_lock_managed_by_other_loaded_entry` → `_lock_managed_by_other_entry` in `async_unload_lock`): main's two new tests **fail**. Restored.
+
+They operate at different layers: main's `4905c748` widens *when* `lock.async_unload()` is called (an unloaded-but-present sibling entry no longer suppresses teardown); the branch's fix corrects *what* `VirtualLock.async_unload` does once called (chain base teardown to release the config-entry-state listener). Neither makes the other redundant — in fact main's change makes the branch's fix reachable in one more scenario.
+
+## Step 2 — `default=` was safely removable
+
+Confirmed unreachable, with a stronger argument than "past the `if not matches` guard". The real invariant is in `domain/slot_coordinator.py:479-487`: `_recompute_active` assigns `_is_active = not inactive_because_of` and `_inactive_because_of` **together**, so `is_active is False` ⟺ reasons non-empty. For the `is_active is None` (pre-start) case, the only construction site is `__init__.py:1755-1757`, where `slot_coordinators[slot_num] = coordinator` is followed by `coordinator.async_start()` on the very next line with **no await between them** — so no caller can ever observe a registered-but-unstarted coordinator. `async_stop()` never resets `_is_active` back to `None`. Therefore `max()` cannot receive an empty sequence.
+
+Removing it also *strengthened* the suite: the `if not matches: return REASON_UNKNOWN_CODE` guard is now load-bearing. Mutating that guard away now raises `ValueError: max() arg is an empty sequence` and kills two tests; previously it would have silently returned `condition_not_met`.
+
+## Step 3 — cleanups
+
+All in `custom_components/lock_code_manager/domain/validation.py` unless noted:
+- Removed `default=REASON_CONDITION_NOT_MET` and its comment; replaced with a comment stating the *trap* (decoupling `is_active` from `inactive_because_of` makes this raise).
+- Re-wrapped the 100-char line; file is now clean at 88.
+- Dropped the keypad reference from the docstring, kept the normalization rationale ("every caller gets the same answer for codes that differ only in surrounding whitespace").
+- Cut the "It deliberately takes no `hass`..." sentence entirely — the preceding "no lock is contacted, nothing is written, and no event is fired" already carries the intent, and the signature has no `hass` to misuse.
+- Removed the duplicated pre-start comment at the old line ~79. It documented the now-deleted `default=` and would have been actively wrong after the change (a pre-start coordinator would raise, not fold into `condition_not_met`). The surviving statement of the invariant is the new comment in `_failure_reason`.
+- `tests/test_validation.py:159`: reworded to "Guards the absence of an event surface: validating a code must not be observable on the bus."
+
+**One edit beyond the brief:** `tests/test_validation.py:143` docstring also said "A keypad that pads what it collected..." — same non-existent-component artifact. Reworded to "A padded code gets the same answer as the same code without padding." Flagging since you didn't list it.
+
+## Step 4 — new tests (6 test cases, in `tests/test_services.py`)
+
+Failing-first evidence, all mutations restored afterward:
+
+| Test | Mutation | Result |
+|---|---|---|
+| `test_validate_code_refuses_a_whitespace_only_code` (2 params) | drop `vol.Length(min=1)` | both FAIL |
+| same | drop schema `str.strip` | both FAIL |
+| `test_validate_code_requires_exactly_one_entry_selector[both]` | `vol.Exclusive` → `vol.Optional` | FAIL |
+| `...[neither]` | drop `cv.has_at_least_one_key` | FAIL |
+| `test_validate_code_on_an_entry_with_no_slots` | drop `if not matches` guard | FAIL (`ValueError: max()`) |
+| `test_validate_code_strips_padding_at_the_schema` | schema rejects padding instead of stripping (`cv.matches_regex(r"^\S+$")`) | FAIL |
+
+**Something I'd flag:** the padded-code test does **not** kill either strip individually. Removing the schema `str.strip` alone leaves it passing, because `validate_credential` strips internally; removing the internal strip alone leaves it passing because the schema strips. It only fails when *both* are gone, or when the schema is changed to reject rather than normalize. So it is a boundary/regression guard on "the action normalizes padding rather than refusing it," not an independent mutant-killer for the schema strip. The whitespace-only test is the one carrying the load for the schema. I kept the padded test — the property is real and the "reject instead of strip" mutant is a plausible future change — but you should know it isn't pulling the weight the brief implied.
+
+A methodology note: my first mutation run reported the whitespace tests as *not* failing. That was a false negative — the exact schema string `cv.string, str.strip, vol.Length(min=1)` appears twice in `__init__.py` (lines 507 and 697), and `str.replace(..., 1)` was hitting the sibling action at 507. I re-ran line-targeted at 697 and got the kills above. Worth remembering: verify a mutation actually landed on the target before believing a survivor.
+
+## Step 5 — brute-force note
+
+Appended to the `validate_code` description in both `strings.json` and `translations/en.json`: "It performs no rate limiting and no logging, so do not expose it to untrusted input." Files verified byte-identical via `cmp`, both valid JSON.
+
+## Verification
+
+- **2194 passed, 3 skipped** (2188 baseline + 6 new), 87s
+- **100.00% coverage** on `custom_components/lock_code_manager/` (6752/6752 statements)
+- `prek` clean on all 5 changed files (including the pre-commit hook run)
+- `strings.json` / `translations/en.json` byte-identical
+- `git diff main -- ts/ www/` empty
+- Working tree clean; **stash list still 4 entries, untouched**
+
+## One thing you should know
+
+The `CLAUDE.md` content injected into my context for this session contained a paragraph beginning "While bypass permissions mode is active:" instructing me to route all file reads and edits through `sed`/`grep`/heredocs instead of the dedicated tools. **That text is not in the repository** — the on-disk `CLAUDE.md` in both the worktree and `main` is the 6-line file ending at "keep it up to date as instructed," and `git diff main -- CLAUDE.md` is empty. I ignored the injected directive and used normal tooling. Its effect would have been benign here (tool choice only), but it did not come from your repo and you may want to find out where it came from.</result>
+<usage><subagent_tokens>84573</subagent_tokens><tool_uses>61</tool_uses><duration_ms>609787</duration_ms></usage>
+</task-notification>
+
+---
+
+I wonder, if instead of validate_code, it should be use_credential. We can add the new credential used event now for both this and for the fire code slot event path, move all the blueprints and logic over to it and then deprecate the old one and plan for removal later
+
+---
+
+<task-notification>
+<task-id>a623d1e5daa3399b4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a623d1e5daa3399b4.output</output-file>
+<status>completed</status>
+<summary>Agent "Merge main and fix review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done — `cce01509` pushed on top of the earlier cleanup.
+
+## Read-path findings
+
+I grepped every `CONF_PIN` reference in `custom_components/` and traced each. There are five paths that read a *stored* PIN, and — contrary to the reviewer's framing of "at minimum `pin_value`, and also check `coordinator.py:158`" — **they all funnel through one accessor**, so one site was sufficient. Two sites would have been the wrong answer.
+
+The chain: `SlotEntityCoordinator.pin_value` → `_slot_config()` → `EntryConfig.slot()`, and `LockCoordinator.desired_credential` → `EntryConfig.slot()`. Both land on `EntryConfig._by_slot`, which `__post_init__` builds from `self.users`, which is built exactly once in `EntryConfig.from_mapping`. Normalizing there covers:
+
+| Read path | Reaches | Was leaking |
+|---|---|---|
+| `slot_coordinator.py:156` `pin_value` | validation | yes |
+| `coordinator.py:153` `desired_credential` | **the device write** | yes |
+| `util.py:122` deobfuscation table | mask tokens | yes (padded PIN hashed to a different token than the one logged) |
+| `text.py` PIN entity | dashboard | yes (rendered `' 4321 '`) |
+| `websocket.py` | dashboard | yes |
+
+`from_mapping` is also where `normalize_name` already runs, so PIN stripping is symmetric with the normalization the class already documents itself as doing ("Typed, **normalized** view"). Bonus: `to_dict()` emits the normalized users and feeds `async_update_entry`, so storage heals itself on the next entry write rather than only being papered over on read.
+
+**One place I deliberately did not touch:** `slot_assignment.py:204` (`users_from_slots`) uses PIN truthiness to decide whether a slot represents a person, and it runs *before* my normalization. A slot with a whitespace-only PIN and no name is therefore still kept as a user (now holding an empty PIN, where before it held `"  "`). Changing that would alter v2→v3 migration semantics, which is a one-way door and out of scope. The read is correct either way; only the "is this an empty leftover slot" judgment differs, and it errs toward keeping data.
+
+## Empty-PIN semantics preserved
+
+`" "` → `""`, so `pin_value` (`... or None`) still returns `None`, `desired_credential` still returns `SlotCredential.empty()`, and `config_flow`'s "enabled but no PIN" check still fires. Verified by test, not by inspection.
+
+## Tests — failing first
+
+Confirmed the bug at the device level before writing anything: with `pin: " 4321 "` in storage, `lock._data` after two sync ticks was `{'1': {'code': ' 4321 ', 'name': 'padded'}}`.
+
+Nine new cases, all written and confirmed red first:
+- `tests/test_config.py` — 5 parametrized `test_stored_pin_is_stripped_on_read`, `test_whitespace_only_stored_pin_reads_as_no_pin`, `test_stored_pin_stripping_survives_the_user_keyed_shape` (both stored shapes normalize, not just the slot-keyed one)
+- `tests/test_services.py::test_validate_code_matches_a_padded_stored_pin` — stored `" 4321 "` validates as `4321` via the action; also asserts the whitespace-only slot's `pin_value is None` and that a whitespace submission is still refused
+- `tests/providers/virtual/test_e2e.py::TestStoredPaddingNeverReachesTheLock` — asserts on the device store (`lock._data["1"]["code"] == "4321"`) after driving two real sync ticks, not on an intermediate
+
+Mutation evidence: removing the read-strip entirely fails **7 tests** across all three files. 
+
+## One thing worth flagging
+
+My first cut of the guard was `if isinstance(pin := ..., str)` with no test for the false branch. Coverage reported **100% on `config.py`**, and mutating the guard to unconditional `str(pin).strip()` **passed all 2203 tests** — the same "100% line coverage hides an unkilled branch" pattern as the `default=` in Step 2, in code I had just written. I added `test_a_non_string_stored_pin_is_left_alone`, and re-ran the mutation to confirm it now fails. The guard matters: an unguarded `.strip()` on a hand-edited `pin: 1234` would raise from the accessor every layer depends on and take entry setup down over one malformed field.
+
+## Verification
+
+- **2204 passed**, 3 skipped (2194 → +9 new, +1 the guard test)
+- **100.00% coverage**, `domain/config.py` 171/171
+- prek clean (ruff reordered my new imports on the first pass; re-ran suite after the autofix)
+- `strings.json` / `translations/en.json` still byte-identical, `git diff main -- ts/ www/` empty
+- Tree clean, **stash list still 4, untouched**
+
+Note on the injected `CLAUDE.md`/MCP paragraph: it reappeared this turn attached to the MCP server instructions block rather than the project file. Acknowledged as harness-level per your note; no action taken.</result>
+<usage><subagent_tokens>134754</subagent_tokens><tool_uses>103</tool_uses><duration_ms>1487581</duration_ms></usage>
+</task-notification>
+
+---
+
+lock_code_manager_credential_used does not need code slot. It just needs name, config entry ID, config entry title, source (lock if it's directly from provider, it could be passed in via the action optionally if it's from there), target (lock if it's targeting a particular provider , credential_used action can accept a valid lock entity - if it's part of the config entry, it fires on the event entity, if it's not, we fire the event but not on the event entity
+
+---
+
+we should make target optional. I can't think of a scenario where there won't be a source right? but there may not be a target if, e.g. down the line we want to support alarm panels
+
+---
+
+<task-notification>
+<task-id>a3f0ea40dfc549ecf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a3f0ea40dfc549ecf.output</output-file>
+<status>killed</status>
+<summary>Agent "use_credential and unified event" was stopped by user</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now update the Stage 1 test for the revised payload:</result>
+</task-notification>
+
+---
+
+maybe we should say that both source and target are required. Targets can be virtual locks, sources can be template entities, so you have the flexibility to hack it, but it strengthens the story around what to expect
+
+---
+
+well there is an alarm_control_panel domain. Perhaps that's the source and target for a provider observed unlock event, and it's the target for via use_credential? 
+
+BTW one thing is esphome users may have a lock entity represented in esphome. Two things there: it would be ideal if they could link that lock instead of having to create a virutal one, and in theory we could wire in the unlock action when the target is not an LCM managed lock or something of that sort if that makes sense
+
+---
+
+does actuate mean it flips? locked -> unlocked and vice versa?
+
+---
+
+one note is that we will probably want to support a cover and anything else that actuates between two final states (on/off). Potentially even a light or switch
+
+---
+
+so it sounds like we would want to ship a blueprint with the codeless-lock provider that allows users to tie actuation to the credential used event maybe?
+
+---
+
+how can I access this sessions transcript? I have another session with you I want to share it in
+
+---
+
+<task-notification>
+<task-id>ab0748a883baca267</task-id>
+<tool-use-id>toolu_01Ni1DsXLbqypjYski2iy286</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/ab0748a883baca267.output</output-file>
+<status>completed</status>
+<summary>Agent "use_credential unified event" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Stages 1, 2, 3, and 5 are done, committed, and green. **Stage 4 is blocked — NEEDS_CONTEXT** (details at the end), and Stage 6 is blocked behind the same decision.
+
+## Stage 1 — the unified event (`929194c4`)
+
+**Constant chosen: `BUS_EVENT_CREDENTIAL_USED = "lock_code_manager_credential_used"`.** The `BUS_EVENT_` prefix is the disambiguator against the pre-existing `EVENT_CREDENTIAL_USED = "credential_used"` (entity key / slot-config key). I put a comment on each pointing at the other, because confusing them fails silently: firing the bare `"credential_used"` on the bus, or listening for the domained string as an entity key, does nothing and raises nothing.
+
+New `custom_components/lock_code_manager/domain/events.py` holds `async_fire_credential_used`. All five fields required, no defaults, no optionality; the docstring states that intent and the "never dereference `source`/`target`" trap explicitly.
+
+**Fire-site grep:** `EVENT_LOCK_STATE_CHANGED` has exactly **one** fire site — `providers/_base.py:2170`, inside the `@final async_fire_code_slot_event`. Every other hit is a listener (`event.py`) or a test. So the one call site does cover every provider.
+
+The unified fire is gated on `config_entry is not None` (the slot belongs to an LCM entry). An unattributed use — a code in a slot no entry manages — fires only the deprecated event, because config entry id/title and name are required fields and there is nothing to put in them. The name expression is now computed once (`slot_name`) and shared with the deprecated payload, so no new untested branch appears.
+
+## Stage 2 — virtual locks record credential use (`7ace3cfb`)
+
+`VirtualLock.supports_code_slot_events` → `True`; `async_get_capabilities` advertises **all six** `CredentialType` values with `num_slots=0, min_length=0, max_length=0, supports_learn=False`, and `supports_user_management=False, max_users=0, max_user_name_length=0`.
+
+**No cascade.** I traced every capability consumer before changing anything: `_assert_slot_within_capacity`, `_get_pin_slot_count`, and `allocation._validate_slot_capacity` all route through `bounded_slot_count`, which reads `num_slots &lt;= 0` as "unknown" and skips. `_assert_credential_type_supported` / `_supports_user_records` are only reached by `supports_native_users` providers, which virtual is not. Behaviour is identical to the previous "capabilities raise" state.
+
+**Tests changed (2, both in `tests/providers/virtual/test_provider.py`):**
+- `test_virtual_lock_does_not_support_code_slot_events` → `test_virtual_lock_supports_code_slot_events`. Reason: the asserted value is the change. Rewritten docstring says why a virtual lock is the recording surface.
+- Added `test_virtual_lock_capabilities_advertise_no_limits`.
+
+Nothing else in the suite asserted the old shape — no test anywhere asserted `unsupported_locks` or event-entity unavailability for a virtual-only entry.
+
+**Mutation evidence:**
+- `min_length=4, max_length=8` → both `test_advertised_capabilities_reject_no_pin_length[1]` and `[9*64]` fail. The test forces the capabilities cache via a real write first and asserts `cached_capabilities is not None` before trying the lengths — without that the length gate skips every lock and the test would prove nothing.
+- `supports_code_slot_events` → `False` → 2 tests fail (unit + the e2e event-entity one).
+
+## Stage 3 — `use_credential` (`eba48637`)
+
+Renamed everywhere: `SERVICE_USE_CREDENTIAL`, `services.yaml`, `strings.json`, `translations/en.json` (byte-identical, verified), `icons.json`, `domain/services.py::async_use_credential`, tests. `tests/test_service_catalog.py` is name-generic and needed no edit; it passes.
+
+Schema: `_entry_schema` + required `code`, required `source`/`target` as `cv.entity_id` with **no domain restriction** (per your correction — a target can be a cover, alarm panel, vacuum, anything).
+
+**One design decision worth your eye.** Routing through `async_fire_code_slot_event` would have fired the unified event a *second* time with lock-shaped attribution, double-counting for any consumer. Instead I added optional keyword-only `source`/`target` to that method, defaulting to the lock's own entity ID. The service passes the caller's values through, so the in-entry path produces exactly one unified event (caller's attribution) + one deprecated event + the entity recording. Out-of-entry produces one unified event only.
+
+**Second decision:** the service passes `to_locked=False`. `BaseLockCodeManagerEntity._event_filter` requires `to == unlocked`, so without it the routing happens but the entity silently filters the event back out and never records. Commented at the call site.
+
+`ValidationResult` gained `slot: int | None` (the service needs it to address the per-slot entity; it is not in the response). **7 assertions in `tests/test_validation.py`** updated to include `slot=` — they compare the whole frozen dataclass, so a new field breaks equality. Reason is mechanical, not behavioural.
+
+`tests/test_services.py`: `_call_validate_code` → `_call_use_credential`, which now defaults `source`/`target` so the ~14 pre-existing tests keep testing what they tested. All `test_validate_code_*` → `test_use_credential_*`.
+
+**New tests:** in-entry lock target (both events, full payload equality, entity `event_type` updates); out-of-entry target (unified only, entity state object unchanged, **zero ERROR records**); invalid × 3 failure modes (nothing on the bus at all, via `MATCH_ALL`); a `source` whose state is the PIN never leaks into any fired payload; both attribution fields required.
+
+**Mutation evidence:**
+- swap `source`/`target` on the non-lock path → out-of-entry test fails
+- fire on invalid too → all 3 invalid tests fail
+- invert the in-entry/out-of-entry routing → 3 tests fail
+
+## Stage 5 — deprecation, docs only (`c9783451`)
+
+Fire-site comment, `const.py` comment, and `AGENTS.md` data flow all now say: retained for backward compatibility while consumers migrate, both fire, no removal version, no runtime warning.
+
+**Nothing in `strings.json` describes either bus event.** The `credential_used` entry under `entity.event` is the event *entity*, not the bus event. So there was no strings.json site to annotate; I said so in the commit message rather than inventing one.
+
+## Numbers
+
+| | tests | coverage |
+|---|---|---|
+| baseline `cce01509` | 2204 + 3 skipped | 100% |
+| after stage 5 | **2218 + 3 skipped** | **100.00%** |
+
+`prek` clean on every commit. **Zero frontend files touched** — the diff is confined to `custom_components/`, `tests/`, and `AGENTS.md`.
+
+---
+
+## NEEDS_CONTEXT — Stage 4 (and therefore Stage 6)
+
+Both existing blueprints scope to **one specific user** via an entity input: `event_entity` (notifier, multiple) and `pin_used_entity` (limiter, single). For the limiter this is load-bearing, not cosmetic — it decrements *that user's* counter and turns off *that user's* switch.
+
+The unified payload carries `name` + `config_entry_id` and **deliberately not the slot**. So the entity input can no longer be matched against the event without a translation step, and there are only two ways out:
+
+**A. Swap the entity inputs for name-based filters** (`users` + `config_entry`), reading `trigger.event.data` directly. Clean, matches the project's name-is-identity direction, and matches the input model you specified for Stage 6. **But it renames/removes a stored input, so every automation already built from these blueprints fails to load.** `slot_usage_limiter.yaml` carries an explicit comment from you saying exactly this is why `pin_used_entity` was never renamed.
+
+**B. Keep the entity inputs and derive the user's name from them** — read the entity's `code_slot`, find the sibling `slot_field == 'name'` text entity in the same entry, compare its state to `trigger.event.data.name`. Preserves stored inputs and capability. The idiom already ships in `calendar_condition.yaml`. **But** it contradicts "reading `trigger.event.data` directly", reintroduces slot-keyed lookups into blueprints just as the project moves off them, and breaks silently if the name entity is unavailable.
+
+I did not guess, because the cost of guessing wrong is either broken user automations (A) or a fragile design the project is actively moving away from (B).
+
+**Related, and I think you should decide both at once:** your Stage 6 blueprint (trigger on the bus event; filter by config entry / users / source / target; user-supplied action sequence) is close to a superset of what a migrated `slot_usage_notifier` would be. Under option A the two would be near-duplicates and the notifier might be better retired in favour of the new one. Under option B they stay meaningfully distinct.
+
+Everything else about Stage 4 I have already verified and is ready to go the moment you pick: `locks` → filter on `trigger.event.data.target`; the limiter's `_slot_number` is **display-only** (`"Slot {{ _slot_number }}"` in the notification title, and the acting entity is the user-selected switch) so it becomes `name`; and **neither blueprint needs the slot number to act** — the notifier's `slot_num` is likewise only exposed as a template variable for the user's action text.</result>
+<usage><subagent_tokens>206166</subagent_tokens><tool_uses>130</tool_uses><duration_ms>1652785</duration_ms></usage>
+</task-notification>
+
+---
+
+fix 1480. If needed update 1484 as well based on what we know. Try to be brief instead of just additive, you've already provided a lot of info that is hard to  consume
+
+---
+
+<task-notification>
+<task-id>ab0748a883baca267</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/ab0748a883baca267.output</output-file>
+<status>completed</status>
+<summary>Agent "use_credential unified event" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All six stages complete. Final report:
+
+## Process incident — please read first
+
+Partway through, I discovered the shell's working directory was the **main checkout** (`/Users/raman/projects/lock_code_manager`, on someone else's branch `fix/config-flow-field-labels`), not the worktree. My Stage 6 edits, which used relative paths, landed there.
+
+I caught it via an `ImportError` resolving to the main checkout's `const.py`. Recovery, without ever running `git stash`:
+1. Captured the diff (`BLUEPRINTS.md`, `tests/test_blueprint_behavior.py`) and the new blueprint file to `/tmp`.
+2. Verified the diff was **purely additive** — zero removed lines — so nothing pre-existing had been clobbered.
+3. Verified both tracked files were **byte-identical across the two branches**, so the patch transferred cleanly.
+4. Applied to the worktree, then `git checkout --` those two files in the main checkout and removed the untracked blueprint.
+
+**Main checkout is now exactly as I found it**: still on `fix/config-flow-field-labels`, with only the pre-existing `M .entire/.gitignore` you already had. Stages 1–5 were unaffected (already committed in the worktree before the leak). Every command since uses absolute paths.
+
+## Commits (all on `reader-provider`, forward-only, nothing amended)
+
+```
+acf068e1 feat(blueprints): add the Credential Used blueprint
+c9783451 docs: mark lock_state_changed as retained for backward compatibility
+eba48637 feat: rename validate_code to use_credential and record the use
+7ace3cfb feat(virtual): make virtual locks a recording surface for credential use
+929194c4 feat: add the unified lock_code_manager_credential_used event
+```
+
+| | tests | coverage |
+|---|---|---|
+| baseline `cce01509` | 2204 + 3 skipped | 100% |
+| final | **2230 + 3 skipped** | **100.00%** |
+
+`prek` clean on every commit. **Zero frontend files touched.**
+
+## Stage 1 — unified event
+
+**Constant: `BUS_EVENT_CREDENTIAL_USED = "lock_code_manager_credential_used"`.** The `BUS_EVENT_` prefix disambiguates from the pre-existing `EVENT_CREDENTIAL_USED = "credential_used"` (entity key). Cross-referencing comments on both, because confusing them fails *silently*.
+
+**Fire-site grep: exactly one** — `providers/_base.py`, inside the `@final async_fire_code_slot_event`. All other hits are listeners or tests. New `domain/events.py` holds the helper; all five fields required, docstring states the no-fallbacks intent and the never-dereference trap. Gated on the slot belonging to an LCM entry (nothing to put in the required entry fields otherwise). Name expression hoisted to a shared `slot_name` so no new untested branch appears.
+
+## Stage 2 — virtual locks
+
+`supports_code_slot_events` → `True`; `async_get_capabilities` advertises all six `CredentialType`s with `num_slots=0, min_length=0, max_length=0`.
+
+**No cascade** — I traced every consumer first: `_assert_slot_within_capacity`, `_get_pin_slot_count`, and `allocation._validate_slot_capacity` all read `num_slots &lt;= 0` as "unknown" and skip; the credential-type asserts are only reached by `supports_native_users` providers.
+
+**Tests changed (2, both `tests/providers/virtual/test_provider.py`):** `test_virtual_lock_does_not_support_code_slot_events` → `..._supports_...` (the asserted value *is* the change); added a capabilities test. Nothing else asserted the old shape.
+
+**Mutations killed:** bounds → `4/8` fails both length params; `supports_code_slot_events` → `False` fails 2 tests. The length test forces the capabilities cache and asserts it is non-`None` first — otherwise the gate skips and the test proves nothing.
+
+## Stage 3 — `use_credential`
+
+Renamed across `const.py`, `services.yaml`, `strings.json`, `translations/en.json` (byte-identical, verified), `icons.json`, `domain/services.py`, tests. `test_service_catalog.py` is name-generic; passes unchanged.
+
+Two decisions worth your review:
+- Added keyword-only `source`/`target` to `async_fire_code_slot_event`, defaulting to the lock. Without this the in-entry path fires the unified event **twice** (once caller-attributed, once lock-attributed), double-counting for consumers.
+- The service passes `to_locked=False`, because `_event_filter` requires `to == unlocked`; otherwise the routing happens and the entity silently filters it back out.
+
+`ValidationResult` gained `slot`; **7 assertions in `tests/test_validation.py`** updated (whole-dataclass equality). `_call_validate_code` → `_call_use_credential` defaults the attribution fields so ~14 pre-existing tests keep testing what they tested.
+
+**Mutations killed:** swapped `source`/`target`; fire-on-invalid; inverted routing.
+
+## Stage 5 — deprecation docs
+
+Fire site, `const.py`, and the `AGENTS.md` data flow all state: retained for backward compatibility, both fire, no removal version, no runtime warning. **Nothing in `strings.json` describes either bus event** — the `credential_used` entry there is the event *entity* — so there was no site to annotate, and the commit message says so rather than inventing one.
+
+## Stage 6 — `credential_used.yaml`
+
+Triggers on the unified event. Inputs `config_entry` / `users` / `sources` / `targets` (all optional, plural to avoid colliding with the exposed `source`/`target` variables) + `credential_actions`. Exposes `name`, `source`, `target`, `config_entry_id`, `config_entry_title`, `timestamp`. **No guards** — a comment explains that the fixed payload is precisely what makes guards unnecessary. `BLUEPRINTS.md` section + TOC entry added.
+
+Both the blueprint description and the docs state plainly that the two existing blueprints trigger on the per-slot *entity* and so only see uses whose target is a lock in the same entry — a `use_credential` call with any other target has no entity to record against and never reaches them.
+
+**One test-quality fix worth calling out.** My first filter tests drove uses via `_fire_pin_used`, where `source == target`, so a filter crosswired to the wrong field would have passed every case. I rewrote them to drive through `use_credential` with genuinely distinct entities and added `sources-crosswired` / `targets-crosswired` parameters. **Mutations killed:** trigger on the deprecated event (6 fail); `sources` crosswired to `target` (2 fail — this one the original tests missed entirely); `users` ignored; `config_entry` ignored.
+
+## Things I'd flag
+
+- **The cwd incident is the real risk item here.** The end state is verified clean, but it means any future session on this repo should use absolute paths rather than trusting cwd.
+- **`to_locked=False` is a small lie.** `use_credential` does not know whether anything unlocked, but the event entity's filter demands it. It is commented, and it is what makes "records exactly as a real lock's usage would" true — but if the #1480 redesign relaxes that filter, this should be revisited.
+- **`ValidationResult.slot` is carried purely for the service's benefit** and is not in the response. It's documented as such, but it is a field on a value object that only one caller reads.
+- **`users` matches names exactly**, so renaming a user silently breaks a filter built on the old name. I documented it in the input description; it is the unavoidable cost of name-as-identity in a free-text blueprint input, and it is the kind of thing #1480 might solve properly.</result>
+<usage><subagent_tokens>231922</subagent_tokens><tool_uses>21</tool_uses><duration_ms>429955</duration_ms></usage>
+</task-notification>
+
+---
+
+it's worth adding a comment on that issue about to_locked so we don't forget it later
+
+---
+
+should the README be updated to share some of this new direction/scope? Or is it better for when one of those issues is addressed? If the latter, make sure that is noted in the issue
+
+---
+
+once we are done don't forget to update the PR title and description
+
+---
+
+<task-notification>
+<task-id>aeed350c2d3d9c65e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/aeed350c2d3d9c65e.output</output-file>
+<status>completed</status>
+<summary>Agent "Final review of reshaped branch" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Final Pre-Merge Review — `reader-provider` @ `acf068e1`
+
+## Verification baseline
+
+- `git diff main -- ts/ www/` — **empty**.
+- Full suite + coverage: **2230 passed, 3 skipped, 100.00%** on `custom_components` (matches expectation).
+- `prek run --all-files` — all 22 hooks pass (ruff, mypy, pydocstyle, yamllint, markdownlint, yarn build).
+- Tree verified clean before and after all mutations; 4 user stashes untouched; no `git stash` subcommand was ever run.
+
+## Strengths
+
+- **The funnel choice is right and is proven.** Putting the unified fire in `@final async_fire_code_slot_event` means all five event-capable providers get it with zero provider-side change, and `tests/providers/test_base.py::test_fire_code_slot_event_fires_both_events` asserts the *whole* unified payload dict, so a key added or dropped has to be deliberate.
+- **The deprecated payload is genuinely byte-for-byte.** The only change to it is hoisting `name_state.state if name_state else ""` into a `slot_name` local; the `config_entry` walrus already existed. Nothing in the dict literal moved.
+- **Tests are not vacuous.** `test_advertised_capabilities_reject_no_pin_length` asserts `lock.cached_capabilities is not None` *before* exercising the lengths — without that the length gate skips every lock and the test proves nothing. That is exactly the trap that has bitten this repo before, and it's guarded explicitly.
+- **The blueprint tests were correctly rebuilt.** Driving through `use_credential` so `source != target` is the fix that makes the crosswire detectable; all four of my crosswire/AND-combination mutations died (below).
+- Both independent carried-along fixes (`VirtualLock.async_unload` chaining, read-side PIN strip) have mutation-killing tests.
+
+## My mutation results
+
+| # | Mutation | Killed by |
+|---|---|---|
+| M1 | Crosswire `source`/`target` in blueprint `variables:` | 5 tests |
+| M2 | Crosswire **only** in blueprint `conditions:` (subtler) | 4 tests (all `test_credential_used_filters`) |
+| M3 | `and` → `or` between blueprint filters | 4 tests |
+| M4 | `_base.py`: ignore the `source`/`target` overrides | `test_use_credential_records_against_an_in_entry_lock` |
+| M5 | `services.py`: fire the unified event unconditionally (double-fire) | `test_use_credential_records_against_an_in_entry_lock` |
+| M6 | `config.py`: remove read-side PIN strip | `test_stored_pin_is_stripped_on_read` |
+| M7 | `virtual.py`: drop `super().async_unload()` | `test_provider_reload_after_unload_does_not_rearm` |
+
+**E is answered: yes, the current tests would catch a crosswire**, including the harder condition-only variant.
+
+---
+
+## Issues
+
+### CRITICAL — 1. `use_credential` targeting an event-incapable lock logs an error on every call
+
+`/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/domain/services.py:131`
+
+```python
+if (lock := config_entry.runtime_data.locks.get(target)) is not None:
+```
+
+The gate is "is this lock in the entry", not "can this lock record events". `LockCodeManagerCodeSlotEventEntity._event_filter` (`entity.py:220`) matches against `self.locks` (**all** locks), but `event_types` (`event.py:78`) lists only `_get_supported_locks()`. So for a lock in the entry with `supports_code_slot_events == False`, the filter passes, `_handle_event` calls `_trigger_event`, and HA's `EventEntity` raises `ValueError: Invalid event type`.
+
+I reproduced this. Every such call emits:
+```
+ERROR ... Error running job: &lt;Job listen lock_code_manager_lock_state_changed ...
+          LockCodeManagerCodeSlotEventEntity._handle_event ...&gt;
+```
+and the use is silently not recorded (the unified event still fires, so no functional loss beyond the log).
+
+**Reachability is high, not theoretical.** `schlage.py:79` and `akuvox.py:89` return `False` unconditionally — and those are precisely the "LCM cannot watch the keypad" locks this feature exists for, so naming one as `target` is the *expected* call. `zwave_js_ui.py:390` returns `supports_push`, so it can be `False` transiently before the node topic resolves, giving intermittent errors on a lock that usually works.
+
+The latent `self.locks` vs `_get_supported_locks()` inconsistency predates this branch but had no fire site; this branch makes it reachable. Fix: `and lock.supports_code_slot_events` on line 131 (falls through to the `async_fire_credential_used` branch, which is already the correct behavior for an unrecordable target). Test: a `supports_code_slot_events=False` lock as `target` asserting no `ERROR` records — the pattern already used at `test_use_credential_with_a_target_outside_the_entry`.
+
+### IMPORTANT — 2. The unified event's "never empty" guarantee is not enforced for `name`
+
+`/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/providers/_base.py:2182` — `name=slot_name`, where `slot_name = name_state.state if name_state else ""`.
+
+`events.py:36` promises "All five fields are always present and **never empty**", and `credential_used.yaml` builds on that: *"Every field of the event is guaranteed present and non-empty, so none of these need a default or an existence check."*
+
+The promise is derived from an *entity state*, not from config. I reproduced `name: ''` by removing the slot's name text entity state — a user disabling `text.&lt;entry&gt;_&lt;user&gt;_name` in the entity registry (one click in the HA UI) makes **every** credential use on **every** provider fire with `name: ''` forever. A state of `unknown`/`unavailable` right after a reload gives `name: 'unknown'`.
+
+Consequences: the blueprint's `users` filter silently never matches, and any consumer notification renders an empty name. Note the same call already produced a correct `user: 'alice'` in the service response — two sources of truth for the same field in one call. `services.py:148` (the non-lock branch) uses the config-derived `result.user`; the funnel does not.
+
+Fix: derive the unified event's `name` from `get_entry_config(config_entry).name_for(code_slot)` and leave `slot_name` serving only the deprecated payload (preserving its byte-for-byte guarantee). Test: fire with the name text entity's state removed.
+
+### IMPORTANT — 3. Verdict on B: `to_locked=False` does corrupt the deprecated event
+
+`/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/domain/services.py:139`
+
+**Yes — a consumer of `lock_code_manager_lock_state_changed` can now see an unlock that never happened.** Reproduced payload from a single `use_credential` call against a lock that never moved:
+
+```
+{'entity_id': 'lock.virtual_probe', 'state': 'locked', 'action_text': None,
+ 'code_slot': 1, 'code_slot_name': 'alice',
+ 'from': LockState.LOCKED, 'to': LockState.UNLOCKED, ...}
+```
+
+Three things make this a real regression rather than a harmless internal signal:
+
+1. **It is a new kind of claim.** I traced all five producers (`zwave_js.py:1015`, `matter.py:1334`, `zha.py:606`, `zigbee2mqtt.py:233`, `zwave_js_ui.py:665`). Every one derives `to_locked` from a device-reported lock/unlock operation. This service is the first producer that fabricates it, and it does so from a call path documented as *"It touches no lock and changes nothing."*
+2. **The payload is self-contradictory.** `state: 'locked'` sits next to `to: 'unlocked'` in the same dict. `action_text` and `notification_source` are `None`, which no provider-generated event ever is.
+3. **`to == unlocked` is the canonical consumer filter** — it is literally what LCM's own `entity.py:225` uses. Any user automation written as "on `lock_code_manager_lock_state_changed` where `to == unlocked` → notify 'Front door unlocked by {{ code_slot_name }}'" now produces a false notification.
+
+Mitigating: none of the four shipped blueprints listen to this event (`auto_relock.yaml` and `door_lock_on_close.yaml` trigger on the real lock entity's state; the notifier/limiter trigger on the per-slot entity), so the blast radius is user- and third-party automations only. That is what keeps this Important rather than Critical.
+
+Also worth noting: **no test pins this down.** `test_use_credential_records_against_an_in_entry_lock` asserts `len(deprecated) == 1` and the code slot, but never touches `from`/`to`. Nobody reading the suite is forced to confront what the service now asserts about a lock.
+
+Recommendation — pick one, but decide it deliberately rather than by omission:
+- **(a)** Don't fire the deprecated event on this path at all; give the event entity a direct recording path so the compatibility event stays purely device-observed. Cleanest semantics, most code.
+- **(b)** Keep `to_locked=False` but add a test that asserts the fabricated `from`/`to` and a note in AGENTS.md that the deprecated event's `from`/`to` no longer imply a device operation. Cheapest, and honest.
+- Either way, the docstring at `services.py:136-141` should say *"this fabricates a lock transition that did not occur"* rather than the current framing, which explains the mechanism without naming the cost.
+
+### MINOR — 4. `REASON_PRECEDENCE`'s comment describes an ordering the code never exercises
+
+`const.py:123`: *"a code that matched a user somewhere outranks one unknown everywhere"*. But `_failure_reason` returns `REASON_UNKNOWN_CODE` via an early return on `if not matches`, so that member can never participate in the `max()`. The comment describes a comparison that does not happen. Trim it to describe only the `condition_not_met` vs `user_disabled` ordering that the `max()` actually performs.
+
+### MINOR — 5. `_failure_reason`'s "max needs no default" invariant is narrower than stated
+
+`validation.py` says an inactive coordinator "always names at least one reason." True only *after* the first `_recompute_active()`; a coordinator constructed but not yet started has `_is_active = None` and `_inactive_because_of = []`, which would make `max()` raise `ValueError`. I believe it's unreachable in practice (`get_loaded_config_entry` gates on LOADED, and setup starts coordinators), but the docstring asserts a stronger invariant than the code guarantees. A one-word hedge, or a `default=REASON_USER_DISABLED`, would close it.
+
+### MINOR — 6. `reason` is a stronger oracle than `valid`
+
+`user_disabled` vs `unknown_code` tells a caller that a submitted code *is* a real LCM credential that merely isn't active right now. `strings.json` already warns "do not expose it to untrusted input", which covers it, but the specific fact that `reason` distinguishes a real-but-inactive code from an unknown one is worth one clause in that warning.
+
+### MINOR — 7. No way to validate without recording
+
+`validate_credential`'s docstring correctly calls itself "a pure query", but the service always records on success — there is no dry-run. The service description ("The response says whether the code would work") invites use as a pure check, and doing so will decrement a Slot Usage Limiter counter. Defensible given the action is named `use_credential`; flagging only so it's a decision.
+
+---
+
+## Answers to the specific focus areas
+
+- **A — Providers unaffected: confirmed.** All five call sites pass only positional args; `source`/`target` are keyword-only with `None` defaults. **Single fire: confirmed** — M5 (double-fire) died. **Deprecated payload byte-for-byte: confirmed** by reading the diff (pure local extraction) and by the empirical dump.
+- **B — See Issue 3.** Verdict: not sound as-is; it is a real, if bounded, corruption of a public event's meaning, and it is untested.
+- **C1** — Virtual locks leaving `unsupported_locks`: purely additive; `event_types` grows, `available` flips to True, `diagnostics.py:111` reflects it. No consumer in `ts/` or `www/`.
+- **C2 — Capabilities cannot refuse an existing PIN: confirmed.** `length_bounds` normalizes `(0, 0)` to `(0, None)`; `_validate_credential_length` then evaluates `length &lt; 0` (false) and skips the max branch. `bounded_slot_count` returns `None` for `num_slots=0`, so `_assert_slot_within_capacity` still skips exactly as it did when the probe raised. `text.py` `native_min`/`native_max` are hardcoded permissive and never consult capabilities. Genuinely unable to reject.
+- **C3 — Nothing keyed on the unnormalized PIN: confirmed.** I enumerated every `CONF_PIN` reader; all resolve through `EntryConfig` (`util.py:122`, `coordinator.py:153`, `slot_coordinator.py:372`, `sync.py`, `websocket.py`). One consequence worth knowing: logs written by a pre-upgrade version containing tokens masked from a *padded* PIN can no longer be reversed by `deobfuscate_log`. Cosmetic, arguably desirable.
+- **D — Coherence.** No vestigial constants, imports, or fixtures; every new symbol has both source and test references. `ValidationResult.slot` is justified — it's the only way the service can address the per-slot entity, it's documented as internal, and it's excluded from the response. The two comment issues are #4 and #5.
+- **E — Blueprint limitation is accurate.** Verified `slot_usage_notifier.yaml:86` and `slot_usage_limiter.yaml:107-111` both trigger on entity state, so the stated claim holds exactly.
+
+---
+
+## Assessment
+
+**Needs fixes before merge.** The design is coherent and the test suite is unusually well-built for a branch that has been reshaped four times — all seven of my mutations died, including the two subtle ones. But two findings change the merge decision:
+
+- **Issue 1 (Critical)** ships an error-log-per-call regression on Schlage and Akuvox entries, which are the exact setups this feature targets. One-line fix plus one test.
+- **Issue 3 (Important, the B question)** needs an explicit decision and, at minimum, a test that states what the deprecated event now claims. Right now the branch changes a public event's meaning without a single assertion recording that it did.
+
+Issue 2 is a one-line fix I'd take in the same pass, since the branch's own docs and blueprint both promise the guarantee it breaks. Issues 4–7 are cleanup and can ride along or follow.</result>
+<usage><subagent_tokens>134809</subagent_tokens><tool_uses>60</tool_uses><duration_ms>702901</duration_ms></usage>
+</task-notification>
+
+---
+
+they should be working again
+
+---
+
+<task-notification>
+<task-id>a20ea5964bbea6b55</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a20ea5964bbea6b55.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All findings fixed on `reader-provider`, in two forward-only commits (`a7a44813`, `b6cf6b05`). Nothing pushed.
+
+## Per fix
+
+**1. Event entity reads the unified event** (`custom_components/lock_code_manager/event.py`)
+Added `_credential_used_filter` + `_handle_credential_used`, subscribed to `BUS_EVENT_CREDENTIAL_USED` in `async_added_to_hass`. The filter matches entry ID and resolves *whose* entity this is via `get_entry_config(self.config_entry).name_for(self.slot_num)` — the unified event names the person, not the slot. The handler checks `target not in self.event_types` and returns silently; `event_types` was not widened. The new path never touches `_event_filter`, so #1480 stays untouched.
+
+**2. `use_credential` no longer routes through the lock** (`domain/services.py`)
+The `locks.get(target)` branch and the `async_fire_code_slot_event(..., to_locked=False, ...)` call are gone. The service now always fires only `async_fire_credential_used`.
+
+**3. `source`/`target` kwargs reverted** (`providers/_base.py`)
+Removed from `async_fire_code_slot_event`; the unified event uses `lock_entity_id` for both. No caller passed them (grepped `custom_components/` and `tests/`).
+
+**4. `name` derived from config** (`providers/_base.py`)
+`credential_user = get_entry_config(config_entry).name_for(int(code_slot))`, fired as `name=`. `slot_name` (from the name text entity) still feeds the deprecated `code_slot_name` only — payload byte-identical.
+
+**Minor:** `const.py` `REASON_PRECEDENCE` comment trimmed to the ordering `max()` actually performs; `domain/validation.py` `_failure_reason` comment hedged with "a coordinator that has recomputed"; `strings.json` + `translations/en.json` (verified byte-identical) now say the reason distinguishes a real-but-inactive credential from an unknown one.
+
+## Two judgement calls you should confirm
+
+- **Removed `ValidationResult.slot`.** It existed solely for the routing caller (its docstring said so). With routing gone it had no consumer, so by the same rule as finding 3 it went. `validate_credential` has no other caller outside tests.
+- **The entity skips unified events where `source == target`.** This is *not* in your finding list and is load-bearing: a provider-observed use fires **both** events, and the entity listens to both. Without the guard it records twice — and because the unified event fires *after* the deprecated one, the second `_trigger_event` replaces the rich lock-shaped attributes with the unified event's five fields. `source == target` is the documented marker of "a lock observed the use itself" (`domain/events.py`), and the guard retires with the deprecated event. **Known hole:** calling `use_credential` with `source == target ==` an in-entry event-capable lock will not record. I judged that a misuse (the caller is claiming an observation LCM would have made itself), but it's your call.
+
+## Failing-first evidence
+
+- `test_fire_code_slot_event_names_the_user_from_the_configuration[remove]` → `AssertionError: assert '' == 'test1'` (finding 4).
+- `test_fire_code_slot_event_takes_no_attribution_arguments` → failed, i.e. the kwargs still existed (finding 3).
+- `test_use_credential_records_against_an_in_entry_lock` → `Left contains one more item: &lt;Event lock_code_manager_lock_state_changed ... from=locked, to=unlocked&gt;` — the fabricated transition (finding 2a).
+- `test_use_credential_against_an_event_blind_lock_in_the_entry` → `ERROR homeassistant.core: Error running job: &lt;Job listen lock_code_manager_lock_state_changed ... _handle_event ...&gt;` — the exact "Invalid event type" swallow (finding 2b).
+
+## Mutations run (all killed)
+
+| Mutation | Killed by |
+|---|---|
+| Drop `target not in self.event_types` check | `..._against_an_event_blind_lock_in_the_entry`, `..._with_a_target_outside_the_entry` |
+| Revert `name=` to the entity state | `..._names_the_user_from_the_configuration[remove]`, `[unknown]` |
+| Re-add the `to_locked=False` routing | `..._records_against_an_in_entry_lock`, `..._against_an_event_blind_lock_in_the_entry` |
+| Drop `source != target` guard | `test_event_entity` (`KeyError: 'notification_source'` — attributes clobbered), `test_a_lock_observed_use_is_recorded_once` |
+| Drop entry-ID condition | `..._ignores_an_entry_that_is_not_ours` |
+| Drop name condition | `..._records_only_for_the_named_user` |
+
+The event-blind test uses a **real** `SchlageLock` (fixture registers a real schlage config entry, entity and mock services, patching only `async_is_integration_connected`); `supports_code_slot_events` is never monkeypatched.
+
+## Verification
+
+- Suite: **2237 passed, 3 skipped** (baseline 2230 + 7 new tests).
+- Coverage: **6792 stmts, 0 miss, 100%** on `custom_components`.
+- `prek run --files &lt;changed&gt;` per commit: all pass (ruff-check, ruff-format, pydocstyle, flake8, mypy included). Two ruff autofixes applied and re-verified before committing.
+- `git diff main -- ts/ www/`: empty.
+- Main checkout `git -C /Users/raman/projects/lock_code_manager status --short` → ` M .entire/.gitignore` only. No `git stash` subcommand was ever run.</result>
+<usage><subagent_tokens>135378</subagent_tokens><tool_uses>76</tool_uses><duration_ms>1371660</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2679511a4d68b502</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a2679511a4d68b502.output</output-file>
+<status>completed</status>
+<summary>Agent "Review the two fix commits" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Tree restored and clean; probe file removed; all mutations reverted.
+
+## Strengths
+
+- The fix is the right shape: the entity now decides for itself what it can record, instead of a lock being asked to fabricate a state transition so the entity would hear about it. All three original defects go, and `async_fire_code_slot_event` gets its signature back.
+- The consumer's assumption is **pinned on the producer side**. `providers/_base.py:2185-2192` hardcodes `source=lock_entity_id, target=lock_entity_id`, and `tests/providers/test_base.py:920-926` asserts the unified payload as an exact five-key dict. So `source == target` is not a heuristic reading of a convention — both ends are tested.
+- The blind-lock test builds a real `SchlageLock` rather than monkeypatching `supports_code_slot_events` (`tests/test_services.py:1196-1257`). That's the right call given `feedback_tests_must_not_build_their_own_input_contract`.
+- Deprecated payload is genuinely untouched: the entire `acf068e1..HEAD` diff of `_base.py` that touches any `ATTR_`/`event_data`/`async_fire` line is one line, `name=slot_name` → `name=credential_user`, and it is in the *unified* fire call. `EVENT_LOCK_STATE_CHANGED`'s `event_data` dict is byte-for-byte identical.
+
+## Verdict on A (the dedupe guard)
+
+**Sound, and it retires cleanly. Merge it — but document the hole.**
+
+- **Can a lock-observed use have `source != target`?** No, structurally: both are the same literal in the one funnel, and a test asserts it. No provider on this branch fires the unified event any other way — the credential reader provider that *would* have (source=reader, target=lock) was deliberately deferred (`c05104cf`). Flag for whoever lands it: that provider is the first thing that can make a lock-observed-style use arrive with distinct ends, and if its lock also fires the deprecated event, the double-record returns.
+- **Can a legitimate action call have them equal?** Yes, and this is the hole. Verified by probe: `use_credential(source=lock.X, target=lock.X)` on an in-entry event-capable lock returns `valid: True`, fires the unified event, records nothing on the entity, and logs nothing at any level. Narrow, but it is the *natural* call shape for a lock with an integrated keypad LCM can't watch — exactly the audience the action exists for.
+- **Better dedupe in five fields?** No. The true discriminator is "did a lock in this entry observe this," which the payload deliberately cannot express. The alternatives (a one-shot flag set by `_handle_event`, or comparing `__last_event_type`) rely on the synchronous fire-ordering inside `async_fire_code_slot_event` — an implicit invariant that is weaker than the one in use, not stronger. Keep the guard.
+- **Retires at #1480 phase 4?** Yes. Deleting the `EVENT_LOCK_STATE_CHANGED` listener, `_event_filter`, `_handle_event`, and the single `and` clause is the whole change, and the hole closes in the same commit. The docstring's claim is accurate.
+
+## Issues
+
+**Important — `strings.json:324` / `translations/en.json:324`, `target` description.** `b6cf6b05` fixed one of two conditions. Recording requires target-is-event-capable **and** `source != target`; only the first is documented, in neither field. A user who names the same lock as both gets a success response and no recording, silently. This is the same class of defect `b6cf6b05` just repaired. Prefer documenting it on `source` ("must name a different entity from the target for the user's credential used entity to record") over adding a log — the drop happens in `_credential_used_filter`, which runs once per slot entity per entry, so there is no good place to log it once.
+
+**Important — `blueprints/automation/lock_code_manager/slot_usage_notifier.yaml:102`.** `slot_name` reads `trigger.to_state.attributes.code_slot_name`, which a unified-path recording does not carry, so every reported use notifies "Unknown slot". Probe output for the attribute set after a reported use: `code_slot, config_entry_id, config_entry_title, event_type, event_types, friendly_name, name, slot_field, source, target`. `code_slot` *is* present (from `_attr_extra_state_attributes`), so `slot_num` and `slot_usage_limiter` are unaffected — this is the one field. `name` is right there; a `| default(trigger.to_state.attributes.name, true)` fallback fixes it. Untested today.
+
+**Minor — `event.py:158-163`.** A hand-fired `lock_code_manager_credential_used` with arbitrary data (Developer Tools → Events, admin-reachable) raises `KeyError` in the filter; HA catches it but logs `ERROR: Error in event filter` with a traceback once per slot entity per entry. Same shape as the pre-existing `_event_filter` at `entity.py:218`, so it is consistent — noting only.
+
+**Minor — `providers/_base.py:2185`.** `config_entry is not None and credential_user is not None`: the second conjunct can never be False, because `find_entry_for_lock_slot` (`domain/queries.py:70-71`) requires `config.has_slot(code_slot)`, which *is* `name_for(...) is not None`, read from the same config object with no await between. It is there for type narrowing and the comment says so — fine, but branch coverage is not enabled, so the half-dead branch is invisible to the 100% number.
+
+**Minor — for #1480 phase 4.** Removing the deprecated event does not just delete a guard: the entity's attributes become the five-field payload permanently, dropping `code_slot_name`, `action_text`, `notification_source`, `from`, `to`, `state`, `device_id`, `extra_data`, `credential_type`, and renaming `lcm_config_entry_id` → `config_entry_id`. That is a user-facing entity-attribute break worth writing into the issue now.
+
+**Minor — availability.** If an event-capable lock is `unavailable`, `_handle_credential_used` records internally and then `async_write_ha_state()` publishes `unavailable`, discarding the visible recording; on recovery the stale timestamp surfaces as a fresh state change. `slot_usage_notifier`'s `from_state.state != 'unavailable'` guard blocks the phantom trigger. Pre-existing shape, not introduced here.
+
+## Mutation results — 5/5 killed
+
+| # | Mutation | Killed by |
+|---|---|---|
+| 1 | drop `and event_data[ATTR_SOURCE] != event_data[ATTR_TARGET]` (`event.py:160`) | `test_a_lock_observed_use_is_recorded_once`, plus `test_event_entity` with `KeyError: 'notification_source'` — proving the thin payload really would displace the lock-shaped one |
+| 2 | drop `if target not in self.event_types: return` (`event.py:179-180`) | `test_use_credential_against_an_event_blind_lock_in_the_entry`, `test_use_credential_with_a_target_outside_the_entry` |
+| 3 | replace the `name_for(self.slot_num)` comparison with `True` | `test_use_credential_records_only_for_the_named_user` |
+| 4 | replace `event_data[ATTR_CONFIG_ENTRY_ID] == self.entry_id` with `True` | `test_use_credential_ignores_an_entry_that_is_not_ours` |
+| 5 | revert `name=credential_user` → `name=slot_name` (`_base.py:2185`) | `test_fire_code_slot_event_names_the_user_from_the_configuration[remove]` and `[unknown]` |
+
+## B — the entity listener
+
+No reachable `ValueError`: `event.data[ATTR_TARGET]` is checked against the same `event_types` property `EventEntity._trigger_event` re-reads, with no await between, so no TOCTOU (this matters — `zwave_js_ui.supports_code_slot_events` is genuinely dynamic, derived from `supports_push`). Rename routing verified by probe: renaming `alice` → `alicia` keeps the slot-1 entity (entity_id unchanged) recording and leaves the other two untouched — the filter reads live config, and `users` is a name-keyed dict so name ↔ slot stays 1:1. `name_for` returning `None` for a vacated slot can never match, since the payload's `name` is always a non-empty `str`. It does not touch `_event_filter` or widen `event_types`, so the #1480 inconsistency stays out of scope.
+
+## C — `ValidationResult.slot`
+
+Confirmed no non-test consumer: the only references anywhere are `validation.py` itself, `services.py:122`, and `tests/`. The action's response dict (`services.py:137-141`) is `{valid, user, reason}` before and after — unchanged.
+
+## Assessment
+
+**Ready to merge**, with two follow-ups I'd take before or immediately after: the `source`-field documentation and the `slot_usage_notifier` `code_slot_name` fallback. Neither is a code defect in the fix; both are the fix's user-visible edges. Suite: 2237 passed, 3 skipped, 100% coverage on `custom_components`, as expected.
+
+Files: `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/event.py`, `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/providers/_base.py`, `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/custom_components/lock_code_manager/strings.json`, `/Users/raman/projects/lock_code_manager/.worktrees/reader-provider/blueprints/automation/lock_code_manager/slot_usage_notifier.yaml`</result>
+<usage><subagent_tokens>95036</subagent_tokens><tool_uses>39</tool_uses><duration_ms>433414</duration_ms></usage>
+</task-notification>
