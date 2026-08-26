@@ -1,0 +1,171 @@
+<task-notification>
+<task-id>a623d1e5daa3399b4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a623d1e5daa3399b4.output</output-file>
+<status>completed</status>
+<summary>Agent "Merge main and fix review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Branch `reader-provider` is merged, cleaned, and pushed (`2bc72afa`).
+
+## Step 1 — merge
+
+`git merge main` auto-merged cleanly, no conflicts (commit `67fcab59`). Note the merge bumped `requirements_dev.txt`/`requirements_test.txt`; I reinstalled into the venv before trusting any result.
+
+**How main's unload change interacts with the branch's:** they are complementary and *both independently load-bearing*. I verified this in both directions:
+
+- Branch's mutation (remove `await super().async_unload(...)` from `providers/virtual.py`): `test_provider_reload_after_unload_does_not_rearm` still **fails** post-merge. Restored, tree clean.
+- Main's mutation (revert `_lock_managed_by_other_loaded_entry` → `_lock_managed_by_other_entry` in `async_unload_lock`): main's two new tests **fail**. Restored.
+
+They operate at different layers: main's `4905c748` widens *when* `lock.async_unload()` is called (an unloaded-but-present sibling entry no longer suppresses teardown); the branch's fix corrects *what* `VirtualLock.async_unload` does once called (chain base teardown to release the config-entry-state listener). Neither makes the other redundant — in fact main's change makes the branch's fix reachable in one more scenario.
+
+## Step 2 — `default=` was safely removable
+
+Confirmed unreachable, with a stronger argument than "past the `if not matches` guard". The real invariant is in `domain/slot_coordinator.py:479-487`: `_recompute_active` assigns `_is_active = not inactive_because_of` and `_inactive_because_of` **together**, so `is_active is False` ⟺ reasons non-empty. For the `is_active is None` (pre-start) case, the only construction site is `__init__.py:1755-1757`, where `slot_coordinators[slot_num] = coordinator` is followed by `coordinator.async_start()` on the very next line with **no await between them** — so no caller can ever observe a registered-but-unstarted coordinator. `async_stop()` never resets `_is_active` back to `None`. Therefore `max()` cannot receive an empty sequence.
+
+Removing it also *strengthened* the suite: the `if not matches: return REASON_UNKNOWN_CODE` guard is now load-bearing. Mutating that guard away now raises `ValueError: max() arg is an empty sequence` and kills two tests; previously it would have silently returned `condition_not_met`.
+
+## Step 3 — cleanups
+
+All in `custom_components/lock_code_manager/domain/validation.py` unless noted:
+- Removed `default=REASON_CONDITION_NOT_MET` and its comment; replaced with a comment stating the *trap* (decoupling `is_active` from `inactive_because_of` makes this raise).
+- Re-wrapped the 100-char line; file is now clean at 88.
+- Dropped the keypad reference from the docstring, kept the normalization rationale ("every caller gets the same answer for codes that differ only in surrounding whitespace").
+- Cut the "It deliberately takes no `hass`..." sentence entirely — the preceding "no lock is contacted, nothing is written, and no event is fired" already carries the intent, and the signature has no `hass` to misuse.
+- Removed the duplicated pre-start comment at the old line ~79. It documented the now-deleted `default=` and would have been actively wrong after the change (a pre-start coordinator would raise, not fold into `condition_not_met`). The surviving statement of the invariant is the new comment in `_failure_reason`.
+- `tests/test_validation.py:159`: reworded to "Guards the absence of an event surface: validating a code must not be observable on the bus."
+
+**One edit beyond the brief:** `tests/test_validation.py:143` docstring also said "A keypad that pads what it collected..." — same non-existent-component artifact. Reworded to "A padded code gets the same answer as the same code without padding." Flagging since you didn't list it.
+
+## Step 4 — new tests (6 test cases, in `tests/test_services.py`)
+
+Failing-first evidence, all mutations restored afterward:
+
+| Test | Mutation | Result |
+|---|---|---|
+| `test_validate_code_refuses_a_whitespace_only_code` (2 params) | drop `vol.Length(min=1)` | both FAIL |
+| same | drop schema `str.strip` | both FAIL |
+| `test_validate_code_requires_exactly_one_entry_selector[both]` | `vol.Exclusive` → `vol.Optional` | FAIL |
+| `...[neither]` | drop `cv.has_at_least_one_key` | FAIL |
+| `test_validate_code_on_an_entry_with_no_slots` | drop `if not matches` guard | FAIL (`ValueError: max()`) |
+| `test_validate_code_strips_padding_at_the_schema` | schema rejects padding instead of stripping (`cv.matches_regex(r"^\S+$")`) | FAIL |
+
+**Something I'd flag:** the padded-code test does **not** kill either strip individually. Removing the schema `str.strip` alone leaves it passing, because `validate_credential` strips internally; removing the internal strip alone leaves it passing because the schema strips. It only fails when *both* are gone, or when the schema is changed to reject rather than normalize. So it is a boundary/regression guard on "the action normalizes padding rather than refusing it," not an independent mutant-killer for the schema strip. The whitespace-only test is the one carrying the load for the schema. I kept the padded test — the property is real and the "reject instead of strip" mutant is a plausible future change — but you should know it isn't pulling the weight the brief implied.
+
+A methodology note: my first mutation run reported the whitespace tests as *not* failing. That was a false negative — the exact schema string `cv.string, str.strip, vol.Length(min=1)` appears twice in `__init__.py` (lines 507 and 697), and `str.replace(..., 1)` was hitting the sibling action at 507. I re-ran line-targeted at 697 and got the kills above. Worth remembering: verify a mutation actually landed on the target before believing a survivor.
+
+## Step 5 — brute-force note
+
+Appended to the `validate_code` description in both `strings.json` and `translations/en.json`: "It performs no rate limiting and no logging, so do not expose it to untrusted input." Files verified byte-identical via `cmp`, both valid JSON.
+
+## Verification
+
+- **2194 passed, 3 skipped** (2188 baseline + 6 new), 87s
+- **100.00% coverage** on `custom_components/lock_code_manager/` (6752/6752 statements)
+- `prek` clean on all 5 changed files (including the pre-commit hook run)
+- `strings.json` / `translations/en.json` byte-identical
+- `git diff main -- ts/ www/` empty
+- Working tree clean; **stash list still 4 entries, untouched**
+
+## One thing you should know
+
+The `CLAUDE.md` content injected into my context for this session contained a paragraph beginning "While bypass permissions mode is active:" instructing me to route all file reads and edits through `sed`/`grep`/heredocs instead of the dedicated tools. **That text is not in the repository** — the on-disk `CLAUDE.md` in both the worktree and `main` is the 6-line file ending at "keep it up to date as instructed," and `git diff main -- CLAUDE.md` is empty. I ignored the injected directive and used normal tooling. Its effect would have been benign here (tool choice only), but it did not come from your repo and you may want to find out where it came from.</result>
+<usage><subagent_tokens>84573</subagent_tokens><tool_uses>61</tool_uses><duration_ms>609787</duration_ms></usage>
+</task-notification>
+
+---
+
+I wonder, if instead of validate_code, it should be use_credential. We can add the new credential used event now for both this and for the fire code slot event path, move all the blueprints and logic over to it and then deprecate the old one and plan for removal later
+
+---
+
+<task-notification>
+<task-id>a623d1e5daa3399b4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a623d1e5daa3399b4.output</output-file>
+<status>completed</status>
+<summary>Agent "Merge main and fix review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done — `cce01509` pushed on top of the earlier cleanup.
+
+## Read-path findings
+
+I grepped every `CONF_PIN` reference in `custom_components/` and traced each. There are five paths that read a *stored* PIN, and — contrary to the reviewer's framing of "at minimum `pin_value`, and also check `coordinator.py:158`" — **they all funnel through one accessor**, so one site was sufficient. Two sites would have been the wrong answer.
+
+The chain: `SlotEntityCoordinator.pin_value` → `_slot_config()` → `EntryConfig.slot()`, and `LockCoordinator.desired_credential` → `EntryConfig.slot()`. Both land on `EntryConfig._by_slot`, which `__post_init__` builds from `self.users`, which is built exactly once in `EntryConfig.from_mapping`. Normalizing there covers:
+
+| Read path | Reaches | Was leaking |
+|---|---|---|
+| `slot_coordinator.py:156` `pin_value` | validation | yes |
+| `coordinator.py:153` `desired_credential` | **the device write** | yes |
+| `util.py:122` deobfuscation table | mask tokens | yes (padded PIN hashed to a different token than the one logged) |
+| `text.py` PIN entity | dashboard | yes (rendered `' 4321 '`) |
+| `websocket.py` | dashboard | yes |
+
+`from_mapping` is also where `normalize_name` already runs, so PIN stripping is symmetric with the normalization the class already documents itself as doing ("Typed, **normalized** view"). Bonus: `to_dict()` emits the normalized users and feeds `async_update_entry`, so storage heals itself on the next entry write rather than only being papered over on read.
+
+**One place I deliberately did not touch:** `slot_assignment.py:204` (`users_from_slots`) uses PIN truthiness to decide whether a slot represents a person, and it runs *before* my normalization. A slot with a whitespace-only PIN and no name is therefore still kept as a user (now holding an empty PIN, where before it held `"  "`). Changing that would alter v2→v3 migration semantics, which is a one-way door and out of scope. The read is correct either way; only the "is this an empty leftover slot" judgment differs, and it errs toward keeping data.
+
+## Empty-PIN semantics preserved
+
+`" "` → `""`, so `pin_value` (`... or None`) still returns `None`, `desired_credential` still returns `SlotCredential.empty()`, and `config_flow`'s "enabled but no PIN" check still fires. Verified by test, not by inspection.
+
+## Tests — failing first
+
+Confirmed the bug at the device level before writing anything: with `pin: " 4321 "` in storage, `lock._data` after two sync ticks was `{'1': {'code': ' 4321 ', 'name': 'padded'}}`.
+
+Nine new cases, all written and confirmed red first:
+- `tests/test_config.py` — 5 parametrized `test_stored_pin_is_stripped_on_read`, `test_whitespace_only_stored_pin_reads_as_no_pin`, `test_stored_pin_stripping_survives_the_user_keyed_shape` (both stored shapes normalize, not just the slot-keyed one)
+- `tests/test_services.py::test_validate_code_matches_a_padded_stored_pin` — stored `" 4321 "` validates as `4321` via the action; also asserts the whitespace-only slot's `pin_value is None` and that a whitespace submission is still refused
+- `tests/providers/virtual/test_e2e.py::TestStoredPaddingNeverReachesTheLock` — asserts on the device store (`lock._data["1"]["code"] == "4321"`) after driving two real sync ticks, not on an intermediate
+
+Mutation evidence: removing the read-strip entirely fails **7 tests** across all three files. 
+
+## One thing worth flagging
+
+My first cut of the guard was `if isinstance(pin := ..., str)` with no test for the false branch. Coverage reported **100% on `config.py`**, and mutating the guard to unconditional `str(pin).strip()` **passed all 2203 tests** — the same "100% line coverage hides an unkilled branch" pattern as the `default=` in Step 2, in code I had just written. I added `test_a_non_string_stored_pin_is_left_alone`, and re-ran the mutation to confirm it now fails. The guard matters: an unguarded `.strip()` on a hand-edited `pin: 1234` would raise from the accessor every layer depends on and take entry setup down over one malformed field.
+
+## Verification
+
+- **2204 passed**, 3 skipped (2194 → +9 new, +1 the guard test)
+- **100.00% coverage**, `domain/config.py` 171/171
+- prek clean (ruff reordered my new imports on the first pass; re-ran suite after the autofix)
+- `strings.json` / `translations/en.json` still byte-identical, `git diff main -- ts/ www/` empty
+- Tree clean, **stash list still 4, untouched**
+
+Note on the injected `CLAUDE.md`/MCP paragraph: it reappeared this turn attached to the MCP server instructions block rather than the project file. Acknowledged as harness-level per your note; no action taken.</result>
+<usage><subagent_tokens>134754</subagent_tokens><tool_uses>103</tool_uses><duration_ms>1487581</duration_ms></usage>
+</task-notification>
+
+---
+
+lock_code_manager_credential_used does not need code slot. It just needs name, config entry ID, config entry title, source (lock if it's directly from provider, it could be passed in via the action optionally if it's from there), target (lock if it's targeting a particular provider , credential_used action can accept a valid lock entity - if it's part of the config entry, it fires on the event entity, if it's not, we fire the event but not on the event entity
+
+---
+
+we should make target optional. I can't think of a scenario where there won't be a source right? but there may not be a target if, e.g. down the line we want to support alarm panels
+
+---
+
+<task-notification>
+<task-id>a3f0ea40dfc549ecf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a3f0ea40dfc549ecf.output</output-file>
+<status>killed</status>
+<summary>Agent "use_credential and unified event" was stopped by user</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now update the Stage 1 test for the revised payload:</result>
+</task-notification>
+
+---
+
+maybe we should say that both source and target are required. Targets can be virtual locks, sources can be template entities, so you have the flexibility to hack it, but it strengthens the story around what to expect
+
+---
+
+well there is an alarm_control_panel domain. Perhaps that's the source and target for a provider observed unlock event, and it's the target for via use_credential? 
+
+BTW one thing is esphome users may have a lock entity represented in esphome. Two things there: it would be ideal if they could link that lock instead of having to create a virutal one, and in theory we could wire in the unlock action when the target is not an LCM managed lock or something of that sort if that makes sense
+
+---
+
+does actuate mean it flips? locked -> unlocked and vice versa?
