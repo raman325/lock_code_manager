@@ -19,6 +19,7 @@ from custom_components.lock_code_manager.const import (
     PER_LOCK_ENTITY_SUFFIX,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
+from custom_components.lock_code_manager.domain.credentials import CredentialType
 
 _CONST_TS = pathlib.Path(__file__).resolve().parent.parent / "ts" / "const.ts"
 
@@ -244,3 +245,28 @@ def test_every_translation_matches_the_strings_it_translates() -> None:
     )
 
     assert strings == english
+
+
+def test_every_credential_kind_the_event_can_publish_is_translated() -> None:
+    """
+    The event entity's event types are credential kinds, so name them all.
+
+    Home Assistant asks nothing of an untranslated event type -- it renders
+    the raw value, so ``rfid`` appears verbatim in the UI and nothing warns.
+    The vocabulary is derived from what the entry's locks advertise, so it
+    can hold any ``CredentialType``, and the translation is the only thing
+    that turns one into a word a person recognizes.
+    """
+    strings = json.loads(
+        (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "custom_components"
+            / "lock_code_manager"
+            / "strings.json"
+        ).read_text(encoding="utf-8")
+    )
+    translated = strings["entity"]["event"][EVENT_CREDENTIAL_USED]["state_attributes"][
+        "event_type"
+    ]["state"]
+
+    assert set(translated) == {member.value for member in CredentialType}

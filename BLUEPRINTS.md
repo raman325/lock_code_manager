@@ -42,11 +42,30 @@ Optionally resets the counter when the user is re-enabled.
   reported it, or whatever `lock_code_manager.use_credential` was told the
   credential acted on
 
+- **Operations that spend a use** picks which recorded uses count, by what
+  the device did with the credential: `unlock` and `unknown` by default,
+  `lock` not
+
+> **Breaking: the entity now records more than unlocks.** It used to record
+> only unlocks; it records every use of the user's credential now, including
+> a lock reporting which slot *locked* it and every use reported through
+> `lock_code_manager.use_credential`. **Operations that spend a use** is what
+> keeps that from changing your counters: leaving it at its default spends a
+> use on `unlock` and `unknown` and not on `lock`, so a guest who unlocks
+> with their PIN and locks up behind them with the same PIN spends one use
+> rather than two — on a 1-use code, being polite would otherwise lock them
+> out. Uses reported through `lock_code_manager.use_credential` are always
+> `unknown`, since Lock Code Manager never actuates a lock and so never sees
+> what happened next; clear `unknown` and those stop counting entirely. Slot
+> Usage Notifier has no such filter and runs on every use, locking included;
+> its `operation` variable says which happened.
+
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fslot_usage_limiter.yaml)
 
 | Input | Description | Default |
 | ----- | ----------- | ------- |
 | Credential used event entity | The user's event entity, which fires when their credential is used | Required |
+| Operations that spend a use | Which uses decrement the counter, by what the device did: `unlock`, `lock`, `unknown` | `unlock`, `unknown` |
 | Locks (optional) | Only count uses whose target is one of these | All targets |
 | Slot enabled switch | The user's Enabled switch, turned off when the counter runs out | Required |
 | Uses counter | `input_number` helper tracking remaining uses | Required |
@@ -67,14 +86,20 @@ their PIN is active.
 
 > **Breaking: `lock_entity_ids` is gone.** It came from the credential used
 > event entity, which no longer lists the config entry's locks as its event
-> types, and nothing else exposes a config entry's locks to a template. A
-> condition template that still references it fails to render and the binary
-> sensor goes unavailable — visibly, rather than silently flipping
-> `{{ 'lock.front_door' in lock_entity_ids }}` to false and quietly
-> deactivating the PIN. The list was identical for every slot in the config
-> entry, so that example could only ever be constantly true or constantly
-> false: a condition entity gates a *user* across every lock in the entry, and
-> never one lock. Delete the reference to fix the sensor.
+> types, and nothing else exposes a config entry's locks to a template.
+> **A condition template that still references it fails quietly.** Home
+> Assistant treats an undefined template variable as empty rather than as an
+> error, so the binary sensor stays available, reads `off`, and the PIN never
+> activates. The one signal is a log line — `Template variable warning:
+> 'lock_entity_ids' is undefined when rendering ...` — so check the Home
+> Assistant log after upgrading. Nothing can make that louder: the sensor
+> cannot tell an undefined variable from a condition that is honestly false.
+> There is no replacement and nothing worth stubbing it to. The list was
+> identical for every slot in the config entry, so
+> `{{ 'lock.front_door' in lock_entity_ids }}` could only ever be constantly
+> true or constantly false: a condition entity gates a *user* across every
+> lock in the entry, and never one lock. Delete the reference to fix the
+> sensor.
 
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Ftemplate%2Flock_code_manager%2Fcalendar_condition.yaml)
 
@@ -171,11 +196,16 @@ has closed while the lock is unlocked.
 Runs actions when a user's credential is used on a lock. Use it to
 send notifications, trigger scripts, or run any HA action.
 
-- Template variables: `slot_name`, `slot_num`, `lock_name`, `timestamp`
+- Template variables: `slot_name`, `slot_num`, `lock_name`, `timestamp`,
+  `operation`, `credential_type`
 - `lock_name` and the optional lock filter both read the use's `target` —
   the lock that reported it, or whatever `lock_code_manager.use_credential`
   was told the credential acted on
 - Uses `mode: queued` to handle rapid successive uses
+- **Breaking:** it now runs on every recorded use, locking by code
+  included, where it used to run only on unlocks. `operation` says which
+  happened; put it in your message, or skip a kind with a condition inside
+  your actions
 
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fslot_usage_notifier.yaml)
 
@@ -191,8 +221,8 @@ Runs actions every time a credential is used, whether Lock Code
 Manager saw it happen on a lock or was told about it through the
 `lock_code_manager.use_credential` action.
 
-- Template variables: `name`, `source`, `target`, `config_entry_id`,
-  `config_entry_title`, `timestamp`
+- Template variables: `name`, `source`, `target`, `credential_type`,
+  `operation`, `config_entry_id`, `config_entry_title`, `timestamp`
 - Every filter is optional; leave them all empty to act on every use
 - Uses `mode: queued` to handle rapid successive uses
 
@@ -262,20 +292,31 @@ template or blueprint reads about that use:
 
 | Attribute | Meaning |
 | --------- | ------- |
-| `event_type` | Always `credential_used`. It says *what* happened, never where |
+| `event_type` | The kind of credential presented — `pin` today. It says *what* was used, never where |
+| `event_types` | The kinds this user's uses can be: what Lock Code Manager manages, plus everything the configuration's locks advertise |
 | `name` | The user whose credential was used |
 | `target` | What the credential was used against — a lock that reported the use, or whatever `lock_code_manager.use_credential` was told it acted on |
 | `source` | Where the credential was entered. Same entity as `target` when a lock observed the use itself |
+| `credential_type` | The kind of credential presented, the same value as `event_type` |
+| `operation` | What the device did with it: `unlock`, `lock`, or `unknown` when nothing reported which. Always `unknown` for a use reported through `lock_code_manager.use_credential` |
 | `config_entry_id` | The Lock Code Manager configuration holding the user |
 | `config_entry_title` | That configuration's title |
 | `code_slot` | The user's slot number |
 | `slot_field` | Always `credential_used` |
 
-> **Breaking:** the entity used to publish the older lock-shaped payload
-> and set `event_type` to the lock entity ID. Templates reading
+Filtering by credential kind is a template away: `event_type` (or
+`credential_type`) is `pin` for a PIN and would be `rfid` for a card read at
+a lock's own reader, so an automation can act on one kind without acting on
+every other.
+
+> **Breaking:** the entity used to record only unlocks; it now records every
+> use of the user's credential, including a lock reporting which slot locked
+> it, and says which in `operation`. Its `event_type` used to be the lock
+> entity ID and is now the credential kind, so `event_types` is the kinds of
+> credential rather than a list of locks. It also used to publish the older
+> lock-shaped payload. Templates reading
 > `event_type` as a lock must read `target` instead, and
 > `lock_code_manager_config_entry_id`, `code_slot_name`, `action_text`,
 > `notification_source`, `from`, `to`, `state`, `entity_id`, `device_id`,
-> `extra_data`, `credential_type` and `lock_config_entry_id` are gone from
-> the entity. They all still travel on the deprecated
+> `extra_data` and `lock_config_entry_id` are gone from the entity. They all still travel on the deprecated
 > `lock_code_manager_lock_state_changed` bus event, which keeps firing.

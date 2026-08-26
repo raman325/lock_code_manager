@@ -33,9 +33,9 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_CREDENTIAL_USED,
 )
 from custom_components.lock_code_manager.domain.credentials import (
+    MANAGED_CREDENTIAL_TYPES,
     CredentialRef,
     CredentialType,
     credential_from_slot,
@@ -315,7 +315,7 @@ class TestCredentialUseRecording:
         state = hass.states.get(SLOT_1_EVENT_ENTITY)
         assert state
         assert state.state != STATE_UNAVAILABLE
-        assert state.attributes[ATTR_EVENT_TYPES] == [EVENT_CREDENTIAL_USED]
+        assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
         lock = get_virtual_lock(hass, lcm_config_entry)
         assert lock.supports_code_slot_events is False
 
@@ -324,7 +324,7 @@ class TestCredentialUseRecording:
 
         recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
         assert recorded.state != state.state
-        assert recorded.attributes[ATTR_EVENT_TYPE] == EVENT_CREDENTIAL_USED
+        assert recorded.attributes[ATTR_EVENT_TYPE] == CredentialType.PIN
         assert recorded.attributes[ATTR_TARGET] == VIRTUAL_LOCK_ENTITY_ID
 
     @pytest.mark.parametrize("pin", ["1", "9" * 64])

@@ -102,11 +102,14 @@ entities.
 - `text.py`: Name and PIN configuration entities
 - `number.py`: Number of uses tracking (decrements on PIN use)
 - `switch.py`: Slot enabled/disabled toggle
-- `event.py`: per-user `credential_used` event entity. One fixed event type,
-  `credential_used`; it records from `BUS_EVENT_CREDENTIAL_USED` alone and
-  publishes that payload (`name`, `config_entry_id`, `config_entry_title`,
-  `source`, `target`) as its state attributes, alongside `code_slot` and
-  `slot_field`. Where the credential was used is `target`, not `event_type`
+- `event.py`: per-user `credential_used` event entity. Its `event_types` are
+  credential kinds -- `MANAGED_CREDENTIAL_TYPES` unioned with everything the
+  entry's locks advertise -- and a recorded use fires with the kind it was.
+  It records from `BUS_EVENT_CREDENTIAL_USED` alone and publishes that
+  payload (`name`, `config_entry_id`, `config_entry_title`, `source`,
+  `target`, `credential_type`, `operation`) as its state attributes,
+  alongside `code_slot` and `slot_field`. Where the credential was used is
+  `target`, not `event_type`
 
 ### Data Flow
 

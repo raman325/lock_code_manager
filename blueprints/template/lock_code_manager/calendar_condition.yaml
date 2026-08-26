@@ -40,18 +40,22 @@ blueprint:
     replacement.
 
 
-    A condition template that still references it will fail to render and the
-    binary sensor will go unavailable — loudly, on purpose. Silently handing
-    back an empty list would have flipped
-    `{{ 'lock.front_door' in lock_entity_ids }}` from always-true to
-    always-false and quietly stopped the PIN from ever activating.
+    A condition template that still references it fails quietly. Home
+    Assistant treats an undefined template variable as empty rather than as
+    an error, so the binary sensor stays available, reads `off`, and the PIN
+    never activates. The one signal is a line in the Home Assistant log:
+    `Template variable warning: 'lock_entity_ids' is undefined when rendering
+    ...`. Check the log after upgrading — nothing else will tell you.
 
 
-    That example was misleading anyway: the list was the same for every slot in
-    the config entry, so the template it appeared in could only ever be
-    constantly true or constantly false. A Lock Code Manager condition entity
-    gates a *user* across every lock in the entry; it cannot gate one lock.
-    Remove the reference to fix the sensor.
+    Nothing here can make that louder, and there is nothing worth stubbing
+    the variable to: the sensor cannot tell an undefined variable from a
+    condition that is honestly false. Nor was the variable worth keeping. The
+    list was the same for every slot in the config entry, so
+    `{{ 'lock.front_door' in lock_entity_ids }}` could only ever be constantly
+    true or constantly false. A Lock Code Manager condition entity gates a
+    *user* across every lock in the entry; it cannot gate one lock. Remove the
+    reference to fix the sensor.
 
 
     **Example condition templates**

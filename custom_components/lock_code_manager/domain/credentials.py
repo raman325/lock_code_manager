@@ -44,6 +44,21 @@ class CredentialType(StrEnum):
     NFC = "nfc"  # Near Field Communication tag.
 
 
+# The credential types Lock Code Manager itself manages -- the kinds it can
+# write to a lock. Only PIN today, because a slot holds one PIN per user, and
+# that is the only credential this integration knows how to produce.
+#
+# The single place to change when that stops being true. Do not restate the
+# set anywhere else: the point of naming it is that "PIN is the only one" is a
+# fact about today rather than an invariant, and every site that assumes it
+# has to move together.
+#
+# Distinct from what a lock can REPORT. A lock may advertise types Lock Code
+# Manager cannot write -- an RFID reader on the door is one -- and a use of
+# one of those is still a use worth recording.
+MANAGED_CREDENTIAL_TYPES: frozenset[CredentialType] = frozenset({CredentialType.PIN})
+
+
 class UserType(StrEnum):
     """
     How a user is constrained on the lock.

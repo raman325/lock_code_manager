@@ -97,6 +97,8 @@ ATTR_SCHEDULE_NEXT_EVENT = "next_event"
 # and a caller with no natural entity for one of them is expected to make one.
 ATTR_SOURCE = "source"
 ATTR_TARGET = "target"
+# What the device did with the credential -- see ``CredentialOperation``.
+ATTR_OPERATION = "operation"
 
 # Bus events. The ``BUS_EVENT_`` prefix is load-bearing: ``EVENT_CREDENTIAL_USED``
 # further down is an entity key with a bare, undomained value, and firing that

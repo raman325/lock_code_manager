@@ -24,6 +24,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
     ATTR_CREDENTIAL_TYPE,
+    ATTR_OPERATION,
     ATTR_SLOT_FIELD,
     ATTR_SOURCE,
     ATTR_TARGET,
@@ -32,7 +33,16 @@ from custom_components.lock_code_manager.const import (
     EVENT_LOCK_STATE_CHANGED,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.domain.credentials import CredentialType
+from custom_components.lock_code_manager.domain.credentials import (
+    MANAGED_CREDENTIAL_TYPES,
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
+)
+from custom_components.lock_code_manager.domain.events import (
+    BUS_EVENT_CREDENTIAL_USED,
+    CredentialOperation,
+)
 from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import (
@@ -65,7 +75,6 @@ RETIRED_ATTRIBUTES = (
     "entity_id",
     "device_id",
     "extra_data",
-    "credential_type",
     "lock_code_manager_config_entry_id",
     "unsupported_locks",
 )
@@ -116,13 +125,16 @@ async def test_the_recorded_attributes_are_the_unified_payload(
         for key, value in state.attributes.items()
         if key not in (ATTR_EVENT_TYPES, "friendly_name")
     } == {
-        ATTR_EVENT_TYPE: EVENT_CREDENTIAL_USED,
+        # The event type is the kind of credential, not a place.
+        ATTR_EVENT_TYPE: CredentialType.PIN,
         ATTR_NAME: "test2",
         ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
         ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
         # A lock that observed the use is both ends of it.
         ATTR_SOURCE: LOCK_1_ENTITY_ID,
         ATTR_TARGET: LOCK_1_ENTITY_ID,
+        ATTR_CREDENTIAL_TYPE: CredentialType.PIN,
+        ATTR_OPERATION: CredentialOperation.UNLOCK,
         ATTR_CODE_SLOT: 2,
         ATTR_SLOT_FIELD: EVENT_CREDENTIAL_USED,
     }
@@ -130,25 +142,126 @@ async def test_the_recorded_attributes_are_the_unified_payload(
         assert retired not in state.attributes
 
 
-async def test_event_types_is_one_fixed_word(
+class MockLCMLockWithCredentialTypes(MockLCMLock):
+    """A lock that answers the capability probe, advertising RFID as well."""
+
+    @property
+    def supports_native_users(self) -> bool:
+        """Take the setup path that probes capabilities."""
+        return True
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        """Advertise a reader Lock Code Manager cannot write to."""
+        return LockCapabilities(
+            supports_user_management=True,
+            max_users=10,
+            max_user_name_length=16,
+            credential_types={
+                credential_type: CredentialTypeCapability(
+                    num_slots=10, min_length=4, max_length=8, supports_learn=False
+                )
+                for credential_type in (CredentialType.PIN, CredentialType.RFID)
+            },
+        )
+
+
+async def test_event_types_names_credential_kinds_and_never_locks(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
     """
-    The vocabulary says what happened, never where.
+    The vocabulary says what kind of credential, never where it was used.
 
-    Home Assistant refuses an event type an entity did not declare, so any
+    Home Assistant refuses an event type an entity did not declare, so a
     vocabulary naming the entry's locks makes a use against anything else
-    impossible to record. Naming no locks is what keeps every target
-    recordable.
+    impossible to record -- which is what this replaced. The kind is the
+    axis that actually distinguishes one recorded use from another; where
+    it happened rides in ``target``.
+
+    These locks answer no capability probe, so this is also the floor:
+    ``MANAGED_CREDENTIAL_TYPES`` alone, which is what keeps the vocabulary
+    from being empty while a probe has not run.
     """
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
     assert state
 
-    assert state.attributes[ATTR_EVENT_TYPES] == [EVENT_CREDENTIAL_USED]
+    assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         assert lock_entity_id not in state.attributes[ATTR_EVENT_TYPES]
+
+
+async def test_event_types_unions_what_the_entrys_locks_advertise(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A kind only the lock can report is still one this entity can record.
+
+    What Lock Code Manager can write and what a lock can report are
+    different sets. A lock with its own card reader reports RFID uses that
+    nothing here ever wrote, and refusing to name them would make them
+    unrecordable -- so the managed set is a floor under the union, not a
+    cap on it.
+    """
+    with patch(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithCredentialTypes},
+    ):
+        config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Credential Types"
+        )
+        config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        state = hass.states.get(SLOT_1_EVENT_ENTITY)
+        assert state
+        assert state.attributes[ATTR_EVENT_TYPES] == [
+            CredentialType.PIN,
+            CredentialType.RFID,
+        ]
+
+        await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_a_use_of_an_unnamed_kind_widens_the_vocabulary(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    A kind that arrives anyway is recorded, not dropped.
+
+    ``_trigger_event`` raises on an undeclared type and this runs on a bus
+    callback whose exceptions Home Assistant swallows, so a use whose kind
+    the capability probe has not admitted yet would vanish without a trace.
+    A use that happened is better evidence of what is possible here than a
+    probe that has not finished, so it widens the vocabulary instead.
+    """
+    before = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert before
+    assert CredentialType.FINGERPRINT not in before.attributes[ATTR_EVENT_TYPES]
+
+    hass.bus.async_fire(
+        BUS_EVENT_CREDENTIAL_USED,
+        event_data={
+            ATTR_NAME: "test1",
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
+            ATTR_SOURCE: EXTERNAL_KEYPAD,
+            ATTR_TARGET: EXTERNAL_TARGET,
+            ATTR_CREDENTIAL_TYPE: CredentialType.FINGERPRINT,
+            ATTR_OPERATION: CredentialOperation.UNKNOWN,
+        },
+    )
+    await hass.async_block_till_done()
+
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+    assert state.state != STATE_UNKNOWN
+    assert state.attributes[ATTR_EVENT_TYPE] == CredentialType.FINGERPRINT
+    assert CredentialType.FINGERPRINT in state.attributes[ATTR_EVENT_TYPES]
 
 
 async def test_a_lock_observed_use_is_recorded_once(
@@ -205,7 +318,7 @@ async def test_a_use_against_something_that_is_not_a_lock_is_recorded(
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
     assert state
     assert state.state != STATE_UNKNOWN
-    assert state.attributes[ATTR_EVENT_TYPE] == EVENT_CREDENTIAL_USED
+    assert state.attributes[ATTR_EVENT_TYPE] == CredentialType.PIN
     assert state.attributes[ATTR_TARGET] == EXTERNAL_TARGET
     assert state.attributes[ATTR_SOURCE] == EXTERNAL_KEYPAD
     assert state.attributes[ATTR_NAME] == "test1"
@@ -234,30 +347,36 @@ async def test_a_use_is_recorded_for_the_user_it_belongs_to_alone(
 
 
 @pytest.mark.parametrize(
-    ("to_locked", "case"),
+    ("to_locked", "operation"),
     [
-        pytest.param(None, "unrecognized", id="unrecognized-operation"),
-        pytest.param(True, "locked", id="locked-by-code"),
+        pytest.param(False, CredentialOperation.UNLOCK, id="unlocked-by-code"),
+        pytest.param(True, CredentialOperation.LOCK, id="locked-by-code"),
+        pytest.param(None, CredentialOperation.UNKNOWN, id="unclassified"),
     ],
 )
-async def test_uses_that_are_not_an_unlock_are_recorded(
+async def test_uses_that_are_not_an_unlock_are_recorded_and_say_so(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     to_locked: bool | None,
-    case: str,
+    operation: CredentialOperation,
 ):
     """
-    Locking by code, and an operation the provider could not classify.
+    Every direction a lock can report is recorded, and named.
 
-    Both are credential uses and neither is an unlock. The entity used to
-    take these off the deprecated event through a filter that demanded a
+    All three are credential uses and only one is an unlock. The entity used
+    to take these off the deprecated event through a filter that demanded a
     transition to ``unlocked``, so a lock-by-code and every notification a
     provider passes through with ``to_locked=None`` -- Matter, ZHA and
     Z-Wave JS all have one -- were recorded nowhere at all.
+
+    Recording them all is only half the answer: a consumer that must not
+    treat locking up as an entry needs to be able to tell, which is what
+    ``operation`` is for. ``unknown`` is a real answer, not a gap -- the
+    provider saw a use it could not classify.
     """
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(1, to_locked, case, Event("test_source"))
+    lock.async_fire_code_slot_event(1, to_locked, "test", Event("test_source"))
     await hass.async_block_till_done()
 
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
@@ -265,6 +384,29 @@ async def test_uses_that_are_not_an_unlock_are_recorded(
     assert state.state != STATE_UNKNOWN
     assert state.attributes[ATTR_TARGET] == LOCK_1_ENTITY_ID
     assert state.attributes[ATTR_NAME] == "test1"
+    assert state.attributes[ATTR_OPERATION] == operation
+
+
+async def test_a_reported_use_never_claims_to_know_what_the_device_did(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    ``use_credential`` reports ``unknown``, and must not guess.
+
+    The caller said a credential was used, not what happened next. Lock Code
+    Manager never actuates a lock, so it has no basis to claim an unlock --
+    stating one would put a fact in the payload nobody observed, and a
+    limiter counting entries would spend a use on it.
+    """
+    await _use_credential(hass, lock_code_manager_config_entry, "1234", EXTERNAL_TARGET)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+    assert state.attributes[ATTR_OPERATION] == CredentialOperation.UNKNOWN
+    assert state.attributes[ATTR_CREDENTIAL_TYPE] == CredentialType.PIN
 
 
 class MockLCMLockNoEvents(MockLCMLock):
@@ -303,7 +445,7 @@ async def test_available_when_no_lock_reports_code_slot_events(
         state = hass.states.get(SLOT_1_EVENT_ENTITY)
         assert state
         assert state.state != STATE_UNAVAILABLE
-        assert state.attributes[ATTR_EVENT_TYPES] == [EVENT_CREDENTIAL_USED]
+        assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
 
         lock: BaseLock = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
         lock.async_fire_code_slot_event(1, False, "test", Event("test_source"))

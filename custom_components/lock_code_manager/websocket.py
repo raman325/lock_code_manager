@@ -862,9 +862,10 @@ def _get_last_used_info(
 
     The event entity's state is the ISO timestamp of the last recorded use.
     Where that use happened is the ``target`` attribute -- not ``event_type``,
-    which is the fixed word ``credential_used`` and names nothing. A target
-    with no state of its own (an entity outside Home Assistant's reach, or
-    one since removed) leaves the name unset and the card says only when.
+    which is the kind of credential presented and names no entity at all. A
+    target with no state of its own (an entity outside Home Assistant's
+    reach, or one since removed) leaves the name unset and the card says
+    only when.
     """
     if not event_entity_id:
         return None, None

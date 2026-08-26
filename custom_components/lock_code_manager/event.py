@@ -12,9 +12,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     ATTR_CONFIG_ENTRY_ID,
+    ATTR_CREDENTIAL_TYPE,
     BUS_EVENT_CREDENTIAL_USED,
     EVENT_CREDENTIAL_USED,
 )
+from .domain.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import get_entry_config
 from .entity import BaseLockCodeManagerEntity
@@ -51,12 +53,14 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
     """
     Records every use of this user's credential, wherever it happened.
 
-    One event type, ``credential_used``, always. Home Assistant refuses an
-    event type an entity did not declare, so a vocabulary that answered
-    "where" -- the entry's lock entity IDs, say -- makes a use against
-    anything outside it impossible to record at all. Keep it saying only
-    "what": where the credential was used is the payload's ``target``,
-    which nothing has to admit in advance.
+    The event type is the kind of credential that was presented, which is
+    what Home Assistant's ``event_types`` is for: telling kinds of event
+    apart. It is not where the use happened. A vocabulary of lock entity IDs
+    was tried and is what this replaces -- Home Assistant refuses an event
+    type an entity did not declare, so naming the entry's locks made a use
+    against anything else impossible to record at all. Where the credential
+    was used is the payload's ``target``, which nothing has to admit in
+    advance.
     """
 
     _attr_entity_category = None
@@ -74,7 +78,43 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         BaseLockCodeManagerEntity.__init__(
             self, hass, ent_reg, config_entry, slot_num, key
         )
-        self._attr_event_types = [EVENT_CREDENTIAL_USED]
+        # Types this entity has actually recorded. A use is proof its kind is
+        # possible here, so recording one widens the vocabulary rather than
+        # being refused by it -- see :meth:`event_types`.
+        self._recorded_types: set[CredentialType] = set()
+
+    @property
+    def event_types(self) -> list[str]:
+        """
+        Return the credential kinds a use recorded here can be.
+
+        The union of what the entry's locks advertise and
+        ``MANAGED_CREDENTIAL_TYPES``, which is a floor rather than a cap.
+        Those two sets answer different questions and this entity spans
+        both: the constant is what Lock Code Manager can WRITE, and a lock's
+        advertised types are what it can REPORT. A lock with its own RFID
+        reader reports uses of a credential this integration never wrote,
+        and they are still this user's uses.
+
+        The floor is what makes the answer safe before anything is known.
+        Capabilities are probed lazily, so ``cached_capabilities`` reads
+        ``None`` for a lock that has not been asked yet or cannot be
+        reached, and an empty vocabulary would make ``_trigger_event``
+        refuse everything -- the entity would record nothing at all, for as
+        long as the probe took.
+
+        Read fresh on every state write, because it moves: a probe
+        completing or a lock being added changes it. Home Assistant re-reads
+        capability attributes each write, so a dynamic answer publishes
+        correctly; nothing caches it here, which is deliberate.
+        """
+        advertised = {
+            credential_type
+            for lock in self.locks
+            if (caps := lock.cached_capabilities) is not None
+            for credential_type in caps.credential_types
+        }
+        return sorted(advertised | MANAGED_CREDENTIAL_TYPES | self._recorded_types)
 
     @callback
     def _credential_used_filter(self, event_data: dict[str, Any]) -> bool:
@@ -90,10 +130,13 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         keypad with no integration of its own -- is still this user's
         credential being used, and recording it is what this entity is for.
         """
-        slot_user = get_entry_config(self.config_entry).name_for(self.slot_num)
-        return (
-            event_data[ATTR_CONFIG_ENTRY_ID] == self.entry_id
-            and event_data[ATTR_NAME] == slot_user
+        # Every entry's entities see every entry's events, and resolving who
+        # holds this slot walks the configuration, so the entry has to be
+        # ruled out before that lookup rather than alongside it.
+        if event_data[ATTR_CONFIG_ENTRY_ID] != self.entry_id:
+            return False
+        return event_data[ATTR_NAME] == get_entry_config(self.config_entry).name_for(
+            self.slot_num
         )
 
     @callback
@@ -104,8 +147,17 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         The whole payload, unedited: a consumer reads ``target`` for where
         the credential was used and ``source`` for where it was entered,
         which for a use a lock observed itself are the same entity.
+
+        A kind the vocabulary does not yet list widens it instead of being
+        dropped. ``_trigger_event`` raises on an undeclared type, and this
+        runs on a bus callback whose exceptions Home Assistant swallows, so
+        refusing would lose the use in silence -- and a use that arrived is
+        better evidence of what is possible here than a capability probe
+        that has not finished.
         """
-        self._trigger_event(EVENT_CREDENTIAL_USED, event.data)
+        credential_type = event.data[ATTR_CREDENTIAL_TYPE]
+        self._recorded_types.add(credential_type)
+        self._trigger_event(credential_type, event.data)
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:

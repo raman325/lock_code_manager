@@ -39,8 +39,10 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
+    ATTR_CREDENTIAL_TYPE,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
+    ATTR_OPERATION,
     ATTR_REASON,
     ATTR_SLOT,
     ATTR_SOURCE,
@@ -71,6 +73,8 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain import services
 from custom_components.lock_code_manager.domain.allocation import SlotAllocationError
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
+from custom_components.lock_code_manager.domain.credentials import CredentialType
+from custom_components.lock_code_manager.domain.events import CredentialOperation
 from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
@@ -1518,13 +1522,17 @@ async def test_use_credential_records_against_an_in_entry_lock(
             ATTR_CONFIG_ENTRY_TITLE: validate_entry.title,
             ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
             ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+            # A PIN is what the action validates, and nothing here watched
+            # the lock move, so it never claims to know what it did.
+            ATTR_CREDENTIAL_TYPE: CredentialType.PIN,
+            ATTR_OPERATION: CredentialOperation.UNKNOWN,
         }
     ]
     assert deprecated == []
 
     state = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert state
-    assert state.attributes[ATTR_EVENT_TYPE] == EVENT_CREDENTIAL_USED
+    assert state.attributes[ATTR_EVENT_TYPE] == CredentialType.PIN
     assert state.attributes[ATTR_TARGET] == VALIDATE_LOCK_ENTITY_ID
     assert state.attributes[ATTR_SOURCE] == VALIDATE_SOURCE_ENTITY_ID
     assert [
@@ -1622,7 +1630,7 @@ async def test_use_credential_against_an_event_blind_lock_in_the_entry(
     ]
     recorded = hass.states.get(event_entity_id)
     assert recorded.state != STATE_UNKNOWN
-    assert recorded.attributes[ATTR_EVENT_TYPE] == EVENT_CREDENTIAL_USED
+    assert recorded.attributes[ATTR_EVENT_TYPE] == CredentialType.PIN
     assert recorded.attributes[ATTR_TARGET] == EVENT_BLIND_LOCK_ENTITY_ID
     assert [
         record for record in caplog.records if record.levelno >= logging.ERROR
