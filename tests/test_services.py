@@ -84,7 +84,7 @@ from custom_components.lock_code_manager.providers.schlage import (
 )
 from tests.providers.helpers import register_mock_service
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID
+from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, reading_for
 
 
 async def test_set_usercode_service(
@@ -514,6 +514,36 @@ async def test_add_user_service(
     assert config.assignment.slot("test1") == 1
     assert config.assignment.slot("test2") == 2
     assert config.assignment.slot("Newcomer") not in (1, 2)
+
+
+async def test_add_user_service_reads_the_locks_for_its_own_entry(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    The entry named in the call is the one its lock reads are made for.
+
+    What allocation makes of a lock is settled by the owning entry's
+    configuration, so a read made for nobody would consult the wrong one --
+    and the service and the editor would stop agreeing about which numbers
+    are free.
+    """
+    with reading_for() as read_for:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Newcomer",
+                CONF_PIN: "9876",
+            },
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    assert read_for, "the service allocated a number without reading a lock"
+    assert all(read is lock_code_manager_config_entry for read in read_for)
 
 
 async def test_add_user_service_returns_once_the_entities_exist(
