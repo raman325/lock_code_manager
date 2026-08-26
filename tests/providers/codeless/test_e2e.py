@@ -11,7 +11,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
 from homeassistant.const import (
     CONF_ENABLED,
     CONF_NAME,
@@ -46,6 +46,7 @@ from custom_components.lock_code_manager.providers.codeless import CodelessLock
 
 from ...common import (
     LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
     MockLCMLock,
     register_codeless_lock,
     slot_entity_id,
@@ -601,5 +602,119 @@ async def test_handing_the_lock_back_discards_the_codes_it_was_holding(
     await hass.async_block_till_done()
 
     assert store_key not in hass_storage
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_reauth_decline_discards_them_the_same_way(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    mock_lock_config_entry,
+) -> None:
+    """
+    Reauth shows the same sentence, so it has to mean the same thing there.
+
+    Reauth is the one save that does not go through the update listener: it
+    writes the entry and reloads, and the entry it is repairing is failed, so
+    nothing was holding the lock for ``locks_redeclared`` to find and
+    ``remove_permanently`` to collect. The promise on screen was therefore
+    true on one path and false on the other, and the false one left a file of
+    cleartext Personal Identification Numbers on disk for a lock that had
+    just been handed back to its own integration -- unreadable by anything,
+    and collected by nothing, because the entry that would have swept it on
+    deletion no longer declares the member.
+
+    A second lock whose registry row is gone is what puts the entry in
+    reauth, which is the only way to reach that step.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    entry = await _entry_for(
+        hass,
+        unique_id="reauth_handing_back",
+        slot_num=1,
+        pin="9999",
+        holding=[LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+        declaring=[claimed],
+    )
+    await _settle_sync(hass)
+    # Unload is what puts the credential on disk; the entry then fails to
+    # come back because one of its locks no longer exists.
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    store_key = f"codeless_{DOMAIN}_{LOCK_1_ENTITY_ID}"
+    assert hass_storage[store_key]["data"]["1"]["code"] == "9999"
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    assert result["step_id"] == "codeless_reconsider"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {"next_step_id": "codeless_decline"}
+    )
+    assert result["type"] == "abort"
+    await hass.async_block_till_done()
+
+    assert store_key not in hass_storage
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_reauth_confirmation_leaves_the_codes_exactly_where_they_are(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    mock_lock_config_entry,
+) -> None:
+    """
+    The other answer to the same question must not cost a single code.
+
+    Discarding on decline and discarding on confirm are one line apart, and
+    the wrong one of the two is silent: the user is asked whether Lock Code
+    Manager should keep holding the codes, says yes, and every one of them is
+    deleted on the way to saving that yes. There is nowhere else a codeless
+    member's codes exist, so it is unrecoverable, and the entry that comes
+    back looks configured -- the slots are all there, holding nothing.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    entry = await _entry_for(
+        hass,
+        unique_id="reauth_keeping_them",
+        slot_num=1,
+        pin="9999",
+        holding=[LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+        declaring=[claimed],
+    )
+    await _settle_sync(hass)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    store_key = f"codeless_{DOMAIN}_{LOCK_1_ENTITY_ID}"
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    assert result["step_id"] == "codeless_reconsider"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {"next_step_id": "codeless_confirm"}
+    )
+    assert result["type"] == "abort"
+    await hass.async_block_till_done()
+
+    # Read back through the provider the repaired entry loaded, so this is
+    # the code a use would be checked against rather than a file nothing
+    # opened.
+    held = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert isinstance(held, CodelessLock)
+    assert (await held.async_get_usercodes())[1].readable_pin == "9999"
+    assert hass_storage[store_key]["data"]["1"]["code"] == "9999"
 
     await hass.config_entries.async_unload(entry.entry_id)

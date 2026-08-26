@@ -42,6 +42,7 @@ from .domain.names import name_error, normalize_name, validate_user_names
 from .domain.queries import get_entry_config
 from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import resolve_provider_class_for_entity
+from .providers.codeless import CodelessLock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -460,6 +461,55 @@ class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
             roster.add(lock_entry.id)
         return declare_codeless(config.members, self._codeless_answers, roster)
 
+    async def _async_discard_reclaimed_credentials(
+        self, config: EntryConfig, lock_entity_ids: Iterable[str]
+    ) -> None:
+        """
+        Retire the store of every member this flow just handed back.
+
+        ``codeless_reconsider`` promises in so many words that answering no
+        discards the codes Lock Code Manager was holding. On the options path
+        that promise is kept by the update listener, which sees the member
+        resolve to a different class and tears the old instance down
+        permanently. A save that does not go through that listener has to
+        keep the promise itself, or the answer leaves a file of cleartext
+        Personal Identification Numbers behind for a lock whose own
+        integration now holds the codes -- readable by nothing, and swept by
+        nothing, because the entry no longer declares the member it would
+        have been collected under.
+
+        Only members the submission KEEPS. A lock leaving the roster entirely
+        is a different question with a different answer, and this is not the
+        surface that answers it.
+
+        No sibling gate, unlike the sweep entry deletion performs. A
+        declaration may only be taken back when no other configuration still
+        declares the member -- ``codeless_conflict`` refuses the submission
+        otherwise, before it can be saved -- so nothing else reads this store
+        by the time an answer of no can land.
+
+        Instances are built fresh and only to name the store: nothing here
+        reaches the lock. Every entity resolves for the same reason it does
+        in :meth:`_declared_members`, and is asserted for the same reason.
+        """
+        ent_reg = er.async_get(self.hass)
+        dev_reg = dr.async_get(self.hass)
+        for entity_id in lock_entity_ids:
+            lock_entry = ent_reg.async_get(entity_id)
+            assert lock_entry
+            if not config.is_codeless(lock_entry) or self._is_codeless(
+                config, lock_entry
+            ):
+                continue
+            lock = CodelessLock(
+                self.hass,
+                dev_reg,
+                ent_reg,
+                self.hass.config_entries.async_get_entry(lock_entry.config_entry_id),
+                lock_entry,
+            )
+            await lock.async_remove_stored_credentials()
+
     def _pending_config(
         self, config: EntryConfig, lock_entity_ids: Iterable[str]
     ) -> EntryConfig:
@@ -588,21 +638,28 @@ async def _async_validate_users_yaml(
 
     Returns the parsed users -- or ``None`` when validation failed -- with the
     accumulated errors and description placeholders.
+
+    Every refusal is keyed to the users field rather than to ``base``, so it
+    renders beside the block it is about and, more to the point, alongside
+    whatever the lock list was refused for. A dict holds one message per key:
+    sharing ``base`` with ``_check_lock_selection`` meant the later of the two
+    silently replaced the earlier, and the user was refused twice for a
+    submission that was wrong in two ways from the start.
     """
     # A block still keyed by slot number coerces cleanly into users named
     # "1", "2", which is a silently wrong reading of what was pasted.
     if raw_users and all(isinstance(key, int) for key in raw_users):
-        return None, {"base": "users_keyed_by_slot"}, {}
+        return None, {CONF_USERS: "users_keyed_by_slot"}, {}
 
     try:
         parsed_users = USERS_SCHEMA(raw_users)
     except vol.Invalid as err:
         _LOGGER.error("Invalid users: %s", err)
-        return None, {"base": "invalid_config"}, {}
+        return None, {CONF_USERS: "invalid_config"}, {}
 
     if problem := validate_user_names(parsed_users):
         name, error = problem
-        return None, {"base": error}, {"name": name}
+        return None, {CONF_USERS: error}, {"name": name}
 
     # The same refusal the guided path gives. Both write the one field, so a
     # condition entity this integration cannot read must fail on both routes
@@ -615,7 +672,7 @@ async def _async_validate_users_yaml(
         if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
             return (
                 None,
-                {"base": "excluded_platform"},
+                {CONF_USERS: "excluded_platform"},
                 {
                     "name": name,
                     "integration": entity_entry.platform,
@@ -634,7 +691,7 @@ async def _async_validate_users_yaml(
     except SlotAllocationError as err:
         return (
             None,
-            {"base": "too_many_users"},
+            {CONF_USERS: "too_many_users"},
             {**err.placeholders, "num_users": str(len(parsed_users))},
         )
     return parsed_users, {}, {}
@@ -1035,6 +1092,13 @@ class LockCodeManagerFlowHandler(
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
+                # Discarded here rather than by the redeclaration teardown:
+                # this save writes the entry and reloads it, and the entry it
+                # is repairing is failed, so no instance is being held for
+                # that teardown to find and collect.
+                await self._async_discard_reclaimed_credentials(
+                    entry_config, user_input[CONF_LOCKS]
+                )
                 # Consume any options-flow save that sat unprocessed while
                 # the entry was failed (no update listener registered in
                 # that state) and clear it: the data→options migration
@@ -1097,8 +1161,12 @@ class LockCodeManagerOptionsFlow(CodelessDeclarationFlow, config_entries.Options
         if user_input:
             stored = get_entry_config(self.config_entry)
             # Accumulated alongside the users validation rather than
-            # short-circuiting it: both refusals render together, so one round
-            # trip shows everything wrong with the submission.
+            # short-circuiting it, which the two lock-picking steps do. The
+            # rule is the same in all three: accumulate what can render
+            # together, guard what cannot. These two can, because they are
+            # keyed to different fields; the allocation refusals below share
+            # ``base`` with this one and the codeless question is a menu
+            # rather than an error, so both are guarded instead.
             lock_errors, lock_placeholders = _check_lock_selection(
                 self.hass, user_input[CONF_LOCKS], stored.locks
             )

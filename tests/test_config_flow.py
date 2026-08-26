@@ -354,7 +354,7 @@ async def test_config_flow_yaml_error(hass: HomeAssistant, mock_lock_config_entr
 
     assert result["type"] == "form"
     assert result["step_id"] == "yaml"
-    assert result["errors"] == {"base": "invalid_config"}
+    assert result["errors"] == {CONF_USERS: "invalid_config"}
 
 
 async def test_config_flow_ui_stores_a_padded_pin_stripped(
@@ -439,7 +439,7 @@ async def test_config_flow_yaml_rejects_a_whitespace_only_pin(
 
     assert result["type"] == "form"
     assert result["step_id"] == "yaml"
-    assert result["errors"] == {"base": "invalid_config"}
+    assert result["errors"] == {CONF_USERS: "invalid_config"}
 
 
 async def test_options_flow(hass: HomeAssistant, mock_lock_config_entry):
@@ -473,7 +473,7 @@ async def test_options_flow(hass: HomeAssistant, mock_lock_config_entry):
 
     assert result["type"] == "form"
     assert result["step_id"] == "init"
-    assert result["errors"] == {"base": "invalid_config"}
+    assert result["errors"] == {CONF_USERS: "invalid_config"}
 
     # Give the enabled user a PIN and it saves.
     new_config[CONF_USERS]["User 3"][CONF_PIN] = "1234"
@@ -827,7 +827,7 @@ async def test_options_flow_invalid_yaml_shows_error(
     )
 
     assert result["type"] == "form"
-    assert result["errors"] == {"base": "invalid_config"}
+    assert result["errors"] == {CONF_USERS: "invalid_config"}
 
 
 # Slot capacity validation (issue #1398)
@@ -883,7 +883,7 @@ async def test_config_flow_yaml_rejects_slot_beyond_lock_capacity(
         )
 
     assert result["type"] == "form"
-    assert result["errors"] == {"base": "too_many_users"}
+    assert result["errors"] == {CONF_USERS: "too_many_users"}
     assert result["description_placeholders"]["num_users"] == "31"
     assert result["description_placeholders"]["num_slots"] == "30"
 
@@ -1334,7 +1334,7 @@ async def test_config_flow_yaml_enforces_name_rules(
         )
 
     assert result["type"] == "form"
-    assert result["errors"] == {"base": expected_error}
+    assert result["errors"] == {CONF_USERS: expected_error}
 
 
 async def test_a_slot_keyed_block_is_rejected_not_reinterpreted(
@@ -1356,7 +1356,7 @@ async def test_a_slot_keyed_block_is_rejected_not_reinterpreted(
     assert result["type"] == "form"
     # Named for what it is, rather than the generic parse failure: those
     # digits would otherwise coerce into users literally called "1".
-    assert result["errors"] == {"base": "users_keyed_by_slot"}
+    assert result["errors"] == {CONF_USERS: "users_keyed_by_slot"}
 
 
 async def test_every_name_error_supplies_what_its_message_asks_for(
@@ -1691,7 +1691,7 @@ async def test_a_blank_yaml_name_names_the_slot_it_came_from(
             {CONF_USERS: {"   ": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
         )
 
-    assert result["errors"] == {"base": "name_required"}
+    assert result["errors"] == {CONF_USERS: "name_required"}
     assert result["description_placeholders"]["name"] == "   "
     message = strings["config"]["error"]["name_required"]
     assert not {
@@ -2241,7 +2241,7 @@ async def test_the_editor_refuses_a_condition_entity_the_guided_path_would(
         )
 
     assert result["type"] == "form"
-    assert result["errors"] == {"base": "excluded_platform"}
+    assert result["errors"] == {CONF_USERS: "excluded_platform"}
     assert result["description_placeholders"]["name"] == "Raman"
 
 
@@ -2552,9 +2552,54 @@ async def test_options_flow_renders_lock_and_users_errors_together(
     assert result["step_id"] == "init"
     assert result["errors"] == {
         CONF_LOCKS: "unsupported_mqtt_lock",
-        "base": "invalid_config",
+        CONF_USERS: "invalid_config",
     }
     assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+
+
+async def test_the_registry_refusal_renders_beside_a_users_one_too(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The other lock refusal accumulates too, which took a third key to arrange.
+
+    Collecting both was never enough on its own. This refusal and every users
+    one were keyed to ``base``, and a dict holds one message per key, so the
+    users message overwrote it and the lock refusal reached the user only
+    after they had fixed the users block and submitted again -- the exact
+    second round trip collecting them was for. The pair above never showed it
+    because those two were already keyed apart.
+    """
+    hass.states.async_set("lock.yaml_only", LockState.LOCKED)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
+        },
+    )
+    entry.add_to_hass(hass)
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID, "lock.yaml_only"],
+                CONF_USERS: {"   ": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            },
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {
+        "base": "lock_not_registered",
+        CONF_USERS: "name_required",
+    }
+    # Named apart, so one flat mapping renders both messages.
+    assert result["description_placeholders"]["unregistered_locks"] == "lock.yaml_only"
+    assert result["description_placeholders"]["name"] == "   "
 
 
 async def test_reauth_rejects_unclaimed_mqtt_lock(
@@ -3269,7 +3314,7 @@ async def test_taking_a_declaration_back_is_sized_against_the_real_lock(
         )
 
     assert result["type"] == "form"
-    assert result["errors"] == {"base": "too_many_users"}
+    assert result["errors"] == {CONF_USERS: "too_many_users"}
     assert result["description_placeholders"]["num_slots"] == "2"
     # Nothing was written, so the member is still what it was.
     assert get_entry_config(entry).is_codeless(claimed)
