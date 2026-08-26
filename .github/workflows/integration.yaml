@@ -5,9 +5,9 @@ name: Integration
 # yamllint disable-line rule:truthy
 on:
   push:
-    branches: [main]
+    branches: [main, "feature/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "feature/**"]
 
 concurrency:
   group: integration-${{ github.head_ref || github.ref }}
