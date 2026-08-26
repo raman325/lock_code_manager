@@ -1,0 +1,17 @@
+merged, ff main and clean up stale worktrees and branches
+
+---
+
+lets delete those two on the remote too, we don't need them
+
+---
+
+there are no prerelease builds except the one I ran
+
+---
+
+there are no prerelease builds except the one I ran. I am realizing though I probably should have used subentries for users
+
+---
+
+open an issue in the GH repo with a plan to use subentries
