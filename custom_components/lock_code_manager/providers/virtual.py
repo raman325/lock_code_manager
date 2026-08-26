@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
+from functools import cached_property
 import logging
 from typing import Literal, TypedDict
 
@@ -39,8 +40,21 @@ class CodeSlotData(TypedDict):
 class VirtualLock(BaseLock):
     """Class to represent Virtual lock."""
 
-    _store: Store[dict[str, CodeSlotData]] = field(init=False, repr=False)
     _data: dict[str, CodeSlotData] = field(default_factory=dict, init=False, repr=False)
+
+    @cached_property
+    def _store(self) -> Store[dict[str, CodeSlotData]]:
+        """
+        Return the store this lock's credentials live in.
+
+        Derived from the provider domain and the lock's entity id, and from
+        nothing that setup produces, so an instance built purely to retire
+        the store names the same file one that has been running does. That
+        is the only way to reach it once the entry it belonged to is gone:
+        entry deletion unloads first, and unload deliberately keeps the
+        store.
+        """
+        return Store(self.hass, 1, f"{self.domain}_{DOMAIN}_{self.lock.entity_id}")
 
     @property
     def domain(self) -> str:
@@ -93,9 +107,6 @@ class VirtualLock(BaseLock):
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock by provider."""
-        self._store = Store(
-            self.hass, 1, f"{self.domain}_{DOMAIN}_{self.lock.entity_id}"
-        )
         await self.async_hard_refresh_codes()
 
     async def async_unload(self, remove_permanently: bool) -> None:
@@ -107,9 +118,13 @@ class VirtualLock(BaseLock):
         # the entry crashes on its missing runtime data.
         await super().async_unload(remove_permanently)
         if remove_permanently:
-            await self._store.async_remove()
+            await self.async_remove_stored_credentials()
         else:
             await self._store.async_save(self._data)
+
+    async def async_remove_stored_credentials(self) -> None:
+        """Discard the store, because it is the credential rather than a cache."""
+        await self._store.async_remove()
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Reload from store and return all codes."""

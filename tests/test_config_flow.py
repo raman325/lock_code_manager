@@ -30,6 +30,7 @@ from custom_components.lock_code_manager.domain.allocation import (
     LockQuerySkipped,
     build_lock_instance,
 )
+from custom_components.lock_code_manager.domain.config import EntryConfig
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     CredentialTypeCapability,
@@ -38,6 +39,9 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
+)
+from custom_components.lock_code_manager.domain.locks import (
+    resolve_member_provider_class,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
@@ -2917,7 +2921,85 @@ async def test_a_declared_member_a_provider_now_claims_is_still_asked_about(
     # that provider rather than leaving a lock nothing can manage.
     assert result["type"] == "create_entry"
     assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    # Read the way dispatch reads it, not as a dict. What declining buys is
+    # the provider that claims the lock now taking it back; an assertion on
+    # the stored shape passes just as well while the member goes on
+    # resolving to the Lock Code Manager store.
+    assert (
+        resolve_member_provider_class(
+            dr.async_get(hass), EntryConfig.from_mapping(result["data"]), claimed
+        )
+        is MockLCMLock
+    )
+
+
+async def test_an_answer_about_a_lock_the_same_visit_drops_is_not_stored(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A yes is not written back about a lock the submission no longer holds.
+
+    The answer outlives the question it answered: it is cached for the life
+    of the flow, so a re-submission refused for some unrelated reason -- a
+    sibling lock too asleep to report its occupancy -- comes back with the
+    yes still held. Dropping the lock is the obvious reaction to that
+    refusal, and storing the answer anyway leaves a declaration about a
+    member the entry does not have, waiting to decide the provider for
+    whatever is added under that registry id next.
+    """
+    codeless = register_codeless_lock(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
+    entry.add_to_hass(hass)
+    users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    flow_id = started["flow_id"]
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
+                CONF_USERS: users,
+            },
+        )
+    await _menu_about(result, codeless)
+
+    async def _unreadable(self, slots=None):
+        raise LockCodeManagerError("lock is asleep")
+
+    # Yes -- and the re-submission it causes fails over the sibling lock.
+    with patch.object(MockLCMLock, "async_get_usercodes", _unreadable):
+        result = await hass.config_entries.options.async_configure(
+            flow_id, {"next_step_id": "codeless_confirm"}
+        )
+
+    assert result["errors"] == {"base": "occupancy_unknown"}
+
+    # So the lock that was answered about is dropped instead.
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
+        )
+
+    assert result["type"] == "create_entry"
     assert result["data"][CONF_MEMBERS] == {}
+
+    # And the lock re-added later is a lock nobody has answered for, rather
+    # than one that resolves to the Lock Code Manager store unasked.
+    hass.config_entries.async_update_entry(entry, data=result["data"], options={})
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
+                CONF_USERS: users,
+            },
+        )
+
+    await _menu_about(result, codeless)
 
 
 async def test_dropping_a_lock_drops_what_was_declared_about_it(

@@ -127,11 +127,20 @@ def declare_codeless(
     anybody ever declined about would leave a husk behind.
 
     ``roster`` is the registry ids the entry will hold after this write, and
-    a declaration about anything else is dropped. Nothing reads a declaration
-    for a member the entry does not have, so keeping one would grow the entry
-    without bound -- and it is not merely untidy: re-adding the same lock
-    later would find an answer nobody was asked for again, and resolve a lock
-    with real code storage to the Lock Code Manager store without a word.
+    anything else is dropped -- a declaration already stored AND an answer
+    just given. Nothing reads a declaration for a member the entry does not
+    have, so keeping one would grow the entry without bound -- and it is not
+    merely untidy: re-adding the same lock later would find an answer nobody
+    was asked for again, and resolve a lock with real code storage to the
+    Lock Code Manager store without a word.
+
+    The answers need the same filter as the stored declarations because a
+    flow can outlive its own question. An answer is cached for the life of
+    the flow, so a yes whose re-submission is refused for some unrelated
+    reason -- a sibling lock too asleep to report its occupancy -- is still
+    held when the user reacts by dropping the lock they just answered about.
+    Written back, that answer is a declaration about a member the entry no
+    longer has, which is the husk this pruning exists to prevent.
     """
     declared = {
         registry_id: dict(fields)
@@ -139,6 +148,8 @@ def declare_codeless(
         if registry_id in roster
     }
     for registry_id, codeless in answers.items():
+        if registry_id not in roster:
+            continue
         member = declared.setdefault(registry_id, {})
         if codeless:
             member[CONF_CODELESS] = True

@@ -93,7 +93,17 @@ entities.
 **Main Module** (`__init__.py`)
 
 - Entry point manages config entry lifecycle
-- `async_update_listener()`: Core function handling dynamic entity creation/removal when config changes
+- `async_update_listener()`: Core function handling dynamic entity creation/removal when config changes.
+  Locks are torn down and rebuilt on a roster change AND on a declaration change: the
+  declaration is what picks the provider, so a member the entry keeps but now resolves
+  differently is treated like one that left and came back
+- Two entries holding one lock share a single `BaseLock`, keyed on the entity id AND the
+  provider class each entry resolves -- entries that disagree about a declaration get one
+  instance each. Release is by object identity, so each entry lets go of its own
+- `async_remove_entry()`: entry deletion only. Clears the persistent per-lock repairs and
+  retires the credentials a provider keeps off the lock (`async_remove_stored_credentials`,
+  the virtual/codeless store). Unload deliberately SAVES that store instead, so deletion is
+  the only place it can be collected -- skipped for a lock another entry still holds
 - Uses dispatcher signals to notify entities of changes (e.g., `{DOMAIN}_{entry_id}_add_lock_slot`)
 - Registers Lovelace strategy resource for dashboard UI
 
@@ -118,8 +128,9 @@ entities.
   member whose platform has since gained a provider (declining that one hands it to the
   provider instead of refusing the submission). One answer per flow: a declined lock
   keeps being refused until it is dropped from the selection or the flow is restarted.
-  On write, `declare_codeless` prunes declarations about members the submission no
-  longer holds, so re-adding a lock is asked about afresh
+  On write, `declare_codeless` prunes anything about members the submission no longer
+  holds -- a stored declaration AND an answer just given, since a yes outlives a
+  re-submission refused for some other reason -- so re-adding a lock is asked about afresh
 
 ### Entities
 

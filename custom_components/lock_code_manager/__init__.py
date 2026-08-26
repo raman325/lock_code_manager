@@ -109,7 +109,11 @@ from .domain.exceptions import (
     LockOperationFailed,
     UnclaimedLockError,
 )
-from .domain.locks import async_create_lock_instance, get_locks_from_targets
+from .domain.locks import (
+    async_create_lock_instance,
+    get_locks_from_targets,
+    resolve_member_provider_class,
+)
 from .domain.models import (
     LockCodeManagerConfigEntry,
     LockCodeManagerConfigEntryRuntimeData,
@@ -857,24 +861,35 @@ def _find_shared_lock_instance(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     lock_entity_id: str,
+    lock_cls: type[BaseLock],
 ) -> BaseLock | None:
     """
-    Return an existing BaseLock for ``lock_entity_id`` from another loaded entry.
+    Return another loaded entry's BaseLock for this lock, if it is the same kind.
 
     A single physical lock may be referenced by multiple Lock Code Manager
     entries. We keep one BaseLock instance and share it: when a new entry
     references a lock that another loaded entry is already managing,
     reuse that entry's instance instead of creating a duplicate.
+
+    ``lock_cls`` is what THIS entry resolves the lock to, and two entries can
+    disagree about that. A member one entry declares codeless resolves to the
+    Lock Code Manager store; the same lock in an entry that declares nothing
+    resolves to whatever platform dispatch claims it. Keying the share on the
+    entity id alone handed both entries whichever instance loaded first, so a
+    declaration decided nothing beyond load order and a device somebody said
+    must never be written to got written to. What is shared is a provider for
+    a lock, not a lock.
     """
     return next(
         (
-            entry.runtime_data.locks[lock_entity_id]
+            existing
             for entry in hass.config_entries.async_entries(
                 DOMAIN, include_disabled=False, include_ignore=False
             )
             if entry.entry_id != config_entry.entry_id
             and entry.state is ConfigEntryState.LOADED
-            and lock_entity_id in entry.runtime_data.locks
+            and (existing := entry.runtime_data.locks.get(lock_entity_id)) is not None
+            and type(existing) is lock_cls
         ),
         None,
     )
@@ -883,20 +898,33 @@ def _find_shared_lock_instance(
 def _lock_still_owned_by_another_entry(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
-    lock_entity_id: str,
+    lock: BaseLock,
 ) -> bool:
     """
-    Return True if another entry still holds the shared instance for this lock.
+    Return True if another entry still holds the instance being torn down.
 
-    Teardown is the exact inverse of acquisition, so it asks by calling the
-    acquiring side rather than restating its rule: any predicate that drifts
-    from ``_find_shared_lock_instance`` leaves an ownerless BaseLock whose
-    push subscription and config-entry state listener keep firing, plus a
-    second instance beside it on the next setup that doubles every code-slot
-    event. Config membership is not the question -- a loaded entry that
-    dropped this lock during setup lists it but does not own it.
+    Teardown is the exact inverse of acquisition, and acquisition is "take
+    the object that entry is holding" -- so this asks after that same object
+    rather than restating the rule that chose it. Any predicate that drifts
+    leaves an ownerless BaseLock whose push subscription and config-entry
+    state listener keep firing, plus a second instance beside it on the next
+    setup that doubles every code-slot event.
+
+    Identity, not entity id: two entries that resolve one lock to different
+    providers hold two instances, and each has to be able to release its own.
+    ``BaseLock`` equality keys on the entity id, so ``in`` and ``==`` would
+    both answer about the other entry's instance. Config membership is not
+    the question either -- a loaded entry that dropped this lock during setup
+    lists it but does not own it.
     """
-    return _find_shared_lock_instance(hass, config_entry, lock_entity_id) is not None
+    return any(
+        entry.entry_id != config_entry.entry_id
+        and entry.state is ConfigEntryState.LOADED
+        and entry.runtime_data.locks.get(lock.lock.entity_id) is lock
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+    )
 
 
 async def async_unload_lock(
@@ -914,7 +942,7 @@ async def async_unload_lock(
         lock = runtime_data.locks.pop(_lock_entity_id, None)
         if lock is None:
             continue
-        if not _lock_still_owned_by_another_entry(hass, config_entry, _lock_entity_id):
+        if not _lock_still_owned_by_another_entry(hass, config_entry, lock):
             # ``remove_permanently`` discards state that deliberately outlives
             # an unload -- the per-lock setup-failed repair, the provider's
             # stored codes. Only a lock leaving Lock Code Manager altogether
@@ -1031,20 +1059,71 @@ async def async_unload_entry(
     return unload_ok
 
 
+async def _async_discard_stored_credentials(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    config: EntryConfig,
+) -> None:
+    """
+    Retire the credentials a deleted entry's providers kept off the lock.
+
+    Some providers ARE the credential store: a virtual lock's codes, and
+    those of a member declared codeless, live in a Home Assistant store and
+    nowhere else. Unload writes that store back rather than removing it --
+    a reload must not be a reset -- and entry deletion unloads first, so
+    deleting an entry left its users' Personal Identification Numbers on
+    disk in cleartext with nothing left that could ever read them.
+
+    Instances are built fresh because the entry's own are gone by now, and
+    only to name the store: nothing here reaches the lock.
+
+    A lock another entry still holds keeps its store, which is the same gate
+    ``async_unload_lock`` puts on ``remove_permanently``. Conservative on
+    purpose: presence, not the provider that entry resolves, so the rare case
+    of two entries disagreeing about a lock leaves a store behind rather than
+    deleting one the other entry is still reading.
+    """
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    for lock_entity_id in config.locks:
+        if _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
+            continue
+        lock_entry = ent_reg.async_get(lock_entity_id)
+        if lock_entry is None:
+            # The entity went before the entry did. Its store is named after
+            # the entity id, so there is nothing left here to name it with.
+            continue
+        lock_cls = resolve_member_provider_class(dev_reg, config, lock_entry)
+        if lock_cls is None:
+            # Nothing claimed it and nothing was declared about it, so no
+            # provider ever ran and no provider ever wrote a store.
+            continue
+        lock = lock_cls(
+            hass,
+            dev_reg,
+            ent_reg,
+            hass.config_entries.async_get_entry(lock_entry.config_entry_id),
+            lock_entry,
+        )
+        await lock.async_remove_stored_credentials()
+
+
 async def async_remove_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
     """
-    Clean up persistent repair issues when the entry is fully removed.
+    Clean up what a deleted entry leaves behind Home Assistant will not.
 
     Called by Home Assistant only on entry deletion -- not on unload,
     reload, disable, or HA restart. The repair issues created by this
     integration are flagged ``is_persistent=True`` so they survive
     restarts and reloads; clearing them belongs here, not in
-    ``async_unload_entry``, so they outlive any non-deletion unload.
+    ``async_unload_entry``, so they outlive any non-deletion unload. The
+    same is true of a provider's stored credentials, for the same reason.
     """
     entry_id = config_entry.entry_id
     config = get_entry_config(config_entry)
+    await _async_discard_stored_credentials(hass, config_entry, config)
     for slot_num in config.slot_numbers:
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
@@ -1458,6 +1537,48 @@ def _async_report_dropped_lock(
     )
 
 
+@callback
+def _async_locks_redeclared(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    new_config: EntryConfig,
+    ent_reg: er.EntityRegistry,
+) -> tuple[str, ...]:
+    """
+    Return the entry's locks whose live instance no longer matches the config.
+
+    Compared against the instance the entry is actually holding rather than
+    against a second resolution of the old config: that is the state this
+    pass exists to correct, and it costs nothing to read. It also answers
+    correctly for a lock that never got an instance -- one that failed setup
+    is absent here and stays the ``locks_to_add`` path's problem.
+
+    A lock the new config resolves to nothing is left alone. There is no
+    replacement to build, so tearing the instance down would take the
+    provider's stored codes with it (``remove_permanently``) and leave the
+    entry with a lock it cannot set up and credentials it cannot get back.
+    Setup already refuses that entry on the next load, loudly.
+
+    Resolved against the entry's own refreshed view rather than the options
+    mapping this pass is applying, because that view is what the factory
+    reads a few lines later. Two readings of "the new config" that merge the
+    entry's two sides differently would name a lock here that came back as
+    the same class it just replaced, once per update, forever.
+    """
+    dev_reg = dr.async_get(hass)
+    config = get_entry_config(config_entry)
+    locks = config_entry.runtime_data.locks
+    return tuple(
+        lock_entity_id
+        for lock_entity_id in new_config.locks
+        if (lock := locks.get(lock_entity_id)) is not None
+        and (lock_entry := ent_reg.async_get(lock_entity_id)) is not None
+        and (resolved := resolve_member_provider_class(dev_reg, config, lock_entry))
+        is not None
+        and type(lock) is not resolved
+    )
+
+
 async def _async_setup_new_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -1479,7 +1600,21 @@ async def _async_setup_new_locks(
     )
 
     async def _setup_one_lock(lock_entity_id: str) -> BaseLock:
-        existing_lock = _find_shared_lock_instance(hass, config_entry, lock_entity_id)
+        # Built before the share is looked for, because what this entry
+        # resolves the lock to is part of what it is looking for, and the
+        # factory is the one place that resolution lives. Construction is a
+        # dataclass and a device registry lookup; everything that talks to
+        # the lock is in async_setup_internal below.
+        lock = async_create_lock_instance(
+            hass,
+            dr.async_get(hass),
+            ent_reg,
+            config_entry,
+            lock_entity_id,
+        )
+        existing_lock = _find_shared_lock_instance(
+            hass, config_entry, lock_entity_id, type(lock)
+        )
         if existing_lock is not None:
             _LOGGER.debug(
                 "%s (%s): Reusing lock instance for lock %s",
@@ -1491,13 +1626,7 @@ async def _async_setup_new_locks(
             await existing_lock.async_wait_for_setup()
             return existing_lock
 
-        lock = runtime_data.locks[lock_entity_id] = async_create_lock_instance(
-            hass,
-            dr.async_get(hass),
-            ent_reg,
-            config_entry,
-            lock_entity_id,
-        )
+        runtime_data.locks[lock_entity_id] = lock
         _LOGGER.debug(
             "%s (%s): Creating lock instance for lock %s",
             entry_id,
@@ -1663,8 +1792,17 @@ async def _async_apply_entry_update(
     diff = old_config - new_config
     slots_to_add = diff.slots_added
     slots_to_remove = diff.slots_removed
-    locks_to_add = diff.locks_added
-    locks_to_remove = diff.locks_removed
+    # A member the entry keeps but now declares differently is torn down and
+    # rebuilt like one that left and came back, because the declaration is
+    # what decides the provider (``resolve_member_provider_class``) and the
+    # provider is what the instance IS. The roster diff cannot see it -- the
+    # entity id sits on both sides -- so without this the answer reached
+    # storage and nothing acted on it until a reload: a lock taken back from
+    # Lock Code Manager went on being held by it, which is the whole of what
+    # the menu offers a way out of.
+    locks_redeclared = _async_locks_redeclared(hass, config_entry, new_config, ent_reg)
+    locks_to_add = diff.locks_added + locks_redeclared
+    locks_to_remove = diff.locks_removed + locks_redeclared
 
     callbacks = runtime_data.callbacks
 

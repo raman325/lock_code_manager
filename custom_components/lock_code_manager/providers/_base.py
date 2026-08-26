@@ -980,6 +980,19 @@ class BaseLock:
         """Wait until async_setup has completed."""
         await self._setup_complete.wait()
 
+    async def async_remove_stored_credentials(self) -> None:
+        """
+        Discard whatever this provider persists outside the config entry.
+
+        Default is a no-op: a provider whose credentials live on the lock has
+        nothing of its own to retire, and must not reach for the device here
+        -- this runs for an entry that has already been deleted, and codes on
+        a lock outlive the entry that wrote them by design.
+
+        Overridden by the providers that ARE the store. Their copy is the
+        only copy, so nothing else would ever collect it.
+        """
+
     async def async_unload(self, remove_permanently: bool) -> None:
         """Tear down config-entry-state listener, reconnect task, and push subscription."""
         if remove_permanently:
