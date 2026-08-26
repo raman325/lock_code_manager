@@ -228,6 +228,11 @@ class MockLCMLock(BaseLock):
         """Return whether the physical device (node) is reachable."""
         return self._device_available
 
+    async def async_unload(self, remove_permanently: bool) -> None:
+        """Record the teardown so tests can assert on remove_permanently."""
+        self.service_calls["unload"].append((remove_permanently,))
+        await super().async_unload(remove_permanently)
+
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Perform hard refresh of all codes."""
         self.service_calls["hard_refresh_codes"].append(())
