@@ -274,3 +274,7 @@ I did not guess, because the cost of guessing wrong is either broken user automa
 Everything else about Stage 4 I have already verified and is ready to go the moment you pick: `locks` → filter on `trigger.event.data.target`; the limiter's `_slot_number` is **display-only** (`"Slot {{ _slot_number }}"` in the notification title, and the acting entity is the user-selected switch) so it becomes `name`; and **neither blueprint needs the slot number to act** — the notifier's `slot_num` is likewise only exposed as a template variable for the user's action text.</result>
 <usage><subagent_tokens>206166</subagent_tokens><tool_uses>130</tool_uses><duration_ms>1652785</duration_ms></usage>
 </task-notification>
+
+---
+
+fix 1480. If needed update 1484 as well based on what we know. Try to be brief instead of just additive, you've already provided a lot of info that is hard to  consume
