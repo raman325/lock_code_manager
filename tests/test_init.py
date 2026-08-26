@@ -693,6 +693,107 @@ async def test_overlapping_locks_both_entries_get_entities(
     await hass.config_entries.async_unload(entry_2.entry_id)
 
 
+def _entry_with_shared_lock(unique_id: str, slot_num: int) -> MockConfigEntry:
+    """Build an unloaded LCM entry managing LOCK_1 on its own slot."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                slot_num: {
+                    CONF_NAME: f"shared{slot_num}",
+                    CONF_PIN: "0123",
+                    CONF_ENABLED: True,
+                },
+            },
+        },
+        unique_id=unique_id,
+        title=unique_id,
+    )
+
+
+async def test_shared_lock_unloads_when_only_sibling_is_unloaded(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """The last loaded entry tears the shared lock down, ignoring unloaded siblings."""
+    entry_a = _entry_with_shared_lock("Shared A", 1)
+    entry_b = _entry_with_shared_lock("Shared B", 3)
+    for entry in (entry_a, entry_b):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    shared_lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert shared_lock is entry_b.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    # B goes away while A still uses the lock: the instance must survive.
+    await hass.config_entries.async_unload(entry_b.entry_id)
+    await hass.async_block_till_done()
+    assert shared_lock._config_entry_state_unsub is not None
+
+    # Now nothing loaded uses the lock. B merely *existing* must not keep the
+    # provider's listeners alive with no owner.
+    await hass.config_entries.async_unload(entry_a.entry_id)
+    await hass.async_block_till_done()
+    assert shared_lock._config_entry_state_unsub is None
+
+
+async def test_reload_with_unloaded_sibling_does_not_leave_two_instances(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Reloading past an unloaded sibling replaces the shared lock, not duplicates it."""
+    entry_a = _entry_with_shared_lock("Reload A", 1)
+    entry_b = _entry_with_shared_lock("Reload B", 3)
+    for entry in (entry_a, entry_b):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    original_lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_unload(entry_b.entry_id)
+    await hass.async_block_till_done()
+
+    await hass.config_entries.async_reload(entry_a.entry_id)
+    await hass.async_block_till_done()
+
+    # The reload builds a fresh instance because no loaded entry holds one, so
+    # the pre-reload instance must have been torn down -- two live instances
+    # means two push subscriptions and duplicate events per physical code use.
+    assert entry_a.runtime_data.locks[LOCK_1_ENTITY_ID] is not original_lock
+    assert original_lock._config_entry_state_unsub is None
+
+    await hass.config_entries.async_unload(entry_a.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_reload_with_loaded_sibling_keeps_sharing_the_instance(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """A loaded sibling still keeps the shared lock alive across a reload."""
+    entry_a = _entry_with_shared_lock("Keep A", 1)
+    entry_b = _entry_with_shared_lock("Keep B", 3)
+    for entry in (entry_a, entry_b):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    shared_lock = entry_b.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_reload(entry_a.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry_a.runtime_data.locks[LOCK_1_ENTITY_ID] is shared_lock
+    assert shared_lock._config_entry_state_unsub is not None
+
+    for entry in (entry_a, entry_b):
+        await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
 @pytest.mark.parametrize("config", [{}])
 async def test_reload_after_started_no_listener_error(
     hass: HomeAssistant,
