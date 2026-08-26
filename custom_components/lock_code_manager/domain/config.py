@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Container, Mapping
 from dataclasses import dataclass, field
 import logging
 from types import MappingProxyType
@@ -109,7 +109,9 @@ def _member_declarations(raw: Any) -> Mapping[str, Mapping[str, Any]]:
 
 
 def declare_codeless(
-    members: Mapping[str, Mapping[str, Any]], answers: Mapping[str, bool]
+    members: Mapping[str, Mapping[str, Any]],
+    answers: Mapping[str, bool],
+    roster: Container[str],
 ) -> dict[str, dict[str, Any]]:
     """
     Return the declarations with an answer recorded about each named member.
@@ -123,8 +125,19 @@ def declare_codeless(
     the default, so a stored ``codeless: false`` would mean exactly what an
     absent key means while looking different in storage -- and every member
     anybody ever declined about would leave a husk behind.
+
+    ``roster`` is the registry ids the entry will hold after this write, and
+    a declaration about anything else is dropped. Nothing reads a declaration
+    for a member the entry does not have, so keeping one would grow the entry
+    without bound -- and it is not merely untidy: re-adding the same lock
+    later would find an answer nobody was asked for again, and resolve a lock
+    with real code storage to the Lock Code Manager store without a word.
     """
-    declared = {registry_id: dict(fields) for registry_id, fields in members.items()}
+    declared = {
+        registry_id: dict(fields)
+        for registry_id, fields in members.items()
+        if registry_id in roster
+    }
     for registry_id, codeless in answers.items():
         member = declared.setdefault(registry_id, {})
         if codeless:
@@ -340,11 +353,12 @@ class EntryConfig:
         every field a caller reads takes its own default. Membership itself is
         the ``locks`` roster; this records only what somebody said about a
         member, which is why an entity absent from the roster still answers
-        rather than raising. A declaration outlives both a rename and the
-        member's removal from the roster -- re-adding the same entity finds it
-        again -- but not the entity's removal from the entity registry, since
-        anything recreated afterwards is a new registry entry with a new id
-        and nothing declared about it.
+        rather than raising -- storage hand-edited, or written before
+        :func:`declare_codeless` pruned, can carry one. A declaration
+        outlives a rename, because the id does. It does not outlive the
+        member leaving the roster, or the entity leaving the registry: the
+        next write drops it either way, and re-adding the same lock is asked
+        about afresh.
         """
         return self.members.get(lock_entry.id, _EMPTY_MEMBER)
 

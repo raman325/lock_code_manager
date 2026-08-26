@@ -73,15 +73,17 @@ MQTT api; gateway type **Named** or **ValueID** gives full functionality includi
 push updates and PIN-used events, while **Manual** runs polling-only. Configure Home
 Assistant’s **MQTT** integration on the same broker zwave-js-ui uses.
 
-⁴ **Codeless locks** — Pick any `lock` entity during setup. If no provider claims it,
+⁴ **Codeless locks** — Pick any `lock` entity Home Assistant has in its entity
+registry (any lock with a unique ID) during setup. If no provider claims it,
 Lock Code Manager asks whether it should hold that lock's codes itself; say yes and it
 stores them, checks codes you report with the `use_credential` action against your users
 and their schedules, and records each use like any other. Nothing is ever written to the
 lock, so something else has to check the code — a keypad automation, an intercom, a door
 controller. This covers ESPHome and any other integration without code support, and it
-means a keypad-only setup no longer needs a separate virtual lock integration. The
-question is asked again whenever you edit the configuration, so the answer can be
-changed.
+means a keypad-only setup no longer needs a separate virtual lock integration. You are
+asked again each time you edit the configuration, so the answer can be changed later —
+but only once per visit: if you answer no and change your mind, close the dialog and
+start over.
 
 [zigbee2mqtt]: https://www.zigbee2mqtt.io/
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration

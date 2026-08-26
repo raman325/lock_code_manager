@@ -106,21 +106,34 @@ SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
 POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
 
-def _check_unclaimed_mqtt_locks(
+def _check_lock_selection(
     hass: HomeAssistant,
     lock_entity_ids: Iterable[str],
     already_configured: Container[str] = (),
 ) -> tuple[dict[str, str], dict[str, Any]]:
     """
-    Turn any newly selected unclaimed mqtt lock into the form error that names it.
+    Turn a lock that cannot be set up into the form error that names it.
 
-    The entity selector filter can only express integration+domain, so
-    per-device dispatch has to be enforced here at submit time -- otherwise
-    an unclaimed mqtt lock is accepted and only refused at setup.
+    The picker offers every ``lock`` entity on purpose -- a lock no provider
+    claims may still be one Lock Code Manager can manage by holding its
+    codes -- so everything the selector cannot express is enforced here, at
+    submit time, rather than by narrowing it back down.
 
-    ``already_configured`` is what the entry holds now, and locks in it are
-    waved through. An entry configured before this check existed can be
-    carrying an unclaimed lock, and every options and reauth submission
+    An entity with no registry row goes first, and is refused outright. It is
+    the same predicate ``async_setup_entry`` refuses on, moved to where the
+    lock is chosen: there is no id to key a declaration or a device to, so
+    the entry cannot load with one in its roster. Accepting it made the
+    guided path fail three steps later with ``occupancy_unknown``, which
+    tells the user to go wake a lock that was never going to answer.
+
+    It is NOT grandfathered the way the mqtt refusal below is: an entry
+    holding one is not running at all, so there is no working configuration
+    to lock somebody out of, and the reauth that setup starts is the flow
+    that has to refuse the lock for the loop to ever end.
+
+    ``already_configured`` is what the entry holds now, and unclaimed mqtt
+    locks in it are waved through. An entry configured before that check
+    existed can be carrying one, and every options and reauth submission
     re-renders that entry's whole lock list -- so validating all of it made
     one grandfathered lock refuse every subsequent edit: no PIN could be
     changed and no reauth could complete, for a lock the form was not being
@@ -129,6 +142,12 @@ def _check_unclaimed_mqtt_locks(
     """
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
+    if unregistered := [
+        entity_id
+        for entity_id in lock_entity_ids
+        if ent_reg.async_get(entity_id) is None
+    ]:
+        return {CONF_LOCKS: "lock_not_registered"}, {"locks": ", ".join(unregistered)}
     unclaimed = [
         entity_id
         for entity_id in lock_entity_ids
@@ -143,38 +162,59 @@ def _check_unclaimed_mqtt_locks(
 
 
 def _codeless_candidates(
-    hass: HomeAssistant, lock_entity_ids: Iterable[str]
-) -> list[er.RegistryEntry]:
+    hass: HomeAssistant, lock_entity_ids: Iterable[str], config: EntryConfig
+) -> tuple[list[er.RegistryEntry], list[er.RegistryEntry]]:
     """
-    Return the selected locks that only a declaration can account for.
+    Return the selected locks to ask about, and those nothing else can manage.
 
     A lock no provider claims is not necessarily a lock this integration
     cannot manage: if it keeps no codes of its own, Lock Code Manager can
     hold them itself and treat the entity as the thing being locked. Which
     of the two it is, is not derivable from anything here -- so these are
-    the locks the user is asked about.
+    the locks the user is asked about, and, unless the answer is yes, the
+    ones the submission is refused over.
 
-    mqtt is left out, and keeps the refusal it already has. Its dispatch is
-    per DEVICE, so an unclaimed one means "this bridge is not one of the two
-    Lock Code Manager speaks" -- a gap that may close in a later version,
-    not a statement that the lock has no code storage. Offering the
-    declaration there answers a question nobody asked, and taking it would
-    strand that lock's credentials in a Lock Code Manager store on the day
-    its bridge became supported.
+    Every member the entry ALREADY declares codeless is asked about too,
+    whatever platform dispatch now makes of it. The declaration wins over a
+    provider, deliberately and permanently
+    (``domain.locks.resolve_member_provider_class``), so a member whose
+    platform gained a provider after it was declared would otherwise keep
+    resolving to the Lock Code Manager store with no form that so much as
+    mentions it. It is asked about but never refused over: something does
+    claim it now, so declining hands it to that provider rather than
+    leaving a lock nothing can manage.
 
-    An entity missing from the registry is left out too: a declaration is
-    keyed by registry id, so there is nothing to key one by, and setup
-    refuses that lock on its own.
+    mqtt is never asked about on dispatch alone, and keeps the refusal it
+    already has. Its dispatch is per DEVICE, so an unclaimed one means "this
+    bridge is not one of the two Lock Code Manager speaks" -- a gap that may
+    close in a later version, not a statement that the lock has no code
+    storage. Offering the declaration there answers a question nobody asked,
+    and taking it would strand that lock's credentials in a Lock Code
+    Manager store on the day its bridge became supported.
+
+    Every selected entity is in the registry by the time this runs:
+    :func:`_check_lock_selection` refuses the whole submission over one that
+    is not, and runs first at every call site. Asserted rather than skipped,
+    the way the lock factory asserts the same thing -- a declaration is keyed
+    by registry id, so an entity that got here without a row would be one
+    this function silently declined to ask about.
     """
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
-    return [
-        lock_entry
-        for entity_id in lock_entity_ids
-        if (lock_entry := ent_reg.async_get(entity_id)) is not None
-        and lock_entry.platform != MQTT_DOMAIN
-        and resolve_provider_class_for_entity(dev_reg, lock_entry) is None
-    ]
+    ask: list[er.RegistryEntry] = []
+    unmanageable: list[er.RegistryEntry] = []
+    for entity_id in lock_entity_ids:
+        lock_entry = ent_reg.async_get(entity_id)
+        assert lock_entry
+        if (
+            lock_entry.platform != MQTT_DOMAIN
+            and resolve_provider_class_for_entity(dev_reg, lock_entry) is None
+        ):
+            unmanageable.append(lock_entry)
+            ask.append(lock_entry)
+        elif config.is_codeless(lock_entry):
+            ask.append(lock_entry)
+    return ask, unmanageable
 
 
 class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
@@ -227,10 +267,12 @@ class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
         that cannot be saved as it stands. ``config`` is what the entry
         already declares, which this flow's own answers override.
         """
-        candidates = _codeless_candidates(self.hass, user_input[CONF_LOCKS])
+        ask, unmanageable = _codeless_candidates(
+            self.hass, user_input[CONF_LOCKS], config
+        )
         if unanswered := [
             lock_entry
-            for lock_entry in candidates
+            for lock_entry in ask
             if lock_entry.id not in self._codeless_answers
         ]:
             self._codeless_origin = origin
@@ -240,7 +282,7 @@ class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
             return await self.async_step_codeless(), {}, {}
         if undeclared := [
             lock_entry
-            for lock_entry in candidates
+            for lock_entry in unmanageable
             if not self._is_codeless(config, lock_entry)
         ]:
             return (
@@ -254,9 +296,27 @@ class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
         """Return the answer that stands for a member: this flow's, else the entry's."""
         return self._codeless_answers.get(lock_entry.id, config.is_codeless(lock_entry))
 
-    def _declared_members(self, config: EntryConfig) -> dict[str, dict[str, Any]]:
-        """Return what to store about this entry's members, answers applied."""
-        return declare_codeless(config.members, self._codeless_answers)
+    def _declared_members(
+        self, config: EntryConfig, lock_entity_ids: Iterable[str]
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Return what to store about this entry's members, answers applied.
+
+        The roster the entry is about to have is resolved here and passed
+        along, so a declaration about a member this submission drops goes
+        with it. Every entity resolves, for the same reason it does in
+        :func:`_codeless_candidates`, and is asserted rather than skipped:
+        one quietly missing from the roster would take its declaration with
+        it while its entity id stayed in ``locks``, leaving an entry that
+        cannot load and no longer remembers what it was told.
+        """
+        ent_reg = er.async_get(self.hass)
+        roster = set()
+        for entity_id in lock_entity_ids:
+            lock_entry = ent_reg.async_get(entity_id)
+            assert lock_entry
+            roster.add(lock_entry.id)
+        return declare_codeless(config.members, self._codeless_answers, roster)
 
     async def async_step_codeless(
         self, user_input: dict[str, Any] | None = None
@@ -452,7 +512,7 @@ class LockCodeManagerFlowHandler(
             # Checked before the step consumes anything from user_input: a
             # refusal re-renders this form from what was submitted, and the
             # name has to still be in there when it does.
-            errors, description_placeholders = _check_unclaimed_mqtt_locks(
+            errors, description_placeholders = _check_lock_selection(
                 self.hass, user_input[CONF_LOCKS]
             )
             if not errors:
@@ -620,7 +680,9 @@ class LockCodeManagerFlowHandler(
         written empty: an entry that was never asked anything should not
         read as one that answered nothing.
         """
-        if members := self._declared_members(EntryConfig.empty()):
+        if members := self._declared_members(
+            EntryConfig.empty(), self.data[CONF_LOCKS]
+        ):
             self.data[CONF_MEMBERS] = members
         return self.async_create_entry(title=self.title, data=self.data)
 
@@ -725,7 +787,7 @@ class LockCodeManagerFlowHandler(
         else:
             entry_config = get_entry_config(config_entry)
             existing_slots = entry_config.slot_numbers
-            additional_errors, additional_placeholders = _check_unclaimed_mqtt_locks(
+            additional_errors, additional_placeholders = _check_lock_selection(
                 self.hass, user_input[CONF_LOCKS], entry_config.locks
             )
             if not additional_errors:
@@ -777,7 +839,9 @@ class LockCodeManagerFlowHandler(
                     data={
                         **entry_config.to_dict(),
                         **user_input,
-                        CONF_MEMBERS: self._declared_members(entry_config),
+                        CONF_MEMBERS: self._declared_members(
+                            entry_config, user_input[CONF_LOCKS]
+                        ),
                     },
                     options={},
                 )
@@ -824,7 +888,7 @@ class LockCodeManagerOptionsFlow(CodelessDeclarationFlow, config_entries.Options
             # Accumulated alongside the users validation rather than
             # short-circuiting it: both refusals render together, so one round
             # trip shows everything wrong with the submission.
-            lock_errors, lock_placeholders = _check_unclaimed_mqtt_locks(
+            lock_errors, lock_placeholders = _check_lock_selection(
                 self.hass,
                 user_input[CONF_LOCKS],
                 get_entry_config(self.config_entry).locks,
@@ -889,7 +953,9 @@ class LockCodeManagerOptionsFlow(CodelessDeclarationFlow, config_entries.Options
                             title="",
                             data=EntryConfig(
                                 locks=tuple(user_input[CONF_LOCKS]),
-                                members=self._declared_members(config),
+                                members=self._declared_members(
+                                    config, user_input[CONF_LOCKS]
+                                ),
                                 users=users,
                                 assignment=assignment,
                                 extra=config.extra,

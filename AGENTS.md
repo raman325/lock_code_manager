@@ -102,13 +102,24 @@ entities.
 - Multi-step flow: select locks → configure slots → configure individual slot properties
 - Validates slots aren't already configured across other config entries
 - Supports YAML object mode for advanced slot configuration
-- The lock picker accepts ANY `lock` entity. A submitted lock no provider claims (mqtt
+- The lock picker accepts ANY `lock` entity, so `_check_lock_selection` enforces at
+  submit time what the selector cannot express: an entity with no entity registry row
+  is refused outright (`lock_not_registered` -- the same predicate `async_setup_entry`
+  refuses on, and not grandfathered, because an entry holding one does not load), and
+  a newly selected unclaimed mqtt lock is refused with `unsupported_mqtt_lock`
+  (grandfathered, because that entry does load). A submitted lock no provider claims (mqtt
   excepted -- it keeps its own refusal) goes to the `codeless` menu step, which asks
   whether Lock Code Manager should hold that lock's codes. `CodelessDeclarationFlow` is
   mixed into the config, reauth and options flows, and either answer re-submits what was
   asked about: confirming saves through the ordinary path, declining lands back on the
   form with `codeless_declined`. Asked about every unclaimed lock in a submission, not
-  only new ones, so a declaration can be taken back
+  only new ones, and about every member the entry already declares codeless whatever
+  dispatch now makes of it -- so a declaration always has a way back, including for a
+  member whose platform has since gained a provider (declining that one hands it to the
+  provider instead of refusing the submission). One answer per flow: a declined lock
+  keeps being refused until it is dropped from the selection or the flow is restarted.
+  On write, `declare_codeless` prunes declarations about members the submission no
+  longer holds, so re-adding a lock is asked about afresh
 
 ### Entities
 

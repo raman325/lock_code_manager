@@ -48,7 +48,9 @@ def resolve_member_provider_class(
     credentials out of this integration's store and onto a device the user
     never agreed to write to, silently, on a version upgrade. Keeping the
     declaration means the only thing that changes an answer is somebody
-    answering again.
+    answering again -- which is why the flows ask about every declared
+    member, not only the ones nothing claims: a rule with no exit would
+    strand the member here forever.
 
     This is what every factory has to call, and why neither factory may go
     through platform dispatch alone: a declared member that resolved to
