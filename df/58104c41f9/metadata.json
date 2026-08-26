@@ -3,7 +3,7 @@
   "checkpoint_id": "df58104c41f9",
   "strategy": "manual-commit",
   "branch": "fix/config-flow-field-labels",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "tests/test_frontend_contract.py"
   ],
@@ -14,13 +14,27 @@
       "compact_transcript": "/df/58104c41f9/0/transcript.jsonl",
       "content_hash": "/df/58104c41f9/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/df/58104c41f9/1/metadata.json",
+      "transcript": "/df/58104c41f9/1/full.jsonl",
+      "compact_transcript": "/df/58104c41f9/1/transcript.jsonl",
+      "content_hash": "/df/58104c41f9/1/content_hash.txt",
+      "prompt": "/df/58104c41f9/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 15,
-    "cache_creation_tokens": 5766,
-    "cache_read_tokens": 1171750,
-    "output_tokens": 3519,
-    "api_call_count": 8
+    "input_tokens": 465,
+    "cache_creation_tokens": 1410268,
+    "cache_read_tokens": 61831384,
+    "output_tokens": 280198,
+    "api_call_count": 239,
+    "subagent_tokens": {
+      "input_tokens": 105,
+      "cache_creation_tokens": 102543,
+      "cache_read_tokens": 4776080,
+      "output_tokens": 36880,
+      "api_call_count": 53
+    }
   }
 }
