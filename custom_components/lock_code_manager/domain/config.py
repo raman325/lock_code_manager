@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+import logging
 from types import MappingProxyType
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_PIN
+from homeassistant.helpers import entity_registry as er
 
 from ..const import CONF_LOCKS, CONF_MEMBERS, CONF_SLOTS, CONF_USERS
 from .names import normalize_name
@@ -18,6 +20,8 @@ from .slot_assignment import (
     identity,
     users_from_slots,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 _EMPTY_USERS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
 _EMPTY_MEMBERS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
@@ -58,22 +62,50 @@ def _member_declarations(raw: Any) -> Mapping[str, Mapping[str, Any]]:
     """
     Return the per-member declarations a stored value carries.
 
-    Malformed storage -- hand-edited ``.storage``, a restored backup, a key
-    written by a version that spelled it differently -- is dropped rather than
-    raised on, at both levels: the whole key if it is not a mapping, and any
-    single member whose declaration is not one. Every field then reads as its
-    own default, where raising would make the entry unloadable over a key no
-    member has to have.
+    Malformed storage -- hand-edited ``.storage``, a restored backup -- is
+    dropped rather than raised on, at both levels: the whole key if it is not
+    a mapping, and any single member whose key is not a registry id or whose
+    declaration is not a mapping. Every field then reads as its own default,
+    where raising would make the entry unloadable over a key no member has to
+    have.
+
+    Whatever is dropped is named in the log. The symptom otherwise is a member
+    silently reverting to defaults, which is indistinguishable from never
+    having been declared about, and the next write erases the evidence.
     """
     if not isinstance(raw, Mapping):
+        _LOGGER.warning(
+            "Ignoring the stored member declarations: expected a mapping of "
+            "entity registry ids, got %s (%r). Nothing is declared about any "
+            "member until this key is repaired",
+            type(raw).__name__,
+            raw,
+        )
         return _EMPTY_MEMBERS
-    return MappingProxyType(
-        {
-            entity_id: MappingProxyType(dict(declared))
-            for entity_id, declared in raw.items()
-            if isinstance(declared, Mapping)
-        }
-    )
+    declarations: dict[str, Mapping[str, Any]] = {}
+    for registry_id, declared in raw.items():
+        if not isinstance(registry_id, str):
+            _LOGGER.warning(
+                "Ignoring a stored member declaration: expected an entity "
+                "registry id, got %s (%r) as the key. The declaration %r is "
+                "dropped",
+                type(registry_id).__name__,
+                registry_id,
+                declared,
+            )
+            continue
+        if not isinstance(declared, Mapping):
+            _LOGGER.warning(
+                "Ignoring the stored declaration for member %s: expected a "
+                "mapping, got %s (%r). That member takes every default until "
+                "this is repaired",
+                registry_id,
+                type(declared).__name__,
+                declared,
+            )
+            continue
+        declarations[registry_id] = MappingProxyType(dict(declared))
+    return MappingProxyType(declarations)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,10 +129,10 @@ class EntryConfig:
     """
 
     locks: tuple[str, ...]
-    # What the entry declares ABOUT each member, keyed by entity id, next to
-    # the `locks` roster rather than inside it: the roster is read raw in
-    # several places that would all have to learn a new element shape. No
-    # default, for the same reason `extra` has none.
+    # What the entry declares ABOUT each member, keyed by entity registry
+    # entry id, next to the `locks` roster rather than inside it: the roster
+    # is read raw in several places that would all have to learn a new
+    # element shape. No default, for the same reason `extra` has none.
     members: Mapping[str, Mapping[str, Any]]
     users: Mapping[str, Mapping[str, Any]]
     assignment: SlotAssignment
@@ -162,11 +194,12 @@ class EntryConfig:
             **{k: v for k, v in entry.data.items() if k not in _CONFIG_KEYS},
             **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
             CONF_LOCKS: entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, [])),
-            # Read per key rather than from the side the users came from, like
-            # the roster beside it. Both are keyed by entity id, so a side that
-            # lags describes members by name and the entries for members this
-            # entry no longer has are simply never read -- where a lagging
-            # assignment would silently renumber the users it is paired with.
+            # Read per key rather than from the side the users came from,
+            # like the roster beside it: a declaration names the member it is
+            # about, so a side that lags describes those same members and the
+            # ones this entry no longer has are simply never read -- where a
+            # lagging assignment would silently renumber the users it is
+            # paired with.
             CONF_MEMBERS: entry.options.get(
                 CONF_MEMBERS, entry.data.get(CONF_MEMBERS, {})
             ),
@@ -211,7 +244,7 @@ class EntryConfig:
             assignment = SlotAssignment.from_mapping(mapping)
         return cls(
             locks=tuple(mapping.get(CONF_LOCKS, [])),
-            members=_member_declarations(mapping.get(CONF_MEMBERS)),
+            members=_member_declarations(mapping.get(CONF_MEMBERS, _EMPTY_MEMBERS)),
             users=MappingProxyType(
                 {
                     name: MappingProxyType(_normalized_user(user))
@@ -253,7 +286,7 @@ class EntryConfig:
         """Return True if this entry manages the given lock."""
         return lock_entity_id in self.locks
 
-    def member(self, entity_id: str) -> Mapping[str, Any]:
+    def member(self, lock_entry: er.RegistryEntry) -> Mapping[str, Any]:
         """
         Return what this entry declares about one of its members.
 
@@ -263,14 +296,31 @@ class EntryConfig:
         member actuates anything, or that the credentials live on the device
         at all.
 
+        Takes the registry entry, not an entity id, because the declarations
+        are keyed by ``RegistryEntry.id`` -- the handle Home Assistant keeps
+        stable across a rename. Nothing in this integration listens for
+        registry updates, so keying by entity id would strand a declaration
+        the moment somebody renamed their lock, with no repair path; the
+        roster IS keyed by entity id, but a stale roster fails setup and the
+        reauth that follows rewrites it, so the two would disagree exactly
+        where it mattered. Every provider already holds its ``lock``
+        registry entry, and the entry cannot load while a roster member has
+        none, so there is no unresolvable case to handle. Passing the entry
+        rather than its id also keeps a caller holding the wrong string out:
+        an entity id would look up nothing and be reported as "nothing
+        declared".
+
         Declaring nothing is the normal case and returns an empty mapping, so
         every field a caller reads takes its own default. Membership itself is
         the ``locks`` roster; this records only what somebody said about a
         member, which is why an entity absent from the roster still answers
-        rather than raising -- a declaration is keyed by entity id and outlives
-        the member's removal, so re-adding them restores what was declared.
+        rather than raising. A declaration outlives both a rename and the
+        member's removal from the roster -- re-adding the same entity finds it
+        again -- but not the entity's removal from the entity registry, since
+        anything recreated afterwards is a new registry entry with a new id
+        and nothing declared about it.
         """
-        return self.members.get(entity_id, _EMPTY_MEMBER)
+        return self.members.get(lock_entry.id, _EMPTY_MEMBER)
 
     def name_for(self, slot_num: int | str) -> str | None:
         """Return the user occupying a slot, or None if it is unoccupied."""
@@ -420,8 +470,8 @@ class EntryConfig:
             **dict(self.extra),
             CONF_LOCKS: list(self.locks),
             CONF_MEMBERS: {
-                entity_id: dict(declared)
-                for entity_id, declared in self.members.items()
+                registry_id: dict(declared)
+                for registry_id, declared in self.members.items()
             },
             CONF_USERS: {name: dict(user) for name, user in self.users.items()},
             CONF_SLOT_ASSIGNMENT: dict(self.assignment.slots),

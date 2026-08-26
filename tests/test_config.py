@@ -1,10 +1,14 @@
 """Tests for data helpers (EntryConfig, EntryConfigDiff, etc)."""
 
 from dataclasses import FrozenInstanceError
+import logging
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
@@ -849,6 +853,23 @@ def test_a_non_string_stored_pin_is_left_alone() -> None:
 # than the meaning of a key that does not exist.
 _DECLARED = {"placeholder": True}
 
+# Declarations are keyed by entity registry entry id, which is opaque: these
+# stand in for the ids a real registry hands out, and look nothing like an
+# entity id on purpose.
+_MEMBER_A = "0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+_MEMBER_B = "0bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+_MEMBER_C = "0cccccccccccccccccccccccccccccccc"
+
+
+def _member_entry(registry_id: str) -> er.RegistryEntry:
+    """
+    Stand in for the registry entry a caller passes to ``member()``.
+
+    Only ``id`` is ever read, and building a real RegistryEntry takes twenty
+    more keyword arguments. The integration tests pass the real thing.
+    """
+    return cast(er.RegistryEntry, SimpleNamespace(id=registry_id))
+
 
 def test_nothing_declared_is_the_default() -> None:
     """
@@ -860,24 +881,24 @@ def test_nothing_declared_is_the_default() -> None:
     config = EntryConfig.from_mapping({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {}})
 
     assert dict(config.members) == {}
-    assert config.member("lock.a") == {}
-    assert EntryConfig.empty().member("lock.a") == {}
+    assert config.member(_member_entry(_MEMBER_A)) == {}
+    assert EntryConfig.empty().member(_member_entry(_MEMBER_A)) == {}
 
 
 def test_a_member_absent_from_the_roster_still_answers() -> None:
     """
-    Declarations are keyed by entity id and outlive membership.
+    Declarations outlive membership.
 
     Removing a lock from the entry does not erase what was declared about it,
     so re-adding it restores the declaration instead of silently reverting to
     defaults.
     """
     config = EntryConfig.from_mapping(
-        {CONF_LOCKS: [], CONF_MEMBERS: {"lock.gone": _DECLARED}}
+        {CONF_LOCKS: [], CONF_MEMBERS: {_MEMBER_A: _DECLARED}}
     )
 
     assert not config.has_lock("lock.gone")
-    assert config.member("lock.gone") == _DECLARED
+    assert config.member(_member_entry(_MEMBER_A)) == _DECLARED
 
 
 def test_member_declarations_round_trip() -> None:
@@ -890,18 +911,18 @@ def test_member_declarations_round_trip() -> None:
     original = EntryConfig.from_mapping(
         {
             CONF_LOCKS: ["lock.a", "lock.b"],
-            CONF_MEMBERS: {"lock.a": _DECLARED},
+            CONF_MEMBERS: {_MEMBER_A: _DECLARED},
             CONF_SLOTS: {1: _slot()},
         }
     )
 
     round_tripped = EntryConfig.from_mapping(original.to_dict())
 
-    assert dict(round_tripped.members) == {"lock.a": _DECLARED}
-    assert round_tripped.member("lock.a") == _DECLARED
+    assert dict(round_tripped.members) == {_MEMBER_A: _DECLARED}
+    assert round_tripped.member(_member_entry(_MEMBER_A)) == _DECLARED
     # The member nobody declared anything about is still defaulted, not
     # invented as an empty declaration.
-    assert "lock.b" not in round_tripped.members
+    assert _MEMBER_B not in round_tripped.members
 
 
 def test_a_partially_populated_declaration_round_trips() -> None:
@@ -915,14 +936,17 @@ def test_a_partially_populated_declaration_round_trips() -> None:
     original = EntryConfig.from_mapping(
         {
             CONF_LOCKS: ["lock.a", "lock.b", "lock.c"],
-            CONF_MEMBERS: {"lock.a": {"one": 1, "two": 2}, "lock.b": {}},
+            CONF_MEMBERS: {_MEMBER_A: {"one": 1, "two": 2}, _MEMBER_B: {}},
         }
     )
 
     round_tripped = EntryConfig.from_mapping(original.to_dict())
 
-    assert dict(round_tripped.members) == {"lock.a": {"one": 1, "two": 2}, "lock.b": {}}
-    assert round_tripped.member("lock.c") == {}
+    assert dict(round_tripped.members) == {
+        _MEMBER_A: {"one": 1, "two": 2},
+        _MEMBER_B: {},
+    }
+    assert round_tripped.member(_member_entry(_MEMBER_C)) == {}
 
 
 def test_an_unrelated_edit_preserves_member_declarations() -> None:
@@ -936,7 +960,7 @@ def test_an_unrelated_edit_preserves_member_declarations() -> None:
     original = EntryConfig.from_mapping(
         {
             CONF_LOCKS: ["lock.a"],
-            CONF_MEMBERS: {"lock.a": _DECLARED},
+            CONF_MEMBERS: {_MEMBER_A: _DECLARED},
             CONF_SLOTS: {1: _slot(name="Somebody")},
         }
     )
@@ -948,7 +972,7 @@ def test_an_unrelated_edit_preserves_member_declarations() -> None:
     )
     saved = EntryConfig.from_mapping(edited.to_dict())
 
-    assert saved.member("lock.a") == _DECLARED
+    assert saved.member(_member_entry(_MEMBER_A)) == _DECLARED
     # The edit itself landed, so the guarantee is not vacuous.
     assert saved.users["Somebody Else"]["pin"] == "9999"
 
@@ -956,14 +980,14 @@ def test_an_unrelated_edit_preserves_member_declarations() -> None:
 def test_member_declarations_are_deeply_immutable() -> None:
     """The declarations share EntryConfig's read-only guarantee."""
     config = EntryConfig.from_mapping(
-        {CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {"lock.a": dict(_DECLARED)}}
+        {CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {_MEMBER_A: dict(_DECLARED)}}
     )
 
     with pytest.raises(TypeError):
-        config.members["lock.b"] = {}  # type: ignore[index]
+        config.members[_MEMBER_B] = {}  # type: ignore[index]
 
     with pytest.raises(TypeError):
-        config.member("lock.a")["placeholder"] = False  # type: ignore[index]
+        config.member(_member_entry(_MEMBER_A))["placeholder"] = False  # type: ignore[index]
 
 
 def test_to_dict_produces_plain_member_dicts() -> None:
@@ -973,41 +997,76 @@ def test_to_dict_produces_plain_member_dicts() -> None:
     The read-only wrappers EntryConfig uses internally do not survive storage.
     """
     config = EntryConfig.from_mapping(
-        {CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {"lock.a": dict(_DECLARED)}}
+        {CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {_MEMBER_A: dict(_DECLARED)}}
     )
 
     result = config.to_dict()
 
     assert isinstance(result[CONF_MEMBERS], dict)
-    assert isinstance(result[CONF_MEMBERS]["lock.a"], dict)
-    result[CONF_MEMBERS]["lock.a"]["placeholder"] = False
-    assert config.member("lock.a") == _DECLARED
+    assert isinstance(result[CONF_MEMBERS][_MEMBER_A], dict)
+    result[CONF_MEMBERS][_MEMBER_A]["placeholder"] = False
+    assert config.member(_member_entry(_MEMBER_A)) == _DECLARED
 
 
 @pytest.mark.parametrize(
-    ("stored", "expected"),
+    ("stored", "expected", "discarded"),
     [
-        (["lock.a"], {}),
-        ("lock.a", {}),
-        (None, {}),
-        ({"lock.a": "not a mapping"}, {}),
-        ({"lock.a": None}, {}),
-        ({"lock.a": _DECLARED, "lock.b": 5}, {"lock.a": _DECLARED}),
+        # The whole key is the wrong shape, so nobody is declared about.
+        (["lock.a"], {}, ["lock.a"]),
+        ("lock.a", {}, "lock.a"),
+        (None, {}, None),
+        # One member's declaration is the wrong shape.
+        ({_MEMBER_A: "not a mapping"}, {}, "not a mapping"),
+        ({_MEMBER_A: None}, {}, None),
+        ({_MEMBER_A: _DECLARED, _MEMBER_B: 5}, {_MEMBER_A: _DECLARED}, 5),
+        # One member's KEY is not a registry id.
+        ({5: _DECLARED}, {}, 5),
+        ({5: _DECLARED, _MEMBER_A: _DECLARED}, {_MEMBER_A: _DECLARED}, 5),
     ],
 )
 def test_malformed_member_storage_is_dropped_not_raised(
-    stored: object, expected: dict
+    stored: object,
+    expected: dict,
+    discarded: object,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     A member key that is not the shape it should be reads as nothing declared.
 
     Reachable from hand-edited storage or a restored backup. Raising here
     would take entry setup down over a key no member has to have, and the
-    members that ARE well-formed still have to load.
+    members that ARE well-formed still have to load. Silence would be worse
+    than either: the symptom is a member taking every default, which is what
+    declaring nothing about it looks like, and the next write erases the
+    evidence -- so whatever was discarded goes in the warning.
     """
-    config = EntryConfig.from_mapping({CONF_LOCKS: ["lock.a"], CONF_MEMBERS: stored})
+    with caplog.at_level(logging.WARNING):
+        config = EntryConfig.from_mapping(
+            {CONF_LOCKS: ["lock.a"], CONF_MEMBERS: stored}
+        )
 
     assert dict(config.members) == expected
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert discarded in warnings[0].args
+
+
+def test_nothing_is_warned_about_when_nothing_is_declared(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    The absent key is the normal case, not a malformed one.
+
+    Every entry written before this key existed omits it, so warning here
+    would fire for all of them on every load, which is how a warning stops
+    being read.
+    """
+    with caplog.at_level(logging.WARNING):
+        config = EntryConfig.from_mapping({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {}})
+        assert dict(EntryConfig.empty().members) == {}
+
+    assert dict(config.members) == {}
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
 
 
 def test_from_entry_reads_member_declarations_options_preferred() -> None:
@@ -1019,14 +1078,16 @@ def test_from_entry_reads_member_declarations_options_preferred() -> None:
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {"lock.a": {"which": "data"}}},
+        data={CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {_MEMBER_A: {"which": "data"}}},
         options={
             CONF_LOCKS: ["lock.a"],
-            CONF_MEMBERS: {"lock.a": {"which": "options"}},
+            CONF_MEMBERS: {_MEMBER_A: {"which": "options"}},
         },
     )
 
-    assert EntryConfig.from_entry(entry).member("lock.a") == {"which": "options"}
+    assert EntryConfig.from_entry(entry).member(_member_entry(_MEMBER_A)) == {
+        "which": "options"
+    }
 
 
 def test_from_entry_falls_back_to_data_for_member_declarations() -> None:
@@ -1038,8 +1099,8 @@ def test_from_entry_falls_back_to_data_for_member_declarations() -> None:
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {"lock.a": _DECLARED}},
+        data={CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {_MEMBER_A: _DECLARED}},
         options={CONF_SLOTS: {1: _slot()}},
     )
 
-    assert EntryConfig.from_entry(entry).member("lock.a") == _DECLARED
+    assert EntryConfig.from_entry(entry).member(_member_entry(_MEMBER_A)) == _DECLARED

@@ -2432,9 +2432,12 @@ async def test_options_flow_preserves_member_declarations(
     it never asks about members, so anything it does not carry forward is
     erased by the one write a user reaches from the UI.
     """
+    ent_reg = er.async_get(hass)
+    lock_1 = ent_reg.async_get(LOCK_1_ENTITY_ID)
+    assert lock_1
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={**BASE_CONFIG, CONF_MEMBERS: {LOCK_1_ENTITY_ID: {"placeholder": True}}},
+        data={**BASE_CONFIG, CONF_MEMBERS: {lock_1.id: {"placeholder": True}}},
         unique_id="Mock Title",
     )
     entry.add_to_hass(hass)
@@ -2450,6 +2453,6 @@ async def test_options_flow_preserves_member_declarations(
         )
 
     assert result["type"] == "create_entry"
-    assert result["data"][CONF_MEMBERS] == {LOCK_1_ENTITY_ID: {"placeholder": True}}
+    assert result["data"][CONF_MEMBERS] == {lock_1.id: {"placeholder": True}}
     # The edit the declaration had to survive actually landed.
     assert set(result["data"][CONF_USERS]) == {"test1"}
