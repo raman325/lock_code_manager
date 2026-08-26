@@ -1325,3 +1325,54 @@ async def test_validate_code_on_an_entry_with_no_slots(hass: HomeAssistant) -> N
     }
 
     await hass.config_entries.async_unload(empty_entry.entry_id)
+
+
+async def test_validate_code_matches_a_padded_stored_pin(hass: HomeAssistant) -> None:
+    """
+    A PIN already stored with padding validates against the code as entered.
+
+    The config is written directly, which is the point: this simulates data
+    that predates the write-path strip -- hand-edited .storage, a restored
+    backup, or an older version -- so it cannot be produced through a path
+    that would normalize it on the way in.
+    """
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+    lock_entity = er.async_get(hass).async_get_or_create(
+        "lock",
+        "virtual",
+        "virtual_validate_padded",
+        suggested_object_id="virtual_validate_padded",
+        config_entry=virtual_entry,
+    )
+    hass.states.async_set(lock_entity.entity_id, "locked")
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Padded",
+        data={
+            CONF_LOCKS: [lock_entity.entity_id],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "dana", CONF_PIN: " 4321 ", CONF_ENABLED: True},
+                2: {CONF_NAME: "blank", CONF_PIN: "   ", CONF_ENABLED: True},
+            },
+        },
+        unique_id="test_validate_padded",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert await _call_validate_code(
+        hass, {"config_entry_id": entry.entry_id, ATTR_CODE: "4321"}
+    ) == {ATTR_VALID: True, ATTR_USER: "dana", ATTR_REASON: None}
+
+    # The whitespace-only slot holds no PIN, so nothing can match it -- least
+    # of all a submission that is itself only padding.
+    assert entry.runtime_data.slot_coordinators[2].pin_value is None
+    with pytest.raises(vol.Invalid):
+        await _call_validate_code(
+            hass, {"config_entry_id": entry.entry_id, ATTR_CODE: "   "}
+        )
+
+    await hass.config_entries.async_unload(entry.entry_id)

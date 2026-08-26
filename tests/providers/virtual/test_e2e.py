@@ -6,17 +6,24 @@ import logging
 from unittest.mock import patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
+from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.sync import TICK_INTERVAL
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
@@ -222,3 +229,47 @@ class TestUnloadReleasesBaseListeners:
         assert not [
             record for record in caplog.records if record.levelno >= logging.ERROR
         ]
+
+
+class TestStoredPaddingNeverReachesTheLock:
+    """A PIN stored with padding must not be programmed onto a device padded."""
+
+    async def test_a_padded_stored_pin_is_written_stripped(
+        self,
+        hass: HomeAssistant,
+        virtual_lock_entity,
+    ) -> None:
+        """
+        The sync writes the stripped PIN, not what storage happened to hold.
+
+        Written straight into the entry config on purpose: this is data that
+        predates the write-path strip, so no path that would normalize it can
+        be used to set it up. The device store is the assertion because that
+        is the last place the padding could still be observed -- a caller who
+        types the PIN on the keypad has no way to reproduce the padding.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [VIRTUAL_LOCK_ENTITY_ID],
+                CONF_SLOTS: {
+                    1: {CONF_NAME: "padded", CONF_PIN: " 4321 ", CONF_ENABLED: True}
+                },
+            },
+            unique_id="test_virtual_padded_storage",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # The first tick loads initial state; the write happens on the next.
+        for tick in range(2):
+            async_fire_time_changed(
+                hass, dt_util.utcnow() + TICK_INTERVAL * (tick + 1) * 2
+            )
+            await hass.async_block_till_done()
+
+        lock = get_virtual_lock(hass, entry)
+        assert lock._data["1"]["code"] == "4321"
+
+        await hass.config_entries.async_unload(entry.entry_id)

@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME
+from homeassistant.const import CONF_NAME, CONF_PIN
 
 from ..const import CONF_LOCKS, CONF_SLOTS, CONF_USERS
 from .names import normalize_name
@@ -25,6 +25,29 @@ _EMPTY_EXTRA: Mapping[str, Any] = MappingProxyType({})
 # The keys EntryConfig models directly. Everything else in the entry is
 # internal bookkeeping and rides along in `extra`.
 _CONFIG_KEYS = frozenset({CONF_LOCKS, CONF_SLOTS, CONF_USERS, CONF_SLOT_ASSIGNMENT})
+
+
+def _normalized_user(user: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    Return a user's stored fields with the PIN stripped.
+
+    Stripping only where a PIN is written makes the invariant true going
+    forward, which leaves it dependent on when a value happened to be
+    written: config hand-edited in ``.storage``, restored from a backup, or
+    written by a version that predates the write-path strip all still carry
+    padding. Stripping on read makes it true regardless of provenance, and
+    every read of a stored PIN -- validation, the sync's desired credential,
+    the dashboard -- resolves through here.
+
+    A whitespace-only PIN collapses to empty, which is already how "this
+    user has no PIN" is spelled, rather than to a truthy value nobody can
+    type. A non-string PIN is left alone: coercing it would hide a
+    malformed entry, and raising would take entry setup down with it.
+    """
+    normalized = dict(user)
+    if isinstance(pin := normalized.get(CONF_PIN), str):
+        normalized[CONF_PIN] = pin.strip()
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +172,10 @@ class EntryConfig:
         return cls(
             locks=tuple(mapping.get(CONF_LOCKS, [])),
             users=MappingProxyType(
-                {name: MappingProxyType(dict(user)) for name, user in users.items()}
+                {
+                    name: MappingProxyType(_normalized_user(user))
+                    for name, user in users.items()
+                }
             ),
             assignment=assignment,
             extra=MappingProxyType(
