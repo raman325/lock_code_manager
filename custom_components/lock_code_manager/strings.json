@@ -301,7 +301,7 @@
     },
     "use_credential": {
       "name": "Use credential",
-      "description": "Report that a credential was used, for the keypads and door controllers Lock Code Manager cannot watch itself. The response says whether the code would work, for which user, and the reason when it would not. A valid code fires the Lock Code Manager credential used event; an invalid one fires nothing, so react to a rejection from the response. It touches no lock and changes nothing. It performs no rate limiting and no logging, so do not expose it to untrusted input.",
+      "description": "Report that a credential was used, for the keypads and door controllers Lock Code Manager cannot watch itself. The response says whether the code would work, for which user, and the reason when it would not. A valid code fires the Lock Code Manager credential used event; an invalid one fires nothing, so react to a rejection from the response. It touches no lock and changes nothing. It performs no rate limiting and no logging, and the reason tells a real credential that is merely inactive apart from one that is unknown, so do not expose it to untrusted input.",
       "fields": {
         "config_entry_id": {
           "name": "Config entry",

@@ -72,7 +72,11 @@ from ..domain.exceptions import (
     ProviderNotImplementedError,
 )
 from ..domain.models import SlotCredential
-from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
+from ..domain.queries import (
+    find_entry_for_lock_slot,
+    get_entry_config,
+    get_managed_slots,
+)
 from ..domain.util import lock_display_name, mask_pin, per_lock_issue_id
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
@@ -2088,9 +2092,6 @@ class BaseLock:
         to_locked: bool | None = None,
         action_text: str | None = None,
         source_data: Event | State | dict[str, Any] | None = None,
-        *,
-        source: str | None = None,
-        target: str | None = None,
     ) -> None:
         """
         Record that a credential on this lock was used.
@@ -2101,19 +2102,17 @@ class BaseLock:
 
         The single funnel every provider goes through, so it is also where the
         unified ``BUS_EVENT_CREDENTIAL_USED`` is fired: every provider gets it
-        without a provider-side change.
-
-        ``source`` and ``target`` are the unified event's attribution and both
-        default to this lock, which is the truth for a use the lock observed
-        itself. The ``use_credential`` action overrides them with the entities
-        its caller named, so that path produces one unified event carrying the
-        caller's attribution instead of a second, lock-shaped one.
+        without a provider-side change. A lock that observed a use is both
+        ends of the unified event's attribution, and only a lock reaches
+        here -- a use reported from outside is announced by the
+        ``use_credential`` action itself.
         """
         name_state: State | None = None
         lock_entity_id = self.lock.entity_id
         lock_device_id = self.lock.device_id
         config_entry: ConfigEntry | None = None
         config_entry_id: str | None = None
+        credential_user: str | None = None
 
         if code_slot is not None and (
             config_entry := find_entry_for_lock_slot(
@@ -2121,6 +2120,11 @@ class BaseLock:
             )
         ):
             config_entry_id = config_entry.entry_id
+            # The unified event's user comes from the configuration, not from
+            # the name text entity below: that entity can be disabled, and it
+            # reads ``unknown`` until it restores after a reload, either of
+            # which would announce a name no consumer can match a user to.
+            credential_user = get_entry_config(config_entry).name_for(int(code_slot))
             name_entity_id = self.ent_reg.async_get_entity_id(
                 TEXT_DOMAIN,
                 DOMAIN,
@@ -2174,14 +2178,16 @@ class BaseLock:
         # Attribution is the whole content of the unified event, and every
         # field of it is required, so a use this integration cannot pin to an
         # entry -- a code in a slot no entry manages -- announces nothing
-        # here. The deprecated event above still carries it.
-        if config_entry is not None:
+        # here. The deprecated event above still carries it. The two
+        # conditions move together: an entry only matches a slot somebody
+        # occupies, so a matched entry always names its user.
+        if config_entry is not None and credential_user is not None:
             async_fire_credential_used(
                 self.hass,
                 config_entry,
-                name=slot_name,
+                name=credential_user,
                 # A lock that observed the use is both where the credential
                 # was entered and what it acted on.
-                source=lock_entity_id if source is None else source,
-                target=lock_entity_id if target is None else target,
+                source=lock_entity_id,
+                target=lock_entity_id,
             )

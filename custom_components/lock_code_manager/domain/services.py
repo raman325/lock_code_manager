@@ -121,32 +121,20 @@ async def async_use_credential(
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     result = validate_credential(config_entry, code)
 
-    # ``user`` and ``slot`` are both set exactly when the credential
-    # validated; reading them rather than ``valid`` is also what tells the
-    # type checker they are present.
-    if result.user is not None and result.slot is not None:
+    # ``user`` is set exactly when the credential validated; reading it
+    # rather than ``valid`` is also what tells the type checker it is there.
+    if result.user is not None:
+        # One event, whatever the target is. The entry's per-slot event
+        # entity reads this off the bus and records the use itself when the
+        # target is one of its event-capable locks, so nothing here has to
+        # know which targets are recordable.
+        #
         # ``source`` and ``target`` are data. Nothing here dereferences them,
         # looks them up in a registry, or reads their state: a code source's
         # state can be the cleartext credential that was just typed.
-        if (lock := config_entry.runtime_data.locks.get(target)) is not None:
-            # Routing through the provider funnel is what makes the entry's
-            # per-slot event entity record this, exactly as a use the lock
-            # observed itself would. ``to_locked`` has to be False for that:
-            # the event entity records unlock-shaped uses only, so anything
-            # else reaches it and is filtered back out.
-            lock.async_fire_code_slot_event(
-                code_slot=result.slot,
-                to_locked=False,
-                source=source,
-                target=target,
-            )
-        else:
-            # No entity of ours to record against. Not an error and not worth
-            # a warning: the caller knows their setup better than we do, and
-            # naming something outside this entry is the ordinary case.
-            async_fire_credential_used(
-                hass, config_entry, name=result.user, source=source, target=target
-            )
+        async_fire_credential_used(
+            hass, config_entry, name=result.user, source=source, target=target
+        )
 
     return {
         ATTR_VALID: result.valid,

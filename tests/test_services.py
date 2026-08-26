@@ -14,7 +14,10 @@ from pytest_homeassistant_custom_component.common import (
 )
 import voluptuous as vol
 
-from homeassistant.components.event import ATTR_EVENT_TYPE
+from homeassistant.components.event import (
+    ATTR_EVENT_TYPE,
+    DOMAIN as EVENT_DOMAIN,
+)
 from homeassistant.const import (
     ATTR_NAME,
     CONF_CONDITION,
@@ -49,6 +52,7 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    EVENT_CREDENTIAL_USED,
     EVENT_LOCK_STATE_CHANGED,
     REASON_CONDITION_NOT_MET,
     REASON_UNKNOWN_CODE,
@@ -70,6 +74,11 @@ from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_p
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
 from custom_components.lock_code_manager.domain.util import mask_pin
+from custom_components.lock_code_manager.providers.schlage import (
+    SCHLAGE_DOMAIN,
+    SchlageLock,
+)
+from tests.providers.helpers import register_mock_service
 
 from .common import LOCK_1_ENTITY_ID
 
@@ -1099,6 +1108,8 @@ async def test_slot_condition_services_accept_a_title(
 VALIDATE_LOCK_ENTITY_ID = "lock.virtual_validate_service"
 VALIDATE_CONDITION_ENTITY_ID = "input_boolean.validate_service_gate"
 VALIDATE_EVENT_ENTITY_ID = "event.validate_service_alice_credential_used"
+# A Schlage lock: a real provider whose ``supports_code_slot_events`` is False.
+EVENT_BLIND_LOCK_ENTITY_ID = "lock.schlage_use_credential"
 
 # alice validates, bob is disabled, carol waits on a condition that is off.
 VALIDATE_CONFIG = {
@@ -1169,6 +1180,82 @@ async def validate_entry_fixture(hass: HomeAssistant):
     yield lcm_entry
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+def _slot_event_entity_id(
+    hass: HomeAssistant, config_entry: MockConfigEntry, slot_num: int
+) -> str:
+    """Resolve a slot's credential-used entity by unique ID."""
+    entity_id = er.async_get(hass).async_get_entity_id(
+        EVENT_DOMAIN,
+        DOMAIN,
+        build_slot_unique_id(config_entry.entry_id, slot_num, EVENT_CREDENTIAL_USED),
+    )
+    assert entity_id
+    return entity_id
+
+
+@pytest.fixture(name="validate_entry_with_event_blind_lock")
+async def validate_entry_with_event_blind_lock_fixture(hass: HomeAssistant):
+    """
+    Set up an entry holding one event-capable lock and one that is not.
+
+    The blind one is a real Schlage lock rather than a doctored capability:
+    ``supports_code_slot_events`` is the provider's own answer, and a
+    monkeypatched one would only prove this test's idea of it.
+    """
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+    schlage_entry = MockConfigEntry(domain=SCHLAGE_DOMAIN)
+    schlage_entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    lock_entity = ent_reg.async_get_or_create(
+        "lock",
+        "virtual",
+        "virtual_blind_pair",
+        suggested_object_id="virtual_validate_service",
+        config_entry=virtual_entry,
+    )
+    assert lock_entity.entity_id == VALIDATE_LOCK_ENTITY_ID
+    schlage_entity = ent_reg.async_get_or_create(
+        "lock",
+        SCHLAGE_DOMAIN,
+        "schlage_blind_pair",
+        suggested_object_id="schlage_use_credential",
+        config_entry=schlage_entry,
+    )
+    assert schlage_entity.entity_id == EVENT_BLIND_LOCK_ENTITY_ID
+    hass.states.async_set(VALIDATE_LOCK_ENTITY_ID, "locked")
+    hass.states.async_set(EVENT_BLIND_LOCK_ENTITY_ID, "locked")
+    hass.states.async_set(VALIDATE_CONDITION_ENTITY_ID, "off")
+
+    for service_name, response in (
+        ("get_codes", {EVENT_BLIND_LOCK_ENTITY_ID: {}}),
+        ("add_code", None),
+        ("delete_code", None),
+    ):
+        register_mock_service(
+            hass, SCHLAGE_DOMAIN, service_name, AsyncMock(return_value=response)
+        )
+
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Validate Service",
+        data={
+            **VALIDATE_CONFIG,
+            CONF_LOCKS: [VALIDATE_LOCK_ENTITY_ID, EVENT_BLIND_LOCK_ENTITY_ID],
+        },
+        unique_id="test_validate_blind_pair",
+    )
+    lcm_entry.add_to_hass(hass)
+    with patch.object(SchlageLock, "async_is_integration_connected", return_value=True):
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+
+        yield lcm_entry
+
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
 async def test_use_credential_valid(hass: HomeAssistant, validate_entry) -> None:
@@ -1403,21 +1490,24 @@ async def test_use_credential_matches_a_padded_stored_pin(hass: HomeAssistant) -
 
 
 async def test_use_credential_records_against_an_in_entry_lock(
-    hass: HomeAssistant, validate_entry
+    hass: HomeAssistant, validate_entry, caplog: pytest.LogCaptureFixture
 ) -> None:
     """
     A lock in the entry gets the use recorded on the slot's event entity.
 
-    The action's own attribution survives the routing: the unified event
-    still names the keypad the credential was entered on, not the lock.
+    The recording is the event entity's own reading of the unified event,
+    not a lock-shaped detour: the action reports something no lock
+    observed, so the deprecated lock-state event -- which would have to
+    claim a from/to state transition that never happened -- stays silent.
     """
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
     deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
 
-    response = await _call_use_credential(
-        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
-    )
-    await hass.async_block_till_done()
+    with caplog.at_level(logging.DEBUG):
+        response = await _call_use_credential(
+            hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
+        )
+        await hass.async_block_till_done()
 
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
     assert [event.data for event in unified] == [
@@ -1429,12 +1519,108 @@ async def test_use_credential_records_against_an_in_entry_lock(
             ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
         }
     ]
-    assert len(deprecated) == 1
-    assert deprecated[0].data[ATTR_CODE_SLOT] == 1
+    assert deprecated == []
 
     state = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert state
     assert state.attributes[ATTR_EVENT_TYPE] == VALIDATE_LOCK_ENTITY_ID
+    assert state.attributes[ATTR_TARGET] == VALIDATE_LOCK_ENTITY_ID
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
+
+
+async def test_use_credential_records_only_for_the_named_user(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    One user's use does not show up on another user's entity.
+
+    The unified event names the person, not the slot they occupy, so the
+    per-slot entity has to work out for itself whether the use is its own.
+    """
+    bob_event_entity_id = _slot_event_entity_id(hass, validate_entry, 2)
+    before = hass.states.get(bob_event_entity_id)
+    assert before
+
+    await _call_use_credential(
+        hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(bob_event_entity_id) == before
+    alice = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert alice
+    assert alice.attributes[ATTR_EVENT_TYPE] == VALIDATE_LOCK_ENTITY_ID
+
+
+async def test_use_credential_ignores_an_entry_that_is_not_ours(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    A unified event from another entry is not this entry's to record.
+
+    Two entries can manage the same lock, and both entities would see this
+    event on the bus.
+    """
+    before = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
+    assert before
+
+    hass.bus.async_fire(
+        BUS_EVENT_CREDENTIAL_USED,
+        event_data={
+            ATTR_NAME: "alice",
+            ATTR_CONFIG_ENTRY_ID: "some_other_entry",
+            ATTR_CONFIG_ENTRY_TITLE: "Some Other Entry",
+            ATTR_SOURCE: VALIDATE_SOURCE_ENTITY_ID,
+            ATTR_TARGET: VALIDATE_LOCK_ENTITY_ID,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(VALIDATE_EVENT_ENTITY_ID) == before
+
+
+async def test_use_credential_against_an_event_blind_lock_in_the_entry(
+    hass: HomeAssistant,
+    validate_entry_with_event_blind_lock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    An entry lock that cannot fire code slot events is not an event type.
+
+    Schlage and Akuvox never fire them, and zwave-js-ui does not until it
+    has learned it can, so this is an ordinary target rather than a
+    mistake. Recording against it would raise inside Home Assistant's
+    ``EventEntity`` and land as an ERROR in the log, which is exactly what
+    the absence of ERROR records here pins down.
+    """
+    entry = validate_entry_with_event_blind_lock
+    event_entity_id = _slot_event_entity_id(hass, entry, 1)
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+    before = hass.states.get(event_entity_id)
+    assert before
+    assert EVENT_BLIND_LOCK_ENTITY_ID not in before.attributes["event_types"]
+
+    with caplog.at_level(logging.DEBUG):
+        response = await _call_use_credential(
+            hass,
+            {
+                "config_entry_id": entry.entry_id,
+                ATTR_CODE: "1234",
+                ATTR_TARGET: EVENT_BLIND_LOCK_ENTITY_ID,
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+    assert [event.data[ATTR_TARGET] for event in unified] == [
+        EVENT_BLIND_LOCK_ENTITY_ID
+    ]
+    assert hass.states.get(event_entity_id) == before
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
 
 
 async def test_use_credential_with_a_target_outside_the_entry(

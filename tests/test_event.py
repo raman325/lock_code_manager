@@ -12,8 +12,15 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTION_TEXT,
@@ -70,6 +77,38 @@ async def test_event_entity(
     assert state.attributes[ATTR_CODE_SLOT_NAME] == "test2"
     assert state.attributes[ATTR_FROM] == LockState.LOCKED
     assert state.attributes[ATTR_TO] == LockState.UNLOCKED
+
+
+async def test_a_lock_observed_use_is_recorded_once(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    One use the lock observed writes one state, with the full payload.
+
+    Both events fire for it -- the deprecated lock-shaped one and the
+    unified one -- and this entity listens to both. Recording twice would
+    fire every automation on this entity twice and leave the state carrying
+    the unified event's five fields instead of the lock-shaped payload.
+    """
+    states: list[State] = []
+
+    @callback
+    def _collect(event: Event[EventStateChangedData]) -> None:
+        if (new_state := event.data["new_state"]) is not None:
+            states.append(new_state)
+
+    unsub = async_track_state_change_event(hass, [SLOT_2_EVENT_ENTITY], _collect)
+
+    lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
+    await hass.async_block_till_done()
+    unsub()
+
+    assert len(states) == 1
+    assert states[0].attributes[ATTR_ACTION_TEXT] == "test"
+    assert states[0].attributes[ATTR_CODE_SLOT] == 2
 
 
 async def test_event_types_are_lock_entity_ids(

@@ -119,9 +119,10 @@ REASON_UNKNOWN_CODE = "unknown_code"
 REASON_USER_DISABLED = "user_disabled"
 REASON_CONDITION_NOT_MET = "condition_not_met"
 
-# Failure reasons ordered least to most restrictive: a code that matched a
-# user somewhere outranks one unknown everywhere, and a user held back by
-# more than a condition outranks one merely waiting on its condition.
+# Failure reasons ordered least to most restrictive. Only the last two are
+# ever ranked against each other: a user held back by more than a condition
+# outranks one merely waiting on its condition. An unknown code is returned
+# outright, without consulting this, because there is no user to rank.
 REASON_PRECEDENCE = (
     REASON_UNKNOWN_CODE,
     REASON_CONDITION_NOT_MET,

@@ -23,16 +23,15 @@ class ValidationResult:
     """
     Outcome of validating one submitted credential.
 
-    ``user`` and ``slot`` are both set exactly when ``valid`` is True, and
-    ``reason`` exactly when it is False. ``slot`` is here for the caller that
-    has to record the use against Lock Code Manager's own per-slot entity; it
-    is not part of any answer a caller outside this integration sees.
+    ``user`` is set exactly when ``valid`` is True, and ``reason`` exactly
+    when it is False. The slot number the credential sits on is deliberately
+    absent: it is internal bookkeeping, and the use is announced by the
+    user's name so that no consumer ends up keyed on a number.
     """
 
     valid: bool
     user: str | None
     reason: str | None
-    slot: int | None
 
 
 def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
@@ -46,9 +45,10 @@ def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
     if not matches:
         return REASON_UNKNOWN_CODE
     # ``max`` needs no default: every match reaching here is inactive, and a
-    # coordinator derives ``is_active`` as the negation of
-    # ``inactive_because_of``, so an inactive slot always names at least one
-    # reason. Decouple those two and this raises on an empty sequence.
+    # coordinator that has recomputed derives ``is_active`` as the negation of
+    # ``inactive_because_of``, so it names at least one reason. Decouple those
+    # two, or reach a coordinator before its first recompute, and this raises
+    # on an empty sequence.
     return max(
         (
             REASON_CONDITION_NOT_MET
@@ -86,9 +86,7 @@ def validate_credential(
     active = next((c for c in matches if c.is_active), None)
 
     if active is None:
-        return ValidationResult(
-            valid=False, user=None, reason=_failure_reason(matches), slot=None
-        )
+        return ValidationResult(valid=False, user=None, reason=_failure_reason(matches))
 
     name = get_entry_config(config_entry).name_for(active.slot_num)
-    return ValidationResult(valid=True, user=name, reason=None, slot=active.slot_num)
+    return ValidationResult(valid=True, user=name, reason=None)
