@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "99ee47f806f4",
+  "strategy": "manual-commit",
+  "branch": "reader-provider",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/services.py",
+    "custom_components/lock_code_manager/domain/validation.py",
+    "custom_components/lock_code_manager/services.yaml",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/properties/test_validation_properties.py",
+    "tests/test_services.py",
+    "tests/test_validation.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/99/ee47f806f4/0/metadata.json",
+      "transcript": "/99/ee47f806f4/0/full.jsonl",
+      "compact_transcript": "/99/ee47f806f4/0/transcript.jsonl",
+      "content_hash": "/99/ee47f806f4/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 52258,
+    "cache_read_tokens": 20437,
+    "output_tokens": 142,
+    "api_call_count": 1
+  }
+}
