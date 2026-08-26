@@ -321,7 +321,7 @@
         },
         "target": {
           "name": "Target",
-          "description": "The entity the credential was used against: a lock, a cover, an alarm panel, whatever the use applies to. Required. If nothing in Home Assistant represents it, create an entity to name here, such as a Virtual lock. Its state is never read, only its entity ID is reported. When it happens to be a lock in the chosen entry, that user's credential used entity records the use as well."
+          "description": "The entity the credential was used against: a lock, a cover, an alarm panel, whatever the use applies to. Required. If nothing in Home Assistant represents it, create an entity to name here, such as a Virtual lock. Its state is never read, only its entity ID is reported. When it happens to be a lock in the chosen entry that can report code slot events, that user's credential used entity records the use as well."
         }
       }
     }
