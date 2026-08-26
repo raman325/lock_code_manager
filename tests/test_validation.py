@@ -142,7 +142,7 @@ async def test_duplicate_code_precedence(hass: HomeAssistant, validation_entry):
 async def test_padding_is_stripped_before_matching(
     hass: HomeAssistant, validation_entry, submitted: str
 ):
-    """A keypad that pads what it collected gets the same answer as one that does not."""
+    """A padded code gets the same answer as the same code without padding."""
     result = validate_credential(validation_entry, submitted)
     assert result == ValidationResult(valid=True, user="alice", reason=None)
 
@@ -151,9 +151,9 @@ async def test_validation_leaves_the_bus_alone(hass: HomeAssistant, validation_e
     """
     Validating is a question, not an occurrence: nothing is published.
 
-    Guards the whole point of the reduction. A future success event would
-    have to be a deliberate re-addition rather than something that creeps
-    back in behind a helper.
+    Guards the absence of an event surface: validating a code must not be
+    observable on the bus. A success event would have to be a deliberate
+    re-addition rather than something that creeps back in behind a helper.
     """
     fired: list[str] = []
 

@@ -37,6 +37,10 @@ def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
     """
     if not matches:
         return REASON_UNKNOWN_CODE
+    # ``max`` needs no default: every match reaching here is inactive, and a
+    # coordinator derives ``is_active`` as the negation of
+    # ``inactive_because_of``, so an inactive slot always names at least one
+    # reason. Decouple those two and this raises on an empty sequence.
     return max(
         (
             REASON_CONDITION_NOT_MET
@@ -46,9 +50,6 @@ def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
             for reason in coordinator.inactive_because_of
         ),
         key=REASON_PRECEDENCE.index,
-        # A matched slot with no recorded reason is inactive all the same,
-        # and lands on the least restrictive explanation available.
-        default=REASON_CONDITION_NOT_MET,
     )
 
 
@@ -62,24 +63,18 @@ def validate_credential(
 
     A pure query: it reports what the entry's configuration says about the
     code and does nothing else -- no lock is contacted, nothing is written,
-    and no event is fired. It deliberately takes no ``hass``: firing an event
-    or reaching a device would need one, so its absence keeps this a question
-    rather than something that can grow side effects. The active check is the slot coordinator's own
+    and no event is fired. The active check is the slot coordinator's own
     derived state -- the same predicate the active binary sensor renders --
     so a validation and the dashboard can never disagree about whether a
     credential works.
 
     Normalizing here rather than at each entry point is what makes "one
-    validation function" true: a keypad that appends a newline has to get
-    the same answer as the service call that trims one.
+    validation function" true: every caller gets the same answer for codes
+    that differ only in surrounding whitespace.
     """
     code = code.strip()
     coordinators = config_entry.runtime_data.slot_coordinators
     matches = [c for c in coordinators.values() if c.pin_value == code]
-    # A coordinator whose active state was never computed (``is_active`` is
-    # None, empty inactive reasons) counts as inactive and folds into
-    # condition_not_met -- unreachable after entry setup, stated so a
-    # pre-start caller isn't surprised.
     active = next((c for c in matches if c.is_active), None)
 
     if active is None:

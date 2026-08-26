@@ -1228,3 +1228,100 @@ async def test_validate_code_without_return_response(
     )
 
     assert response is None
+
+
+@pytest.mark.parametrize("code", ["   ", "\t\n"])
+async def test_validate_code_refuses_a_whitespace_only_code(
+    hass: HomeAssistant, validate_entry, code: str
+) -> None:
+    """
+    A code that is only padding is refused by the schema, not answered.
+
+    The schema strips before length-checking, so whitespace collapses to
+    the empty string the sibling write actions already refuse. Answering
+    it instead would report every entry with no PIN set as a match.
+    """
+    with pytest.raises(vol.Invalid):
+        await _call_validate_code(
+            hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code}
+        )
+
+
+async def test_validate_code_strips_padding_at_the_schema(
+    hass: HomeAssistant, validate_entry
+) -> None:
+    """
+    A padded code validates: the schema strips it before the action sees it.
+
+    Distinct from the strip inside ``validate_credential`` -- this one is
+    what makes the length check reject padding-only input, so it has to be
+    shown not to reject a real code that merely arrives padded.
+    """
+    response = await _call_validate_code(
+        hass,
+        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: " 1234 "},
+    )
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        pytest.param(
+            {"config_entry_id": "an_id", "config_entry_title": "a title"}, id="both"
+        ),
+        pytest.param({}, id="neither"),
+    ],
+)
+async def test_validate_code_requires_exactly_one_entry_selector(
+    hass: HomeAssistant, validate_entry, selector: dict
+) -> None:
+    """
+    The entry is named by id or by title, never both and never neither.
+
+    Accepting both would leave the action free to pick, and the two can
+    disagree; accepting neither has no entry to answer about.
+    """
+    with pytest.raises(vol.Invalid):
+        await _call_validate_code(hass, {**selector, ATTR_CODE: "1234"})
+
+
+async def test_validate_code_on_an_entry_with_no_slots(hass: HomeAssistant) -> None:
+    """
+    An entry configuring no users answers unknown_code rather than erroring.
+
+    Nothing can match, which is the same shape as a code no slot holds --
+    a caller polling an entry mid-setup gets an answer, not an exception.
+    """
+    virtual_entry = MockConfigEntry(domain="virtual")
+    virtual_entry.add_to_hass(hass)
+    lock_entity = er.async_get(hass).async_get_or_create(
+        "lock",
+        "virtual",
+        "virtual_validate_no_slots",
+        suggested_object_id="virtual_validate_no_slots",
+        config_entry=virtual_entry,
+    )
+    hass.states.async_set(lock_entity.entity_id, "locked")
+
+    empty_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="No Slots",
+        data={CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: {}},
+        unique_id="test_validate_no_slots",
+    )
+    empty_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(empty_entry.entry_id)
+    await hass.async_block_till_done()
+
+    response = await _call_validate_code(
+        hass, {"config_entry_id": empty_entry.entry_id, ATTR_CODE: "1234"}
+    )
+
+    assert response == {
+        ATTR_VALID: False,
+        ATTR_USER: None,
+        ATTR_REASON: REASON_UNKNOWN_CODE,
+    }
+
+    await hass.config_entries.async_unload(empty_entry.entry_id)

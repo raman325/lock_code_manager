@@ -301,7 +301,7 @@
     },
     "validate_code": {
       "name": "Validate code",
-      "description": "Ask whether a code would work against a Lock Code Manager entry's users. This action only answers the question: it touches no lock, changes nothing, and fires no event. The response says whether the code would work, for which user, and the reason when it would not.",
+      "description": "Ask whether a code would work against a Lock Code Manager entry's users. This action only answers the question: it touches no lock, changes nothing, and fires no event. The response says whether the code would work, for which user, and the reason when it would not. It performs no rate limiting and no logging, so do not expose it to untrusted input.",
       "fields": {
         "config_entry_id": {
           "name": "Config entry",
