@@ -606,6 +606,69 @@ async def test_handing_the_lock_back_discards_the_codes_it_was_holding(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_an_options_decline_discards_them_with_the_entry_unloaded(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    mock_lock_config_entry,
+) -> None:
+    """
+    The listener that kept that promise is not there while the entry is not.
+
+    ``async_update_listener`` is registered during setup and released on
+    unload, so an options save against an entry that is not loaded reaches
+    storage with nothing to act on it: no ``locks_redeclared``, no permanent
+    removal, and a file of cleartext Personal Identification Numbers left on
+    disk for a member the entry has just stopped declaring -- unreadable by
+    anything, and swept by nothing, because entry deletion collects only
+    what the entry still declares.
+
+    The options form is reachable in that state, and the entry that comes
+    back later is a working one, so nothing on screen ever says the answer
+    was only half taken.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    entry = await _entry_for(
+        hass,
+        unique_id="handing_back_unloaded",
+        slot_num=1,
+        pin="9999",
+        holding=[LOCK_1_ENTITY_ID],
+        declaring=[claimed],
+    )
+    await _settle_sync(hass)
+    # Unload is both what puts the credential on disk and what takes the
+    # listener away, which is the whole of the state under test.
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    store_key = f"codeless_{DOMAIN}_{LOCK_1_ENTITY_ID}"
+    assert hass_storage[store_key]["data"]["1"]["code"] == "9999"
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    flow_id = started["flow_id"]
+    users = {f"{USER_NAME} 1": {CONF_PIN: "9999", CONF_ENABLED: True}}
+    result = await hass.config_entries.options.async_configure(
+        flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
+    )
+    assert result["step_id"] == "codeless_reconsider"
+
+    result = await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": "codeless_decline"}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+
+    assert store_key not in hass_storage
+
+    # Loaded again, so the member is the provider's now and the store stays
+    # gone: nothing rebuilt it out of what the unloaded instance still held.
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert not isinstance(entry.runtime_data.locks[LOCK_1_ENTITY_ID], CodelessLock)
+    assert store_key not in hass_storage
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_a_reauth_decline_discards_them_the_same_way(
     hass: HomeAssistant,
     hass_storage: dict[str, Any],

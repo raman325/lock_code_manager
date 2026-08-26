@@ -842,10 +842,12 @@ async def test_two_providers_over_one_entity_are_not_one_lock(hass: HomeAssistan
     A provider is equal only to itself, and a set of them keeps both.
 
     Equality used to key on the lock entity id, which said two instances
-    wrapping one entity were the same logical lock. Two entries can resolve
-    one entity to different providers, and those hold different credential
-    stores -- so a collection of providers silently kept one of them, and
-    whichever it kept decided where a Personal Identification Number went.
+    wrapping one entity were the same logical lock. One entity does mean one
+    live instance, but not one instance ever: a reload builds a replacement,
+    and teardown asks whether a sibling still holds THIS object. Answering
+    that by entity id says yes for the stale instance the reload replaced,
+    so the entry walks away from the live one and leaves its push
+    subscription firing with nothing owning it.
     """
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)

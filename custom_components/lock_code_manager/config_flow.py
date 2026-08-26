@@ -468,15 +468,23 @@ class CodelessDeclarationFlow(config_entries.ConfigEntryBaseFlow):
         Retire the store of every member this flow just handed back.
 
         ``codeless_reconsider`` promises in so many words that answering no
-        discards the codes Lock Code Manager was holding. On the options path
-        that promise is kept by the update listener, which sees the member
-        resolve to a different class and tears the old instance down
-        permanently. A save that does not go through that listener has to
-        keep the promise itself, or the answer leaves a file of cleartext
-        Personal Identification Numbers behind for a lock whose own
+        discards the codes Lock Code Manager was holding, and every surface
+        that asks the question keeps that promise here rather than leaving it
+        to the redeclaration teardown. That teardown runs from the update
+        listener, which is registered during setup and released on unload, so
+        it is absent for exactly the entries this question tends to be
+        answered about: a failed one being repaired through reauth, an
+        unloaded or disabled one being edited through options. Left to it,
+        the answer reached storage while a file of cleartext Personal
+        Identification Numbers stayed on disk for a lock whose own
         integration now holds the codes -- readable by nothing, and swept by
         nothing, because the entry no longer declares the member it would
         have been collected under.
+
+        Asked unconditionally rather than only when that listener is known to
+        be missing. Naming a store and removing it is idempotent, and this is
+        awaited before the save that would trigger the listener, so when the
+        teardown does also run it finds the file already gone.
 
         Only members the submission KEEPS. A lock leaving the roster entirely
         is a different question with a different answer, and this is not the
@@ -1092,10 +1100,6 @@ class LockCodeManagerFlowHandler(
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
-                # Discarded here rather than by the redeclaration teardown:
-                # this save writes the entry and reloads it, and the entry it
-                # is repairing is failed, so no instance is being held for
-                # that teardown to find and collect.
                 await self._async_discard_reclaimed_credentials(
                     entry_config, user_input[CONF_LOCKS]
                 )
@@ -1229,6 +1233,9 @@ class LockCodeManagerOptionsFlow(CodelessDeclarationFlow, config_entries.Options
                         # their credential on every lock.
                         assignment = stored.assignment.reconcile(
                             users, start=1, unavailable=unavailable
+                        )
+                        await self._async_discard_reclaimed_credentials(
+                            stored, user_input[CONF_LOCKS]
                         )
                         # Written through EntryConfig so whatever else the entry
                         # carries survives the edit. Building the dict by hand
