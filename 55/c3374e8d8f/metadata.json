@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "55c3374e8d8f",
+  "strategy": "manual-commit",
+  "branch": "feature/credential-store-model",
+  "checkpoints_count": 20,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/55/c3374e8d8f/0/metadata.json",
+      "transcript": "/55/c3374e8d8f/0/full.jsonl",
+      "compact_transcript": "/55/c3374e8d8f/0/transcript.jsonl",
+      "content_hash": "/55/c3374e8d8f/0/content_hash.txt",
+      "prompt": "/55/c3374e8d8f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 170,
+    "cache_creation_tokens": 845819,
+    "cache_read_tokens": 59301647,
+    "output_tokens": 84563,
+    "api_call_count": 85,
+    "subagent_tokens": {
+      "input_tokens": 3660,
+      "cache_creation_tokens": 1293456,
+      "cache_read_tokens": 53350378,
+      "output_tokens": 415572,
+      "api_call_count": 549
+    }
+  }
+}
