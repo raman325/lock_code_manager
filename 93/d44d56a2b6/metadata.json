@@ -3,7 +3,7 @@
   "checkpoint_id": "93d44d56a2b6",
   "strategy": "manual-commit",
   "branch": "reader-provider",
-  "checkpoints_count": 2,
+  "checkpoints_count": 6,
   "files_touched": [
     "custom_components/lock_code_manager/domain/services.py",
     "custom_components/lock_code_manager/domain/validation.py",
@@ -24,13 +24,27 @@
       "compact_transcript": "/93/d44d56a2b6/1/transcript.jsonl",
       "content_hash": "/93/d44d56a2b6/1/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/93/d44d56a2b6/2/metadata.json",
+      "transcript": "/93/d44d56a2b6/2/full.jsonl",
+      "compact_transcript": "/93/d44d56a2b6/2/transcript.jsonl",
+      "content_hash": "/93/d44d56a2b6/2/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 91,
-    "cache_creation_tokens": 60106,
-    "cache_read_tokens": 5475047,
-    "output_tokens": 29361,
-    "api_call_count": 48
+    "input_tokens": 527,
+    "cache_creation_tokens": 1448126,
+    "cache_read_tokens": 62820885,
+    "output_tokens": 292819,
+    "api_call_count": 272,
+    "subagent_tokens": {
+      "input_tokens": 4038,
+      "cache_creation_tokens": 3564369,
+      "cache_read_tokens": 84115977,
+      "output_tokens": 756069,
+      "api_call_count": 1086
+    }
   }
 }
