@@ -154,14 +154,14 @@ validate_code:
       required: true
       selector:
         entity:
-          domain:
-            - lock
-            - sensor
-            - text
+          domain: lock
     code:
       required: true
       selector:
         text:
+    source_entity_id:
+      selector:
+        entity:
     fire_events:
       default: true
       selector:

@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+from unittest.mock import patch
+
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.domain.credentials import (
@@ -12,7 +19,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
-from .conftest import VIRTUAL_LOCK_ENTITY_ID
+from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
 
 
 class TestFullSetupLifecycle:
@@ -173,3 +180,45 @@ class TestSetAndGetUsercodes:
         assert user_map[1].pin_credentials[0].state == SlotCredential.known("5555")
         assert 2 in user_map
         assert user_map[2].active is False
+
+
+class TestUnloadReleasesBaseListeners:
+    """Unloading Lock Code Manager must leave nothing armed on the lock's entry."""
+
+    async def test_provider_reload_after_unload_does_not_rearm(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+        virtual_provider_entry: MockConfigEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        A provider reload after a Lock Code Manager unload must not re-run setup.
+
+        The base config-entry-state listener watches the lock's own config
+        entry, and only the base teardown releases it. A provider that
+        unloads without chaining ``super()`` leaves it armed, so the lock's
+        entry reaching LOADED re-runs provider setup against the unloaded
+        Lock Code Manager entry -- and anything reached from there finds no
+        runtime data on it.
+
+        The spy, not the log, is the detector: what a re-setup goes on to
+        break is provider-specific, so the assertion has to be that it does
+        not happen at all.
+        """
+        lock = get_virtual_lock(hass, lcm_config_entry)
+
+        assert await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        caplog.clear()
+        with patch.object(lock, "async_setup", wraps=lock.async_setup) as resetup:
+            virtual_provider_entry.mock_state(hass, ConfigEntryState.LOADED)
+            await hass.async_block_till_done()
+
+        assert resetup.call_count == 0
+        # The re-setup runs in a task, so a crash inside it never reaches the
+        # caller; the log would be the only place it surfaced.
+        assert not [
+            record for record in caplog.records if record.levelno >= logging.ERROR
+        ]

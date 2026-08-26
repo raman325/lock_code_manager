@@ -66,8 +66,7 @@ class VirtualLock(BaseLock):
         # config-entry-state listener on the lock's provider entry. Left in
         # place, a later provider reload re-runs async_setup against the
         # unloaded Lock Code Manager entry, and anything that then consults
-        # the entry (a reader validating a submission, for one) crashes on
-        # its missing runtime data.
+        # the entry crashes on its missing runtime data.
         await super().async_unload(remove_permanently)
         if remove_permanently:
             await self._store.async_remove()

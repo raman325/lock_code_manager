@@ -1,8 +1,8 @@
 """Property-based test for credential validation.
 
-The reader-provider design's core guarantee: ``validate_credential`` and the
-per-slot active binary sensor render the same predicate, so a reader and the
-dashboard can never disagree about whether a credential works. Stated as a
+Credential validation's core guarantee: ``validate_credential`` and the
+per-slot active binary sensor render the same predicate, so a validation and
+the dashboard can never disagree about whether a credential works. Stated as a
 property over generated entry configurations: for any set of slots and any
 submitted code, validation succeeds exactly when at least one slot whose
 configured PIN equals the code has its active binary sensor on.

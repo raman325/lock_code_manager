@@ -548,6 +548,7 @@ const slotCardComponentStyles = css`
 
     .lock-name {
         color: var(--primary-text-color);
+        cursor: pointer;
         flex: 1;
         font-size: 14px;
         min-width: 0;
@@ -556,18 +557,12 @@ const slotCardComponentStyles = css`
         white-space: nowrap;
     }
 
-    /* Only a real lock opens; a credential reader's name is plain text, so it
-       must not look clickable either. */
-    .lock-name.navigable {
-        cursor: pointer;
-    }
-
-    .lock-name.navigable:hover {
+    .lock-name:hover {
         color: var(--primary-color);
         text-decoration: underline;
     }
 
-    .lock-name.navigable:focus-visible {
+    .lock-name:focus-visible {
         border-radius: 4px;
         color: var(--primary-color);
         outline: 2px solid var(--primary-color);

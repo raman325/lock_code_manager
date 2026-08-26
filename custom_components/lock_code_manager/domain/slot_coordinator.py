@@ -247,7 +247,7 @@ class SlotEntityCoordinator:
         the slot on an active slot whose PIN was cleared) live here so
         entities do not have to coordinate sibling state themselves.
         Stripping applies to every PIN, not just the whitespace-only one:
-        readers strip a submitted code before matching it, so padding kept
+        a submitted code is stripped before it is matched, so padding kept
         on the stored side makes a credential nothing typed can match.
 
         A non-empty PIN is validated against every bound lock's advertised

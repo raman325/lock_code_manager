@@ -70,6 +70,7 @@ from .const import (
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
+    ATTR_SOURCE_ENTITY_ID,
     ATTR_TEXT,
     ATTR_USERCODE,
     CONDITION_ENTITY_DOMAINS,
@@ -597,8 +598,8 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             {
                 vol.Required(CONF_NAME): cv.string,
                 # Stripped here as the config flow strips its own field: a
-                # reader strips a submitted code before matching it, so a
-                # PIN stored with padding matches nothing anybody can type.
+                # submitted code is stripped before it is matched, so a PIN
+                # stored with padding matches nothing anybody can type.
                 vol.Optional(CONF_PIN): vol.All(cv.string, str.strip),
                 vol.Optional(CONF_ENABLED, default=True): cv.boolean,
                 vol.Optional(CONF_CONDITION): cv.entity_domain(
@@ -676,12 +677,13 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     )
 
     async def _validate_code(call: ServiceCall) -> ServiceResponse:
-        """Validate a code against the entries managing an entity."""
+        """Validate a code against the entries managing a lock."""
         return await async_validate_code(
             hass,
             call.data[ATTR_LOCK_ENTITY_ID],
             call.data[ATTR_CODE],
             fire_events=call.data[ATTR_FIRE_EVENTS],
+            source_entity_id=call.data.get(ATTR_SOURCE_ENTITY_ID),
         )
 
     hass.services.async_register(
@@ -690,13 +692,16 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         _validate_code,
         schema=vol.Schema(
             {
-                # A plain entity ID, not entity_domain("lock"): credential
-                # readers anchor on sensor and text entities.
-                vol.Required(ATTR_LOCK_ENTITY_ID): cv.entity_id,
+                vol.Required(ATTR_LOCK_ENTITY_ID): cv.entity_domain("lock"),
                 vol.Required(ATTR_CODE): vol.All(
                     cv.string, str.strip, vol.Length(min=1)
                 ),
                 vol.Optional(ATTR_FIRE_EVENTS, default=True): cv.boolean,
+                # Unrestricted by domain: whatever collected the code -- a
+                # keypad's text sensor, an NFC tag entity, a dashboard
+                # button -- is a legitimate source, and only its ID is ever
+                # published.
+                vol.Optional(ATTR_SOURCE_ENTITY_ID): cv.entity_id,
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,

@@ -44,7 +44,6 @@ from ..const import (
     ATTR_TO,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
-    REDACTED,
 )
 from ..domain.config import build_slot_unique_id
 from ..domain.coordinator import LockUsercodeUpdateCoordinator
@@ -640,18 +639,6 @@ class BaseLock:
         attribute on the event entity.
         """
         return True
-
-    @property
-    def state_is_credential(self) -> bool:
-        """
-        Return whether the lock entity's own state is a submitted credential.
-
-        False for a lock, whose state is locked/unlocked and safe to publish
-        anywhere. True for a credential reader, whose anchor entity holds the
-        PIN that was just typed: republishing that state would put cleartext
-        on the event bus, into the recorder, and into a diagnostics download.
-        """
-        return False
 
     @final
     @callback
@@ -2121,22 +2108,14 @@ class BaseLock:
 
         notification_source, extra_data = _serialize_source_data(source_data)
 
-        # Redacted rather than omitted so a consumer reading ATTR_STATE keeps
-        # finding a string there; the marker also tells a reader's user why
-        # the field never says anything about their door.
-        lock_state = self.hass.states.get(lock_entity_id)
-        published_state = (
-            REDACTED
-            if self.state_is_credential
-            else (lock_state.state if lock_state else "")
-        )
-
         event_data = {
             ATTR_NOTIFICATION_SOURCE: notification_source,
             ATTR_ENTITY_ID: lock_entity_id,
             ATTR_DEVICE_ID: lock_device_id,
             ATTR_LCM_CONFIG_ENTRY_ID: config_entry_id,
-            ATTR_STATE: published_state,
+            ATTR_STATE: (
+                state.state if (state := self.hass.states.get(lock_entity_id)) else ""
+            ),
             ATTR_ACTION_TEXT: action_text,
             ATTR_CODE_SLOT: code_slot or 0,
             # Only PIN is exercised today, but a consumer that reads it

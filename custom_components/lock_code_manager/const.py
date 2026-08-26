@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 
 DOMAIN = "lock_code_manager"
@@ -102,6 +100,10 @@ ATTR_REASON = "reason"
 ATTR_FIRE_EVENTS = "fire_events"
 ATTR_VALID = "valid"
 ATTR_USER = "user"
+# The entity the code came from, when the caller knows it. Carried through
+# to both validation events so an automation can tell a keypad submission
+# from the lock's own keypad, and scope itself to one code source.
+ATTR_SOURCE_ENTITY_ID = "source_entity_id"
 
 REASON_UNKNOWN_CODE = "unknown_code"
 REASON_USER_DISABLED = "user_disabled"
@@ -117,10 +119,6 @@ REASON_PRECEDENCE = (
     REASON_CONDITION_NOT_MET,
     REASON_USER_DISABLED,
 )
-
-# Stands in for a value withheld from a surface that leaves the integration:
-# the event bus, the recorder, a diagnostics download.
-REDACTED = "**REDACTED**"
 
 # Event data constants
 ATTR_ACTION_TEXT = "action_text"
@@ -138,9 +136,6 @@ CONF_CONFIG_ENTRY = "config_entry"
 CONF_CONDITIONS = "conditions"
 CONF_ENTITIES = "entities"
 CONF_LOCKS = "locks"
-# A form-only field: the config and options flows collect readers separately
-# for clarity, then merge them into CONF_LOCKS before anything is persisted.
-CONF_READERS = "readers"
 CONF_SLOTS = "slots"
 CONF_USERS = "users"
 CONF_NUM_USERS = "num_users"
@@ -158,11 +153,6 @@ ATTR_SYNC_STATUS = "sync_status"
 
 # Code slot properties
 CONF_CALENDAR = "calendar"
-
-# Entity domains a credential reader entry may anchor on. Only reader
-# entries can contain non-lock-domain entities, so an entity carrying one
-# of these domains dispatches to the reader provider.
-READER_ANCHOR_DOMAINS = frozenset({SENSOR_DOMAIN, TEXT_DOMAIN})
 
 # Supported domains for condition entities (CONF_CONDITION option)
 CONDITION_ENTITY_DOMAINS = [

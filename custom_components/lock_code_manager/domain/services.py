@@ -93,11 +93,20 @@ async def async_clear_usercode(
 
 
 async def async_validate_code(
-    hass: HomeAssistant, lock_entity_id: str, code: str, *, fire_events: bool = True
+    hass: HomeAssistant,
+    lock_entity_id: str,
+    code: str,
+    *,
+    fire_events: bool = True,
+    source_entity_id: str | None = None,
 ) -> dict[str, Any]:
-    """Validate a code against every loaded entry managing the target entity."""
+    """Validate a code against every loaded entry managing the target lock."""
     result = validate_across_entries(
-        hass, lock_entity_id, code, fire_events=fire_events
+        hass,
+        lock_entity_id,
+        code,
+        fire_events=fire_events,
+        source_entity_id=source_entity_id,
     )
     if result is None:
         raise ServiceValidationError(

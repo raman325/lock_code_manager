@@ -17,12 +17,7 @@ import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { until } from 'lit/directives/until.js';
 
-import {
-    CONDITION_DOMAINS,
-    ensureEntityPickerLoaded,
-    isConditionEntity,
-    isLockEntity
-} from './ha-components';
+import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
 import { slotCardStyles } from './slot-card.styles';
 import { LcmSubscriptionMixin } from './subscription-mixin';
@@ -940,12 +935,6 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
 
     private _renderLockRow(lock: LockSyncStatus): TemplateResult {
         const showSync = this._config?.show_lock_sync !== false;
-        // A credential reader sits in the same list as the locks, and its
-        // entity state IS the credential last submitted at the keypad, so
-        // more-info on it would put the PIN -- and every PIN typed before it,
-        // in the history graph -- on screen. The row still renders, name and
-        // sync status, but with nothing that opens the entity.
-        const navigable = isLockEntity(lock.lockEntityId);
 
         let iconClass: string;
         let statusText: string;
@@ -1008,26 +997,22 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                         : nothing
                 }
                 <div class="lock-info">
-                    ${
-                        navigable
-                            ? html`<span
-                                  class="lock-name navigable"
-                                  title="View lock codes"
-                                  role="button"
-                                  tabindex="0"
-                                  aria-label="View ${lock.name} more info"
-                                  @click=${() => this._navigateToLock(lock.lockEntityId)}
-                                  @keydown=${(e: KeyboardEvent) => {
-                                      if (e.key === 'Enter' || e.key === ' ') {
-                                          e.preventDefault();
-                                          this._navigateToLock(lock.lockEntityId);
-                                      }
-                                  }}
-                              >
-                                  ${lock.name}
-                              </span>`
-                            : html`<span class="lock-name">${lock.name}</span>`
-                    }
+                    <span
+                        class="lock-name"
+                        title="View lock codes"
+                        role="button"
+                        tabindex="0"
+                        aria-label="View ${lock.name} more info"
+                        @click=${() => this._navigateToLock(lock.lockEntityId)}
+                        @keydown=${(e: KeyboardEvent) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                this._navigateToLock(lock.lockEntityId);
+                            }
+                        }}
+                    >
+                        ${lock.name}
+                    </span>
                     ${
                         showSync && lock.syncStatus !== 'suspended' && lock.lastSynced
                             ? html`<span class="lock-synced-time">

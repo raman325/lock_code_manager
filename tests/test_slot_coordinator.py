@@ -334,8 +334,8 @@ async def test_request_pin_update_strips_surrounding_whitespace(
     """
     A padded PIN is stored stripped, and its length is judged stripped too.
 
-    Every consumer compares against the stored value stripped -- validation
-    at a credential reader most visibly -- so storing the padding makes a
+    Every consumer compares against the stored value stripped -- the
+    validate_code action most visibly -- so storing the padding makes a
     PIN nobody can enter.
     """
     runtime_data = lock_code_manager_config_entry.runtime_data

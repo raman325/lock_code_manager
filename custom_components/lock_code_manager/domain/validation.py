@@ -12,6 +12,7 @@ from ..const import (
     ATTR_CODE,
     ATTR_LCM_CONFIG_ENTRY_ID,
     ATTR_REASON,
+    ATTR_SOURCE_ENTITY_ID,
     EVENT_CODE_VALIDATION_FAILED,
     REASON_CONDITION_NOT_MET,
     REASON_PRECEDENCE,
@@ -68,13 +69,19 @@ def validate_credential(
     code: str,
     *,
     fire_events: bool = True,
+    source_entity_id: str | None = None,
 ) -> ValidationResult:
     """
     Validate ``code`` against the entry's configured users.
 
     The active check is the slot coordinator's own derived state -- the same
-    predicate the active binary sensor renders -- so a reader and the
+    predicate the active binary sensor renders -- so a validation and the
     dashboard can never disagree about whether a credential works.
+
+    ``source_entity_id`` names whatever collected the code, and rides along
+    on whichever event this fires. Without it the events name only the lock
+    the code was checked against, which a keypad submission and a real
+    unlock at the door share.
 
     Callers rely on this completing without suspension: nothing may
     interleave between a validation and whatever its caller does next.
@@ -102,6 +109,15 @@ def validate_credential(
                 code_slot=active.slot_num,
                 to_locked=False,
                 action_text="Credential validated",
+                # A dict carrying the ID alone, never the source entity's
+                # State: _serialize_source_data publishes a State's own
+                # state and attributes, and a code source's state is the
+                # cleartext credential that was just typed.
+                source_data=(
+                    {ATTR_SOURCE_ENTITY_ID: source_entity_id}
+                    if source_entity_id is not None
+                    else None
+                ),
             )
         return ValidationResult(valid=True, user=name, reason=None)
 
@@ -112,16 +128,18 @@ def validate_credential(
         masked = (
             lock.mask_pin(code, matches[0].slot_num) if matches else lock.mask_pin(code)
         )
-        hass.bus.async_fire(
-            EVENT_CODE_VALIDATION_FAILED,
-            {
-                ATTR_ENTITY_ID: lock.lock.entity_id,
-                ATTR_DEVICE_ID: lock.lock.device_id,
-                ATTR_LCM_CONFIG_ENTRY_ID: config_entry.entry_id,
-                ATTR_REASON: reason,
-                ATTR_CODE: masked,
-            },
-        )
+        event_data = {
+            ATTR_ENTITY_ID: lock.lock.entity_id,
+            ATTR_DEVICE_ID: lock.lock.device_id,
+            ATTR_LCM_CONFIG_ENTRY_ID: config_entry.entry_id,
+            ATTR_REASON: reason,
+            ATTR_CODE: masked,
+        }
+        # Omitted entirely when unknown, so a template can test for the key
+        # rather than compare against a placeholder.
+        if source_entity_id is not None:
+            event_data[ATTR_SOURCE_ENTITY_ID] = source_entity_id
+        hass.bus.async_fire(EVENT_CODE_VALIDATION_FAILED, event_data)
     return ValidationResult(valid=False, user=None, reason=reason)
 
 
@@ -132,6 +150,7 @@ def validate_across_entries(
     code: str,
     *,
     fire_events: bool = True,
+    source_entity_id: str | None = None,
 ) -> ValidationResult | None:
     """
     Validate ``code`` against every loaded entry managing ``lock_entity_id``.
@@ -173,4 +192,6 @@ def validate_across_entries(
     # another. The event-free computation is synchronous and side-effect
     # free, so nothing can change between the two passes.
     entry, lock = targets[chosen]
-    return validate_credential(hass, entry, lock, code)
+    return validate_credential(
+        hass, entry, lock, code, source_entity_id=source_entity_id
+    )

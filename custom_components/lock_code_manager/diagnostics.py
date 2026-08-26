@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import DOMAIN, REDACTED
+from .const import DOMAIN
 from .domain.config import build_slot_device_identifier
 from .domain.credentials import pin_address
 from .domain.models import SlotCode, SlotCredential
@@ -40,23 +39,8 @@ def _mask_code(
 _SENSITIVE_UNIQUE_ID_MARKERS = ("|pin", "|code")
 
 
-def _credential_bearing_entity_ids(locks: Iterable[BaseLock]) -> frozenset[str]:
-    """
-    Return the entity IDs whose own state is a credential.
-
-    A credential reader anchors on somebody else's entity -- an esphome
-    sensor, say -- so the unique-id rule below, which only ever recognises
-    this integration's own entities, cannot see it.
-    """
-    return frozenset(lock.lock.entity_id for lock in locks if lock.state_is_credential)
-
-
-def _is_sensitive(
-    entry: er.RegistryEntry, credential_entity_ids: frozenset[str]
-) -> bool:
+def _is_sensitive(entry: er.RegistryEntry) -> bool:
     """Return True if the entity may expose a PIN or code in its state."""
-    if entry.entity_id in credential_entity_ids:
-        return True
     uid = entry.unique_id or ""
     return entry.platform == DOMAIN and any(
         m in uid for m in _SENSITIVE_UNIQUE_ID_MARKERS
@@ -67,14 +51,12 @@ def _entity_states_for_device(
     hass: HomeAssistant,
     ent_reg: er.EntityRegistry,
     device_id: str,
-    credential_entity_ids: frozenset[str],
 ) -> list[dict[str, Any]]:
     """
     Return entity states for all entities on a device.
 
-    Sensitive entities (PIN text, code sensor, reader anchor) have their
-    state and attributes redacted to avoid leaking PINs in diagnostics
-    output.
+    Sensitive entities (PIN text, code sensor) have their state and
+    attributes redacted to avoid leaking PINs in diagnostics output.
     """
     entities: list[dict[str, Any]] = []
     for entry in er.async_entries_for_device(ent_reg, device_id):
@@ -82,13 +64,13 @@ def _entity_states_for_device(
         friendly_name = (
             state.attributes.get("friendly_name") if state else entry.original_name
         )
-        if _is_sensitive(entry, credential_entity_ids):
+        if _is_sensitive(entry):
             entities.append(
                 {
                     "entity_id": entry.entity_id,
                     "friendly_name": friendly_name,
                     "platform": entry.platform,
-                    "state": REDACTED,
+                    "state": "**REDACTED**",
                     "attributes": {},
                 }
             )
@@ -110,7 +92,6 @@ def _lock_diagnostic(
     lock: BaseLock,
     instance_id: str,
     ent_reg: er.EntityRegistry,
-    credential_entity_ids: frozenset[str],
 ) -> dict[str, Any]:
     """Build diagnostic data for a single lock."""
     coordinator = lock.coordinator
@@ -138,12 +119,8 @@ def _lock_diagnostic(
     }
 
     if lock.device_entry:
-        # The dump below is device-scoped, not lock-scoped: it walks every
-        # entity on the device, which can include a sibling anchor. The
-        # redaction set has to be entry-scoped to match, or the sibling's
-        # state -- the last credential typed -- rides along in cleartext.
         result["entities"] = _entity_states_for_device(
-            hass, ent_reg, lock.device_entry.id, credential_entity_ids
+            hass, ent_reg, lock.device_entry.id
         )
 
     return result
@@ -157,7 +134,6 @@ def _slot_diagnostic(
     instance_id: str,
     ent_reg: er.EntityRegistry,
     dev_reg: dr.DeviceRegistry,
-    credential_entity_ids: frozenset[str],
 ) -> dict[str, Any]:
     """Build diagnostic data for a single slot device."""
     entry_config = get_entry_config(config_entry)
@@ -196,9 +172,7 @@ def _slot_diagnostic(
     )
     device = dev_reg.async_get_device(identifiers={slot_identifier})
     if device:
-        result["entities"] = _entity_states_for_device(
-            hass, ent_reg, device.id, credential_entity_ids
-        )
+        result["entities"] = _entity_states_for_device(hass, ent_reg, device.id)
 
     return result
 
@@ -215,7 +189,6 @@ async def async_get_config_entry_diagnostics(
     all_locks: dict[str, BaseLock] = (
         dict(runtime_data.locks) if runtime_data is not None else {}
     )
-    credential_entity_ids = _credential_bearing_entity_ids(all_locks.values())
 
     return {
         "config_entry": {
@@ -224,22 +197,13 @@ async def async_get_config_entry_diagnostics(
             "state": config_entry.state.value,
         },
         "locks": {
-            lock_id: _lock_diagnostic(
-                hass, lock, instance_id, ent_reg, credential_entity_ids
-            )
+            lock_id: _lock_diagnostic(hass, lock, instance_id, ent_reg)
             for lock_id, lock in all_locks.items()
             if entry_config.has_lock(lock_id)
         },
         "slots": {
             str(slot_num): _slot_diagnostic(
-                hass,
-                config_entry,
-                slot_num,
-                all_locks,
-                instance_id,
-                ent_reg,
-                dev_reg,
-                credential_entity_ids,
+                hass, config_entry, slot_num, all_locks, instance_id, ent_reg, dev_reg
             )
             for slot_num in entry_config.slot_numbers
         },
@@ -258,7 +222,6 @@ async def async_get_device_diagnostics(
     all_locks: dict[str, BaseLock] = (
         dict(runtime_data.locks) if runtime_data is not None else {}
     )
-    credential_entity_ids = _credential_bearing_entity_ids(all_locks.values())
 
     # Check if this is a slot device: (DOMAIN, entry_id|slot_num)
     for identifier in device.identifiers:
@@ -278,7 +241,6 @@ async def async_get_device_diagnostics(
                     instance_id,
                     ent_reg,
                     dev_reg,
-                    credential_entity_ids,
                 )
 
     # Check if this is a lock device (from an external integration)
@@ -288,9 +250,7 @@ async def async_get_device_diagnostics(
             and lock.device_entry
             and lock.device_entry.id == device.id
         ):
-            return _lock_diagnostic(
-                hass, lock, instance_id, ent_reg, credential_entity_ids
-            )
+            return _lock_diagnostic(hass, lock, instance_id, ent_reg)
 
     # Config entry device or unknown — return the full config entry diagnostic
     return await async_get_config_entry_diagnostics(hass, config_entry)

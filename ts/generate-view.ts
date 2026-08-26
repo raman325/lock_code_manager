@@ -7,7 +7,6 @@ import {
     IN_SYNC_KEY,
     KEY_ORDER
 } from './const';
-import { isLockEntity } from './ha-components';
 import {
     EntityRegistryEntry,
     HomeAssistant,
@@ -66,13 +65,9 @@ export async function generateView(
     // The slot cards already show detailed status (active, sync, conditions)
     const badges: Array<string | object> = [];
 
-    // A badge renders its entity's state, and `locks` also carries credential
-    // readers, whose state IS the credential last submitted at the keypad --
-    // badging one would put a PIN on the dashboard in cleartext. Only the
-    // `lock` domain has a lock state to show; a reader gets no badge, and the
-    // slot cards already carry its per-slot status.
+    // Lock state badges - show each lock with its current state
+    // Entity badges automatically show friendly name and lock/unlock state
     configEntryData.locks
-        .filter((lock) => isLockEntity(lock.entity_id))
         .sort((a, b) => a.entity_id.localeCompare(b.entity_id))
         .forEach((lock) => {
             badges.push({
