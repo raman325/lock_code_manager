@@ -50,6 +50,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_VALID,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
+    CONF_MEMBERS,
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
@@ -69,7 +70,10 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.domain import services
 from custom_components.lock_code_manager.domain.allocation import SlotAllocationError
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
+from custom_components.lock_code_manager.domain.config import (
+    EntryConfig,
+    build_slot_unique_id,
+)
 from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
@@ -80,7 +84,7 @@ from custom_components.lock_code_manager.providers.schlage import (
 )
 from tests.providers.helpers import register_mock_service
 
-from .common import LOCK_1_ENTITY_ID, reading_for
+from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, reading_for
 
 
 async def test_set_usercode_service(
@@ -1761,3 +1765,98 @@ async def test_use_credential_requires_both_attribution_fields(
         await hass.services.async_call(
             DOMAIN, SERVICE_USE_CREDENTIAL, data, blocking=True
         )
+
+
+async def test_a_write_preserves_member_declarations(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+) -> None:
+    """
+    What the entry declares about a member survives a write about a user.
+
+    The declaration is stored on the entry, and every write rewrites the
+    whole entry from an EntryConfig, so a construction site that does not
+    carry it erases it -- silently, and only for users who set it. Driven
+    through real setup and a real service call because those are the writes
+    that would do the erasing.
+    """
+    lock_1 = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    assert lock_1
+    declared = {lock_1.id: {"placeholder": True}}
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Member Declarations",
+        data={**BASE_CONFIG, CONF_MEMBERS: declared},
+        unique_id="test_member_declarations",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Setup moves the configuration from data into options, which is already
+    # a full rewrite of the entry.
+    assert dict(get_entry_config(entry).members) == declared
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            ATTR_CONFIG_ENTRY_ID: entry.entry_id,
+            CONF_NAME: "Newcomer",
+            CONF_PIN: "9876",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.member(lock_1) == {"placeholder": True}
+    # The write it had to survive actually happened.
+    assert "Newcomer" in config.users
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {ATTR_CONFIG_ENTRY_ID: entry.entry_id, CONF_NAME: "Newcomer"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.member(lock_1) == {"placeholder": True}
+    assert "Newcomer" not in config.users
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_declaration_survives_renaming_its_member(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+) -> None:
+    """
+    Renaming the lock entity does not lose what was declared about it.
+
+    This is the whole reason declarations are keyed by registry entry id
+    rather than entity id. Nothing in this integration listens for entity
+    registry updates, so a declaration keyed by entity id would be stranded
+    the moment somebody renamed their lock -- and stranded permanently, since
+    the roster beside it gets rewritten by the reauth a stale roster
+    triggers, leaving the two describing different entities. Renamed through
+    the real registry because the guarantee being relied on is Home
+    Assistant's, not this integration's.
+    """
+    ent_reg = er.async_get(hass)
+    lock_1 = ent_reg.async_get(LOCK_1_ENTITY_ID)
+    assert lock_1
+    config = EntryConfig.from_mapping(
+        {**BASE_CONFIG, CONF_MEMBERS: {lock_1.id: {"placeholder": True}}}
+    )
+
+    renamed = ent_reg.async_update_entity(
+        LOCK_1_ENTITY_ID, new_entity_id="lock.renamed_by_the_user"
+    )
+
+    assert renamed.entity_id != lock_1.entity_id
+    assert config.member(renamed) == {"placeholder": True}
+    # The roster, which is keyed by entity id, is the half that goes stale.
+    assert not config.has_lock(renamed.entity_id)

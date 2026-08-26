@@ -17,6 +17,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
+    CONF_MEMBERS,
     CONF_NUM_USERS,
     CONF_USERS,
     DOMAIN,
@@ -2530,3 +2531,39 @@ async def test_reauth_completes_around_a_grandfathered_unclaimed_lock(
 
     assert result["type"] == "abort"
     assert result["reason"] == "locks_updated"
+
+
+async def test_options_flow_preserves_member_declarations(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    Editing users through the options flow keeps the member declarations.
+
+    The flow rebuilds the whole entry from an EntryConfig and writes it, and
+    it never asks about members, so anything it does not carry forward is
+    erased by the one write a user reaches from the UI.
+    """
+    ent_reg = er.async_get(hass)
+    lock_1 = ent_reg.async_get(LOCK_1_ENTITY_ID)
+    assert lock_1
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**BASE_CONFIG, CONF_MEMBERS: {lock_1.id: {"placeholder": True}}},
+        unique_id="Mock Title",
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_LOCKS: list(BASE_CONFIG[CONF_LOCKS]),
+                CONF_USERS: {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}},
+            },
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_MEMBERS] == {lock_1.id: {"placeholder": True}}
+    # The edit the declaration had to survive actually landed.
+    assert set(result["data"][CONF_USERS]) == {"test1"}
