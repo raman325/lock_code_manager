@@ -3090,6 +3090,7 @@ async def test_removing_a_slot_clears_its_code_off_the_lock(
         entry,
         options=EntryConfig(
             locks=config.locks,
+            members=config.members,
             users=remaining,
             assignment=config.assignment.reconcile(remaining, start=1),
             extra=config.extra,

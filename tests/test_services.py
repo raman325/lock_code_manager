@@ -50,6 +50,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_VALID,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
+    CONF_MEMBERS,
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
@@ -80,7 +81,7 @@ from custom_components.lock_code_manager.providers.schlage import (
 )
 from tests.providers.helpers import register_mock_service
 
-from .common import LOCK_1_ENTITY_ID
+from .common import BASE_CONFIG, LOCK_1_ENTITY_ID
 
 
 async def test_set_usercode_service(
@@ -1731,3 +1732,63 @@ async def test_use_credential_requires_both_attribution_fields(
         await hass.services.async_call(
             DOMAIN, SERVICE_USE_CREDENTIAL, data, blocking=True
         )
+
+
+async def test_a_write_preserves_member_declarations(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+) -> None:
+    """
+    What the entry declares about a member survives a write about a user.
+
+    The declaration is stored on the entry, and every write rewrites the
+    whole entry from an EntryConfig, so a construction site that does not
+    carry it erases it -- silently, and only for users who set it. Driven
+    through real setup and a real service call because those are the writes
+    that would do the erasing.
+    """
+    declared = {LOCK_1_ENTITY_ID: {"placeholder": True}}
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Member Declarations",
+        data={**BASE_CONFIG, CONF_MEMBERS: declared},
+        unique_id="test_member_declarations",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Setup moves the configuration from data into options, which is already
+    # a full rewrite of the entry.
+    assert dict(get_entry_config(entry).members) == declared
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            ATTR_CONFIG_ENTRY_ID: entry.entry_id,
+            CONF_NAME: "Newcomer",
+            CONF_PIN: "9876",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.member(LOCK_1_ENTITY_ID) == {"placeholder": True}
+    # The write it had to survive actually happened.
+    assert "Newcomer" in config.users
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {ATTR_CONFIG_ENTRY_ID: entry.entry_id, CONF_NAME: "Newcomer"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.member(LOCK_1_ENTITY_ID) == {"placeholder": True}
+    assert "Newcomer" not in config.users
+
+    await hass.config_entries.async_unload(entry.entry_id)

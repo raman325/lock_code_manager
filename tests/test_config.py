@@ -8,6 +8,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
+    CONF_MEMBERS,
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
@@ -838,3 +839,207 @@ def test_a_non_string_stored_pin_is_left_alone() -> None:
     )
     assert config.slot(1)["pin"] == 1234
     assert not isinstance(config.slot(1)["pin"], str)
+
+
+# --- Per-member declarations (issue #1480) ---
+
+# There is no declared field yet: this PR adds the shape the first one will
+# live in. A placeholder stands in so the tests assert what the shape
+# guarantees -- that it carries whatever is put in it, unchanged -- rather
+# than the meaning of a key that does not exist.
+_DECLARED = {"placeholder": True}
+
+
+def test_nothing_declared_is_the_default() -> None:
+    """
+    An entry with no member key declares nothing about anybody.
+
+    Absence is the normal case for every entry that exists today, so it has
+    to read as "take the defaults" rather than as missing data.
+    """
+    config = EntryConfig.from_mapping({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {}})
+
+    assert dict(config.members) == {}
+    assert config.member("lock.a") == {}
+    assert EntryConfig.empty().member("lock.a") == {}
+
+
+def test_a_member_absent_from_the_roster_still_answers() -> None:
+    """
+    Declarations are keyed by entity id and outlive membership.
+
+    Removing a lock from the entry does not erase what was declared about it,
+    so re-adding it restores the declaration instead of silently reverting to
+    defaults.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: [], CONF_MEMBERS: {"lock.gone": _DECLARED}}
+    )
+
+    assert not config.has_lock("lock.gone")
+    assert config.member("lock.gone") == _DECLARED
+
+
+def test_member_declarations_round_trip() -> None:
+    """
+    to_dict -> from_mapping preserves declarations verbatim.
+
+    to_dict feeds async_update_entry, so anything this does not preserve is
+    dropped from storage on the next write of any other field.
+    """
+    original = EntryConfig.from_mapping(
+        {
+            CONF_LOCKS: ["lock.a", "lock.b"],
+            CONF_MEMBERS: {"lock.a": _DECLARED},
+            CONF_SLOTS: {1: _slot()},
+        }
+    )
+
+    round_tripped = EntryConfig.from_mapping(original.to_dict())
+
+    assert dict(round_tripped.members) == {"lock.a": _DECLARED}
+    assert round_tripped.member("lock.a") == _DECLARED
+    # The member nobody declared anything about is still defaulted, not
+    # invented as an empty declaration.
+    assert "lock.b" not in round_tripped.members
+
+
+def test_a_partially_populated_declaration_round_trips() -> None:
+    """
+    Members may declare some fields, no fields, or not appear at all.
+
+    All three are legal and distinct on the way in, and all three have to
+    survive the write: a declaration is not a fixed record, so the shape can
+    never fill in what was left out.
+    """
+    original = EntryConfig.from_mapping(
+        {
+            CONF_LOCKS: ["lock.a", "lock.b", "lock.c"],
+            CONF_MEMBERS: {"lock.a": {"one": 1, "two": 2}, "lock.b": {}},
+        }
+    )
+
+    round_tripped = EntryConfig.from_mapping(original.to_dict())
+
+    assert dict(round_tripped.members) == {"lock.a": {"one": 1, "two": 2}, "lock.b": {}}
+    assert round_tripped.member("lock.c") == {}
+
+
+def test_an_unrelated_edit_preserves_member_declarations() -> None:
+    """
+    Editing a user does not erase what was declared about the members.
+
+    Every copy helper rebuilds the whole EntryConfig, and to_dict writes the
+    result straight to the entry, so a field one of them forgets to carry is
+    gone from storage with no error anywhere.
+    """
+    original = EntryConfig.from_mapping(
+        {
+            CONF_LOCKS: ["lock.a"],
+            CONF_MEMBERS: {"lock.a": _DECLARED},
+            CONF_SLOTS: {1: _slot(name="Somebody")},
+        }
+    )
+
+    edited = (
+        original.with_user_field_set("Somebody", "pin", "9999")
+        .with_user_field_removed("Somebody", "enabled")
+        .with_user_renamed("Somebody", "Somebody Else")
+    )
+    saved = EntryConfig.from_mapping(edited.to_dict())
+
+    assert saved.member("lock.a") == _DECLARED
+    # The edit itself landed, so the guarantee is not vacuous.
+    assert saved.users["Somebody Else"]["pin"] == "9999"
+
+
+def test_member_declarations_are_deeply_immutable() -> None:
+    """The declarations share EntryConfig's read-only guarantee."""
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {"lock.a": dict(_DECLARED)}}
+    )
+
+    with pytest.raises(TypeError):
+        config.members["lock.b"] = {}  # type: ignore[index]
+
+    with pytest.raises(TypeError):
+        config.member("lock.a")["placeholder"] = False  # type: ignore[index]
+
+
+def test_to_dict_produces_plain_member_dicts() -> None:
+    """
+    The written declarations are plain dicts HA can serialize.
+
+    The read-only wrappers EntryConfig uses internally do not survive storage.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {"lock.a": dict(_DECLARED)}}
+    )
+
+    result = config.to_dict()
+
+    assert isinstance(result[CONF_MEMBERS], dict)
+    assert isinstance(result[CONF_MEMBERS]["lock.a"], dict)
+    result[CONF_MEMBERS]["lock.a"]["placeholder"] = False
+    assert config.member("lock.a") == _DECLARED
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (["lock.a"], {}),
+        ("lock.a", {}),
+        (None, {}),
+        ({"lock.a": "not a mapping"}, {}),
+        ({"lock.a": None}, {}),
+        ({"lock.a": _DECLARED, "lock.b": 5}, {"lock.a": _DECLARED}),
+    ],
+)
+def test_malformed_member_storage_is_dropped_not_raised(
+    stored: object, expected: dict
+) -> None:
+    """
+    A member key that is not the shape it should be reads as nothing declared.
+
+    Reachable from hand-edited storage or a restored backup. Raising here
+    would take entry setup down over a key no member has to have, and the
+    members that ARE well-formed still have to load.
+    """
+    config = EntryConfig.from_mapping({CONF_LOCKS: ["lock.a"], CONF_MEMBERS: stored})
+
+    assert dict(config.members) == expected
+
+
+def test_from_entry_reads_member_declarations_options_preferred() -> None:
+    """
+    Options wins over data, matching the roster beside it.
+
+    During an options-flow update the new configuration is in options while
+    data still holds the old one.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {"lock.a": {"which": "data"}}},
+        options={
+            CONF_LOCKS: ["lock.a"],
+            CONF_MEMBERS: {"lock.a": {"which": "options"}},
+        },
+    )
+
+    assert EntryConfig.from_entry(entry).member("lock.a") == {"which": "options"}
+
+
+def test_from_entry_falls_back_to_data_for_member_declarations() -> None:
+    """
+    A side carrying no declarations does not erase the other side's.
+
+    Setup moves the configuration from data into options and the listener
+    moves it back, so either side may be the one holding it.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.a"], CONF_MEMBERS: {"lock.a": _DECLARED}},
+        options={CONF_SLOTS: {1: _slot()}},
+    )
+
+    assert EntryConfig.from_entry(entry).member("lock.a") == _DECLARED

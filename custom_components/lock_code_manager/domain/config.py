@@ -10,7 +10,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_PIN
 
-from ..const import CONF_LOCKS, CONF_SLOTS, CONF_USERS
+from ..const import CONF_LOCKS, CONF_MEMBERS, CONF_SLOTS, CONF_USERS
 from .names import normalize_name
 from .slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
@@ -20,11 +20,15 @@ from .slot_assignment import (
 )
 
 _EMPTY_USERS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MEMBERS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MEMBER: Mapping[str, Any] = MappingProxyType({})
 _EMPTY_EXTRA: Mapping[str, Any] = MappingProxyType({})
 
 # The keys EntryConfig models directly. Everything else in the entry is
 # internal bookkeeping and rides along in `extra`.
-_CONFIG_KEYS = frozenset({CONF_LOCKS, CONF_SLOTS, CONF_USERS, CONF_SLOT_ASSIGNMENT})
+_CONFIG_KEYS = frozenset(
+    {CONF_LOCKS, CONF_MEMBERS, CONF_SLOTS, CONF_USERS, CONF_SLOT_ASSIGNMENT}
+)
 
 
 def _normalized_user(user: Mapping[str, Any]) -> dict[str, Any]:
@@ -50,6 +54,28 @@ def _normalized_user(user: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _member_declarations(raw: Any) -> Mapping[str, Mapping[str, Any]]:
+    """
+    Return the per-member declarations a stored value carries.
+
+    Malformed storage -- hand-edited ``.storage``, a restored backup, a key
+    written by a version that spelled it differently -- is dropped rather than
+    raised on, at both levels: the whole key if it is not a mapping, and any
+    single member whose declaration is not one. Every field then reads as its
+    own default, where raising would make the entry unloadable over a key no
+    member has to have.
+    """
+    if not isinstance(raw, Mapping):
+        return _EMPTY_MEMBERS
+    return MappingProxyType(
+        {
+            entity_id: MappingProxyType(dict(declared))
+            for entity_id, declared in raw.items()
+            if isinstance(declared, Mapping)
+        }
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class EntryConfig:
     """
@@ -71,6 +97,11 @@ class EntryConfig:
     """
 
     locks: tuple[str, ...]
+    # What the entry declares ABOUT each member, keyed by entity id, next to
+    # the `locks` roster rather than inside it: the roster is read raw in
+    # several places that would all have to learn a new element shape. No
+    # default, for the same reason `extra` has none.
+    members: Mapping[str, Mapping[str, Any]]
     users: Mapping[str, Mapping[str, Any]]
     assignment: SlotAssignment
     # Every other top-level key in the entry, carried through verbatim. No
@@ -100,6 +131,7 @@ class EntryConfig:
         """Return a config for an entry with no locks and no users."""
         return cls(
             locks=(),
+            members=_EMPTY_MEMBERS,
             users=_EMPTY_USERS,
             assignment=SlotAssignment.empty(),
             extra=_EMPTY_EXTRA,
@@ -130,6 +162,14 @@ class EntryConfig:
             **{k: v for k, v in entry.data.items() if k not in _CONFIG_KEYS},
             **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
             CONF_LOCKS: entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, [])),
+            # Read per key rather than from the side the users came from, like
+            # the roster beside it. Both are keyed by entity id, so a side that
+            # lags describes members by name and the entries for members this
+            # entry no longer has are simply never read -- where a lagging
+            # assignment would silently renumber the users it is paired with.
+            CONF_MEMBERS: entry.options.get(
+                CONF_MEMBERS, entry.data.get(CONF_MEMBERS, {})
+            ),
         }
         # The assignment comes from the SAME side as the users it numbers, or
         # it could pair users with numbering that predates them.
@@ -171,6 +211,7 @@ class EntryConfig:
             assignment = SlotAssignment.from_mapping(mapping)
         return cls(
             locks=tuple(mapping.get(CONF_LOCKS, [])),
+            members=_member_declarations(mapping.get(CONF_MEMBERS)),
             users=MappingProxyType(
                 {
                     name: MappingProxyType(_normalized_user(user))
@@ -211,6 +252,25 @@ class EntryConfig:
     def has_lock(self, lock_entity_id: str) -> bool:
         """Return True if this entry manages the given lock."""
         return lock_entity_id in self.locks
+
+    def member(self, entity_id: str) -> Mapping[str, Any]:
+        """
+        Return what this entry declares about one of its members.
+
+        A member is an entity this entry keeps credentials on. Deliberately
+        not "a lock": a provider is a credential store, and only some stores
+        are also the thing that gets locked. Nothing here may assume the
+        member actuates anything, or that the credentials live on the device
+        at all.
+
+        Declaring nothing is the normal case and returns an empty mapping, so
+        every field a caller reads takes its own default. Membership itself is
+        the ``locks`` roster; this records only what somebody said about a
+        member, which is why an entity absent from the roster still answers
+        rather than raising -- a declaration is keyed by entity id and outlives
+        the member's removal, so re-adding them restores what was declared.
+        """
+        return self.members.get(entity_id, _EMPTY_MEMBER)
 
     def name_for(self, slot_num: int | str) -> str | None:
         """Return the user occupying a slot, or None if it is unoccupied."""
@@ -276,6 +336,7 @@ class EntryConfig:
         }
         return EntryConfig(
             locks=self.locks,
+            members=self.members,
             users=MappingProxyType(
                 {k: MappingProxyType(v) for k, v in new_users.items()}
             ),
@@ -305,6 +366,7 @@ class EntryConfig:
         new_users[stored][key] = value
         return EntryConfig(
             locks=self.locks,
+            members=self.members,
             users=MappingProxyType(
                 {k: MappingProxyType(v) for k, v in new_users.items()}
             ),
@@ -323,6 +385,7 @@ class EntryConfig:
         new_users[stored].pop(key, None)
         return EntryConfig(
             locks=self.locks,
+            members=self.members,
             users=MappingProxyType(
                 {k: MappingProxyType(v) for k, v in new_users.items()}
             ),
@@ -356,6 +419,10 @@ class EntryConfig:
         return {
             **dict(self.extra),
             CONF_LOCKS: list(self.locks),
+            CONF_MEMBERS: {
+                entity_id: dict(declared)
+                for entity_id, declared in self.members.items()
+            },
             CONF_USERS: {name: dict(user) for name, user in self.users.items()},
             CONF_SLOT_ASSIGNMENT: dict(self.assignment.slots),
         }

@@ -263,6 +263,7 @@ async def async_add_user(
         config_entry,
         EntryConfig(
             locks=config.locks,
+            members=config.members,
             users={**config.users, name: user},
             assignment=assignment,
             extra=config.extra,
@@ -312,6 +313,7 @@ async def async_delete_user(
         config_entry,
         EntryConfig(
             locks=config.locks,
+            members=config.members,
             users=remaining,
             assignment=config.assignment.reconcile(remaining, start=1),
             extra=config.extra,

@@ -664,6 +664,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                         title="",
                         data=EntryConfig(
                             locks=tuple(user_input[CONF_LOCKS]),
+                            members=config.members,
                             users=users,
                             assignment=assignment,
                             extra=config.extra,

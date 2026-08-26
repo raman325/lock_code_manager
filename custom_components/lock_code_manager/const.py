@@ -146,6 +146,9 @@ CONF_CONFIG_ENTRY = "config_entry"
 CONF_CONDITIONS = "conditions"
 CONF_ENTITIES = "entities"
 CONF_LOCKS = "locks"
+# Per-member declarations, keyed by entity id, alongside the CONF_LOCKS
+# roster. See EntryConfig.member().
+CONF_MEMBERS = "members"
 CONF_SLOTS = "slots"
 CONF_USERS = "users"
 CONF_NUM_USERS = "num_users"
