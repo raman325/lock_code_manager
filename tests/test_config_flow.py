@@ -161,6 +161,92 @@ async def _init_flow_to_user_step(hass: HomeAssistant) -> str:
     return result["flow_id"]
 
 
+def _assert_fields_are_labelled(result, category: str) -> None:
+    """
+    Assert a form's fields and its labels name the same set of keys.
+
+    ``ha-form`` falls back to the raw key when a field has no label, so a
+    field the strings do not name reaches the user as ``condition`` rather
+    than "Condition Entity". Comparing as sets catches the other half of the
+    same mistake: a label still filed under the key a rename left behind
+    names nothing, and is the only trace that the rename was half-done.
+
+    The schema comes off the form the flow actually returned rather than
+    from an import, so a step that builds its schema inline is covered the
+    same as one that reuses a module constant.
+    """
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+    step_id = result["step_id"]
+    labelled = set(strings[category]["step"][step_id].get("data", {}))
+    fields = {str(key.schema) for key in result["data_schema"].schema}
+    assert fields == labelled, (
+        f"{category} step {step_id}: fields {sorted(fields)} "
+        f"but labels {sorted(labelled)}"
+    )
+
+
+async def test_every_config_flow_field_has_a_label(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """Every field the setup flow shows is named by the strings."""
+    flow_id = await _init_flow_to_user_step(hass)
+    result = await hass.config_entries.flow.async_configure(flow_id)
+    _assert_fields_are_labelled(result, "config")
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "ui"}
+    )
+    _assert_fields_are_labelled(result, "config")
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NUM_USERS: 1}
+    )
+    _assert_fields_are_labelled(result, "config")
+
+    # The yaml path is the ui path's sibling, so reaching it takes a second
+    # flow -- under a second name, because the first one holds the unique id.
+    flow_id = await _init_flow_to_user_step(hass)
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "test2", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    _assert_fields_are_labelled(result, "config")
+
+
+async def test_every_options_flow_field_has_a_label(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """Every field the options flow shows is named by the strings."""
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    _assert_fields_are_labelled(result, "options")
+
+
+async def test_every_reauth_field_has_a_label(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """Every field the reauth flow shows is named by the strings."""
+    lock_code_manager_config_entry.async_start_reauth(
+        hass, context={"lock_entity_id": LOCK_1_ENTITY_ID}
+    )
+    await hass.async_block_till_done()
+    [flow] = lock_code_manager_config_entry.async_get_active_flows(
+        hass, {SOURCE_REAUTH}
+    )
+    # The in-progress flow carries no schema, so render the form to get one.
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"])
+    _assert_fields_are_labelled(result, "config")
+
+
 async def test_config_flow_ui(hass: HomeAssistant, mock_lock_config_entry):
     """Test UI based config flow with slot number incrementing correctly."""
     flow_id = await _start_ui_config_flow(hass)
