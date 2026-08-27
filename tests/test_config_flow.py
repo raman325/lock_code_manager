@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
+    CONF_AVAILABILITY_ENTITIES,
     CONF_LOCKS,
     CONF_MEMBERS,
     CONF_NUM_USERS,
@@ -274,6 +275,7 @@ async def test_config_flow_ui(hass: HomeAssistant, mock_lock_config_entry):
 
     assert result["title"] == "test"
     assert result["data"] == {
+        CONF_AVAILABILITY_ENTITIES: [],
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_USERS: {
             "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
@@ -324,6 +326,7 @@ async def test_config_flow_yaml(hass: HomeAssistant, mock_lock_config_entry):
     assert result["type"] == "create_entry"
     assert result["title"] == "test"
     assert result["data"] == {
+        CONF_AVAILABILITY_ENTITIES: [],
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_USERS: {
             "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
@@ -2297,6 +2300,7 @@ async def test_user_step_rejects_unclaimed_mqtt_lock(
     # The refusal comes back holding the name, which means the check ran
     # before the step consumed it.
     assert _suggested_values(result) == {
+        CONF_AVAILABILITY_ENTITIES: [],
         CONF_NAME: "test",
         CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
     }

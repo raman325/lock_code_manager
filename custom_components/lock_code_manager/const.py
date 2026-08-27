@@ -147,6 +147,10 @@ LEGACY_EVENT_PIN_USED = "pin_used"
 CONF_CONFIG_ENTRY = "config_entry"
 CONF_CONDITIONS = "conditions"
 CONF_ENTITIES = "entities"
+# Entities whose availability this entry's own entities follow, for an entry
+# with no lock to follow. Not members: nothing is written to them and they
+# are never read for anything but whether they are available.
+CONF_AVAILABILITY_ENTITIES = "availability_entities"
 CONF_LOCKS = "locks"
 # Per-member declarations, keyed by entity registry entry id, alongside the
 # CONF_LOCKS roster. See EntryConfig.member().

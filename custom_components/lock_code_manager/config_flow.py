@@ -24,6 +24,7 @@ from homeassistant.util import slugify
 
 from .const import (
     CONDITION_ENTITY_DOMAINS,
+    CONF_AVAILABILITY_ENTITIES,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_USERS,
@@ -96,6 +97,13 @@ LOCKS_FILTER_CONFIG = [
 ]
 LOCK_ENTITY_SELECTOR = sel.EntitySelector(
     sel.EntitySelectorConfig(filter=LOCKS_FILTER_CONFIG, multiple=True)
+)
+# Deliberately unfiltered: what an entry follows for availability is whatever
+# the user can point at -- the keypad's own status sensor, the device's
+# connectivity entity, a template. Nothing is written to these and nothing but
+# their availability is read, so no domain is wrong here.
+AVAILABILITY_ENTITY_SELECTOR = sel.EntitySelector(
+    sel.EntitySelectorConfig(multiple=True)
 )
 SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
 
@@ -312,6 +320,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     {
                         vol.Required(CONF_NAME): cv.string,
                         vol.Required(CONF_LOCKS): LOCK_ENTITY_SELECTOR,
+                        vol.Optional(
+                            CONF_AVAILABILITY_ENTITIES, default=list
+                        ): AVAILABILITY_ENTITY_SELECTOR,
                     }
                 ),
                 user_input,
@@ -678,6 +689,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                         data=EntryConfig(
                             locks=tuple(user_input[CONF_LOCKS]),
                             members=config.members,
+                            availability_entities=config.availability_entities,
                             users=users,
                             assignment=assignment,
                             extra=config.extra,
@@ -689,6 +701,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
         # deeply read-only mappings EntryConfig uses internally.
         defaults = {
             CONF_LOCKS: list(config.locks),
+            CONF_AVAILABILITY_ENTITIES: list(config.availability_entities),
             CONF_USERS: {name: dict(user) for name, user in config.users.items()},
         }
 
@@ -700,6 +713,13 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                         CONF_LOCKS,
                         default=user_input.get(CONF_LOCKS, defaults[CONF_LOCKS]),
                     ): LOCK_ENTITY_SELECTOR,
+                    vol.Optional(
+                        CONF_AVAILABILITY_ENTITIES,
+                        default=user_input.get(
+                            CONF_AVAILABILITY_ENTITIES,
+                            defaults[CONF_AVAILABILITY_ENTITIES],
+                        ),
+                    ): AVAILABILITY_ENTITY_SELECTOR,
                     vol.Required(
                         CONF_USERS,
                         default=user_input.get(CONF_USERS, defaults[CONF_USERS]),

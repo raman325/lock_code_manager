@@ -48,10 +48,14 @@
       },
       "user": {
         "data": {
+          "availability_entities": "Availability sources",
           "locks": "Locks",
           "name": "Name"
         },
-        "description": "Give this configuration a unique name (e.g. `House Locks`) and select the locks you would like to manage with it.",
+        "data_description": {
+          "availability_entities": "Optional. This configuration's entities stay available while any of its locks, or any entity named here, is available. Name a keypad's own status entity when this configuration manages no locks, so its entities still reflect whether that device is up."
+        },
+        "description": "Give this configuration a unique name (e.g. `House Locks`) and select the locks you would like to manage with it. Locks may be left empty for credentials that are only ever checked with the `use_credential` action.",
         "title": "Lock Code Manager"
       },
       "yaml": {
@@ -147,8 +151,12 @@
     "step": {
       "init": {
         "data": {
+          "availability_entities": "Availability sources",
           "locks": "Locks",
           "users": "Users YAML"
+        },
+        "data_description": {
+          "availability_entities": "Optional. This configuration's entities stay available while any of its locks, or any entity named here, is available. Name a keypad's own status entity when this configuration manages no locks, so its entities still reflect whether that device is up."
         },
         "description": "Update the locks that are associated with this config entry and/or the users.",
         "title": "Lock Code Manager"
