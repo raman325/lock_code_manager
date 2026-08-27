@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+import logging
 from types import MappingProxyType
 from typing import Any
 
@@ -18,6 +19,8 @@ from .slot_assignment import (
     identity,
     users_from_slots,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 _EMPTY_USERS: Mapping[str, Mapping[str, Any]] = MappingProxyType({})
 _EMPTY_EXTRA: Mapping[str, Any] = MappingProxyType({})

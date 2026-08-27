@@ -15,6 +15,7 @@ from homeassistant.components.calendar import (
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
     CONF_CONDITION,
     CONF_ENTITY_ID,
     CONF_NAME,
@@ -57,7 +58,9 @@ from custom_components.lock_code_manager.const import (
     ATTR_SCHEDULE_NEXT_EVENT,
     ATTR_SLOT,
     ATTR_SLOT_NUM,
+    ATTR_SOURCE,
     ATTR_SYNC_STATUS,
+    ATTR_TARGET,
     ATTR_USER_ENTITY_ID,
     ATTR_USERCODE,
     BACKOFF_FAILURE_THRESHOLD,
@@ -70,6 +73,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
+    SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
@@ -938,21 +942,23 @@ async def test_subscribe_code_slot_omits_number_of_uses(
     assert LEGACY_NUMBER_OF_USES_KEY not in data[CONF_ENTITIES]
 
 
-async def test_subscribe_code_slot_with_event_type(
+async def test_subscribe_code_slot_names_what_the_credential_was_used_on(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
     """
-    Test event_type attribute is set correctly after firing code slot event.
+    The card's "Last used on <lock>" comes from the use's ``target``.
 
-    This verifies the event entity state has the event_type attribute set to
-    the lock entity ID, which the websocket uses to look up last_used_lock_name.
+    ``event_type`` is the fixed word ``credential_used``, so resolving that
+    as an entity id yields nothing and the card silently drops to a bare
+    "Last used". Asserting the resolved friendly name rather than merely a
+    non-null timestamp is what makes that visible here.
     """
     ws_client = await hass_ws_client(hass)
 
-    # First, subscribe before any event - last_used should be None
+    # Subscribe before any use: nothing to report yet.
     await ws_client.send_json(
         {
             "id": 1,
@@ -968,34 +974,73 @@ async def test_subscribe_code_slot_with_event_type(
     event = await ws_client.receive_json()
     data = event["event"]
     assert data[ATTR_SLOT_NUM] == 2
-    # No event fired yet, so last_used should be None
     assert data.get(ATTR_LAST_USED) is None
     assert data.get(ATTR_LAST_USED_LOCK) is None
 
-    # Fire a code slot event
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
     await hass.async_block_till_done()
 
-    # Check event entity state to verify event_type is set (this is what
-    # websocket code reads to determine last_used_lock_name)
     event_state = hass.states.get(SLOT_2_EVENT_ENTITY)
     assert event_state is not None
     assert event_state.state not in ("unknown", "unavailable")
-    assert event_state.attributes.get("event_type") == LOCK_1_ENTITY_ID
+    assert event_state.attributes[ATTR_TARGET] == LOCK_1_ENTITY_ID
 
-    # Verify lock state exists and has friendly_name (websocket looks this up)
     lock_state = hass.states.get(LOCK_1_ENTITY_ID)
     assert lock_state is not None
-    assert "friendly_name" in lock_state.attributes
 
-    # Should receive websocket update with last_used populated
     updated = await ws_client.receive_json()
     assert updated["type"] == "event"
     data = updated["event"]
     assert data[ATTR_SLOT_NUM] == 2
-    # last_used should have the timestamp from the event
     assert data.get(ATTR_LAST_USED) is not None
+    assert data[ATTR_LAST_USED_LOCK] == lock_state.attributes[ATTR_FRIENDLY_NAME]
+
+
+async def test_subscribe_code_slot_says_only_when_for_a_target_with_no_state(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    A target Home Assistant holds no state for leaves the name unset.
+
+    Now that a use can act on anything -- a gate, a door controller with no
+    integration of its own -- the target is not guaranteed to resolve, and
+    the card has to fall back to a bare "Last used" rather than break.
+    """
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 1,
+            "reveal": True,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    await ws_client.receive_json()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_USE_CREDENTIAL,
+        {
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CODE: "1234",
+            ATTR_SOURCE: "sensor.side_gate_keypad",
+            ATTR_TARGET: "cover.side_gate",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get("cover.side_gate") is None
+    data = (await ws_client.receive_json())["event"]
+    assert data[ATTR_SLOT_NUM] == 1
+    assert data.get(ATTR_LAST_USED) is not None
+    assert data.get(ATTR_LAST_USED_LOCK) is None
 
 
 async def test_subscribe_lock_codes_slot_metadata(

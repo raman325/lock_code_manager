@@ -64,7 +64,10 @@ entities.
 - `zha.py`: Zigbee Home Automation lock implementation
 - `zigbee2mqtt.py`: Zigbee2MQTT lock implementation (via MQTT)
 - `zwave_js_ui.py`: zwave-js-ui lock implementation (via MQTT, api-driven)
-- `virtual.py`: Virtual lock implementation for testing
+- `virtual.py`: Virtual lock implementation -- a credential store rather than a device.
+  Advertises every credential type with no limits, and reports code slot events so it can be
+  the recording surface for credentials used where Lock Code Manager observes nothing
+  (`use_credential`). Also the way to try Lock Code Manager without a real lock.
 - Each provider implements: `async_get_users()`, `async_set_credential()`, `async_delete_credential()`,
   `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
@@ -102,7 +105,14 @@ entities.
 - `text.py`: Name and PIN configuration entities
 - `number.py`: Number of uses tracking (decrements on PIN use)
 - `switch.py`: Slot enabled/disabled toggle
-- `event.py`: PIN usage events (fires when code slot is used to lock/unlock)
+- `event.py`: per-user `credential_used` event entity. Its `event_types` are
+  credential kinds -- `MANAGED_CREDENTIAL_TYPES` unioned with everything the
+  entry's locks advertise -- and a recorded use fires with the kind it was.
+  It records from `BUS_EVENT_CREDENTIAL_USED` alone and publishes that
+  payload (`name`, `config_entry_id`, `config_entry_title`, `source`,
+  `target`, `credential_type`, `operation`) as its state attributes,
+  alongside `code_slot` and `slot_field`. Where the credential was used is
+  `target`, not `event_type`
 
 ### Data Flow
 
@@ -121,7 +131,9 @@ entities.
    (`lock_code_manager_lock_state_changed`), the older lock-shaped event. It is
    retained for backward compatibility while consumers migrate to the unified
    event above, with no removal version set and no runtime deprecation
-   warning; the per-slot `credential_used` event entity still listens to it.
+   warning. Nothing inside the integration listens to it -- the per-slot
+   `credential_used` event entity records from the unified event only, which
+   is what lets it record a use whose target is not a lock at all.
 
 ### Sync State Machine (`sync.py`)
 
@@ -428,7 +440,7 @@ with a comment citing the contract. Never silence one by rerunning.
 | `hard_refresh_interval` | None | Interval for full code refresh (detects out-of-band changes) |
 | `connection_check_interval` | 30 seconds | Interval for connection state checks |
 | `supports_push` | False | Enable push-based updates instead of polling |
-| `supports_code_slot_events` | True | Whether lock fires code slot used events |
+| `supports_code_slot_events` | True | Whether lock reports which code slot was used. Diagnostics only; nothing gates on it |
 
 ### Push Support
 

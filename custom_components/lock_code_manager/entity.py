@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, final
 
-from homeassistant.components.lock import LockState
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import (
     Event,
     EventStateChangedData,
@@ -23,7 +22,6 @@ from homeassistant.helpers.event import TrackStates, async_track_state_change_fi
 from .const import (
     ATTR_CODE_SLOT,
     ATTR_SLOT_FIELD,
-    ATTR_TO,
     DOMAIN,
 )
 from .domain.config import build_slot_device_identifier, build_slot_unique_id
@@ -215,19 +213,13 @@ class BaseLockCodeManagerEntity(Entity):
         )
 
     @callback
-    def _event_filter(self, event_data: dict[str, Any]) -> bool:
-        """Filter events."""
-        return (
-            any(
-                event_data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks
-            )
-            and event_data[ATTR_CODE_SLOT] == int(self.slot_num)
-            and event_data[ATTR_TO] == LockState.UNLOCKED
-        )
-
-    @callback
     def _is_available(self) -> bool:
         """Return whether entity should be available."""
+        if not self.locks:
+            # Nothing to follow is not the same as nothing being up. An entry
+            # with no locks answers for its credentials out of its own
+            # configuration, which is present whenever the entry is loaded.
+            return True
         return any(
             state.state != STATE_UNAVAILABLE
             for lock in self.locks

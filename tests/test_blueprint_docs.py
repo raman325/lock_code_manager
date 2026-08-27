@@ -45,6 +45,11 @@ def _documented_inputs() -> dict[str, list[str]]:
     for line in _DOC.read_text().splitlines():
         if match := _IMPORT_LINK.search(line):
             current = sections.setdefault(match[1], [])
+        # A section ends at the next heading. The doc carries reference
+        # tables of its own that belong to no blueprint, and without this
+        # they read as extra inputs of whichever one was documented last.
+        elif line.startswith("#"):
+            current = None
         elif current is not None and line.startswith("|"):
             name = line.split("|")[1].strip()
             if name != "Input" and not name.startswith("--"):

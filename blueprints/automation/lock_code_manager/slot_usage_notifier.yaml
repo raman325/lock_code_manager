@@ -27,11 +27,25 @@ blueprint:
 
     - `timestamp` — the date and time the event occurred
 
+    - `operation` — what the device did with the credential: `unlock`,
+      `lock`, or `unknown` when nothing reported which
 
-    **Requirements**
+    - `credential_type` — the kind of credential presented, `pin` today
 
-    This blueprint requires at least one lock that supports code slot
-    events (i.e. produces credential-used events).
+
+    **What runs the actions**
+
+    Every use recorded on the credential used event entity. That is a lock
+    reporting which code slot unlocked it, a lock reporting which code slot
+    *locked* it, and a use reported through the
+    `lock_code_manager.use_credential` action from a keypad or door
+    controller Home Assistant cannot watch.
+
+
+    Every one of them runs the actions, including locking by code — a guest
+    who unlocks with their PIN and locks up behind them with the same PIN
+    runs them twice. Use `operation` in your message to say which happened,
+    or to skip one kind with a condition inside your actions.
 
 
     **Setup**
@@ -96,25 +110,42 @@ variables:
   # `trigger.to_state` access against the entity-removal case
   # (`to_state is None`) — otherwise the variable rendering errors
   # out before the conditions below can block the action.
+
+  # `event_type` is the fixed word `credential_used` and names nothing;
+  # `target` is what the credential was used against, which is a lock when
+  # a lock observed the use and can be anything at all when the
+  # `use_credential` action reported one.
+  #
+  # Read off the trigger's own snapshot rather than the entity's live state:
+  # `mode: queued` runs this behind up to nine other uses, and a live read
+  # would pair this trigger with whatever target arrived last.
   lock_entity_id: >-
-    {{ state_attr(trigger.entity_id, 'event_type') }}
-  # A use the lock observed carries `code_slot_name`; one reported through
-  # the `use_credential` action carries the unified payload, which names the
-  # user in `name` instead.
+    {{ trigger.to_state.attributes.target | default(none, true)
+       if trigger.to_state is not none else none }}
   slot_name: >-
-    {{ trigger.to_state.attributes.code_slot_name
-       | default(trigger.to_state.attributes.name | default('Unknown slot'))
+    {{ trigger.to_state.attributes.name | default('Unknown slot')
        if trigger.to_state is not none else 'Unknown slot' }}
   slot_num: >-
     {{ trigger.to_state.attributes.code_slot | default('?')
        if trigger.to_state is not none else '?' }}
+  # A target can be an entity Home Assistant holds no state for at all --
+  # a gate, a door controller with no integration -- so falling back to the
+  # target's own id says more than 'Unknown lock' ever would.
   lock_name: >-
-    {{ state_attr(lock_entity_id, 'friendly_name') | default('Unknown lock')
+    {{ state_attr(lock_entity_id, 'friendly_name')
+       | default(lock_entity_id, true)
        if lock_entity_id is not none else 'Unknown lock' }}
   timestamp: >-
     {{ (trigger.to_state.last_updated | as_local
         | as_timestamp | timestamp_custom('%Y-%m-%d %H:%M:%S'))
        if trigger.to_state is not none else '' }}
+  operation: >-
+    {{ trigger.to_state.attributes.operation | default('unknown', true)
+       if trigger.to_state is not none else 'unknown' }}
+  # The entity's event type is the kind of credential presented, not a place.
+  credential_type: >-
+    {{ trigger.to_state.attributes.event_type | default('unknown', true)
+       if trigger.to_state is not none else 'unknown' }}
 
 conditions:
   # Block transitions that aren't real PIN uses:

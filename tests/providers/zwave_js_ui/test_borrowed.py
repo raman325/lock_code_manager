@@ -73,7 +73,9 @@ async def test_the_occupancy_read_returns_the_transport_it_borrowed(
     allocation refuses to issue numbers it could not verify are free.
     """
     with track_zui_transport() as transport:
-        occupancy = await async_read_occupancy(hass, [zui_lock_answering], range(1, 3))
+        occupancy = await async_read_occupancy(
+            hass, None, [zui_lock_answering], range(1, 3)
+        )
 
     assert occupancy.is_known
     assert transport.opened
@@ -93,7 +95,7 @@ async def test_the_capacity_check_returns_the_transport_it_borrowed(
     does not have to remember to add a teardown.
     """
     with track_zui_transport() as transport:
-        await async_check_slot_capacity(hass, [zui_lock_answering], [2])
+        await async_check_slot_capacity(hass, None, [zui_lock_answering], [2])
 
     assert transport.disposed == [zui_lock_answering]
 
@@ -103,7 +105,7 @@ async def test_the_slot_range_query_returns_the_transport_it_borrowed(
 ) -> None:
     """Asking how far the slot numbers go opens the same transport, and closes it."""
     with track_zui_transport() as transport:
-        assert await async_max_slot(hass, [zui_lock_answering]) == (
+        assert await async_max_slot(hass, None, [zui_lock_answering]) == (
             LOCK_CAPACITY,
             zui_lock_answering,
         )
@@ -154,7 +156,7 @@ async def test_a_returned_provider_stops_reporting_keypad_use(
     assert [event.data[ATTR_CODE_SLOT] for event in events] == [1]
 
     # What an options flow does on its way to re-numbering the users.
-    await async_read_occupancy(hass, [zui_lock.lock.entity_id], range(1, 3))
+    await async_read_occupancy(hass, None, [zui_lock.lock.entity_id], range(1, 3))
 
     fire_zui_node_value(hass, KEYPAD_UNLOCK, {"userId": 1})
     await hass.async_block_till_done()
