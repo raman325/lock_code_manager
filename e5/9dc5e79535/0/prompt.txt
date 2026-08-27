@@ -1968,3 +1968,7 @@ I actually think in this case having a separate picker for non native locks is t
 ---
 
 in the selector you can exclude the providers we support from one, and include it from the other
+
+---
+
+as a follow up or in parallel, we should allow for lock_entity_id (or just entity_id) as input for use_credential action which finds the first config entry that has that entity ID as a member with that PIN (so it should return the config entry ID in the return when found probably)
