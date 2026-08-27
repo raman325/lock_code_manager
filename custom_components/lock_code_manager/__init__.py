@@ -689,24 +689,39 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             target=call.data[ATTR_TARGET],
             config_entry_id=call.data.get("config_entry_id"),
             config_entry_title=call.data.get("config_entry_title"),
+            lock_entity_id=call.data.get(ATTR_LOCK_ENTITY_ID),
         )
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_USE_CREDENTIAL,
         _use_credential,
-        schema=_entry_schema(
-            {
-                vol.Required(ATTR_CODE): vol.All(
-                    cv.string, str.strip, vol.Length(min=1)
+        schema=vol.Schema(
+            vol.All(
+                {
+                    **_ENTRY_SELECTOR,
+                    # A third way to name the entry, in the same exclusive
+                    # group: a caller that knows the lock but not which
+                    # configuration manages it hands that lookup over. Two
+                    # ways of naming one entry can disagree, so the schema
+                    # takes one and the action never has to choose.
+                    vol.Exclusive(ATTR_LOCK_ENTITY_ID, "entry"): cv.entity_domain(
+                        "lock"
+                    ),
+                    vol.Required(ATTR_CODE): vol.All(
+                        cv.string, str.strip, vol.Length(min=1)
+                    ),
+                    # Any domain, both of them: a credential is rarely entered
+                    # on a lock, and what it was used against can be a cover, an
+                    # alarm panel, or anything else the caller associates it
+                    # with. Nothing here dereferences either one.
+                    vol.Required(ATTR_SOURCE): cv.entity_id,
+                    vol.Required(ATTR_TARGET): cv.entity_id,
+                },
+                cv.has_at_least_one_key(
+                    "config_entry_id", "config_entry_title", ATTR_LOCK_ENTITY_ID
                 ),
-                # Any domain, both of them: a credential is rarely entered
-                # on a lock, and what it was used against can be a cover, an
-                # alarm panel, or anything else the caller associates it
-                # with. Nothing here dereferences either one.
-                vol.Required(ATTR_SOURCE): cv.entity_id,
-                vol.Required(ATTR_TARGET): cv.entity_id,
-            }
+            )
         ),
         # OPTIONAL, not ONLY, even though the response is the only thing
         # this produces: ONLY makes Home Assistant reject a caller that

@@ -157,6 +157,10 @@ use_credential:
     config_entry_title:
       selector:
         text:
+    lock_entity_id:
+      selector:
+        entity:
+          domain: lock
     code:
       required: true
       selector:
