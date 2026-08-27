@@ -102,6 +102,12 @@ LOCKS_FILTER_CONFIG = [
     sel.EntityFilterSelectorConfig(integration=platform, domain=LOCK_DOMAIN)
     for platform in CONFIG_FLOW_PLATFORMS
 ]
+# Hassfest refuses a literal URL inside a data_description, so the wiki link
+# the codeless picker needs is supplied as a placeholder instead.
+WIKI_EXTERNAL_KEYPADS = (
+    "https://github.com/raman325/lock_code_manager/wiki/External-Keypads"
+)
+
 LOCK_ENTITY_SELECTOR = sel.EntitySelector(
     sel.EntitySelectorConfig(filter=LOCKS_FILTER_CONFIG, multiple=True)
 )
@@ -738,7 +744,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 user_input,
             ),
             errors=errors,
-            description_placeholders=description_placeholders,
+            description_placeholders={
+                **description_placeholders,
+                "wiki_url": WIKI_EXTERNAL_KEYPADS,
+            },
             last_step=False,
         )
 
@@ -1071,7 +1080,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
-            description_placeholders=description_placeholders,
+            description_placeholders={
+                **description_placeholders,
+                "wiki_url": WIKI_EXTERNAL_KEYPADS,
+            },
             last_step=True,
         )
 
@@ -1199,6 +1211,9 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 }
             ),
             errors=errors,
-            description_placeholders=description_placeholders,
+            description_placeholders={
+                **description_placeholders,
+                "wiki_url": WIKI_EXTERNAL_KEYPADS,
+            },
             last_step=True,
         )

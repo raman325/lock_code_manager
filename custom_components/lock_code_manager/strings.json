@@ -61,7 +61,7 @@
         "title": "Lock Code Manager",
         "data_description": {
           "locks": "Locks whose own integration stores the PIN codes, which Lock Code Manager writes to and reads back.",
-          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See https://github.com/raman325/lock_code_manager/wiki/External-Keypads"
+          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See {wiki_url}"
         }
       },
       "yaml": {
@@ -80,7 +80,7 @@
         "title": "Update locks for {name}",
         "data_description": {
           "locks": "Locks whose own integration stores the PIN codes, which Lock Code Manager writes to and reads back.",
-          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See https://github.com/raman325/lock_code_manager/wiki/External-Keypads"
+          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See {wiki_url}"
         }
       }
     }
@@ -175,7 +175,7 @@
         "title": "Lock Code Manager",
         "data_description": {
           "locks": "Locks whose own integration stores the PIN codes, which Lock Code Manager writes to and reads back.",
-          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See https://github.com/raman325/lock_code_manager/wiki/External-Keypads"
+          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See {wiki_url}"
         }
       }
     }

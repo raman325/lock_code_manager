@@ -16,7 +16,10 @@ from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PI
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.config_flow import _check_common_slots
+from custom_components.lock_code_manager.config_flow import (
+    WIKI_EXTERNAL_KEYPADS,
+    _check_common_slots,
+)
 from custom_components.lock_code_manager.const import (
     CONF_CODELESS,
     CONF_CODELESS_LOCKS,
@@ -2309,7 +2312,8 @@ async def test_user_step_rejects_a_lock_the_entity_registry_does_not_know(
     assert result["step_id"] == "user"
     assert result["errors"] == {"base": "lock_not_registered"}
     assert result["description_placeholders"] == {
-        "unregistered_locks": "lock.yaml_only"
+        "unregistered_locks": "lock.yaml_only",
+        "wiki_url": WIKI_EXTERNAL_KEYPADS,
     }
     assert _suggested_values(result) == {
         CONF_NAME: "test",
@@ -2381,7 +2385,10 @@ async def test_user_step_rejects_unclaimed_mqtt_lock(
     assert result["type"] == "form"
     assert result["step_id"] == "user"
     assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
-    assert result["description_placeholders"] == {"locks": unclaimed.entity_id}
+    assert result["description_placeholders"] == {
+        "locks": unclaimed.entity_id,
+        "wiki_url": WIKI_EXTERNAL_KEYPADS,
+    }
     # The refusal comes back holding the name, which means the check ran
     # before the step consumed it.
     assert _suggested_values(result) == {
@@ -2920,7 +2927,10 @@ async def test_an_unclaimed_lock_in_the_ordinary_field_points_at_the_other(
     assert result["type"] == "form"
     assert result["step_id"] == "user"
     assert result["errors"] == {CONF_LOCKS: "unclaimed_lock"}
-    assert result["description_placeholders"] == {"locks": codeless.entity_id}
+    assert result["description_placeholders"] == {
+        "locks": codeless.entity_id,
+        "wiki_url": WIKI_EXTERNAL_KEYPADS,
+    }
 
     # Moving it to the other field is what clears it.
     result = await hass.config_entries.flow.async_configure(
@@ -2972,7 +2982,10 @@ async def test_a_claimed_lock_in_the_codeless_field_is_refused(
     assert result["type"] == "form"
     assert result["step_id"] == "user"
     assert result["errors"] == {CONF_CODELESS_LOCKS: "codeless_lock_claimed"}
-    assert result["description_placeholders"] == {"codeless_locks": unclaimed.entity_id}
+    assert result["description_placeholders"] == {
+        "codeless_locks": unclaimed.entity_id,
+        "wiki_url": WIKI_EXTERNAL_KEYPADS,
+    }
     assert not hass.config_entries.async_entries(DOMAIN)
 
 
@@ -3513,7 +3526,8 @@ async def test_a_second_configuration_may_not_contradict_the_first(
     assert result["step_id"] == "user"
     assert result["errors"] == {CONF_CODELESS_LOCKS: "codeless_conflict"}
     assert result["description_placeholders"] == {
-        "codeless_locks": f"{LOCK_1_ENTITY_ID} (Upstairs Codes)"
+        "codeless_locks": f"{LOCK_1_ENTITY_ID} (Upstairs Codes)",
+        "wiki_url": WIKI_EXTERNAL_KEYPADS,
     }
     # Nothing was created, so there is no second store for the refusal to
     # have been merely cosmetic about.
@@ -3547,7 +3561,8 @@ async def test_declaring_a_lock_another_entry_holds_undeclared_is_refused(
 
     assert result["errors"] == {CONF_CODELESS_LOCKS: "codeless_conflict"}
     assert result["description_placeholders"] == {
-        "codeless_locks": f"{codeless.entity_id} (Upstairs Codes)"
+        "codeless_locks": f"{codeless.entity_id} (Upstairs Codes)",
+        "wiki_url": WIKI_EXTERNAL_KEYPADS,
     }
 
 
