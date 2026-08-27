@@ -930,6 +930,45 @@ async def async_unload_lock(
                 await lock.coordinator.async_shutdown()
 
 
+async def async_release_locks(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_ids: Iterable[str],
+) -> None:
+    """
+    Take locks out of an entry for good.
+
+    Everything that has to happen when a lock stops being this entry's, in one
+    place because there is more than one way for that to happen: the options
+    flow reaches it through the update listener's diff, and reauth reaches it
+    by swapping a lock out. A second copy of this would drift, and what it
+    would drop first is the repair deletion -- the step with no visible
+    symptom when it is missed.
+
+    Requires the entry to be loaded. Reauth can run against an entry that
+    failed setup, where there is no runtime data to release anything from;
+    such an entry never built lock instances, so there is nothing here to do.
+    """
+    if (runtime_data := getattr(config_entry, "runtime_data", None)) is None:
+        return
+    for lock_entity_id in lock_entity_ids:
+        runtime_data.callbacks.invoke_lock_removed_handlers(lock_entity_id)
+        if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
+            # A lock that never got an instance has no teardown to clear its
+            # repair, and removing it from the entry is exactly what that
+            # repair asks the user to do.
+            async_delete_issue(
+                hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
+            )
+        # LCM no longer adds its config entry to the lock's device (its
+        # per-lock entities link to the device via ``device_entry``), so
+        # there is no config-entry association to unmerge here; the per-lock
+        # entities are torn down by ``async_unload_lock`` below.
+        await async_unload_lock(
+            hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
+        )
+
+
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
@@ -1741,22 +1780,7 @@ async def _async_apply_entry_update(
         _LOGGER.debug(
             "%s (%s): Removing locks %s", entry_id, entry_title, locks_to_remove
         )
-    for lock_entity_id in locks_to_remove:
-        callbacks.invoke_lock_removed_handlers(lock_entity_id)
-        if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
-            # A lock that never got an instance has no teardown to clear its
-            # repair, and removing it from the entry is exactly what that
-            # repair asks the user to do.
-            async_delete_issue(
-                hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
-            )
-        # LCM no longer adds its config entry to the lock's device (its
-        # per-lock entities link to the device via ``device_entry``), so
-        # there is no config-entry association to unmerge here; the per-lock
-        # entities are torn down by ``async_unload_lock`` below.
-        await async_unload_lock(
-            hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
-        )
+    await async_release_locks(hass, config_entry, locks_to_remove)
 
     # Create per-slot coordinators for new slots BEFORE setting up new
     # locks. _async_setup_new_locks awaits per-lock connection checks,
