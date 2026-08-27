@@ -169,3 +169,61 @@ use_credential:
       required: true
       selector:
         entity:
+
+set_credential:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:
+    credential_type:
+      required: true
+      default: pin
+      selector:
+        select:
+          translation_key: credential_type
+          options:
+            - pin
+            - rfid
+            - fingerprint
+            - face
+            - password
+            - nfc
+    value:
+      required: true
+      selector:
+        text:
+
+clear_credential:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:
+    credential_type:
+      required: true
+      default: pin
+      selector:
+        select:
+          translation_key: credential_type
+          options:
+            - pin
+            - rfid
+            - fingerprint
+            - face
+            - password
+            - nfc

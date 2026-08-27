@@ -51,9 +51,11 @@ from custom_components.lock_code_manager.const import (
     ATTR_USER,
     ATTR_USERCODE,
     ATTR_VALID,
+    ATTR_VALUE,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
+    CONF_USERS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
     EVENT_LOCK_STATE_CHANGED,
@@ -61,11 +63,13 @@ from custom_components.lock_code_manager.const import (
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
     SERVICE_ADD_USER,
+    SERVICE_CLEAR_CREDENTIAL,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_GENERATE_PIN,
+    SERVICE_SET_CREDENTIAL,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
     SERVICE_USE_CREDENTIAL,
@@ -1779,4 +1783,225 @@ async def test_use_credential_requires_both_attribution_fields(
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(
             DOMAIN, SERVICE_USE_CREDENTIAL, data, blocking=True
+        )
+
+
+async def test_set_credential_updates_the_user_not_just_the_device(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    The credential lands in the configuration, which is the whole point.
+
+    ``set_usercode`` writes straight to a device, so the code it sets is one
+    Lock Code Manager does not know about. This addresses the user, so the
+    entry holds it and the sync carries it to every lock.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CREDENTIAL,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "test1",
+            ATTR_CREDENTIAL_TYPE: "pin",
+            ATTR_VALUE: "4321",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_PIN] == "4321"
+
+
+async def test_set_credential_matches_a_name_the_way_it_is_said(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Case and surrounding whitespace do not have to match what was stored."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CREDENTIAL,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: "  TEST1 ",
+            ATTR_CREDENTIAL_TYPE: "pin",
+            ATTR_VALUE: "4321",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    # Stored under the name it already had, not re-keyed under what was typed.
+    assert config.users["test1"][CONF_PIN] == "4321"
+
+
+async def test_clear_credential_clears_and_disables(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Clearing takes the credential and the user's active state together.
+
+    A user with no credential who still read as enabled would be advertised
+    as able to get in while holding nothing anybody could present. This is
+    the same pairing emptying the PIN field on the dashboard produces.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CLEAR_CREDENTIAL,
+        {
+            "config_entry_title": entry.title,
+            CONF_NAME: "test1",
+            ATTR_CREDENTIAL_TYPE: "pin",
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert not config.users["test1"][CONF_PIN]
+    assert config.users["test1"][CONF_ENABLED] is False
+
+
+@pytest.mark.parametrize(
+    "service,extra",
+    [
+        (SERVICE_SET_CREDENTIAL, {ATTR_VALUE: "4321"}),
+        (SERVICE_CLEAR_CREDENTIAL, {}),
+    ],
+)
+async def test_credential_actions_refuse_an_unknown_user(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    service: str,
+    extra: dict,
+) -> None:
+    """Naming nobody is the caller's mistake, not a silent no-op."""
+    with pytest.raises(ServiceValidationError, match="No user named"):
+        await hass.services.async_call(
+            DOMAIN,
+            service,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Nobody",
+                ATTR_CREDENTIAL_TYPE: "pin",
+                **extra,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_credential_refuses_a_kind_it_cannot_store(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A real credential kind that is not supported yet says so.
+
+    RFID is in the vocabulary because providers report it; Lock Code Manager
+    has nowhere to keep one. The caller should learn that rather than that
+    the word was invalid.
+    """
+    with pytest.raises(ServiceValidationError, match="cannot store"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CREDENTIAL,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "test1",
+                ATTR_CREDENTIAL_TYPE: "rfid",
+                ATTR_VALUE: "abc123",
+            },
+            blocking=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "service,data,replacement",
+    [
+        (
+            SERVICE_SET_USERCODE,
+            {ATTR_CODE_SLOT: 1, ATTR_USERCODE: "4321"},
+            "set_credential",
+        ),
+        (SERVICE_CLEAR_USERCODE, {ATTR_CODE_SLOT: 1}, "clear_credential"),
+    ],
+)
+async def test_the_device_level_actions_say_they_are_deprecated(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+    service: str,
+    data: dict,
+    replacement: str,
+) -> None:
+    """
+    They still work, and they say what to use instead.
+
+    A warning rather than a note, because the caller has something to do
+    about it: these write straight to a device, so the code they set is one
+    Lock Code Manager treats as unmanaged.
+    """
+    caplog.clear()
+    await hass.services.async_call(
+        DOMAIN,
+        service,
+        {ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID, **data},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    deprecations = [
+        record
+        for record in caplog.records
+        if record.levelname == "WARNING" and "deprecated" in record.getMessage()
+    ]
+    assert len(deprecations) == 1
+    assert replacement in deprecations[0].getMessage()
+
+
+async def test_credential_actions_refuse_a_user_holding_no_slot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+) -> None:
+    """
+    A user the configuration never numbered has no credential to change.
+
+    Reachable from stored configuration: a users block with no slot
+    assignment beside it leaves everybody unnumbered, which is exactly the
+    shape ``EntryConfig`` skips when it builds its slot view.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"Unplaced": {CONF_PIN: "1234", CONF_ENABLED: True}},
+        },
+        unique_id="unplaced",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with pytest.raises(ServiceValidationError, match="holds no slot"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CLEAR_CREDENTIAL,
+            {
+                "config_entry_id": entry.entry_id,
+                CONF_NAME: "Unplaced",
+                ATTR_CREDENTIAL_TYPE: "pin",
+            },
+            blocking=True,
         )
