@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "9c4552c2332d",
+  "strategy": "manual-commit",
+  "branch": "refactor/drop-member-declarations",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/9c/4552c2332d/0/metadata.json",
+      "transcript": "/9c/4552c2332d/0/full.jsonl",
+      "compact_transcript": "/9c/4552c2332d/0/transcript.jsonl",
+      "content_hash": "/9c/4552c2332d/0/content_hash.txt",
+      "prompt": "/9c/4552c2332d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1635,
+    "cache_creation_tokens": 4761900,
+    "cache_read_tokens": 362403278,
+    "output_tokens": 749752,
+    "api_call_count": 826,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  }
+}
