@@ -259,3 +259,41 @@ disable_user:
       required: true
       selector:
         text:
+
+set_condition:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - calendar
+            - input_boolean
+            - schedule
+            - switch
+
+clear_condition:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:

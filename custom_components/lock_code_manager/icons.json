@@ -42,6 +42,7 @@
   },
   "services": {
     "add_user": "mdi:account-plus",
+    "clear_condition": "mdi:calendar-remove",
     "clear_credential": "mdi:key-remove",
     "clear_slot_condition": "mdi:calendar-remove",
     "clear_usercode": "mdi:key-remove",
@@ -51,6 +52,7 @@
     "enable_user": "mdi:account-check",
     "generate_pin": "mdi:dice-multiple",
     "hard_refresh_usercodes": "mdi:refresh",
+    "set_condition": "mdi:calendar-edit",
     "set_credential": "mdi:key-plus",
     "set_slot_condition": "mdi:calendar-edit",
     "set_usercode": "mdi:key-plus",

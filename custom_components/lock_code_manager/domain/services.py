@@ -98,27 +98,47 @@ async def async_clear_usercode(
     await lock.async_internal_clear_usercode(code_slot)
 
 
+def _stored_user(config: EntryConfig, name: str) -> str:
+    """
+    Return the name an entry stores for the person ``name`` names.
+
+    Matched the way a user is recognized everywhere else -- whitespace
+    normalized and casefolded -- so a caller may spell the name the way they
+    say it rather than the way it was stored.
+    """
+    stored = next(
+        (known for known in config.users if identity(known) == identity(name)), None
+    )
+    if stored is None:
+        raise ServiceValidationError(f"No user named {name!r} in this config entry")
+    return stored
+
+
+def _slot_for_user(
+    hass: HomeAssistant,
+    name: str,
+    config_entry_id: str | None,
+    config_entry_title: str | None,
+) -> tuple[ConfigEntry, int]:
+    """Return the entry and the slot number the named user occupies."""
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
+    config = get_entry_config(config_entry)
+    stored = _stored_user(config, name)
+    if (slot_num := config.assignment.slot(stored)) is None:
+        raise ServiceValidationError(f"{stored!r} holds no slot in this config entry")
+    return config_entry, slot_num
+
+
 def _slot_coordinator_for(
     hass: HomeAssistant,
     name: str,
     config_entry_id: str | None,
     config_entry_title: str | None,
 ) -> SlotEntityCoordinator:
-    """
-    Return the coordinator for the user ``name`` names in the given entry.
-
-    Matched the way a user is recognized everywhere else -- whitespace
-    normalized and casefolded -- so the caller may spell the name the way
-    they say it rather than the way it was stored.
-    """
+    """Return the coordinator for the slot the named user occupies."""
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
-
-    stored = next(
-        (known for known in config.users if identity(known) == identity(name)), None
-    )
-    if stored is None:
-        raise ServiceValidationError(f"No user named {name!r} in this config entry")
+    stored = _stored_user(config, name)
 
     # One condition for two ways to hold nothing: a user with no number was
     # never placed, and a number with no coordinator is an entry whose slots
@@ -299,6 +319,55 @@ def _async_validate_condition(hass: HomeAssistant, condition: str) -> None:
             "https://github.com/raman325/lock_code_manager/wiki/"
             "Unsupported-Condition-Entity-Integrations"
         )
+
+
+async def async_set_condition(
+    hass: HomeAssistant,
+    name: str,
+    entity_id: str,
+    *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> None:
+    """
+    Attach a condition entity to a user.
+
+    A condition gates a person -- their credential works while it is on --
+    so the person is what this names. ``set_slot_condition`` named the slot
+    number instead, which is internal bookkeeping: an automation holding one
+    goes on addressing that number after somebody else comes to occupy it.
+    """
+    config_entry, slot_num = _slot_for_user(
+        hass, name, config_entry_id, config_entry_title
+    )
+    _async_validate_condition(hass, entity_id)
+
+    new_config = get_entry_config(config_entry).with_slot_field_set(
+        slot_num, CONF_CONDITION, entity_id
+    )
+    await _async_write_and_settle(hass, config_entry, new_config.to_dict())
+
+
+async def async_clear_condition(
+    hass: HomeAssistant,
+    name: str,
+    *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> None:
+    """
+    Detach a user's condition entity, leaving their credential ungated.
+
+    Removing the gate does not disable anybody: a user with no condition is
+    one whose credential simply always applies, which is the ordinary case.
+    """
+    config_entry, slot_num = _slot_for_user(
+        hass, name, config_entry_id, config_entry_title
+    )
+    new_config = get_entry_config(config_entry).with_slot_field_removed(
+        slot_num, CONF_CONDITION
+    )
+    await _async_write_and_settle(hass, config_entry, new_config.to_dict())
 
 
 async def async_set_slot_condition(

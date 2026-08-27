@@ -87,6 +87,7 @@ from .const import (
     PLATFORMS,
     RENAMES_KEY,
     SERVICE_ADD_USER,
+    SERVICE_CLEAR_CONDITION,
     SERVICE_CLEAR_CREDENTIAL,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
@@ -96,6 +97,7 @@ from .const import (
     SERVICE_ENABLE_USER,
     SERVICE_GENERATE_PIN,
     SERVICE_HARD_REFRESH_USERCODES,
+    SERVICE_SET_CONDITION,
     SERVICE_SET_CREDENTIAL,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
@@ -132,12 +134,14 @@ from .domain.queries import get_entry_config
 from .domain.references import async_notify_moved
 from .domain.services import (
     async_add_user,
+    async_clear_condition,
     async_clear_credential,
     async_clear_slot_condition,
     async_clear_usercode,
     async_delete_user,
     async_disable_user,
     async_enable_user,
+    async_set_condition,
     async_set_credential,
     async_set_slot_condition,
     async_set_usercode,
@@ -498,28 +502,32 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
-    def _warn_deprecated(old: str, new: str) -> None:
+    def _warn_deprecated(old: str, new: str, reason: str) -> None:
         """
         Say that a released action has a replacement, once per call.
 
         Warning rather than info because the caller has something to do about
-        it: these write straight to a device, so a code they set is one Lock
-        Code Manager does not know about and the sync may clear back out.
+        it, and ``reason`` says what: each of these addresses a lock slot,
+        which is internal bookkeeping the caller should not have to hold.
         """
         _LOGGER.warning(
             "%s.%s is deprecated and will be removed in a future major "
-            "version. Use %s.%s, which addresses a user rather than a lock "
-            "slot and puts the credential in the configuration so it is "
-            "synced rather than treated as unmanaged",
+            "version. Use %s.%s instead, which %s",
             DOMAIN,
             old,
             DOMAIN,
             new,
+            reason,
         )
 
     async def _set_usercode(service: ServiceCall) -> None:
         """Set a usercode on a lock slot."""
-        _warn_deprecated(SERVICE_SET_USERCODE, SERVICE_SET_CREDENTIAL)
+        _warn_deprecated(
+            SERVICE_SET_USERCODE,
+            SERVICE_SET_CREDENTIAL,
+            "names the user and puts the credential in the configuration, so it is "
+            "synced to every lock rather than treated as a code nobody manages",
+        )
         await async_set_usercode(
             hass,
             service.data[ATTR_LOCK_ENTITY_ID],
@@ -546,7 +554,12 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
     async def _clear_usercode(service: ServiceCall) -> None:
         """Clear a usercode from a lock slot."""
-        _warn_deprecated(SERVICE_CLEAR_USERCODE, SERVICE_CLEAR_CREDENTIAL)
+        _warn_deprecated(
+            SERVICE_CLEAR_USERCODE,
+            SERVICE_CLEAR_CREDENTIAL,
+            "names the user and puts the credential in the configuration, so it is "
+            "synced to every lock rather than treated as a code nobody manages",
+        )
         await async_clear_usercode(
             hass,
             service.data[ATTR_LOCK_ENTITY_ID],
@@ -567,8 +580,54 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
+    async def _set_condition(service: ServiceCall) -> None:
+        """Attach a condition entity to a user."""
+        await async_set_condition(
+            hass,
+            service.data[CONF_NAME],
+            service.data[CONF_ENTITY_ID],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_CONDITION,
+        _set_condition,
+        schema=_entry_schema(
+            {
+                vol.Required(CONF_NAME): cv.string,
+                vol.Required(CONF_ENTITY_ID): cv.entity_domain(
+                    CONDITION_ENTITY_DOMAINS
+                ),
+            }
+        ),
+    )
+
+    async def _clear_condition(service: ServiceCall) -> None:
+        """Detach a user's condition entity."""
+        await async_clear_condition(
+            hass,
+            service.data[CONF_NAME],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_CONDITION,
+        _clear_condition,
+        schema=_entry_schema({vol.Required(CONF_NAME): cv.string}),
+    )
+
     async def _set_slot_condition(service: ServiceCall) -> None:
         """Set a condition entity for a slot."""
+        _warn_deprecated(
+            SERVICE_SET_SLOT_CONDITION,
+            SERVICE_SET_CONDITION,
+            "names the user a condition gates, rather than a slot number that can "
+            "come to hold somebody else",
+        )
         await async_set_slot_condition(
             hass,
             service.data[ATTR_SLOT],
@@ -595,6 +654,12 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
     async def _clear_slot_condition(service: ServiceCall) -> None:
         """Clear the condition entity from a slot."""
+        _warn_deprecated(
+            SERVICE_CLEAR_SLOT_CONDITION,
+            SERVICE_CLEAR_CONDITION,
+            "names the user a condition gates, rather than a slot number that can "
+            "come to hold somebody else",
+        )
         await async_clear_slot_condition(
             hass,
             service.data[ATTR_SLOT],
