@@ -847,7 +847,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                     config_entry_id: 'abc',
                     entity_id: 'input_boolean.test_condition',
                     slot: 1,
-                    type: 'lock_code_manager/set_slot_condition'
+                    type: 'lock_code_manager/set_condition'
                 })
             );
         });
@@ -872,7 +872,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                     config_entry_title: 'My Lock',
                     entity_id: 'switch.cond',
                     slot: 2,
-                    type: 'lock_code_manager/set_slot_condition'
+                    type: 'lock_code_manager/set_condition'
                 })
             );
         });
@@ -883,7 +883,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 expect.objectContaining({
                     config_entry_id: 'abc',
                     slot: 1,
-                    type: 'lock_code_manager/clear_slot_condition'
+                    type: 'lock_code_manager/clear_condition'
                 })
             );
         });
@@ -907,7 +907,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 expect.objectContaining({
                     config_entry_title: 'My Lock',
                     slot: 3,
-                    type: 'lock_code_manager/clear_slot_condition'
+                    type: 'lock_code_manager/clear_condition'
                 })
             );
         });
@@ -969,7 +969,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(callWSMock).toHaveBeenCalledWith(
                 expect.objectContaining({
                     entity_id: 'input_boolean.valid_entity',
-                    type: 'lock_code_manager/set_slot_condition'
+                    type: 'lock_code_manager/set_condition'
                 })
             );
             // Dialog closes immediately once the WS call resolves.
@@ -1011,7 +1011,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             await (card as any)._removeCondition();
             expect(callWSMock).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    type: 'lock_code_manager/clear_slot_condition'
+                    type: 'lock_code_manager/clear_condition'
                 })
             );
             expect((card as any)._showConditionDialog).toBe(false);
@@ -1222,7 +1222,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                     config_entry_id: 'abc',
                     entity_id: 'calendar.vacation',
                     slot: 1,
-                    type: 'lock_code_manager/set_slot_condition'
+                    type: 'lock_code_manager/set_condition'
                 })
             );
             expect((card as any)._showConditionDialog).toBe(false);
@@ -1241,7 +1241,7 @@ describe('LockCodeManagerSlotCard integration', () => {
 
             expect(callWSMock).not.toHaveBeenCalledWith(
                 expect.objectContaining({
-                    type: 'lock_code_manager/set_slot_condition'
+                    type: 'lock_code_manager/set_condition'
                 })
             );
             expect((card as any)._showConditionDialog).toBe(true);

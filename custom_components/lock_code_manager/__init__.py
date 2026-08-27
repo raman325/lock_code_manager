@@ -65,16 +65,12 @@ from homeassistant.util import slugify
 from .const import (
     ATTR_CLEAR_CREDENTIALS,
     ATTR_CODE,
-    ATTR_CODE_SLOT,
     ATTR_CREDENTIAL_TYPE,
     ATTR_ENABLE_IF_DISABLED,
     ATTR_LENGTH,
-    ATTR_LOCK_ENTITY_ID,
-    ATTR_SLOT,
     ATTR_SOURCE,
     ATTR_TARGET,
     ATTR_TEXT,
-    ATTR_USERCODE,
     ATTR_VALUE,
     CONDITION_ENTITY_DOMAINS,
     CONF_CALENDAR,
@@ -89,8 +85,6 @@ from .const import (
     SERVICE_ADD_USER,
     SERVICE_CLEAR_CONDITION,
     SERVICE_CLEAR_CREDENTIAL,
-    SERVICE_CLEAR_SLOT_CONDITION,
-    SERVICE_CLEAR_USERCODE,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_DISABLE_USER,
@@ -99,8 +93,6 @@ from .const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_SET_CONDITION,
     SERVICE_SET_CREDENTIAL,
-    SERVICE_SET_SLOT_CONDITION,
-    SERVICE_SET_USERCODE,
     SERVICE_USE_CREDENTIAL,
     STRATEGY_FILENAME,
     STRATEGY_PATH,
@@ -136,15 +128,11 @@ from .domain.services import (
     async_add_user,
     async_clear_condition,
     async_clear_credential,
-    async_clear_slot_condition,
-    async_clear_usercode,
     async_delete_user,
     async_disable_user,
     async_enable_user,
     async_set_condition,
     async_set_credential,
-    async_set_slot_condition,
-    async_set_usercode,
     async_use_credential,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
@@ -502,84 +490,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
-    def _warn_deprecated(old: str, new: str, reason: str) -> None:
-        """
-        Say that a released action has a replacement, once per call.
-
-        Warning rather than info because the caller has something to do about
-        it, and ``reason`` says what: each of these addresses a lock slot,
-        which is internal bookkeeping the caller should not have to hold.
-        """
-        _LOGGER.warning(
-            "%s.%s is deprecated and will be removed in a future major "
-            "version. Use %s.%s instead, which %s",
-            DOMAIN,
-            old,
-            DOMAIN,
-            new,
-            reason,
-        )
-
-    async def _set_usercode(service: ServiceCall) -> None:
-        """Set a usercode on a lock slot."""
-        _warn_deprecated(
-            SERVICE_SET_USERCODE,
-            SERVICE_SET_CREDENTIAL,
-            "names the user and puts the credential in the configuration, so it is "
-            "synced to every lock rather than treated as a code nobody manages",
-        )
-        await async_set_usercode(
-            hass,
-            service.data[ATTR_LOCK_ENTITY_ID],
-            service.data[ATTR_CODE_SLOT],
-            service.data[ATTR_USERCODE],
-        )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_USERCODE,
-        _set_usercode,
-        schema=vol.Schema(
-            {
-                vol.Required(ATTR_LOCK_ENTITY_ID): cv.entity_domain("lock"),
-                vol.Required(ATTR_CODE_SLOT): vol.All(
-                    vol.Coerce(int), vol.Range(min=1)
-                ),
-                vol.Required(ATTR_USERCODE): vol.All(
-                    cv.string, vol.Strip, vol.Length(min=1)
-                ),
-            }
-        ),
-    )
-
-    async def _clear_usercode(service: ServiceCall) -> None:
-        """Clear a usercode from a lock slot."""
-        _warn_deprecated(
-            SERVICE_CLEAR_USERCODE,
-            SERVICE_CLEAR_CREDENTIAL,
-            "names the user and puts the credential in the configuration, so it is "
-            "synced to every lock rather than treated as a code nobody manages",
-        )
-        await async_clear_usercode(
-            hass,
-            service.data[ATTR_LOCK_ENTITY_ID],
-            service.data[ATTR_CODE_SLOT],
-        )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_CLEAR_USERCODE,
-        _clear_usercode,
-        schema=vol.Schema(
-            {
-                vol.Required(ATTR_LOCK_ENTITY_ID): cv.entity_domain("lock"),
-                vol.Required(ATTR_CODE_SLOT): vol.All(
-                    vol.Coerce(int), vol.Range(min=1)
-                ),
-            }
-        ),
-    )
-
     async def _set_condition(service: ServiceCall) -> None:
         """Attach a condition entity to a user."""
         await async_set_condition(
@@ -618,66 +528,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         SERVICE_CLEAR_CONDITION,
         _clear_condition,
         schema=_entry_schema({vol.Required(CONF_NAME): cv.string}),
-    )
-
-    async def _set_slot_condition(service: ServiceCall) -> None:
-        """Set a condition entity for a slot."""
-        _warn_deprecated(
-            SERVICE_SET_SLOT_CONDITION,
-            SERVICE_SET_CONDITION,
-            "names the user a condition gates, rather than a slot number that can "
-            "come to hold somebody else",
-        )
-        await async_set_slot_condition(
-            hass,
-            service.data[ATTR_SLOT],
-            service.data[CONF_ENTITY_ID],
-            config_entry_id=service.data.get("config_entry_id"),
-            config_entry_title=service.data.get("config_entry_title"),
-        )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_SLOT_CONDITION,
-        _set_slot_condition,
-        schema=_entry_schema(
-            {
-                vol.Required(ATTR_SLOT): vol.All(
-                    vol.Coerce(int), vol.Range(min=1, max=9999)
-                ),
-                vol.Required(CONF_ENTITY_ID): cv.entity_domain(
-                    CONDITION_ENTITY_DOMAINS
-                ),
-            }
-        ),
-    )
-
-    async def _clear_slot_condition(service: ServiceCall) -> None:
-        """Clear the condition entity from a slot."""
-        _warn_deprecated(
-            SERVICE_CLEAR_SLOT_CONDITION,
-            SERVICE_CLEAR_CONDITION,
-            "names the user a condition gates, rather than a slot number that can "
-            "come to hold somebody else",
-        )
-        await async_clear_slot_condition(
-            hass,
-            service.data[ATTR_SLOT],
-            config_entry_id=service.data.get("config_entry_id"),
-            config_entry_title=service.data.get("config_entry_title"),
-        )
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_CLEAR_SLOT_CONDITION,
-        _clear_slot_condition,
-        schema=_entry_schema(
-            {
-                vol.Required(ATTR_SLOT): vol.All(
-                    vol.Coerce(int), vol.Range(min=1, max=9999)
-                ),
-            }
-        ),
     )
 
     async def _set_credential(service: ServiceCall) -> None:

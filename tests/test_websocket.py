@@ -580,7 +580,7 @@ async def test_set_usercode(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/set_usercode",
+            "type": "lock_code_manager/write_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "9999",
@@ -603,7 +603,7 @@ async def test_clear_usercode(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/clear_usercode",
+            "type": "lock_code_manager/clear_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
         }
@@ -625,7 +625,7 @@ async def test_set_usercode_lock_not_found(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/set_usercode",
+            "type": "lock_code_manager/write_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "1234",
@@ -648,7 +648,7 @@ async def test_clear_usercode_lock_not_found(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/clear_usercode",
+            "type": "lock_code_manager/clear_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
             ATTR_CODE_SLOT: 3,
         }
@@ -1095,7 +1095,7 @@ async def test_set_usercode_operation_failure(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_usercode",
+                "type": "lock_code_manager/write_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
                 ATTR_USERCODE: "1234",
@@ -1125,7 +1125,7 @@ async def test_clear_usercode_operation_failure(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/clear_usercode",
+                "type": "lock_code_manager/clear_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
             }
@@ -1161,7 +1161,7 @@ async def test_set_usercode_duplicate_code_error(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_usercode",
+                "type": "lock_code_manager/write_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
                 ATTR_USERCODE: "1234",
@@ -1416,7 +1416,7 @@ async def test_set_usercode_reflects_in_subscribe_lock_codes(
     await ws_client.send_json(
         {
             "id": 2,
-            "type": "lock_code_manager/set_usercode",
+            "type": "lock_code_manager/write_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "7777",
@@ -1484,7 +1484,7 @@ async def test_set_slot_condition_reflects_in_subscribe_code_slot(
     await ws_client.send_json(
         {
             "id": 2,
-            "type": "lock_code_manager/set_slot_condition",
+            "type": "lock_code_manager/set_condition",
             ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "entity_id": condition_entity_id,
@@ -2296,7 +2296,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2330,7 +2330,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 999,
                 "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2357,7 +2357,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "sensor.temperature",
@@ -2380,7 +2380,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "binary_sensor.nonexistent",
@@ -2409,7 +2409,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
                 "slot": 1,
                 "entity_id": INPUT_BOOLEAN_TEST_ENTITY_ID,
@@ -2455,7 +2455,7 @@ class TestSetSlotCondition:
             await ws_client.send_json(
                 {
                     "id": i + 1,
-                    "type": "lock_code_manager/set_slot_condition",
+                    "type": "lock_code_manager/set_condition",
                     ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                     "slot": 1,
                     "entity_id": entity_id,
@@ -2488,7 +2488,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "switch.my_schedule",
@@ -2524,7 +2524,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "schedule.work_hours",
@@ -2556,7 +2556,7 @@ class TestSetSlotCondition:
             await ws_client.send_json(
                 {
                     "id": 1,
-                    "type": "lock_code_manager/set_slot_condition",
+                    "type": "lock_code_manager/set_condition",
                     ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                     "slot": 1,
                     "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2589,7 +2589,7 @@ class TestSetSlotCondition:
             await ws_client.send_json(
                 {
                     "id": 1,
-                    "type": "lock_code_manager/set_slot_condition",
+                    "type": "lock_code_manager/set_condition",
                     ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                     "slot": 1,
                     "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2622,7 +2622,7 @@ class TestClearSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 2,
             }
@@ -2653,7 +2653,7 @@ class TestClearSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
             }
@@ -2674,7 +2674,7 @@ class TestClearSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 999,
             }
@@ -3383,7 +3383,7 @@ class TestAddressingASlotByUser:
         client = await hass_ws_client(hass)
         await client.send_json_auto_id(
             {
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 "config_entry_id": lock_code_manager_config_entry.entry_id,
                 CONF_NAME: "test1",
                 CONF_ENTITY_ID: "binary_sensor.by_name",
@@ -3397,7 +3397,7 @@ class TestAddressingASlotByUser:
 
         await client.send_json_auto_id(
             {
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 "config_entry_id": lock_code_manager_config_entry.entry_id,
                 CONF_NAME: "test1",
             }
@@ -3441,7 +3441,7 @@ class TestAddressingASlotByUser:
         client = await hass_ws_client(hass)
         await client.send_json_auto_id(
             {
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 "config_entry_id": lock_code_manager_config_entry.entry_id,
                 CONF_NAME: "nobody",
             }
@@ -3480,7 +3480,7 @@ class TestAddressingASlotByUser:
         client = await hass_ws_client(hass)
         await client.send_json_auto_id(
             {
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 "config_entry_id": lock_code_manager_config_entry.entry_id,
                 CONF_NAME: "nobody",
                 CONF_ENTITY_ID: "binary_sensor.somewhere",

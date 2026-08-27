@@ -44,8 +44,6 @@
     "add_user": "mdi:account-plus",
     "clear_condition": "mdi:calendar-remove",
     "clear_credential": "mdi:key-remove",
-    "clear_slot_condition": "mdi:calendar-remove",
-    "clear_usercode": "mdi:key-remove",
     "delete_user": "mdi:account-remove",
     "deobfuscate_log": "mdi:incognito-off",
     "disable_user": "mdi:account-cancel",
@@ -54,8 +52,6 @@
     "hard_refresh_usercodes": "mdi:refresh",
     "set_condition": "mdi:calendar-edit",
     "set_credential": "mdi:key-plus",
-    "set_slot_condition": "mdi:calendar-edit",
-    "set_usercode": "mdi:key-plus",
     "use_credential": "mdi:shield-key"
   }
 }

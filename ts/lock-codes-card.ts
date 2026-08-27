@@ -240,14 +240,14 @@ class LockCodesCard extends LockCodesCardBase {
                 await this._hass.connection.sendMessagePromise({
                     code_slot: slotNum,
                     lock_entity_id: this._config.lock_entity_id,
-                    type: 'lock_code_manager/set_usercode',
+                    type: 'lock_code_manager/write_unmanaged_code',
                     usercode
                 });
             } else {
                 await this._hass.connection.sendMessagePromise({
                     code_slot: slotNum,
                     lock_entity_id: this._config.lock_entity_id,
-                    type: 'lock_code_manager/clear_usercode'
+                    type: 'lock_code_manager/clear_unmanaged_code'
                 });
             }
             // Success - exit edit mode
