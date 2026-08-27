@@ -458,23 +458,31 @@ async def test_available_when_no_lock_reports_code_slot_events(
         await hass.config_entries.async_unload(config_entry.entry_id)
 
 
-async def test_unavailable_when_every_lock_is(
+async def test_available_even_when_every_lock_is_not(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
     """
-    The entity follows its entry's locks, the same as every other slot entity.
+    This entity does NOT follow its entry's locks, unlike every other slot entity.
 
-    Blueprint authors rely on that shape: the shipped notifier explicitly
-    rejects the ``unavailable`` -> timestamp transition a recovering lock
-    produces, and would fire spuriously if this entity never went there.
+    A use recorded here need not have come from a lock: ``use_credential``
+    carries uses this integration cannot observe and refuses nothing while
+    the locks are unreachable, so following them would blank the entity
+    exactly when it is holding a use nothing else can report.
+
+    This used to go ``unavailable``, and the shipped blueprints grew guards
+    against the ``unavailable`` -> timestamp transition that produced. Those
+    guards stay -- an entity can still be blanked on reload or removal --
+    but the transition they were written for no longer happens at all. That
+    a recovering lock now notifies nobody is pinned by
+    ``test_lock_recovery_notifies_nobody`` rather than argued from here.
     """
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         hass.states.async_set(lock_entity_id, STATE_UNAVAILABLE)
     await hass.async_block_till_done()
 
-    assert hass.states.get(SLOT_1_EVENT_ENTITY).state == STATE_UNAVAILABLE
+    assert hass.states.get(SLOT_1_EVENT_ENTITY).state != STATE_UNAVAILABLE
 
 
 async def test_the_event_says_which_kind_of_credential_was_used(

@@ -116,6 +116,28 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         }
         return sorted(advertised | MANAGED_CREDENTIAL_TYPES | self._recorded_types)
 
+    @property
+    def available(self) -> bool:
+        """
+        Return True whenever the entry is loaded.
+
+        Deliberately not the shared per-slot rule, which asks whether any of
+        the entry's locks is reachable. A use recorded here need not have
+        come from a lock at all: ``use_credential`` carries uses this
+        integration cannot observe, and refuses nothing when every lock is
+        unreachable -- which is a likely reason to be using it.
+
+        Gating on lock reachability hid those uses twice. The entity read
+        ``unavailable`` while holding the use, and when a lock recovered the
+        use surfaced as an ``unavailable -> <timestamp>`` transition, which
+        consumers discard on purpose as lock recovery rather than a use.
+
+        What a lock being down actually means is reported by that lock's own
+        entity and by the slot's in-sync sensor, neither of which this
+        answer speaks for.
+        """
+        return True
+
     @callback
     def _credential_used_filter(self, event_data: dict[str, Any]) -> bool:
         """

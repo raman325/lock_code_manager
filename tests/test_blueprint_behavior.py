@@ -23,7 +23,7 @@ from pytest_homeassistant_custom_component.common import (
 from homeassistant.components import automation
 from homeassistant.components.blueprint import models
 from homeassistant.components.template import config as template_config
-from homeassistant.const import ATTR_FRIENDLY_NAME
+from homeassistant.const import ATTR_FRIENDLY_NAME, STATE_UNAVAILABLE
 from homeassistant.core import Event, HomeAssistant, ServiceCall, State, callback
 from homeassistant.helpers import entity_registry as er, template
 from homeassistant.setup import async_setup_component
@@ -1270,3 +1270,158 @@ async def test_credential_used_config_entry_filter(
     await hass.async_block_till_done()
 
     assert len(captured) == (1 if matches else 0)
+
+
+async def test_limiter_ignores_recovery_from_unavailable(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Coming back from `unavailable` is not a use.
+
+    The state object still carries the LAST recorded use's attributes when
+    the entity returns, so an `operation` filter alone cannot tell a
+    recovery from a fresh use -- it reads the old use's operation and
+    passes. Nobody entered a code here, so nothing may be spent.
+    """
+    counter = await _setup_counter(hass, initial=3)
+    await _setup_blueprint_automation(
+        hass,
+        LIMITER_PATH,
+        {
+            "pin_used_entity": SLOT_1_EVENT_ENTITY,
+            "enabled_switch": SLOT_1_ENABLED_ENTITY,
+            "uses_counter": counter,
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1, to_locked=False)
+    await hass.async_block_till_done()
+    assert float(hass.states.get(counter).state) == 2
+
+    # Driven directly rather than through lock availability: this pins the
+    # blueprint's contract about the transition, whatever produced it.
+    recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
+    hass.states.async_set(SLOT_1_EVENT_ENTITY, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+    hass.states.async_set(
+        SLOT_1_EVENT_ENTITY, recorded.state, dict(recorded.attributes)
+    )
+    await hass.async_block_till_done()
+
+    assert float(hass.states.get(counter).state) == 2
+
+
+async def test_limiter_ignores_first_appearance(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    An entity appearing for the first time is not a use.
+
+    After a restart or a reload the entity is restored with the last use it
+    recorded, which arrives as a transition from nothing. The notifier
+    guards `from_state is None`; the limiter has to as well or every reload
+    spends a use.
+    """
+    counter = await _setup_counter(hass, initial=3)
+    await _setup_blueprint_automation(
+        hass,
+        LIMITER_PATH,
+        {
+            "pin_used_entity": SLOT_1_EVENT_ENTITY,
+            "enabled_switch": SLOT_1_ENABLED_ENTITY,
+            "uses_counter": counter,
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1, to_locked=False)
+    await hass.async_block_till_done()
+    recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert float(hass.states.get(counter).state) == 2
+
+    hass.states.async_remove(SLOT_1_EVENT_ENTITY)
+    await hass.async_block_till_done()
+    hass.states.async_set(
+        SLOT_1_EVENT_ENTITY, recorded.state, dict(recorded.attributes)
+    )
+    await hass.async_block_till_done()
+
+    assert float(hass.states.get(counter).state) == 2
+
+
+async def test_reported_use_is_visible_while_every_lock_is_down(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A use reported while no lock is reachable still reaches consumers.
+
+    ``use_credential`` exists for uses this integration cannot observe, and
+    it refuses nothing when the locks are unreachable -- so gating the
+    entity that carries those uses on lock reachability hides them exactly
+    when the mechanism is most likely to be in use. It hides them twice
+    over: the use arrives later as an ``unavailable -> <timestamp>``
+    transition, which consumers deliberately discard as lock recovery.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured", "data": {}}],
+        },
+    )
+
+    for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        hass.states.async_set(lock_entity_id, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+
+    await _use_credential(hass, lock_code_manager_config_entry)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state is not None
+    assert state.state != STATE_UNAVAILABLE
+    assert len(captured) == 1
+
+
+async def test_lock_recovery_notifies_nobody(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A lock coming back is not a use, and must reach no consumer as one.
+
+    This is the property the entity's old lock-following availability was
+    protecting, kept after that availability was removed: the guarantee is
+    now that a recovering lock produces no transition on this entity at
+    all, rather than one the blueprints have to recognise and discard.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured", "data": {}}],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert len(captured) == 1
+
+    for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        hass.states.async_set(lock_entity_id, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+    for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        hass.states.async_set(lock_entity_id, "locked")
+    await hass.async_block_till_done()
+
+    assert len(captured) == 1
