@@ -21,7 +21,7 @@ from ..const import (
 )
 from .allocation import SlotAllocationError, async_allocate_for
 from .config import EntryConfig
-from .credentials import CredentialType
+from .credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from .events import (
     CredentialOperation,
     async_fire_credential_used,
@@ -29,6 +29,7 @@ from .events import (
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry
+from .slot_coordinator import SlotEntityCoordinator
 from .validation import validate_credential
 
 _LOGGER = logging.getLogger(__name__)
@@ -95,6 +96,133 @@ async def async_clear_usercode(
     """Clear a usercode from a lock slot."""
     lock = get_managed_lock(hass, lock_entity_id)
     await lock.async_internal_clear_usercode(code_slot)
+
+
+def _slot_coordinator_for(
+    hass: HomeAssistant,
+    name: str,
+    config_entry_id: str | None,
+    config_entry_title: str | None,
+) -> SlotEntityCoordinator:
+    """
+    Return the coordinator for the user ``name`` names in the given entry.
+
+    Matched the way a user is recognized everywhere else -- whitespace
+    normalized and casefolded -- so the caller may spell the name the way
+    they say it rather than the way it was stored.
+    """
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
+    config = get_entry_config(config_entry)
+
+    stored = next(
+        (known for known in config.users if identity(known) == identity(name)), None
+    )
+    if stored is None:
+        raise ServiceValidationError(f"No user named {name!r} in this config entry")
+
+    # One condition for two ways to hold nothing: a user with no number was
+    # never placed, and a number with no coordinator is an entry whose slots
+    # and configuration disagree. Both mean there is no slot here to write to
+    # or clear, and neither is worth telling apart in the message.
+    slot_num = config.assignment.slot(stored)
+    coordinators = config_entry.runtime_data.slot_coordinators
+    if slot_num is None or (coordinator := coordinators.get(slot_num)) is None:
+        raise ServiceValidationError(f"{stored!r} holds no slot in this config entry")
+    return coordinator
+
+
+def _managed_credential_type(credential_type: str) -> CredentialType:
+    """
+    Return the credential type, refusing kinds this integration cannot write.
+
+    Every member of ``CredentialType`` is accepted by the schema so the
+    vocabulary is the providers' rather than this action's, and the ones Lock
+    Code Manager cannot yet store are refused here instead -- the caller
+    learns that RFID is a real kind that is not supported yet, rather than
+    that the word is invalid.
+    """
+    kind = CredentialType(credential_type)
+    if kind not in MANAGED_CREDENTIAL_TYPES:
+        supported = ", ".join(sorted(MANAGED_CREDENTIAL_TYPES))
+        raise ServiceValidationError(
+            f"Lock Code Manager cannot store a {kind} credential. "
+            f"Supported: {supported}"
+        )
+    return kind
+
+
+async def async_set_credential(
+    hass: HomeAssistant,
+    name: str,
+    *,
+    credential_type: str,
+    value: str,
+    enable_if_disabled: bool = False,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> None:
+    """
+    Set one of a user's credentials, and let the sync carry it to the locks.
+
+    Addresses the user rather than a lock and a slot number. What that buys
+    over ``set_usercode`` is that the credential ends up in the
+    configuration: a code written straight to a device is one Lock Code
+    Manager does not know about, which the sync may clear back out, and which
+    cannot reach a member holding its credentials here rather than on a
+    device.
+
+    Routed through the slot's coordinator rather than written to the entry,
+    because that is the authoritative gate for a credential write -- it strips
+    whitespace and validates the length against every bound lock. Writing the
+    configuration directly here would be a second path that skips both.
+
+    ``enable_if_disabled`` turns the user on afterwards, which is what makes this the
+    inverse of :func:`async_clear_credential` rather than half of it: clearing
+    a credential disables the user, so setting one on somebody cleared earlier
+    would otherwise leave a code that is present and inert. Off by default,
+    because giving a user a credential and letting them in are different
+    decisions and only the caller knows whether they are making both.
+
+    Not a field written alongside the PIN: enabling has its own rules -- it
+    refuses a user with no credential and clears the repair issue raised when
+    that happened -- and the second call is what runs them.
+    """
+    # Not checked for emptiness here: the schema strips and requires at least
+    # one character, so an empty value never reaches this. Repeating that gate
+    # would be a branch nothing can take.
+    _managed_credential_type(credential_type)
+    coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
+    await coordinator.async_request_pin_update(value)
+    if enable_if_disabled:
+        # Safe in this order, and only in this order: the write above refreshes
+        # the entry's cached config before returning, so the PIN this checks
+        # for is the one just set.
+        await coordinator.async_request_active_toggle(True)
+
+
+async def async_clear_credential(
+    hass: HomeAssistant,
+    name: str,
+    *,
+    credential_type: str,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> None:
+    """
+    Clear one of a user's credentials from the configuration and the locks.
+
+    The type is named rather than assumed because one user may eventually
+    hold more than one kind, and clearing their PIN must not take their tag
+    with it.
+
+    **This disables the user**, which is the same thing emptying their PIN
+    field on the dashboard does: a user with no credential and nothing
+    disabled would read as active while holding nothing anybody could
+    present.
+    """
+    _managed_credential_type(credential_type)
+    coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
+    await coordinator.async_request_pin_update("")
 
 
 async def async_use_credential(

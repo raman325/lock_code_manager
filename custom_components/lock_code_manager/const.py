@@ -24,6 +24,8 @@ SERVICE_DELETE_USER = "delete_user"
 SERVICE_GENERATE_PIN = "generate_pin"
 SERVICE_DEOBFUSCATE_LOG = "deobfuscate_log"
 SERVICE_USE_CREDENTIAL = "use_credential"
+SERVICE_SET_CREDENTIAL = "set_credential"
+SERVICE_CLEAR_CREDENTIAL = "clear_credential"
 
 ATTR_TEXT = "text"
 
@@ -35,6 +37,15 @@ ATTR_CREDENTIAL_TYPE = "credential_type"
 # shape depends on the user's name and on the language it was created in.
 ATTR_SLOT_FIELD = "slot_field"
 ATTR_USERCODE = "usercode"
+# The credential itself on set_credential. Not ``usercode``: that name is
+# PIN-shaped, and this field carries whatever the credential type is.
+ATTR_VALUE = "value"
+# Opt-in on set_credential: turn the user on once the credential is set.
+# Named for the effect rather than the state -- ``enabled: false`` would read
+# as a request to disable somebody, which this never does. Enabling a user who
+# already is costs nothing, so there is no guard behind the name: the write is
+# a no-op when the value has not changed.
+ATTR_ENABLE_IF_DISABLED = "enable_if_disabled"
 ATTR_FROM = "from"
 ATTR_TO = "to"
 ATTR_LCM_CONFIG_ENTRY_ID = "lock_code_manager_config_entry_id"

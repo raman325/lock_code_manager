@@ -66,6 +66,8 @@ from .const import (
     ATTR_CLEAR_CREDENTIALS,
     ATTR_CODE,
     ATTR_CODE_SLOT,
+    ATTR_CREDENTIAL_TYPE,
+    ATTR_ENABLE_IF_DISABLED,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
@@ -73,6 +75,7 @@ from .const import (
     ATTR_TARGET,
     ATTR_TEXT,
     ATTR_USERCODE,
+    ATTR_VALUE,
     CONDITION_ENTITY_DOMAINS,
     CONF_CALENDAR,
     CONF_SLOTS,
@@ -84,12 +87,14 @@ from .const import (
     PLATFORMS,
     RENAMES_KEY,
     SERVICE_ADD_USER,
+    SERVICE_CLEAR_CREDENTIAL,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_GENERATE_PIN,
     SERVICE_HARD_REFRESH_USERCODES,
+    SERVICE_SET_CREDENTIAL,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
     SERVICE_USE_CREDENTIAL,
@@ -104,6 +109,7 @@ from .domain.config import (
     parse_slot_device_identifier,
     parse_slot_unique_id,
 )
+from .domain.credentials import CredentialType
 from .domain.exceptions import (
     LockDisconnected,
     LockOperationFailed,
@@ -124,9 +130,11 @@ from .domain.queries import get_entry_config
 from .domain.references import async_notify_moved
 from .domain.services import (
     async_add_user,
+    async_clear_credential,
     async_clear_slot_condition,
     async_clear_usercode,
     async_delete_user,
+    async_set_credential,
     async_set_slot_condition,
     async_set_usercode,
     async_use_credential,
@@ -486,8 +494,28 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
+    def _warn_deprecated(old: str, new: str) -> None:
+        """
+        Say that a released action has a replacement, once per call.
+
+        Warning rather than info because the caller has something to do about
+        it: these write straight to a device, so a code they set is one Lock
+        Code Manager does not know about and the sync may clear back out.
+        """
+        _LOGGER.warning(
+            "%s.%s is deprecated and will be removed in a future major "
+            "version. Use %s.%s, which addresses a user rather than a lock "
+            "slot and puts the credential in the configuration so it is "
+            "synced rather than treated as unmanaged",
+            DOMAIN,
+            old,
+            DOMAIN,
+            new,
+        )
+
     async def _set_usercode(service: ServiceCall) -> None:
         """Set a usercode on a lock slot."""
+        _warn_deprecated(SERVICE_SET_USERCODE, SERVICE_SET_CREDENTIAL)
         await async_set_usercode(
             hass,
             service.data[ATTR_LOCK_ENTITY_ID],
@@ -514,6 +542,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
     async def _clear_usercode(service: ServiceCall) -> None:
         """Clear a usercode from a lock slot."""
+        _warn_deprecated(SERVICE_CLEAR_USERCODE, SERVICE_CLEAR_CREDENTIAL)
         await async_clear_usercode(
             hass,
             service.data[ATTR_LOCK_ENTITY_ID],
@@ -578,6 +607,63 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 vol.Required(ATTR_SLOT): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=9999)
                 ),
+            }
+        ),
+    )
+
+    async def _set_credential(service: ServiceCall) -> None:
+        """Set one of a user's credentials."""
+        await async_set_credential(
+            hass,
+            service.data[CONF_NAME],
+            credential_type=service.data[ATTR_CREDENTIAL_TYPE],
+            value=service.data[ATTR_VALUE],
+            enable_if_disabled=service.data[ATTR_ENABLE_IF_DISABLED],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_CREDENTIAL,
+        _set_credential,
+        schema=_entry_schema(
+            {
+                vol.Required(CONF_NAME): cv.string,
+                # The whole vocabulary, not just what can be stored today.
+                # A kind this integration cannot yet write is refused by the
+                # handler with a message saying so, which reads better than
+                # the schema calling a real credential kind invalid.
+                vol.Required(ATTR_CREDENTIAL_TYPE): vol.Coerce(CredentialType),
+                # Stripped for the reason every other credential field is: a
+                # submitted code is stripped before it is matched, so padding
+                # kept here makes a credential nothing typed can match.
+                vol.Required(ATTR_VALUE): vol.All(
+                    cv.string, vol.Strip, vol.Length(min=1)
+                ),
+                vol.Optional(ATTR_ENABLE_IF_DISABLED, default=False): cv.boolean,
+            }
+        ),
+    )
+
+    async def _clear_credential(service: ServiceCall) -> None:
+        """Clear one of a user's credentials."""
+        await async_clear_credential(
+            hass,
+            service.data[CONF_NAME],
+            credential_type=service.data[ATTR_CREDENTIAL_TYPE],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_CREDENTIAL,
+        _clear_credential,
+        schema=_entry_schema(
+            {
+                vol.Required(CONF_NAME): cv.string,
+                vol.Required(ATTR_CREDENTIAL_TYPE): vol.Coerce(CredentialType),
             }
         ),
     )

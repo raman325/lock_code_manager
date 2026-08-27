@@ -186,6 +186,28 @@
         }
       }
     },
+    "clear_credential": {
+      "name": "Clear credential",
+      "description": "Remove one of a person's credentials from a Lock Code Manager config entry and from every lock in it. This also disables the person, the same as emptying their PIN on the dashboard does.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry the person belongs to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person whose credential this is. Matched ignoring case and surrounding whitespace, so it need not be spelled exactly as stored."
+        },
+        "credential_type": {
+          "name": "Credential type",
+          "description": "Which kind of credential. Only PIN can be stored today; the others are refused with a message saying so."
+        }
+      }
+    },
     "clear_slot_condition": {
       "name": "Clear slot condition",
       "description": "Remove a code slot's condition entity, leaving its PIN active whenever the slot is enabled.",
@@ -263,6 +285,36 @@
     "hard_refresh_usercodes": {
       "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
       "name": "Hard refresh usercodes"
+    },
+    "set_credential": {
+      "name": "Set credential",
+      "description": "Set one of a person's credentials in a Lock Code Manager config entry. The credential is stored in the configuration and synced to every lock in the entry, so it is managed rather than treated as an unknown code somebody programmed.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry the person belongs to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person whose credential this is. Matched ignoring case and surrounding whitespace, so it need not be spelled exactly as stored."
+        },
+        "credential_type": {
+          "name": "Credential type",
+          "description": "Which kind of credential. Only PIN can be stored today; the others are refused with a message saying so."
+        },
+        "value": {
+          "name": "Value",
+          "description": "The credential itself — the PIN, for a PIN credential. Surrounding whitespace is stripped."
+        },
+        "enable_if_disabled": {
+          "name": "Enable if disabled",
+          "description": "Turn this person on once the credential is set. Off by default, so somebody disabled stays disabled and their new credential is inert until you enable them. Never disables anybody."
+        }
+      }
     },
     "set_slot_condition": {
       "name": "Set slot condition",
@@ -429,6 +481,18 @@
     },
     "slot_out_of_range": {
       "message": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}."
+    }
+  },
+  "selector": {
+    "credential_type": {
+      "options": {
+        "pin": "PIN",
+        "rfid": "RFID tag or card",
+        "fingerprint": "Fingerprint",
+        "face": "Face",
+        "password": "Password",
+        "nfc": "NFC tag"
+      }
     }
   }
 }
