@@ -29,7 +29,7 @@ from .events import (
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry
-from .slot_coordinator import SlotEntityCoordinator
+from .slot_coordinator import PinRequiredError, SlotEntityCoordinator
 from .validation import validate_credential
 
 _LOGGER = logging.getLogger(__name__)
@@ -336,6 +336,51 @@ async def async_clear_slot_condition(
 
     new_config = config.with_slot_field_removed(slot, CONF_CONDITION)
     await _async_write_and_settle(hass, config_entry, new_config.to_dict())
+
+
+async def async_enable_user(
+    hass: HomeAssistant,
+    name: str,
+    *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> None:
+    """
+    Turn a user on, so their credential is written to the entry's locks.
+
+    Refuses a user holding no credential, because enabling one would
+    advertise somebody as able to get in while they hold nothing anybody
+    could present. That rule lives in the coordinator, which is also what
+    clears the repair issue raised the last time it was hit -- so this goes
+    through the same path the dashboard switch does rather than writing the
+    field itself.
+    """
+    coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
+    try:
+        await coordinator.async_request_active_toggle(True)
+    except PinRequiredError as err:
+        # Not a HomeAssistantError, so it would surface as an internal error
+        # rather than as the caller's problem, which is what it is.
+        raise ServiceValidationError(str(err)) from err
+
+
+async def async_disable_user(
+    hass: HomeAssistant,
+    name: str,
+    *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> None:
+    """
+    Turn a user off, and clear their credential from the entry's locks.
+
+    Unconditional, unlike enabling: there is no state a user can be in that
+    makes turning them off invalid. Their credential stays in the
+    configuration, so enabling them again restores it without anybody
+    having to remember what it was.
+    """
+    coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
+    await coordinator.async_request_active_toggle(False)
 
 
 async def async_add_user(

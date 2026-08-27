@@ -272,6 +272,42 @@
         }
       }
     },
+    "disable_user": {
+      "name": "Disable user",
+      "description": "Turn a person off and clear their credential from the entry's locks. Their credential stays in the configuration, so enabling them again restores it.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry the person belongs to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person. Matched ignoring case and surrounding whitespace, so it need not be spelled exactly as stored."
+        }
+      }
+    },
+    "enable_user": {
+      "name": "Enable user",
+      "description": "Turn a person on, so their credential is written to the entry's locks. Refused if they hold no credential — there would be nothing to write.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry the person belongs to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person. Matched ignoring case and surrounding whitespace, so it need not be spelled exactly as stored."
+        }
+      }
+    },
     "generate_pin": {
       "description": "Generate a random PIN that avoids known unsafe patterns (all-same digits, sequential digits, repeating sub-sequences, and common weak PINs). Returns the PIN via response_variable.",
       "name": "Generate PIN",

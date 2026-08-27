@@ -47,6 +47,8 @@
     "clear_usercode": "mdi:key-remove",
     "delete_user": "mdi:account-remove",
     "deobfuscate_log": "mdi:incognito-off",
+    "disable_user": "mdi:account-cancel",
+    "enable_user": "mdi:account-check",
     "generate_pin": "mdi:dice-multiple",
     "hard_refresh_usercodes": "mdi:refresh",
     "set_credential": "mdi:key-plus",

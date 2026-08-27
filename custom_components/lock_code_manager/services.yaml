@@ -231,3 +231,31 @@ clear_credential:
             - face
             - password
             - nfc
+
+enable_user:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:
+
+disable_user:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:

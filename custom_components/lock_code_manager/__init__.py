@@ -92,6 +92,8 @@ from .const import (
     SERVICE_CLEAR_USERCODE,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
+    SERVICE_DISABLE_USER,
+    SERVICE_ENABLE_USER,
     SERVICE_GENERATE_PIN,
     SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_SET_CREDENTIAL,
@@ -134,6 +136,8 @@ from .domain.services import (
     async_clear_slot_condition,
     async_clear_usercode,
     async_delete_user,
+    async_disable_user,
+    async_enable_user,
     async_set_credential,
     async_set_slot_condition,
     async_set_usercode,
@@ -667,6 +671,35 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             }
         ),
     )
+
+    async def _enable_user(service: ServiceCall) -> None:
+        """Turn a user on."""
+        await async_enable_user(
+            hass,
+            service.data[CONF_NAME],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
+        )
+
+    async def _disable_user(service: ServiceCall) -> None:
+        """Turn a user off."""
+        await async_disable_user(
+            hass,
+            service.data[CONF_NAME],
+            config_entry_id=service.data.get("config_entry_id"),
+            config_entry_title=service.data.get("config_entry_title"),
+        )
+
+    for _service_name, _handler in (
+        (SERVICE_ENABLE_USER, _enable_user),
+        (SERVICE_DISABLE_USER, _disable_user),
+    ):
+        hass.services.async_register(
+            DOMAIN,
+            _service_name,
+            _handler,
+            schema=_entry_schema({vol.Required(CONF_NAME): cv.string}),
+        )
 
     async def _add_user(service: ServiceCall) -> None:
         """Add a user to an entry."""

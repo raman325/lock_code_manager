@@ -69,6 +69,8 @@ from custom_components.lock_code_manager.const import (
     SERVICE_CLEAR_USERCODE,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
+    SERVICE_DISABLE_USER,
+    SERVICE_ENABLE_USER,
     SERVICE_GENERATE_PIN,
     SERVICE_SET_CREDENTIAL,
     SERVICE_SET_SLOT_CONDITION,
@@ -2075,3 +2077,81 @@ async def test_set_credential_can_enable_in_the_same_call(
     config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
     assert config.users["test1"][CONF_PIN] == "4321"
     assert config.users["test1"][CONF_ENABLED] is True
+
+
+async def test_disable_and_enable_a_user_round_trip(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Turning somebody off keeps their credential, so turning them on restores it.
+
+    The point of a disable that is not a delete: nobody has to remember what
+    the code was to give it back.
+    """
+    entry = lock_code_manager_config_entry
+    common = {"config_entry_id": entry.entry_id, CONF_NAME: "test1"}
+
+    await hass.services.async_call(DOMAIN, SERVICE_DISABLE_USER, common, blocking=True)
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_ENABLED] is False
+    assert config.users["test1"][CONF_PIN] == "1234"
+
+    await hass.services.async_call(DOMAIN, SERVICE_ENABLE_USER, common, blocking=True)
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_ENABLED] is True
+    assert config.users["test1"][CONF_PIN] == "1234"
+
+
+async def test_enable_user_refuses_somebody_holding_no_credential(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Enabling a user with nothing to present is refused, not silently allowed.
+
+    Otherwise the configuration would advertise somebody as able to get in
+    while holding no credential. The refusal has to arrive as the caller's
+    problem: the coordinator raises a bare exception, which would surface as
+    an internal error if it were not translated.
+    """
+    entry = lock_code_manager_config_entry
+    common = {"config_entry_id": entry.entry_id, CONF_NAME: "test1"}
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CLEAR_CREDENTIAL,
+        {**common, ATTR_CREDENTIAL_TYPE: "pin"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    with pytest.raises(ServiceValidationError, match="Set a PIN"):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_ENABLE_USER, common, blocking=True
+        )
+
+
+async def test_user_actions_match_a_name_the_way_it_is_said(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Addressing the person by name means not needing their entity IDs."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DISABLE_USER,
+        {"config_entry_title": entry.title, CONF_NAME: "  TEST1 "},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_ENABLED] is False
