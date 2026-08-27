@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "346920012bd9",
+  "strategy": "manual-commit",
+  "branch": "pr4-codeless-locks",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/34/6920012bd9/0/metadata.json",
+      "transcript": "/34/6920012bd9/0/full.jsonl",
+      "compact_transcript": "/34/6920012bd9/0/transcript.jsonl",
+      "content_hash": "/34/6920012bd9/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 30984,
+    "cache_read_tokens": 28969881,
+    "output_tokens": 14347,
+    "api_call_count": 30
+  }
+}
