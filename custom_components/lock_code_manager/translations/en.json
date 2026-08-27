@@ -186,6 +186,24 @@
         }
       }
     },
+    "clear_condition": {
+      "name": "Clear condition",
+      "description": "Detach a person's condition entity, so their credential always applies. Does not disable them. Replaces Clear slot condition, which named a slot number rather than the person.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry the person belongs to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person whose credential the condition gates. Matched ignoring case and surrounding whitespace."
+        }
+      }
+    },
     "clear_credential": {
       "name": "Clear credential",
       "description": "Remove one of a person's credentials from a Lock Code Manager config entry and from every lock in it. This also disables the person, the same as emptying their PIN on the dashboard does.",
@@ -210,7 +228,7 @@
     },
     "clear_slot_condition": {
       "name": "Clear slot condition",
-      "description": "Remove a code slot's condition entity, leaving its PIN active whenever the slot is enabled.",
+      "description": "Deprecated — use Clear condition instead, which names the person rather than a slot number that can come to hold somebody else. Still works, and logs a warning. Remove a code slot's condition entity, leaving its PIN active whenever the slot is enabled.",
       "fields": {
         "config_entry_id": {
           "name": "Config entry",
@@ -272,6 +290,42 @@
         }
       }
     },
+    "disable_user": {
+      "name": "Disable user",
+      "description": "Turn a person off and clear their credential from the entry's locks. Their credential stays in the configuration, so enabling them again restores it.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry the person belongs to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person. Matched ignoring case and surrounding whitespace, so it need not be spelled exactly as stored."
+        }
+      }
+    },
+    "enable_user": {
+      "name": "Enable user",
+      "description": "Turn a person on, so their credential is written to the entry's locks. Refused if they hold no credential — there would be nothing to write.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry the person belongs to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person. Matched ignoring case and surrounding whitespace, so it need not be spelled exactly as stored."
+        }
+      }
+    },
     "generate_pin": {
       "description": "Generate a random PIN that avoids known unsafe patterns (all-same digits, sequential digits, repeating sub-sequences, and common weak PINs). Returns the PIN via response_variable.",
       "name": "Generate PIN",
@@ -285,6 +339,28 @@
     "hard_refresh_usercodes": {
       "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
       "name": "Hard refresh usercodes"
+    },
+    "set_condition": {
+      "name": "Set condition",
+      "description": "Attach a condition entity to a person. Their credential works while the condition is on. Replaces Set slot condition, which named a slot number rather than the person.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "The Lock Code Manager entry the person belongs to."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
+        "name": {
+          "name": "Name",
+          "description": "The person whose credential the condition gates. Matched ignoring case and surrounding whitespace."
+        },
+        "entity_id": {
+          "name": "Condition entity",
+          "description": "The calendar, schedule, switch or binary sensor that gates this person's credential."
+        }
+      }
     },
     "set_credential": {
       "name": "Set credential",
@@ -318,7 +394,7 @@
     },
     "set_slot_condition": {
       "name": "Set slot condition",
-      "description": "Attach a condition entity to a code slot. The slot's PIN is active only while that entity says so.",
+      "description": "Deprecated — use Set condition instead, which names the person rather than a slot number that can come to hold somebody else. Still works, and logs a warning. Attach a condition entity to a code slot. The slot's PIN is active only while that entity says so.",
       "fields": {
         "config_entry_id": {
           "name": "Config entry",

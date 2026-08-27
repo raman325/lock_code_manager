@@ -26,6 +26,10 @@ SERVICE_DEOBFUSCATE_LOG = "deobfuscate_log"
 SERVICE_USE_CREDENTIAL = "use_credential"
 SERVICE_SET_CREDENTIAL = "set_credential"
 SERVICE_CLEAR_CREDENTIAL = "clear_credential"
+SERVICE_ENABLE_USER = "enable_user"
+SERVICE_DISABLE_USER = "disable_user"
+SERVICE_SET_CONDITION = "set_condition"
+SERVICE_CLEAR_CONDITION = "clear_condition"
 
 ATTR_TEXT = "text"
 

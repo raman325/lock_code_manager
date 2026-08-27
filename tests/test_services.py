@@ -64,12 +64,16 @@ from custom_components.lock_code_manager.const import (
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
     SERVICE_ADD_USER,
+    SERVICE_CLEAR_CONDITION,
     SERVICE_CLEAR_CREDENTIAL,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
+    SERVICE_DISABLE_USER,
+    SERVICE_ENABLE_USER,
     SERVICE_GENERATE_PIN,
+    SERVICE_SET_CONDITION,
     SERVICE_SET_CREDENTIAL,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
@@ -1995,6 +1999,8 @@ async def test_credential_actions_refuse_a_user_holding_no_slot(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
+    # Both name-addressed paths: the one that resolves a coordinator, and
+    # the one that only needs the number.
     with pytest.raises(ServiceValidationError, match="holds no slot"):
         await hass.services.async_call(
             DOMAIN,
@@ -2004,6 +2010,14 @@ async def test_credential_actions_refuse_a_user_holding_no_slot(
                 CONF_NAME: "Unplaced",
                 ATTR_CREDENTIAL_TYPE: "pin",
             },
+            blocking=True,
+        )
+
+    with pytest.raises(ServiceValidationError, match="holds no slot"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CLEAR_CONDITION,
+            {"config_entry_id": entry.entry_id, CONF_NAME: "Unplaced"},
             blocking=True,
         )
 
@@ -2075,3 +2089,201 @@ async def test_set_credential_can_enable_in_the_same_call(
     config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
     assert config.users["test1"][CONF_PIN] == "4321"
     assert config.users["test1"][CONF_ENABLED] is True
+
+
+async def test_disable_and_enable_a_user_round_trip(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Turning somebody off keeps their credential, so turning them on restores it.
+
+    The point of a disable that is not a delete: nobody has to remember what
+    the code was to give it back.
+    """
+    entry = lock_code_manager_config_entry
+    common = {"config_entry_id": entry.entry_id, CONF_NAME: "test1"}
+
+    await hass.services.async_call(DOMAIN, SERVICE_DISABLE_USER, common, blocking=True)
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_ENABLED] is False
+    assert config.users["test1"][CONF_PIN] == "1234"
+
+    await hass.services.async_call(DOMAIN, SERVICE_ENABLE_USER, common, blocking=True)
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_ENABLED] is True
+    assert config.users["test1"][CONF_PIN] == "1234"
+
+
+async def test_enable_user_refuses_somebody_holding_no_credential(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Enabling a user with nothing to present is refused, not silently allowed.
+
+    Otherwise the configuration would advertise somebody as able to get in
+    while holding no credential. The refusal has to arrive as the caller's
+    problem: the coordinator raises a bare exception, which would surface as
+    an internal error if it were not translated.
+    """
+    entry = lock_code_manager_config_entry
+    common = {"config_entry_id": entry.entry_id, CONF_NAME: "test1"}
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CLEAR_CREDENTIAL,
+        {**common, ATTR_CREDENTIAL_TYPE: "pin"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    with pytest.raises(ServiceValidationError, match="Set a PIN"):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_ENABLE_USER, common, blocking=True
+        )
+
+
+async def test_user_actions_match_a_name_the_way_it_is_said(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Addressing the person by name means not needing their entity IDs."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DISABLE_USER,
+        {"config_entry_title": entry.title, CONF_NAME: "  TEST1 "},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_ENABLED] is False
+
+
+async def test_set_and_clear_condition_by_name(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A condition gates a person, so the person is what names it.
+
+    The slot number the condition lands on is bookkeeping the caller never
+    sees or supplies.
+    """
+    hass.states.async_set("binary_sensor.test_condition", STATE_ON)
+    entry = lock_code_manager_config_entry
+    common = {"config_entry_id": entry.entry_id, CONF_NAME: "test1"}
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CONDITION,
+        {**common, CONF_ENTITY_ID: "binary_sensor.test_condition"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_CONDITION] == "binary_sensor.test_condition"
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_CLEAR_CONDITION, common, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert CONF_CONDITION not in config.users["test1"]
+    # Clearing the gate is not disabling the person.
+    assert config.users["test1"][CONF_ENABLED] is True
+
+
+async def test_set_condition_refuses_an_unknown_user(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Naming nobody is the caller's mistake, not a silent no-op."""
+    with pytest.raises(ServiceValidationError, match="No user named"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CONDITION,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Nobody",
+                CONF_ENTITY_ID: "binary_sensor.test_condition",
+            },
+            blocking=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "service,data,replacement",
+    [
+        (
+            SERVICE_SET_SLOT_CONDITION,
+            {ATTR_SLOT: 1, CONF_ENTITY_ID: "binary_sensor.test_condition"},
+            "set_condition",
+        ),
+        (SERVICE_CLEAR_SLOT_CONDITION, {ATTR_SLOT: 1}, "clear_condition"),
+    ],
+)
+async def test_the_slot_keyed_condition_actions_say_they_are_deprecated(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+    service: str,
+    data: dict,
+    replacement: str,
+) -> None:
+    """They still work, and they name what replaces them."""
+    hass.states.async_set("binary_sensor.test_condition", STATE_ON)
+    caplog.clear()
+    await hass.services.async_call(
+        DOMAIN,
+        service,
+        {"config_entry_id": lock_code_manager_config_entry.entry_id, **data},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    deprecations = [
+        record
+        for record in caplog.records
+        if record.levelname == "WARNING" and "deprecated" in record.getMessage()
+    ]
+    assert len(deprecations) == 1
+    assert replacement in deprecations[0].getMessage()
+
+
+async def test_set_condition_refuses_an_entity_that_does_not_exist(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A condition Lock Code Manager cannot read is refused, not stored.
+
+    Storing it would leave the user gated on something that never reports,
+    which reads as a credential that simply stopped working.
+    """
+    with pytest.raises(ServiceValidationError, match="not found"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CONDITION,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "test1",
+                CONF_ENTITY_ID: "binary_sensor.nonexistent",
+            },
+            blocking=True,
+        )
