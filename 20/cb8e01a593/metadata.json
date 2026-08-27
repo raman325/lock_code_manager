@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "20cb8e01a593",
+  "strategy": "manual-commit",
+  "branch": "feat/lockless-entries",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/20/cb8e01a593/0/metadata.json",
+      "transcript": "/20/cb8e01a593/0/full.jsonl",
+      "compact_transcript": "/20/cb8e01a593/0/transcript.jsonl",
+      "content_hash": "/20/cb8e01a593/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 263,
+    "cache_creation_tokens": 278746,
+    "cache_read_tokens": 19886702,
+    "output_tokens": 69597,
+    "api_call_count": 132
+  }
+}
