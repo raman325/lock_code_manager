@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "e59f8ff20d18",
+  "strategy": "manual-commit",
+  "branch": "fix/credential-use-visibility-feat",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e5/9f8ff20d18/0/metadata.json",
+      "transcript": "/e5/9f8ff20d18/0/full.jsonl",
+      "compact_transcript": "/e5/9f8ff20d18/0/transcript.jsonl",
+      "content_hash": "/e5/9f8ff20d18/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 77,
+    "cache_creation_tokens": 41731,
+    "cache_read_tokens": 12996613,
+    "output_tokens": 27252,
+    "api_call_count": 39
+  }
+}
