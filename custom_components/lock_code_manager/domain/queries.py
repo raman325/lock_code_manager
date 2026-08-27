@@ -112,33 +112,6 @@ def find_config_entry_by_title(hass: HomeAssistant, title: str) -> ConfigEntry |
     )
 
 
-def get_loaded_config_entries_for_lock(
-    hass: HomeAssistant, lock_entity_id: str
-) -> list[ConfigEntry]:
-    """
-    Get every loaded LCM entry that holds a lock as a member.
-
-    Plural on purpose: one lock can be managed by several Lock Code Manager
-    configurations, so a caller that names the lock rather than an entry is
-    asking about all of them and has to decide between the answers itself.
-
-    Raises rather than returning nothing, the way its by-identifier sibling
-    does. Naming a lock no configuration manages is the same class of
-    mistake as naming an entry that does not exist, and an empty list would
-    let a typo in an automation read as a perfectly ordinary "no".
-    """
-    config_entries = [
-        entry
-        for entry in iter_loaded_lcm_entries(hass)
-        if get_entry_config(entry).has_lock(lock_entity_id)
-    ]
-    if not config_entries:
-        raise ServiceValidationError(
-            f"No loaded lock code manager config entry manages `{lock_entity_id}`"
-        )
-    return config_entries
-
-
 def get_loaded_config_entry(
     hass: HomeAssistant,
     config_entry_id: str | None = None,

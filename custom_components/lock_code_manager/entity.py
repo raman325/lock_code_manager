@@ -215,6 +215,11 @@ class BaseLockCodeManagerEntity(Entity):
     @callback
     def _is_available(self) -> bool:
         """Return whether entity should be available."""
+        if not self.locks:
+            # Nothing to follow is not the same as nothing being up. An entry
+            # with no locks answers for its credentials out of its own
+            # configuration, which is present whenever the entry is loaded.
+            return True
         return any(
             state.state != STATE_UNAVAILABLE
             for lock in self.locks
