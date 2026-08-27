@@ -17,7 +17,7 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
@@ -26,6 +26,8 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
@@ -358,3 +360,52 @@ class TestCredentialUseRecording:
         state = hass.states.get(SLOT_1_PIN_ENTITY)
         assert state
         assert state.state == pin
+
+
+class TestReauthLockSwap:
+    """A lock swapped out during reauth must lose its credential store."""
+
+    async def test_reauth_swap_removes_the_dropped_locks_store(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+        virtual_provider_entry,
+    ) -> None:
+        """
+        Swapping a lock out via reauth takes its stored credentials with it.
+
+        For a Virtual lock the store IS the credentials, so a store that
+        outlives every entry referencing it is a cleartext PIN left on disk.
+        Reauth writes the entry and reloads it wholesale, which is a different
+        path from the options flow's per-lock removal -- this asserts the two
+        agree about what leaving an entry means.
+        """
+        ent_reg = er.async_get(hass)
+        replacement = ent_reg.async_get_or_create(
+            "lock",
+            "virtual",
+            "test_virtual_replacement",
+            config_entry=virtual_provider_entry,
+        )
+        hass.states.async_set(replacement.entity_id, "locked")
+
+        lock = get_virtual_lock(hass, lcm_config_entry)
+        await lock.async_internal_set_usercode(1, "1234")
+
+        def _fresh_store() -> Store:
+            return Store(hass, 1, f"{lock.domain}_{DOMAIN}_{VIRTUAL_LOCK_ENTITY_ID}")
+
+        lcm_config_entry.async_start_reauth(
+            hass, context={"lock_entity_id": VIRTUAL_LOCK_ENTITY_ID}
+        )
+        await hass.async_block_till_done()
+        [flow] = lcm_config_entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+
+        result = await hass.config_entries.flow.async_configure(
+            flow["flow_id"], {CONF_LOCKS: [replacement.entity_id]}
+        )
+        assert result["type"] == "abort"
+        assert result["reason"] == "locks_updated"
+        await hass.async_block_till_done()
+
+        assert await _fresh_store().async_load() is None

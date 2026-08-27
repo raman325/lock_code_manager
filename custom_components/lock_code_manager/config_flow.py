@@ -22,6 +22,7 @@ from homeassistant.helpers import (
 )
 from homeassistant.util import slugify
 
+from . import async_release_locks
 from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
@@ -48,7 +49,10 @@ _LOGGER = logging.getLogger(__name__)
 # compares a submitted code stripped, so a PIN stored with padding is one
 # nothing anybody can type will ever match. Not vol.Length(min=1) -- an
 # empty PIN is how a user without one is expressed.
-STRIPPED_PIN = vol.All(cv.string, str.strip)
+# vol.Strip rather than str.strip because this schema is also rendered: a
+# form is serialized for the frontend, and a bare callable has no JSON form
+# to serialize into.
+STRIPPED_PIN = vol.All(cv.string, vol.Strip)
 
 CODE_SLOT_SCHEMA = vol.Schema(
     {
@@ -574,6 +578,20 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # Resolved through EntryConfig, not by merging raw dicts: the
                 # two sides may be in different shapes, and a raw merge carries
                 # both, discarding the very save this block exists to consume.
+                # Released before the entry is rewritten, while the roster
+                # still names them. This does not reach the update listener
+                # the options flow relies on: the write below leaves empty
+                # options, which is the same shape the listener's own settle
+                # write leaves, so the listener returns early and its removal
+                # pass never runs. For a provider whose store IS the
+                # credentials, that left a cleartext PIN on disk for a lock
+                # no entry referenced any more.
+                dropped = [
+                    lock_entity_id
+                    for lock_entity_id in get_entry_config(config_entry).locks
+                    if lock_entity_id not in user_input[CONF_LOCKS]
+                ]
+                await async_release_locks(self.hass, config_entry, dropped)
                 self.hass.config_entries.async_update_entry(
                     config_entry,
                     data={
