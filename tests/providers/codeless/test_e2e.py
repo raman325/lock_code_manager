@@ -26,6 +26,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_SOURCE,
     ATTR_TARGET,
     CONF_CODELESS,
+    CONF_CODELESS_LOCKS,
     CONF_LOCKS,
     CONF_MEMBERS,
     CONF_NUM_USERS,
@@ -245,9 +246,9 @@ async def test_taking_the_declaration_back_hands_the_lock_to_its_provider(
 
     The declaration is what picks the provider, so changing it changes what
     the member IS -- but the roster the update listener diffs carries the
-    same entity id on both sides, so nothing rebuilt the instance. The answer
+    same entity id on both sides, so nothing rebuilt the instance. The move
     reached storage and the lock went on being held by Lock Code Manager,
-    which is the whole of what the menu offers a way out of.
+    which is the whole of what the second picker offers a way out of.
 
     Written against a lock a provider does claim, because that is the only
     shape this exit exists for: a declared member whose platform gained a
@@ -317,17 +318,19 @@ async def test_a_second_entry_cannot_end_up_on_a_different_provider(
     )
     flow_id = started["flow_id"]
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "second", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        flow_id,
+        {
+            CONF_NAME: "second",
+            CONF_LOCKS: [],
+            CONF_CODELESS_LOCKS: [LOCK_1_ENTITY_ID],
+        },
     )
 
-    # Asked, rather than quietly handed to the provider that claims the
-    # lock: agreeing has to be an answer the second entry can give.
-    assert result["step_id"] == "codeless_reconsider"
-    assert result["description_placeholders"] == {"lock": LOCK_1_ENTITY_ID}
+    # Accepted, rather than refused for declaring a lock something claims:
+    # agreeing with the sibling has to be a selection the second entry can
+    # make.
+    assert result["step_id"] == "choose_path"
 
-    await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "codeless_confirm"}
-    )
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
     await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
     result = await hass.config_entries.flow.async_configure(
@@ -557,18 +560,17 @@ async def test_handing_the_lock_back_discards_the_codes_it_was_holding(
     mock_lock_config_entry,
 ) -> None:
     """
-    The ``codeless_reconsider`` question promises this in so many words.
+    Moving a member out of the codeless field discards what it was holding.
 
-    "The codes Lock Code Manager was holding for it are discarded" is true
-    only through the redeclaration teardown: the roster carries the same
-    entity id on both sides of the edit, so the codes go only because
-    ``locks_redeclared`` feeds ``locks_to_remove`` and that removal is a
-    permanent one. Drop either coupling and the promise silently becomes a
-    lie -- a file of cleartext Personal Identification Numbers left on disk
+    On a loaded entry the redeclaration teardown also does this: the roster
+    carries the same entity id on both sides of the edit, so the codes go
+    because ``locks_redeclared`` feeds ``locks_to_remove`` and that removal
+    is a permanent one. Drop either coupling -- or the flow's own discard --
+    and a file of cleartext Personal Identification Numbers is left on disk
     for a lock nothing reads it for any more.
 
     Driven through the options flow rather than a config write, because the
-    sentence is about what answering "no" does.
+    promise is about what moving the lock does.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
     entry = await _entry_for(
@@ -591,12 +593,12 @@ async def test_handing_the_lock_back_discards_the_codes_it_was_holding(
     flow_id = started["flow_id"]
     users = {f"{USER_NAME} 1": {CONF_PIN: "9999", CONF_ENABLED: True}}
     result = await hass.config_entries.options.async_configure(
-        flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-    )
-    assert result["step_id"] == "codeless_reconsider"
-
-    result = await hass.config_entries.options.async_configure(
-        flow_id, {"next_step_id": "codeless_decline"}
+        flow_id,
+        user_input={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_CODELESS_LOCKS: [],
+            CONF_USERS: users,
+        },
     )
     assert result["type"] == "create_entry"
     await hass.async_block_till_done()
@@ -606,13 +608,13 @@ async def test_handing_the_lock_back_discards_the_codes_it_was_holding(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_an_options_decline_discards_them_with_the_entry_unloaded(
+async def test_an_options_move_discards_them_with_the_entry_unloaded(
     hass: HomeAssistant,
     hass_storage: dict[str, Any],
     mock_lock_config_entry,
 ) -> None:
     """
-    The listener that kept that promise is not there while the entry is not.
+    The listener that keeps that promise is not there while the entry is not.
 
     ``async_update_listener`` is registered during setup and released on
     unload, so an options save against an entry that is not loaded reaches
@@ -620,11 +622,12 @@ async def test_an_options_decline_discards_them_with_the_entry_unloaded(
     removal, and a file of cleartext Personal Identification Numbers left on
     disk for a member the entry has just stopped declaring -- unreadable by
     anything, and swept by nothing, because entry deletion collects only
-    what the entry still declares.
+    what the entry still declares. The flow does the discard itself for
+    exactly this reason.
 
     The options form is reachable in that state, and the entry that comes
-    back later is a working one, so nothing on screen ever says the answer
-    was only half taken.
+    back later is a working one, so nothing on screen ever says the move was
+    only half made.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
     entry = await _entry_for(
@@ -647,12 +650,12 @@ async def test_an_options_decline_discards_them_with_the_entry_unloaded(
     flow_id = started["flow_id"]
     users = {f"{USER_NAME} 1": {CONF_PIN: "9999", CONF_ENABLED: True}}
     result = await hass.config_entries.options.async_configure(
-        flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-    )
-    assert result["step_id"] == "codeless_reconsider"
-
-    result = await hass.config_entries.options.async_configure(
-        flow_id, {"next_step_id": "codeless_decline"}
+        flow_id,
+        user_input={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_CODELESS_LOCKS: [],
+            CONF_USERS: users,
+        },
     )
     assert result["type"] == "create_entry"
     await hass.async_block_till_done()
@@ -669,22 +672,23 @@ async def test_an_options_decline_discards_them_with_the_entry_unloaded(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_a_reauth_decline_discards_them_the_same_way(
+async def test_a_reauth_move_discards_them_the_same_way(
     hass: HomeAssistant,
     hass_storage: dict[str, Any],
     mock_lock_config_entry,
 ) -> None:
     """
-    Reauth shows the same sentence, so it has to mean the same thing there.
+    Reauth shows the same two pickers, so a move made there has to mean the
+    same thing.
 
     Reauth is the one save that does not go through the update listener: it
     writes the entry and reloads, and the entry it is repairing is failed, so
     nothing was holding the lock for ``locks_redeclared`` to find and
-    ``remove_permanently`` to collect. The promise on screen was therefore
-    true on one path and false on the other, and the false one left a file of
-    cleartext Personal Identification Numbers on disk for a lock that had
-    just been handed back to its own integration -- unreadable by anything,
-    and collected by nothing, because the entry that would have swept it on
+    ``remove_permanently`` to collect. The promise was therefore true on one
+    path and false on the other, and the false one left a file of cleartext
+    Personal Identification Numbers on disk for a lock that had just been
+    handed back to its own integration -- unreadable by anything, and
+    collected by nothing, because the entry that would have swept it on
     deletion no longer declares the member.
 
     A second lock whose registry row is gone is what puts the entry in
@@ -713,12 +717,8 @@ async def test_a_reauth_decline_discards_them_the_same_way(
 
     [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
     result = await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-    )
-    assert result["step_id"] == "codeless_reconsider"
-
-    result = await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {"next_step_id": "codeless_decline"}
+        flow["flow_id"],
+        {CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_CODELESS_LOCKS: []},
     )
     assert result["type"] == "abort"
     await hass.async_block_till_done()
@@ -734,14 +734,14 @@ async def test_a_reauth_confirmation_leaves_the_codes_exactly_where_they_are(
     mock_lock_config_entry,
 ) -> None:
     """
-    The other answer to the same question must not cost a single code.
+    Leaving the member where it is must not cost a single code.
 
-    Discarding on decline and discarding on confirm are one line apart, and
-    the wrong one of the two is silent: the user is asked whether Lock Code
-    Manager should keep holding the codes, says yes, and every one of them is
-    deleted on the way to saving that yes. There is nowhere else a codeless
-    member's codes exist, so it is unrecoverable, and the entry that comes
-    back looks configured -- the slots are all there, holding nothing.
+    Discarding what the submission drops and discarding what it keeps are one
+    predicate apart, and the wrong one of the two is silent: the user
+    resubmits the form unchanged and every code is deleted on the way to
+    saving it. There is nowhere else a codeless member's codes exist, so it
+    is unrecoverable, and the entry that comes back looks configured -- the
+    slots are all there, holding nothing.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
     entry = await _entry_for(
@@ -762,12 +762,8 @@ async def test_a_reauth_confirmation_leaves_the_codes_exactly_where_they_are(
     store_key = f"codeless_{DOMAIN}_{LOCK_1_ENTITY_ID}"
     [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
     result = await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-    )
-    assert result["step_id"] == "codeless_reconsider"
-
-    result = await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {"next_step_id": "codeless_confirm"}
+        flow["flow_id"],
+        {CONF_LOCKS: [], CONF_CODELESS_LOCKS: [LOCK_1_ENTITY_ID]},
     )
     assert result["type"] == "abort"
     await hass.async_block_till_done()
@@ -781,3 +777,111 @@ async def test_a_reauth_confirmation_leaves_the_codes_exactly_where_they_are(
     assert hass_storage[store_key]["data"]["1"]["code"] == "9999"
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_dropping_a_declared_lock_discards_the_codes_it_was_holding(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    mock_lock_config_entry,
+    codeless_lock_entity: er.RegistryEntry,
+) -> None:
+    """
+    A lock that leaves the entry altogether is a declaration taken back too.
+
+    Moving a member to the other picker and dropping it from both mean the
+    same thing: Lock Code Manager is no longer where that lock's codes live.
+    The teardown that would collect the store runs from the update listener,
+    which an unloaded entry does not have -- so the file of cleartext
+    Personal Identification Numbers stayed on disk, unreadable by anything
+    and swept by nothing, since entry deletion collects only what the entry
+    still declares.
+    """
+    entry = await _entry_for(
+        hass,
+        unique_id="dropping_declared",
+        slot_num=1,
+        pin="1111",
+        holding=[codeless_lock_entity.entity_id, LOCK_1_ENTITY_ID],
+        declaring=[codeless_lock_entity],
+    )
+    await _settle_sync(hass)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    store_key = f"codeless_{DOMAIN}_{codeless_lock_entity.entity_id}"
+    assert hass_storage[store_key]["data"]["1"]["code"] == "1111"
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    users = {f"{USER_NAME} 1": {CONF_PIN: "1111", CONF_ENABLED: True}}
+    result = await hass.config_entries.options.async_configure(
+        started["flow_id"],
+        user_input={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_CODELESS_LOCKS: [],
+            CONF_USERS: users,
+        },
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+
+    assert store_key not in hass_storage
+
+
+async def test_dropping_a_lock_a_sibling_still_declares_leaves_its_codes(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    mock_lock_config_entry,
+    codeless_lock_entity: er.RegistryEntry,
+) -> None:
+    """
+    The discard asks whether anybody else still reads the store first.
+
+    A member this entry KEEPS cannot disagree with a sibling -- the conflict
+    refusal stops the submission -- but a member it DROPS is outside what any
+    refusal looks at. Discarding unconditionally would delete the other
+    configuration's users' codes, and for a codeless member there is nowhere
+    else those codes exist.
+    """
+    shared = {
+        "holding": [codeless_lock_entity.entity_id, LOCK_1_ENTITY_ID],
+        "declaring": [codeless_lock_entity],
+    }
+    keeping = await _entry_for(
+        hass, unique_id="sibling_keeping", slot_num=1, pin="1111", **shared
+    )
+    await _settle_sync(hass)
+    # A reload is the cheapest way to reach the save unload performs, which
+    # is what puts the sibling's credential on disk in the first place.
+    assert await hass.config_entries.async_reload(keeping.entry_id)
+    await hass.async_block_till_done()
+    going = await _entry_for(
+        hass, unique_id="sibling_going", slot_num=2, pin="2222", **shared
+    )
+    await _settle_sync(hass)
+    # Unloading the entry about to be edited takes away its listener, which
+    # is the state the flow's own discard is for. It writes nothing, because
+    # the instance belongs to the sibling that is still holding it.
+    await hass.config_entries.async_unload(going.entry_id)
+    await hass.async_block_till_done()
+
+    store_key = f"codeless_{DOMAIN}_{codeless_lock_entity.entity_id}"
+    assert hass_storage[store_key]["data"]["1"]["code"] == "1111"
+
+    started = await hass.config_entries.options.async_init(going.entry_id)
+    users = {f"{USER_NAME} 2": {CONF_PIN: "2222", CONF_ENABLED: True}}
+    result = await hass.config_entries.options.async_configure(
+        started["flow_id"],
+        user_input={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_CODELESS_LOCKS: [],
+            CONF_USERS: users,
+        },
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+
+    # The file the sibling reads its codes back from survives, which is the
+    # whole of what "there is nowhere else those codes exist" means.
+    assert hass_storage[store_key]["data"]["1"]["code"] == "1111"
+
+    await hass.config_entries.async_unload(keeping.entry_id)

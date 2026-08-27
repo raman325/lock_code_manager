@@ -1145,7 +1145,7 @@ def test_declaring_codeless_survives_a_write() -> None:
     disagreeing is invisible until a member silently resolves to the wrong
     provider.
     """
-    stored = declare_codeless({}, {_MEMBER_A: True}, {_MEMBER_A})
+    stored = declare_codeless({}, {_MEMBER_A}, {_MEMBER_A})
 
     config = EntryConfig.from_mapping(
         EntryConfig.from_mapping({CONF_MEMBERS: stored}).to_dict()
@@ -1164,7 +1164,7 @@ def test_declaring_codeless_leaves_every_other_field_alone() -> None:
     """
     declared = declare_codeless(
         {_MEMBER_A: {"something_else": "kept"}, _MEMBER_B: {"untouched": True}},
-        {_MEMBER_A: True},
+        {_MEMBER_A},
         {_MEMBER_A, _MEMBER_B},
     )
 
@@ -1174,20 +1174,20 @@ def test_declaring_codeless_leaves_every_other_field_alone() -> None:
     }
 
 
-def test_declining_takes_the_declaration_back() -> None:
+def test_a_member_outside_the_codeless_set_loses_the_field() -> None:
     """
-    Declining has to erase, because it is how a declaration is undone.
+    Leaving the codeless field erases, because it is how a declaration is undone.
 
     A member left holding nothing else goes with it: an empty declaration
     and no declaration mean the same thing to every reader, so storing one
-    would leave a husk behind for every member anybody ever declined about.
+    would leave a husk behind for every member anybody ever moved out.
     """
     declared = declare_codeless(
         {
             _MEMBER_A: {CONF_CODELESS: True},
             _MEMBER_B: {CONF_CODELESS: True, "something_else": "kept"},
         },
-        {_MEMBER_A: False, _MEMBER_B: False},
+        set(),
         {_MEMBER_A, _MEMBER_B},
     )
 
@@ -1197,22 +1197,25 @@ def test_declining_takes_the_declaration_back() -> None:
     )
 
 
-def test_declining_a_member_nobody_declared_about_stores_nothing() -> None:
-    """An answer of no, for a member with nothing recorded, is not a record."""
-    assert declare_codeless({}, {_MEMBER_A: False}, {_MEMBER_A}) == {}
+def test_a_member_nobody_ever_declared_about_stores_nothing() -> None:
+    """A member in the roster and outside the codeless set is not a record."""
+    assert declare_codeless({}, set(), {_MEMBER_A}) == {}
 
 
-def test_a_declaration_about_a_member_that_left_the_roster_is_dropped() -> None:
+def test_the_roster_outranks_the_codeless_set() -> None:
     """
-    Writing prunes what the entry no longer holds.
+    Writing prunes what the entry no longer holds, whatever else it was told.
 
     Nothing reads a declaration for a member outside the roster, so keeping
     one is invisible until the same lock is added back -- and then it decides
-    that lock's provider, with nobody having been asked twice.
+    that lock's provider, with nobody having selected it. The codeless set is
+    filtered by the same rule as the stored declarations, because a lock can
+    be dropped from the roster while still sitting in the field that named
+    it.
     """
     declared = declare_codeless(
         {_MEMBER_A: {CONF_CODELESS: True}, _MEMBER_B: {CONF_CODELESS: True}},
-        {},
+        {_MEMBER_A, _MEMBER_B},
         {_MEMBER_B},
     )
 
@@ -1227,4 +1230,4 @@ def test_pruning_takes_every_field_a_dropped_member_carried() -> None:
     carrying a field this version does not model would otherwise be exactly
     the husk that grows the entry without bound.
     """
-    assert declare_codeless({_MEMBER_A: {"something_else": "kept"}}, {}, set()) == {}
+    assert declare_codeless({_MEMBER_A: {"something_else": "kept"}}, set(), set()) == {}

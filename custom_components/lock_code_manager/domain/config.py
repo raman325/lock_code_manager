@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Container, Mapping
+from collections.abc import Collection, Container, Mapping
 from dataclasses import dataclass, field
 import logging
 from types import MappingProxyType
@@ -110,48 +110,44 @@ def _member_declarations(raw: Any) -> Mapping[str, Mapping[str, Any]]:
 
 def declare_codeless(
     members: Mapping[str, Mapping[str, Any]],
-    answers: Mapping[str, bool],
-    roster: Container[str],
+    codeless: Container[str],
+    roster: Collection[str],
 ) -> dict[str, dict[str, Any]]:
     """
-    Return the declarations with an answer recorded about each named member.
+    Return the declarations for a roster, codeless recorded for those named.
 
-    Keyed by ``er.RegistryEntry.id``, like the declarations themselves, and
-    merged into each member's own rather than replacing it: recording this
-    one field must not erase another field the same member carries.
+    ``roster`` is every member the entry will hold after this write, and
+    ``codeless`` is the subset whose credentials Lock Code Manager keeps
+    itself. Both are ``er.RegistryEntry.id``, like the declarations
+    themselves, so "the same lock" is an exact key match rather than
+    anything inferred from an entity id a rename can move.
 
-    A False answer removes the field, and a declaration left holding nothing
-    goes with it. "Nothing declared" is already what every reader treats as
-    the default, so a stored ``codeless: false`` would mean exactly what an
-    absent key means while looking different in storage -- and every member
-    anybody ever declined about would leave a husk behind.
+    Merged into each member's own declaration rather than replacing it:
+    recording this one field must not erase another field the same member
+    carries.
 
-    ``roster`` is the registry ids the entry will hold after this write, and
-    anything else is dropped -- a declaration already stored AND an answer
-    just given. Nothing reads a declaration for a member the entry does not
-    have, so keeping one would grow the entry without bound -- and it is not
-    merely untidy: re-adding the same lock later would find an answer nobody
-    was asked for again, and resolve a lock with real code storage to the
-    Lock Code Manager store without a word.
+    A member outside ``codeless`` loses the field, and a declaration left
+    holding nothing goes with it. "Nothing declared" is already what every
+    reader treats as the default, so a stored ``codeless: false`` would mean
+    exactly what an absent key means while looking different in storage --
+    and every lock anybody ever moved out of the codeless field would leave
+    a husk behind.
 
-    The answers need the same filter as the stored declarations because a
-    flow can outlive its own question. An answer is cached for the life of
-    the flow, so a yes whose re-submission is refused for some unrelated
-    reason -- a sibling lock too asleep to report its occupancy -- is still
-    held when the user reacts by dropping the lock they just answered about.
-    Written back, that answer is a declaration about a member the entry no
-    longer has, which is the husk this pruning exists to prevent.
+    Anything outside ``roster`` is dropped, stored declarations included.
+    Nothing reads a declaration for a member the entry does not have, so
+    keeping one would grow the entry without bound -- and it is not merely
+    untidy: re-adding the same lock later would find a declaration nobody
+    made this time, and resolve a lock with real code storage to the Lock
+    Code Manager store without a word.
     """
     declared = {
         registry_id: dict(fields)
         for registry_id, fields in members.items()
         if registry_id in roster
     }
-    for registry_id, codeless in answers.items():
-        if registry_id not in roster:
-            continue
+    for registry_id in roster:
         member = declared.setdefault(registry_id, {})
-        if codeless:
+        if registry_id in codeless:
             member[CONF_CODELESS] = True
         else:
             member.pop(CONF_CODELESS, None)

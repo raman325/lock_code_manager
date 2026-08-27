@@ -29,6 +29,12 @@ INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "zwave_js": ZWaveJSLock,
 }
 
+# The lock picker's allowlist, wider than what resolves: mqtt dispatch is per
+# DEVICE, so the platform is offered and the bridge is checked at submit time.
+# A lock this leaves out is not unreachable -- the codeless picker beside it
+# offers exactly the locks nothing here claims.
+CONFIG_FLOW_PLATFORMS: tuple[str, ...] = (*INTEGRATIONS_CLASS_MAP, MQTT_DOMAIN)
+
 
 def resolve_provider_class(
     platform: str, device_entry: dr.DeviceEntry | None

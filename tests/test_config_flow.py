@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, PropertyMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN, LockState
 from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
@@ -18,6 +19,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
     CONF_CODELESS,
+    CONF_CODELESS_LOCKS,
     CONF_LOCKS,
     CONF_MEMBERS,
     CONF_NUM_USERS,
@@ -48,6 +50,7 @@ from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
+from custom_components.lock_code_manager.providers import CONFIG_FLOW_PLATFORMS
 from custom_components.lock_code_manager.providers.codeless import CodelessLock
 
 from .common import (
@@ -2311,6 +2314,7 @@ async def test_user_step_rejects_a_lock_the_entity_registry_does_not_know(
     assert _suggested_values(result) == {
         CONF_NAME: "test",
         CONF_LOCKS: [LOCK_1_ENTITY_ID, "lock.yaml_only"],
+        CONF_CODELESS_LOCKS: [],
     }
 
 
@@ -2383,6 +2387,7 @@ async def test_user_step_rejects_unclaimed_mqtt_lock(
     assert _suggested_values(result) == {
         CONF_NAME: "test",
         CONF_LOCKS: [LOCK_1_ENTITY_ID, unclaimed.entity_id],
+        CONF_CODELESS_LOCKS: [],
     }
 
     result = await hass.config_entries.flow.async_configure(
@@ -2701,246 +2706,97 @@ async def test_options_flow_preserves_member_declarations(
 # --- Locks nothing claims, that the user declares codeless (issue #1484) ---
 
 
-async def _menu_about(result, lock_entry, step_id: str = "codeless") -> None:
-    """Assert a flow result is the codeless question, naming this one lock."""
-    assert result["type"] == "menu"
-    assert result["step_id"] == step_id
-    assert result["description_placeholders"] == {"lock": lock_entry.entity_id}
+def _field_config(result, field: str) -> dict:
+    """Return the selector configuration a rendered form carries for a field."""
+    [marker] = [key for key in result["data_schema"].schema if str(key) == field]
+    return result["data_schema"].schema[marker].config
 
 
-async def test_the_lock_picker_offers_every_lock(
+async def _codeless_field(hass: HomeAssistant) -> dict:
+    """Return the codeless picker's configuration as the setup form builds it."""
+    flow_id = await _init_flow_to_user_step(hass)
+    result = await hass.config_entries.flow.async_configure(flow_id)
+    return _field_config(result, CONF_CODELESS_LOCKS)
+
+
+async def test_the_lock_picker_offers_only_platforms_that_resolve(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    The picker is not an allowlist of the platforms that resolve to a provider.
+    The ordinary picker is an allowlist of the platforms dispatch can answer for.
 
-    A lock nothing claims may still be one Lock Code Manager can manage by
-    holding its codes, and the question that settles it is asked after the
-    submission -- which a picker that hides the lock makes unaskable.
+    It is what keeps the two fields apart: a lock offered here is one Lock
+    Code Manager writes codes to, and the field beside it offers exactly the
+    rest. Widening this to every lock puts locks in both fields and leaves
+    the user to guess which one is meant.
     """
     flow_id = await _init_flow_to_user_step(hass)
     result = await hass.config_entries.flow.async_configure(flow_id)
 
-    [locks_field] = [
-        key for key in result["data_schema"].schema if str(key) == CONF_LOCKS
-    ]
-    config = result["data_schema"].schema[locks_field].config
+    config = _field_config(result, CONF_LOCKS)
+
+    assert config["multiple"] is True
+    assert {entry["integration"] for entry in config["filter"]} == set(
+        CONFIG_FLOW_PLATFORMS
+    )
+    assert all(entry["domain"] == [LOCK_DOMAIN] for entry in config["filter"])
+
+
+async def test_the_codeless_picker_hides_every_lock_a_provider_claims(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The second picker offers the locks nothing claims, and only those.
+
+    This is where the rule is taught: a user sees each lock in exactly one
+    field instead of being told after the fact which one it belonged in. A
+    lock Lock Code Manager can write codes to has no business being one Lock
+    Code Manager holds the codes for, and the exclusion is what says so.
+    """
+    codeless = register_codeless_lock(hass)
+
+    config = await _codeless_field(hass)
 
     assert config["domain"] == [LOCK_DOMAIN]
-    assert "filter" not in config
+    assert config["multiple"] is True
+    assert LOCK_1_ENTITY_ID in config["exclude_entities"]
+    assert LOCK_2_ENTITY_ID in config["exclude_entities"]
+    assert codeless.entity_id not in config["exclude_entities"]
 
 
-async def test_the_user_step_asks_about_a_lock_nothing_claims(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """Confirming records the declaration on the entry it creates."""
-    codeless = register_codeless_lock(hass)
-    flow_id = await _init_flow_to_user_step(hass)
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [codeless.entity_id]}
-    )
-    await _menu_about(result, codeless)
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "codeless_confirm"}
-    )
-
-    # The answer re-submits what it was asked about, so the flow carries on
-    # from where it would have been.
-    assert result["type"] == "menu"
-    assert result["step_id"] == "choose_path"
-
-    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
-    await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}
-    )
-
-    assert result["type"] == "create_entry"
-    assert result["data"][CONF_MEMBERS] == {codeless.id: {CONF_CODELESS: True}}
-
-
-async def test_a_lock_a_provider_claims_is_never_asked_about(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """The question is only for the locks whose answer is not already known."""
-    flow_id = await _init_flow_to_user_step(hass)
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-    )
-
-    assert result["step_id"] == "choose_path"
-
-
-async def test_an_unclaimed_mqtt_lock_is_refused_rather_than_asked_about(
+async def test_an_unrecognised_mqtt_bridge_is_offered_in_both_pickers(
     hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
 ) -> None:
     """
-    mqtt keeps its own refusal.
+    mqtt gets no special case, and the overlap it creates is expected.
 
-    Its dispatch is per device, so an unclaimed one means "this bridge is
-    not one Lock Code Manager speaks" -- a gap that may close later, not a
-    lock with no code storage. Offering the declaration there would strand
-    that lock's credentials in a Lock Code Manager store on the day its
-    bridge became supported.
+    The ordinary picker allowlists the mqtt PLATFORM because dispatch there
+    is per device and a selector cannot express a device; the codeless
+    picker excludes what a provider actually claims, which an unrecognised
+    bridge is not. So the lock shows up in both, and the user -- who is the
+    one who knows whether the door has a keypad -- decides. Refusing it in
+    the ordinary field is the backstop for the wrong choice.
     """
     unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
-    flow_id = await _init_flow_to_user_step(hass)
 
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [unclaimed.entity_id]}
-    )
+    config = await _codeless_field(hass)
 
-    assert result["type"] == "form"
-    assert result["errors"] == {CONF_LOCKS: "unsupported_mqtt_lock"}
+    assert unclaimed.entity_id not in config["exclude_entities"]
 
 
-async def test_declining_lands_back_on_the_form_that_asked(
+async def test_a_member_already_declared_is_still_offered_where_it_lives(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    Declining is not a dead end: the way out is to choose different locks.
+    A declaration outranks dispatch, so the picker holding it has to keep it.
 
-    The refusal names them and the form comes back holding what was
-    submitted, so the selection can be changed rather than retyped.
-    """
-    codeless = register_codeless_lock(hass)
-    flow_id = await _init_flow_to_user_step(hass)
-
-    await hass.config_entries.flow.async_configure(
-        flow_id,
-        {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id]},
-    )
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "codeless_decline"}
-    )
-
-    assert result["type"] == "form"
-    assert result["step_id"] == "user"
-    assert result["errors"] == {CONF_LOCKS: "codeless_declined"}
-    assert result["description_placeholders"] == {"locks": codeless.entity_id}
-    assert _suggested_values(result) == {
-        CONF_NAME: "test",
-        CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
-    }
-
-    # Submitting the same locks again asks nothing new -- the answer stands
-    # for this flow -- and refuses again. Dropping the lock is what clears it.
-    result = await hass.config_entries.flow.async_configure(
-        flow_id,
-        {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id]},
-    )
-
-    assert result["errors"] == {CONF_LOCKS: "codeless_declined"}
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-    )
-
-    assert result["type"] == "menu"
-    assert result["step_id"] == "choose_path"
-
-
-async def test_the_options_flow_asks_about_a_lock_added_later(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """A lock that arrives after setup gets the same question setup would ask."""
-    codeless = register_codeless_lock(hass)
-    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
-    entry.add_to_hass(hass)
-    users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
-    locks = [LOCK_1_ENTITY_ID, codeless.entity_id]
-
-    started = await hass.config_entries.options.async_init(entry.entry_id)
-    flow_id = started["flow_id"]
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, user_input={CONF_LOCKS: locks, CONF_USERS: users}
-        )
-    await _menu_about(result, codeless)
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_confirm"}
-        )
-
-    assert result["type"] == "create_entry"
-    assert result["data"][CONF_LOCKS] == locks
-    assert result["data"][CONF_MEMBERS] == {codeless.id: {CONF_CODELESS: True}}
-
-
-async def test_the_options_flow_lets_a_declaration_be_taken_back(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """
-    An entry that already declares a lock is asked again, and can answer no.
-
-    Asking only about locks nobody has answered for would leave a
-    declaration with no way back: there is no second provider to hand the
-    lock to, so taking it back means dropping the lock, and the user has to
-    be able to reach that decision from the form.
-    """
-    codeless = register_codeless_lock(hass)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="test",
-        data={
-            **BASE_CONFIG,
-            CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
-            CONF_MEMBERS: {codeless.id: {CONF_CODELESS: True}},
-        },
-    )
-    entry.add_to_hass(hass)
-    users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
-
-    started = await hass.config_entries.options.async_init(entry.entry_id)
-    flow_id = started["flow_id"]
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id,
-            user_input={
-                CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
-                CONF_USERS: users,
-            },
-        )
-    await _menu_about(result, codeless)
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_decline"}
-        )
-
-    assert result["type"] == "form"
-    assert result["step_id"] == "init"
-    assert result["errors"] == {CONF_LOCKS: "codeless_declined"}
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-        )
-
-    assert result["type"] == "create_entry"
-    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID]
-    # Answering no is what undoes it, so the entry stops declaring anything.
-    assert result["data"][CONF_MEMBERS] == {}
-
-
-async def test_a_declared_member_a_provider_now_claims_is_still_asked_about(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """
-    A declaration must have an exit even after its platform gains a provider.
-
-    Dispatch never takes a declared member back -- deliberately, so an
-    upgrade cannot move somebody's credentials onto a device they never
-    agreed to write to -- which leaves the form as the only way out. Asking
-    only about the locks nothing claims made that exit unreachable: the
-    member kept resolving to the Lock Code Manager store while no form ever
-    mentioned it.
+    Should Lock Code Manager gain a provider for a platform somebody already
+    declared codeless -- or should an mqtt bridge it did not recognise become
+    supported -- the member goes on resolving to the Lock Code Manager store
+    (``resolve_member_provider_class`` reads the declaration first).
+    Excluding it from the field it is selected in would leave that entry
+    unable to save any edit at all, while its way out is to move the lock to
+    the other field.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
     entry = MockConfigEntry(
@@ -2949,33 +2805,349 @@ async def test_a_declared_member_a_provider_now_claims_is_still_asked_about(
         data={**BASE_CONFIG, CONF_MEMBERS: {claimed.id: {CONF_CODELESS: True}}},
     )
     entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    config = _field_config(result, CONF_CODELESS_LOCKS)
+
+    assert LOCK_1_ENTITY_ID not in config["exclude_entities"]
+    # The other claimed lock, which nobody declared anything about, is still
+    # kept out -- so this is the declaration being honoured rather than the
+    # exclusion being dropped.
+    assert LOCK_2_ENTITY_ID in config["exclude_entities"]
+
+
+async def test_the_two_pickers_merge_into_one_roster(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Both fields are the entry's locks; which one they came from is the declaration.
+
+    The entry stores one roster, so a lock picked in either field has to be
+    set up, entity-created and allocated against like any other. What the
+    second field adds is the record that Lock Code Manager holds this one's
+    codes.
+    """
+    codeless = register_codeless_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_CODELESS_LOCKS: [codeless.entity_id],
+        },
+    )
+
+    assert result["step_id"] == "choose_path"
+
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+    await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
+    with _holding():
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, codeless.entity_id]
+    # Read the way dispatch reads it, not as a dict: what the second field
+    # buys is the member resolving to the Lock Code Manager store, which an
+    # assertion on the stored shape alone would not settle.
+    config = EntryConfig.from_mapping(result["data"])
+    dev_reg = dr.async_get(hass)
+    assert resolve_member_provider_class(dev_reg, config, codeless) is CodelessLock
+    assert (
+        resolve_member_provider_class(
+            dev_reg, config, er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+        )
+        is MockLCMLock
+    )
+
+
+async def test_a_declared_lock_is_set_up_and_holds_its_codes(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The declaration reaches a running entry, not just storage.
+
+    A test that stops at the stored dict passes while the entry refuses to
+    load: the roster still contains a lock platform dispatch answers None
+    for, and only the declaration makes the factory build anything at all.
+    """
+    codeless = register_codeless_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [],
+            CONF_CODELESS_LOCKS: [codeless.entity_id],
+        },
+    )
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+    await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1234"}
+    )
+
+    assert result["type"] == "create_entry"
+
+
+async def test_an_unclaimed_lock_in_the_ordinary_field_points_at_the_other(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The refusal a lock nothing claims gets is no longer a dead end.
+
+    The picker cannot put one here -- it allowlists the platforms that
+    resolve -- but a YAML import or a direct submission can, and the answer
+    is not "you cannot use this lock" any more. It is "select it in the
+    other field", which the message says.
+    """
+    codeless = register_codeless_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
+            CONF_CODELESS_LOCKS: [],
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_LOCKS: "unclaimed_lock"}
+    assert result["description_placeholders"] == {"locks": codeless.entity_id}
+
+    # Moving it to the other field is what clears it.
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_CODELESS_LOCKS: [codeless.entity_id],
+        },
+    )
+
+    assert result["step_id"] == "choose_path"
+
+
+async def test_a_claimed_lock_in_the_codeless_field_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    Lock Code Manager must not hold codes for a lock that holds its own.
+
+    The picker's exclusions are a snapshot taken when the form was built, and
+    the selector enforces that same snapshot on submit -- so what gets past
+    both is a lock that became claimable in between. An mqtt bridge is where
+    that really happens: the device is rediscovered under an identifier Lock
+    Code Manager does recognize, and the lock the user is about to declare
+    now has code storage of its own. Accepted, its codes would go to a Lock
+    Code Manager store and never reach the device, while the lock went on
+    opening to whatever it already held.
+    """
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+    # Render the form while nothing claims it, so the picker offers it.
+    await hass.config_entries.flow.async_configure(flow_id)
+
+    dr.async_get(hass).async_update_device(
+        unclaimed.device_id,
+        new_identifiers={("mqtt", "zigbee2mqtt_0x00158d0001abcdef")},
+    )
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [],
+            CONF_CODELESS_LOCKS: [unclaimed.entity_id],
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_CODELESS_LOCKS: "codeless_lock_claimed"}
+    assert result["description_placeholders"] == {"codeless_locks": unclaimed.entity_id}
+    assert not hass.config_entries.async_entries(DOMAIN)
+
+
+async def test_a_lock_in_both_fields_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    One lock, one field. The two say opposite things about where its codes live.
+
+    An mqtt lock from an unrecognised bridge really is offered in both
+    pickers, so this is reachable from the UI rather than only from a
+    hand-written submission -- and merging the fields without checking would
+    hand the same entity two providers.
+    """
+    codeless = register_codeless_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [codeless.entity_id],
+            CONF_CODELESS_LOCKS: [codeless.entity_id],
+        },
+    )
+
+    assert result["type"] == "form"
+    # The ordinary field refuses it as well, on its own key, so one round
+    # trip says both things.
+    assert result["errors"] == {
+        CONF_LOCKS: "unclaimed_lock",
+        CONF_CODELESS_LOCKS: "lock_in_both_fields",
+    }
+    assert result["description_placeholders"]["codeless_locks"] == codeless.entity_id
+
+
+async def test_an_unregistered_lock_is_refused_from_the_codeless_field_too(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A declaration is keyed by registry id, so an entity without one cannot carry it.
+
+    Checked over both fields rather than only the one the ordinary locks come
+    from: an entity with no registry row selected here would be stored in the
+    roster with nothing declared about it, and the entry would fail to load
+    over a lock the user believed they had declared.
+    """
+    hass.states.async_set("lock.yaml_only", LockState.LOCKED)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [],
+            CONF_CODELESS_LOCKS: ["lock.yaml_only"],
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "lock_not_registered"}
+    assert result["description_placeholders"]["unregistered_locks"] == "lock.yaml_only"
+
+
+async def test_every_lock_refusal_renders_from_one_submission(
+    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    A selection wrong in three ways says so once, not over three visits.
+
+    Refusing on the first and returning hid the rest entirely: the user fixed
+    what they were shown, submitted again, and was refused again for
+    something that had been wrong all along. The three keys -- base and one
+    per field -- are what makes rendering them together possible, and their
+    placeholders are named apart so one flat mapping carries all three.
+    """
+    hass.states.async_set("lock.yaml_only", LockState.LOCKED)
+    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
+    flow_id = await _init_flow_to_user_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, "lock.yaml_only", unclaimed.entity_id],
+            CONF_CODELESS_LOCKS: [unclaimed.entity_id],
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
+    assert result["errors"] == {
+        "base": "lock_not_registered",
+        CONF_LOCKS: "unsupported_mqtt_lock",
+        CONF_CODELESS_LOCKS: "lock_in_both_fields",
+    }
+    assert result["description_placeholders"]["unregistered_locks"] == "lock.yaml_only"
+    assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+    assert result["description_placeholders"]["codeless_locks"] == unclaimed.entity_id
+
+
+# --- Taking a declaration back ---
+
+
+def _entry_declaring(
+    hass: HomeAssistant, lock_entry: er.RegistryEntry, *others: str
+) -> MockConfigEntry:
+    """Return an entry that holds these locks and declares the first codeless."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        unique_id="Mock Title",
+        data={
+            **BASE_CONFIG,
+            CONF_LOCKS: [*others, lock_entry.entity_id],
+            CONF_MEMBERS: {lock_entry.id: {CONF_CODELESS: True}},
+        },
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_the_options_flow_seeds_each_lock_into_the_field_that_declares_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The form opens showing what the entry says, split the way it says it.
+
+    Seeding both fields from the roster alone -- or all of it into the
+    ordinary field -- would make the very first save move every declared
+    member out, silently discarding the codes Lock Code Manager was holding
+    for it.
+    """
+    codeless = register_codeless_lock(hass)
+    entry = _entry_declaring(hass, codeless, LOCK_1_ENTITY_ID)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    schema = result["data_schema"].schema
+    defaults = {
+        str(key): key.default() for key in schema if key.default is not vol.UNDEFINED
+    }
+    assert defaults[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert defaults[CONF_CODELESS_LOCKS] == [codeless.entity_id]
+
+
+async def test_moving_a_lock_to_the_ordinary_field_undoes_the_declaration(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A member handed back stops resolving to the Lock Code Manager store.
+
+    Written with a lock a provider claims, because that is the only case
+    where handing it back leaves something able to manage it. Read through
+    dispatch rather than off the stored dict: the declaration is what picks
+    the provider, and an assertion on the shape passes just as well while
+    the member goes on resolving to the store it was supposed to leave.
+    """
+    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
+    entry = _entry_declaring(hass, claimed)
     users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
 
     started = await hass.config_entries.options.async_init(entry.entry_id)
-    flow_id = started["flow_id"]
 
     with _holding():
         result = await hass.config_entries.options.async_configure(
-            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-        )
-    # Its own question, not the one a lock nothing claims gets: declining
-    # here hands the lock to the provider that claims it now and saves,
-    # rather than refusing the submission.
-    await _menu_about(result, claimed, "codeless_reconsider")
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_decline"}
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_CODELESS_LOCKS: [],
+                CONF_USERS: users,
+            },
         )
 
-    # Not refused: something claims this lock now, so declining hands it to
-    # that provider rather than leaving a lock nothing can manage.
     assert result["type"] == "create_entry"
-    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID]
-    # Read the way dispatch reads it, not as a dict. What declining buys is
-    # the provider that claims the lock now taking it back; an assertion on
-    # the stored shape passes just as well while the member goes on
-    # resolving to the Lock Code Manager store.
     assert (
         resolve_member_provider_class(
             dr.async_get(hass), EntryConfig.from_mapping(result["data"]), claimed
@@ -2984,61 +3156,22 @@ async def test_a_declared_member_a_provider_now_claims_is_still_asked_about(
     )
 
 
-async def test_an_answer_about_a_lock_the_same_visit_drops_is_not_stored(
+async def test_handing_back_a_lock_nothing_claims_is_refused(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    A yes is not written back about a lock the submission no longer holds.
+    A declared member is not grandfathered into the ordinary field.
 
-    The answer outlives the question it answered: it is cached for the life
-    of the flow, so a re-submission refused for some unrelated reason -- a
-    sibling lock too asleep to report its occupancy -- comes back with the
-    yes still held. Dropping the lock is the obvious reaction to that
-    refusal, and storing the answer anyway leaves a declaration about a
-    member the entry does not have, waiting to decide the provider for
-    whatever is added under that registry id next.
+    The roster grandfathering exists so one unclaimed lock an old entry
+    carries does not refuse every subsequent edit. Applying it to a member
+    the entry declares CODELESS would wave through the one move that has no
+    landing: nothing claims this lock, so there is no provider to hand it
+    to, and the entry would save a member it cannot set up.
     """
     codeless = register_codeless_lock(hass)
-    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
-    entry.add_to_hass(hass)
+    entry = _entry_declaring(hass, codeless, LOCK_1_ENTITY_ID)
     users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
 
-    started = await hass.config_entries.options.async_init(entry.entry_id)
-    flow_id = started["flow_id"]
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id,
-            user_input={
-                CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
-                CONF_USERS: users,
-            },
-        )
-    await _menu_about(result, codeless)
-
-    async def _unreadable(self, slots=None):
-        raise LockCodeManagerError("lock is asleep")
-
-    # Yes -- and the re-submission it causes fails over the sibling lock.
-    with patch.object(MockLCMLock, "async_get_usercodes", _unreadable):
-        result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_confirm"}
-        )
-
-    assert result["errors"] == {"base": "occupancy_unknown"}
-
-    # So the lock that was answered about is dropped instead.
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-        )
-
-    assert result["type"] == "create_entry"
-    assert result["data"][CONF_MEMBERS] == {}
-
-    # And the lock re-added later is a lock nobody has answered for, rather
-    # than one that resolves to the Lock Code Manager store unasked.
-    hass.config_entries.async_update_entry(entry, data=result["data"], options={})
     started = await hass.config_entries.options.async_init(entry.entry_id)
 
     with _holding():
@@ -3046,11 +3179,16 @@ async def test_an_answer_about_a_lock_the_same_visit_drops_is_not_stored(
             started["flow_id"],
             user_input={
                 CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
+                CONF_CODELESS_LOCKS: [],
                 CONF_USERS: users,
             },
         )
 
-    await _menu_about(result, codeless)
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_LOCKS: "unclaimed_lock"}
+    assert result["description_placeholders"]["locks"] == codeless.entity_id
+    # Nothing was written, so the member is still what it was.
+    assert get_entry_config(entry).is_codeless(codeless)
 
 
 async def test_dropping_a_lock_drops_what_was_declared_about_it(
@@ -3060,19 +3198,11 @@ async def test_dropping_a_lock_drops_what_was_declared_about_it(
     A declaration about a member the entry no longer holds is not carried forward.
 
     Nothing reads it while the lock is gone, so the cost is invisible until
-    the entry has collected one husk per lock anybody ever removed.
+    the entry has collected one husk per lock anybody ever removed -- and
+    then re-adding that lock finds a declaration nobody made this time.
     """
     codeless = register_codeless_lock(hass)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="test",
-        data={
-            **BASE_CONFIG,
-            CONF_LOCKS: [LOCK_1_ENTITY_ID, codeless.entity_id],
-            CONF_MEMBERS: {codeless.id: {CONF_CODELESS: True}},
-        },
-    )
-    entry.add_to_hass(hass)
+    entry = _entry_declaring(hass, codeless, LOCK_1_ENTITY_ID)
     users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
 
     started = await hass.config_entries.options.async_init(entry.entry_id)
@@ -3080,11 +3210,13 @@ async def test_dropping_a_lock_drops_what_was_declared_about_it(
     with _holding():
         result = await hass.config_entries.options.async_configure(
             started["flow_id"],
-            user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users},
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_CODELESS_LOCKS: [],
+                CONF_USERS: users,
+            },
         )
 
-    # Nothing was asked -- the lock simply left -- and the declaration left
-    # with it.
     assert result["type"] == "create_entry"
     assert result["data"][CONF_MEMBERS] == {}
 
@@ -3093,15 +3225,12 @@ async def test_re_adding_a_dropped_lock_does_not_resurrect_its_declaration(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    A lock the entry forgot about comes back as a lock nobody has answered for.
+    A lock the entry forgot about comes back as a lock nobody declared.
 
-    Written with a lock a provider claims, because that is where the stale
+    Written with a lock a provider claims, because that is where a stale
     declaration has teeth: dispatch reads the declaration FIRST, so one left
-    behind decides the provider for a lock with real code storage. It is
-    survivable only because the flow now asks about declared members too --
-    which is the tell this test reads. A lock re-added with nothing declared
-    about it saves in one round trip; one carrying a husk stops to ask a
-    question the user already answered, about a lock they never declared.
+    behind would decide the provider for a lock with real code storage and
+    quietly move its codes into Lock Code Manager.
     """
     reused = er.async_get(hass).async_get(LOCK_2_ENTITY_ID)
     entry = MockConfigEntry(
@@ -3116,7 +3245,11 @@ async def test_re_adding_a_dropped_lock_does_not_resurrect_its_declaration(
     with _holding():
         result = await hass.config_entries.options.async_configure(
             dropped["flow_id"],
-            user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users},
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_CODELESS_LOCKS: [],
+                CONF_USERS: users,
+            },
         )
     assert result["data"][CONF_MEMBERS] == {}
     hass.config_entries.async_update_entry(entry, data=result["data"], options={})
@@ -3127,157 +3260,32 @@ async def test_re_adding_a_dropped_lock_does_not_resurrect_its_declaration(
             re_added["flow_id"],
             user_input={
                 CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+                CONF_CODELESS_LOCKS: [],
                 CONF_USERS: users,
             },
         )
 
     assert result["type"] == "create_entry"
     assert result["data"][CONF_MEMBERS] == {}
-
-
-async def test_the_options_flow_asks_nothing_when_no_lock_needs_it(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """Editing users on an entry of ordinary locks is one round trip, as before."""
-    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
-    entry.add_to_hass(hass)
-
-    started = await hass.config_entries.options.async_init(entry.entry_id)
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            started["flow_id"],
-            user_input={
-                CONF_LOCKS: [LOCK_1_ENTITY_ID],
-                CONF_USERS: {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}},
-            },
-        )
-
-    assert result["type"] == "create_entry"
-
-
-async def test_reauth_asks_about_a_lock_nothing_claims(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """
-    Reauth renders the same picker, so it is a third way in.
-
-    Without the question, somebody repairing one broken lock could swap in a
-    codeless one and land straight back in reauth, with nothing telling them
-    why.
-    """
-    codeless = register_codeless_lock(hass)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="test",
-        data={
-            CONF_LOCKS: [LOCK_1_ENTITY_ID],
-            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
-            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
-        },
-    )
-    entry.add_to_hass(hass)
-    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
-    await hass.async_block_till_done()
-    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-
-    result = await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {CONF_LOCKS: [codeless.entity_id]}
-    )
-    await _menu_about(result, codeless)
-
-    result = await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {"next_step_id": "codeless_confirm"}
-    )
-    await hass.async_block_till_done()
-
-    assert result["type"] == "abort"
-    assert result["reason"] == "locks_updated"
-    assert entry.data[CONF_LOCKS] == [codeless.entity_id]
-    assert entry.data[CONF_MEMBERS] == {codeless.id: {CONF_CODELESS: True}}
-
-
-async def test_an_answer_applies_only_to_the_member_it_was_asked_about(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """
-    Declining a lock just added leaves an unrelated declared member alone.
-
-    The set asked about mixes two populations: a lock nothing claims that
-    this submission adds, and every member the entry already declares. One
-    Yes/No over both meant an answer aimed at the newcomer was recorded
-    against the other member too -- so saying "no, don't manage that new
-    lock" stripped the declaration off a lock somebody had said must never
-    be written to, and handed it straight back to its provider.
-    """
-    claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="test",
-        data={**BASE_CONFIG, CONF_MEMBERS: {claimed.id: {CONF_CODELESS: True}}},
-    )
-    entry.add_to_hass(hass)
-    newcomer = register_codeless_lock(hass)
-    users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
-
-    started = await hass.config_entries.options.async_init(entry.entry_id)
-    flow_id = started["flow_id"]
-
-    # Both locks are asked about, one question each, in the order submitted.
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id,
-            user_input={
-                CONF_LOCKS: [LOCK_1_ENTITY_ID, newcomer.entity_id],
-                CONF_USERS: users,
-            },
-        )
-    await _menu_about(result, claimed, "codeless_reconsider")
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_confirm"}
-        )
-    await _menu_about(result, newcomer)
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_decline"}
-        )
-
-    # The refusal names the newcomer and nothing else.
-    assert result["errors"] == {CONF_LOCKS: "codeless_declined"}
-    assert result["description_placeholders"]["locks"] == newcomer.entity_id
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-        )
-
-    # Read the way dispatch reads it: what matters is that the untouched
-    # member still resolves to the Lock Code Manager store, which an
-    # assertion on the stored shape alone would not settle.
-    assert result["type"] == "create_entry"
     assert (
         resolve_member_provider_class(
-            dr.async_get(hass), EntryConfig.from_mapping(result["data"]), claimed
+            dr.async_get(hass), EntryConfig.from_mapping(result["data"]), reused
         )
-        is CodelessLock
+        is MockLCMLock
     )
 
 
-async def test_taking_a_declaration_back_is_sized_against_the_real_lock(
+async def test_handing_a_member_back_is_sized_against_the_real_lock(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
     Capacity is checked against the provider the lock is about to become.
 
-    Reading the STORED declaration made a pending answer invisible to the
-    very validation the answer triggers a re-run of: the lock still resolved
-    to the Lock Code Manager store -- no capacity and nothing in it -- so a
-    configuration far too large for the real lock saved without a word, and
-    every user past the lock's last slot silently failed to be written from
-    then on.
+    Reading the STORED declaration made the pending move invisible to the
+    very validation the move triggers: the lock still resolved to the Lock
+    Code Manager store -- no capacity and nothing in it -- so a configuration
+    far too large for the real lock saved without a word, and every user past
+    the lock's last slot silently failed to be written from then on.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
     users = {
@@ -3297,20 +3305,18 @@ async def test_taking_a_declaration_back_is_sized_against_the_real_lock(
     entry.add_to_hass(hass)
 
     started = await hass.config_entries.options.async_init(entry.entry_id)
-    flow_id = started["flow_id"]
     # Two slots is fewer than the three users, so only a check that reaches
     # the real lock can refuse this.
     probe = _capacity_probe(return_value=_capabilities_with_slots(2))
 
     with probe, _holding():
         result = await hass.config_entries.options.async_configure(
-            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-        )
-    await _menu_about(result, claimed, "codeless_reconsider")
-
-    with probe, _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_decline"}
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_CODELESS_LOCKS: [],
+                CONF_USERS: users,
+            },
         )
 
     assert result["type"] == "form"
@@ -3320,37 +3326,92 @@ async def test_taking_a_declaration_back_is_sized_against_the_real_lock(
     assert get_entry_config(entry).is_codeless(claimed)
 
 
-async def test_both_lock_refusals_render_from_one_submission(
-    hass: HomeAssistant, mock_lock_config_entry, mqtt_mock, mqtt_teardown
+async def test_the_options_flow_is_one_round_trip_when_nothing_is_declared(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Editing users on an entry of ordinary locks saves without a detour."""
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
+    entry.add_to_hass(hass)
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+
+    with _holding():
+        result = await hass.config_entries.options.async_configure(
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_CODELESS_LOCKS: [],
+                CONF_USERS: {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}},
+            },
+        )
+
+    assert result["type"] == "create_entry"
+
+
+async def test_reauth_can_declare_a_lock_codeless(
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    A selection with one of each problem says so once, not over two visits.
+    Reauth renders both pickers, so it is a third way to declare.
 
-    Refusing on the first and returning hid the second entirely: the user
-    fixed what they were shown, submitted again, and was refused again for
-    something that had been wrong all along.
+    Without the second field, somebody repairing a broken lock would have
+    nowhere to put the codeless one they are replacing it with, and would
+    land straight back in reauth.
     """
-    hass.states.async_set("lock.yaml_only", LockState.LOCKED)
-    unclaimed = await async_discover_unclaimed_mqtt_lock(hass)
-    flow_id = await _init_flow_to_user_step(hass)
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id,
-        {
-            CONF_NAME: "test",
-            CONF_LOCKS: [LOCK_1_ENTITY_ID, "lock.yaml_only", unclaimed.entity_id],
+    codeless = register_codeless_lock(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"user 1": 1},
         },
     )
+    entry.add_to_hass(hass)
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
 
-    assert result["type"] == "form"
-    assert result["step_id"] == "user"
-    assert result["errors"] == {
-        "base": "lock_not_registered",
-        CONF_LOCKS: "unsupported_mqtt_lock",
-    }
-    # Named apart, so one flat mapping renders both messages.
-    assert result["description_placeholders"]["unregistered_locks"] == "lock.yaml_only"
-    assert result["description_placeholders"]["locks"] == unclaimed.entity_id
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"],
+        {CONF_LOCKS: [], CONF_CODELESS_LOCKS: [codeless.entity_id]},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    assert entry.data[CONF_LOCKS] == [codeless.entity_id]
+    assert (
+        resolve_member_provider_class(
+            dr.async_get(hass), get_entry_config(entry), codeless
+        )
+        is CodelessLock
+    )
+
+
+async def test_reauth_seeds_each_lock_into_the_field_that_declares_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Reauth opens on the entry's own split, like the options form.
+
+    A user repairing one lock submits the form largely unchanged, so a
+    declared member seeded into the wrong field would be handed back by a
+    repair that was never about it.
+    """
+    codeless = register_codeless_lock(hass)
+    entry = _entry_declaring(hass, codeless, LOCK_1_ENTITY_ID)
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"])
+
+    schema = result["data_schema"].schema
+    defaults = {str(key): key.default() for key in schema}
+    assert defaults[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert defaults[CONF_CODELESS_LOCKS] == [codeless.entity_id]
 
 
 # --- One lock, one answer, however many configurations manage it ---
@@ -3381,29 +3442,30 @@ def _sibling_declaring(
     return entry
 
 
-async def test_a_lock_another_entry_declares_is_asked_about_here_too(
+async def test_agreeing_with_a_sibling_is_a_selection_this_entry_can_make(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    Agreeing has to be an answer this entry can give.
+    A lock another entry declares stays selectable in the codeless field here.
 
-    A lock a provider claims is otherwise never asked about, so an entry
-    adding one that another entry declares codeless could only ever
-    contradict it -- and would then be refused with no answer available that
-    was not. The question is asked because a sibling already answered it,
-    not because dispatch came up empty.
+    Excluding it -- it is claimed, after all -- would leave an entry adding
+    that lock only able to contradict its sibling, and then be refused with
+    no selection available that was not. Agreeing has to be expressible.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
     _sibling_declaring(hass, claimed, declares=True)
+
+    config = await _codeless_field(hass)
+    assert LOCK_1_ENTITY_ID not in config["exclude_entities"]
+
     flow_id = await _init_flow_to_user_step(hass)
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-    )
-    await _menu_about(result, claimed, "codeless_reconsider")
-
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "codeless_confirm"}
+    await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [],
+            CONF_CODELESS_LOCKS: [LOCK_1_ENTITY_ID],
+        },
     )
     await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
     await hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 1})
@@ -3413,8 +3475,6 @@ async def test_a_lock_another_entry_declares_is_asked_about_here_too(
         )
 
     assert result["type"] == "create_entry"
-    # Read the way dispatch reads it: the entry agrees with its sibling
-    # about what the member IS, not merely about what to store.
     assert (
         resolve_member_provider_class(
             dr.async_get(hass), EntryConfig.from_mapping(result["data"]), claimed
@@ -3427,12 +3487,12 @@ async def test_a_second_configuration_may_not_contradict_the_first(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    Two entries answering differently is refused, and the other one is named.
+    Two entries disagreeing is refused, and the other one is named.
 
     Whether a lock keeps codes of its own is a fact about the device, so the
     disagreement is not a configuration but a contradiction -- and one with
-    teeth, because the two answers resolve to two credential stores over one
-    entity and a Personal Identification Number lands in whichever the
+    teeth, because the two selections resolve to two credential stores over
+    one entity and a Personal Identification Number lands in whichever the
     caller happened to reach. The refusal names the other configuration
     because reconciling it is the only way through.
     """
@@ -3440,18 +3500,20 @@ async def test_a_second_configuration_may_not_contradict_the_first(
     _sibling_declaring(hass, claimed, declares=True)
     flow_id = await _init_flow_to_user_step(hass)
 
-    await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-    )
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "codeless_decline"}
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_CODELESS_LOCKS: [],
+        },
     )
 
     assert result["type"] == "form"
     assert result["step_id"] == "user"
-    assert result["errors"] == {CONF_LOCKS: "codeless_conflict"}
+    assert result["errors"] == {CONF_CODELESS_LOCKS: "codeless_conflict"}
     assert result["description_placeholders"] == {
-        "locks": f"{LOCK_1_ENTITY_ID} (Upstairs Codes)"
+        "codeless_locks": f"{LOCK_1_ENTITY_ID} (Upstairs Codes)"
     }
     # Nothing was created, so there is no second store for the refusal to
     # have been merely cosmetic about.
@@ -3474,16 +3536,18 @@ async def test_declaring_a_lock_another_entry_holds_undeclared_is_refused(
     _sibling_declaring(hass, codeless, declares=False)
     flow_id = await _init_flow_to_user_step(hass)
 
-    await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [codeless.entity_id]}
-    )
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "codeless_confirm"}
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [],
+            CONF_CODELESS_LOCKS: [codeless.entity_id],
+        },
     )
 
-    assert result["errors"] == {CONF_LOCKS: "codeless_conflict"}
+    assert result["errors"] == {CONF_CODELESS_LOCKS: "codeless_conflict"}
     assert result["description_placeholders"] == {
-        "locks": f"{codeless.entity_id} (Upstairs Codes)"
+        "codeless_locks": f"{codeless.entity_id} (Upstairs Codes)"
     }
 
 
@@ -3493,36 +3557,29 @@ async def test_the_options_flow_may_not_take_back_what_a_sibling_declares(
     """
     Handing a shared lock back is a decision both configurations have to make.
 
-    Taking the declaration back here alone would leave the sibling holding
-    the lock's codes in Lock Code Manager while this entry started writing
-    them to the device -- the same entity, two stores. Removing the lock
-    from one of the two is the way through, which is what the refusal says.
+    Moving it out here alone would leave the sibling holding the lock's codes
+    in Lock Code Manager while this entry started writing them to the device
+    -- the same entity, two stores. Removing the lock from one of the two is
+    the way through, which is what the refusal says.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
     _sibling_declaring(hass, claimed, declares=True)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="test",
-        data={**BASE_CONFIG, CONF_MEMBERS: {claimed.id: {CONF_CODELESS: True}}},
-    )
-    entry.add_to_hass(hass)
+    entry = _entry_declaring(hass, claimed)
     users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
 
     started = await hass.config_entries.options.async_init(entry.entry_id)
-    flow_id = started["flow_id"]
     with _holding():
         result = await hass.config_entries.options.async_configure(
-            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-        )
-    await _menu_about(result, claimed, "codeless_reconsider")
-
-    with _holding():
-        result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_decline"}
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_CODELESS_LOCKS: [],
+                CONF_USERS: users,
+            },
         )
 
     assert result["type"] == "form"
-    assert result["errors"] == {CONF_LOCKS: "codeless_conflict"}
+    assert result["errors"] == {CONF_CODELESS_LOCKS: "codeless_conflict"}
     # The declaration is still the one the entry runs on, so the member
     # keeps resolving to the store the sibling is also reading.
     assert get_entry_config(entry).is_codeless(claimed)
@@ -3532,30 +3589,25 @@ async def test_the_entry_being_edited_does_not_contradict_itself(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    An entry's own stored answer is the one being replaced, not an obstacle.
+    An entry's own stored declaration is the one being replaced, not an obstacle.
 
     The sibling scan reads every OTHER entry; reading this one too would
-    refuse every answer that changed anything, so a declaration could never
-    be taken back at all -- the exit the menu exists to offer.
+    refuse every submission that changed anything, so a declaration could
+    never be taken back at all -- the exit the second field exists to offer.
     """
     claimed = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="test",
-        data={**BASE_CONFIG, CONF_MEMBERS: {claimed.id: {CONF_CODELESS: True}}},
-    )
-    entry.add_to_hass(hass)
+    entry = _entry_declaring(hass, claimed)
     users = {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}}
 
     started = await hass.config_entries.options.async_init(entry.entry_id)
-    flow_id = started["flow_id"]
-    with _holding():
-        await hass.config_entries.options.async_configure(
-            flow_id, user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID], CONF_USERS: users}
-        )
     with _holding():
         result = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": "codeless_decline"}
+            started["flow_id"],
+            user_input={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_CODELESS_LOCKS: [],
+                CONF_USERS: users,
+            },
         )
 
     assert result["type"] == "create_entry"
@@ -3571,11 +3623,11 @@ async def test_reauth_may_not_contradict_a_sibling_either(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """
-    Reauth renders the same picker, so it is a third way to introduce the pair.
+    Reauth renders the same pickers, so it is a third way to introduce the pair.
 
     The entry being repaired is left out of the scan the way the edited entry
-    is -- it is the one whose answer is being rewritten -- so what refuses
-    here is genuinely another configuration.
+    is -- it is the one whose declaration is being rewritten -- so what
+    refuses here is genuinely another configuration.
     """
     codeless = register_codeless_lock(hass)
     _sibling_declaring(hass, codeless, declares=False)
@@ -3593,15 +3645,13 @@ async def test_reauth_may_not_contradict_a_sibling_either(
     await hass.async_block_till_done()
     [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
 
-    await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {CONF_LOCKS: [codeless.entity_id]}
-    )
     result = await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {"next_step_id": "codeless_confirm"}
+        flow["flow_id"],
+        {CONF_LOCKS: [], CONF_CODELESS_LOCKS: [codeless.entity_id]},
     )
 
     assert result["type"] == "form"
-    assert result["errors"] == {CONF_LOCKS: "codeless_conflict"}
+    assert result["errors"] == {CONF_CODELESS_LOCKS: "codeless_conflict"}
     # The repair did not land, so the entry still holds the lock it came in
     # with rather than one two configurations disagree about.
     assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
@@ -3614,18 +3664,23 @@ async def test_a_configuration_that_does_not_manage_the_lock_has_no_say(
     Only entries that HOLD the member answer for it.
 
     A declaration left behind by an entry that no longer lists the lock is
-    not an opinion about anything -- nothing resolves it -- so reading one
-    would refuse an answer no live provider contradicts, and a lock nothing
-    else manages could never be declared while any other configuration
-    existed.
+    not an opinion about anything -- nothing resolves it, so no store exists
+    to disagree with. Read anyway, a husk in some unrelated configuration
+    would refuse a selection no live provider contradicts, and the lock it
+    names could never be added to anything again.
+
+    The leftover is about a lock this flow puts in the ORDINARY field,
+    because that is the direction a stale "yes" contradicts: agreeing with a
+    husk is indistinguishable from ignoring it.
     """
-    codeless = register_codeless_lock(hass)
+    stale = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
     elsewhere = MockConfigEntry(
         domain=DOMAIN,
         title="Garage Codes",
         unique_id="garage_codes",
         data={
             CONF_LOCKS: [LOCK_2_ENTITY_ID],
+            CONF_MEMBERS: {stale.id: {CONF_CODELESS: True}},
             CONF_USERS: {"Ada": {CONF_PIN: "1111", CONF_ENABLED: True}},
             CONF_SLOT_ASSIGNMENT: {"ada": 9},
         },
@@ -3633,11 +3688,13 @@ async def test_a_configuration_that_does_not_manage_the_lock_has_no_say(
     elsewhere.add_to_hass(hass)
     flow_id = await _init_flow_to_user_step(hass)
 
-    await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [codeless.entity_id]}
-    )
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "codeless_confirm"}
+        flow_id,
+        {
+            CONF_NAME: "test",
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_CODELESS_LOCKS: [],
+        },
     )
 
     assert result["type"] == "menu"

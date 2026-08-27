@@ -48,7 +48,7 @@ Supported lock integrations:
 | [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | ✅ | ❌ | ❌ | Local API, polling-based |
 | [Virtual][wiki-virtual]¹ | ✅ | ❌ | ✅ | A credential store rather than a device: records uses reported by the `use_credential` action, and lets you try Lock Code Manager without a real lock |
-| Any other lock, declared codeless⁴ | ✅ | ❌ | ✅ | For a lock with no code support of its own (ESPHome and similar): Lock Code Manager holds the codes and checks uses reported with the `use_credential` action. The lock itself is never written to |
+| Any other lock, with no code storage⁴ | ✅ | ❌ | ✅ | For a lock with no code support of its own (ESPHome and similar): Lock Code Manager holds the codes and checks uses reported with the `use_credential` action. The lock itself is never written to |
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])
@@ -73,17 +73,22 @@ MQTT api; gateway type **Named** or **ValueID** gives full functionality includi
 push updates and PIN-used events, while **Manual** runs polling-only. Configure Home
 Assistant’s **MQTT** integration on the same broker zwave-js-ui uses.
 
-⁴ **Codeless locks** — Pick any `lock` entity Home Assistant has in its entity
-registry (any lock with a unique ID) during setup. If no provider claims it,
-Lock Code Manager asks whether it should hold that lock's codes itself; say yes and it
-stores them, checks codes you report with the `use_credential` action against your users
-and their schedules, and records each use like any other. Nothing is ever written to the
-lock, so something else has to check the code — a keypad automation, an intercom, a door
-controller. This covers ESPHome and any other integration without code support, and it
-means a keypad-only setup no longer needs a separate virtual lock integration. You are
-asked again each time you edit the configuration, so the answer can be changed later —
-but only once per visit: if you answer no and change your mind, close the dialog and
-start over.
+⁴ **Codeless locks** — Setup, reauth and the options dialog all show two lock
+pickers. The first offers the locks Lock Code Manager writes PIN codes to. The
+second, **Locks with no code storage**, offers everything else: any `lock` entity
+in Home Assistant's entity registry that no Lock Code Manager provider claims.
+Pick a lock there and Lock Code Manager stores its codes itself, checks codes you
+report with the `lock_code_manager.use_credential` action against your users and
+their schedules, and records each use like any other. Nothing is ever written to
+the lock, so something else has to check the code — a keypad automation, an
+intercom, a door controller. This covers ESPHome and any other integration
+without code support, and it means a keypad-only setup no longer needs a separate
+virtual lock integration.
+
+Move a lock back to the first picker, or remove it, and Lock Code Manager stops
+holding its codes — the ones it was holding are discarded. See the
+[External Keypads](https://github.com/raman325/lock_code_manager/wiki/External-Keypads)
+wiki page.
 
 [zigbee2mqtt]: https://www.zigbee2mqtt.io/
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
@@ -109,8 +114,8 @@ libraries. See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Uns
 for details.
 
 An integration whose locks simply have no code storage — ESPHome, for one — is a different
-case, and is supported: declare the lock codeless during setup and Lock Code Manager keeps
-its credentials itself (see note ⁴ above).
+case, and is supported: pick the lock under **Locks with no code storage** during setup and
+Lock Code Manager keeps its credentials itself (see note ⁴ above).
 
 ## Condition Entity Integrations Not Supported
 

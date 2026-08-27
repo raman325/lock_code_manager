@@ -18,10 +18,12 @@
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
       "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "lock_not_registered": "Home Assistant has no entity registry entry for {unregistered_locks}, so Lock Code Manager has nothing stable to attach their configuration to and cannot be set up with them. A lock set up in YAML without a unique ID is the usual cause: give it one, or select a different lock.",
-      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
+      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}. If one of them keeps no PIN codes of its own, select it under “Locks with no code storage” instead.",
       "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true",
-      "codeless_conflict": "Another Lock Code Manager configuration already manages {locks}, and does not agree about where the codes for it live. A lock either has code storage of its own or it does not, and every configuration that manages it has to say the same thing. Answer the same way here, or remove the lock from one of the two configurations.",
-      "codeless_declined": "Lock Code Manager has no way to manage codes on {locks}. Remove them from the list to continue. Your \"no\" stands for the rest of this attempt -- to let Lock Code Manager hold their codes after all, close this dialog and start again."
+      "codeless_conflict": "Another Lock Code Manager configuration does not agree about where the codes for {codeless_locks} live. A lock either has code storage of its own or it does not, and every configuration that manages it has to say the same thing. Select the lock in the same field the other configuration uses, or remove it from one of the two configurations.",
+      "unclaimed_lock": "No Lock Code Manager provider claims {locks}. If a lock keeps no PIN codes of its own, select it under “Locks with no code storage” instead and Lock Code Manager will hold its codes for you.",
+      "lock_in_both_fields": "{codeless_locks} are selected in both lock fields. A lock belongs in one or the other: “Locks” if its own integration stores the codes, “Locks with no code storage” if Lock Code Manager holds them instead.",
+      "codeless_lock_claimed": "Lock Code Manager can already read and write the codes on {codeless_locks} through their own integration, so it must not hold codes for them as well — codes it held would never reach the lock. Select them under “Locks” instead."
     },
     "step": {
       "choose_path": {
@@ -52,10 +54,15 @@
       "user": {
         "data": {
           "locks": "Locks",
-          "name": "Name"
+          "name": "Name",
+          "codeless_locks": "Locks with no code storage"
         },
         "description": "Give this configuration a unique name (e.g. `House Locks`) and select the locks you would like to manage with it.",
-        "title": "Lock Code Manager"
+        "title": "Lock Code Manager",
+        "data_description": {
+          "locks": "Locks whose own integration stores the PIN codes, which Lock Code Manager writes to and reads back.",
+          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See https://github.com/raman325/lock_code_manager/wiki/External-Keypads"
+        }
       },
       "yaml": {
         "data": {
@@ -66,25 +73,14 @@
       },
       "reauth_confirm": {
         "data": {
-          "locks": "Locks"
+          "locks": "Locks",
+          "codeless_locks": "Locks with no code storage"
         },
         "description": "The lock `{lock}`, in the configuration for `{name}`, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
-        "title": "Update locks for {name}"
-      },
-      "codeless": {
-        "title": "Locks with no code storage",
-        "description": "Lock Code Manager can't read or write codes on {lock}.\n\nIt can still manage codes for this lock: it stores them itself, and checks codes you report with the `use_credential` action against your users and their schedules, recording each use like any other. The lock itself is never written to, so a code set up here does not open it on its own -- something else has to check it, such as a keypad automation calling `use_credential`.\n\nAnswer only for this lock; anything else you selected is asked about separately. Choose \"No\" to return to the lock list and select different locks. Your answer stands for the rest of this attempt -- to change it, close this dialog and start again.",
-        "menu_options": {
-          "codeless_confirm": "Yes, Lock Code Manager holds the codes for this lock",
-          "codeless_decline": "No, don't manage codes for this lock"
-        }
-      },
-      "codeless_reconsider": {
-        "title": "Lock Code Manager still holds this lock's codes",
-        "description": "Lock Code Manager currently holds the codes for {lock} itself, because you said it has no code storage of its own. Something now claims that lock, so the answer is worth confirming.\n\nChoose \"Yes\" and nothing changes: the codes stay in Lock Code Manager, the lock is never written to, and a code reaches it only through the `use_credential` action. Choose \"No\" and the lock's own integration takes over, so the codes get written to the device from then on -- the codes Lock Code Manager was holding for it are discarded.\n\nAnswer only for this lock; anything else you selected is asked about separately. Your answer stands for the rest of this attempt -- to change it, close this dialog and start again.",
-        "menu_options": {
-          "codeless_confirm": "Yes, Lock Code Manager keeps holding the codes",
-          "codeless_decline": "No, hand this lock back to its own integration"
+        "title": "Update locks for {name}",
+        "data_description": {
+          "locks": "Locks whose own integration stores the PIN codes, which Lock Code Manager writes to and reads back.",
+          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See https://github.com/raman325/lock_code_manager/wiki/External-Keypads"
         }
       }
     }
@@ -162,33 +158,24 @@
       "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
       "lock_not_registered": "Home Assistant has no entity registry entry for {unregistered_locks}, so Lock Code Manager has nothing stable to attach their configuration to and cannot be set up with them. A lock set up in YAML without a unique ID is the usual cause: give it one, or select a different lock.",
-      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
-      "codeless_conflict": "Another Lock Code Manager configuration already manages {locks}, and does not agree about where the codes for it live. A lock either has code storage of its own or it does not, and every configuration that manages it has to say the same thing. Answer the same way here, or remove the lock from one of the two configurations.",
-      "codeless_declined": "Lock Code Manager has no way to manage codes on {locks}. Remove them from the list to continue. Your \"no\" stands for the rest of this attempt -- to let Lock Code Manager hold their codes after all, close this dialog and start again."
+      "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}. If one of them keeps no PIN codes of its own, select it under “Locks with no code storage” instead.",
+      "codeless_conflict": "Another Lock Code Manager configuration does not agree about where the codes for {codeless_locks} live. A lock either has code storage of its own or it does not, and every configuration that manages it has to say the same thing. Select the lock in the same field the other configuration uses, or remove it from one of the two configurations.",
+      "unclaimed_lock": "No Lock Code Manager provider claims {locks}. If a lock keeps no PIN codes of its own, select it under “Locks with no code storage” instead and Lock Code Manager will hold its codes for you.",
+      "lock_in_both_fields": "{codeless_locks} are selected in both lock fields. A lock belongs in one or the other: “Locks” if its own integration stores the codes, “Locks with no code storage” if Lock Code Manager holds them instead.",
+      "codeless_lock_claimed": "Lock Code Manager can already read and write the codes on {codeless_locks} through their own integration, so it must not hold codes for them as well — codes it held would never reach the lock. Select them under “Locks” instead."
     },
     "step": {
       "init": {
         "data": {
           "locks": "Locks",
-          "users": "Users YAML"
+          "users": "Users YAML",
+          "codeless_locks": "Locks with no code storage"
         },
         "description": "Update the locks that are associated with this config entry and/or the users.",
-        "title": "Lock Code Manager"
-      },
-      "codeless": {
-        "title": "Locks with no code storage",
-        "description": "Lock Code Manager can't read or write codes on {lock}.\n\nIt can still manage codes for this lock: it stores them itself, and checks codes you report with the `use_credential` action against your users and their schedules, recording each use like any other. The lock itself is never written to, so a code set up here does not open it on its own -- something else has to check it, such as a keypad automation calling `use_credential`.\n\nAnswer only for this lock; anything else you selected is asked about separately. Choose \"No\" to return to the lock list and select different locks. Your answer stands for the rest of this attempt -- to change it, close this dialog and start again.",
-        "menu_options": {
-          "codeless_confirm": "Yes, Lock Code Manager holds the codes for this lock",
-          "codeless_decline": "No, don't manage codes for this lock"
-        }
-      },
-      "codeless_reconsider": {
-        "title": "Lock Code Manager still holds this lock's codes",
-        "description": "Lock Code Manager currently holds the codes for {lock} itself, because you said it has no code storage of its own. Something now claims that lock, so the answer is worth confirming.\n\nChoose \"Yes\" and nothing changes: the codes stay in Lock Code Manager, the lock is never written to, and a code reaches it only through the `use_credential` action. Choose \"No\" and the lock's own integration takes over, so the codes get written to the device from then on -- the codes Lock Code Manager was holding for it are discarded.\n\nAnswer only for this lock; anything else you selected is asked about separately. Your answer stands for the rest of this attempt -- to change it, close this dialog and start again.",
-        "menu_options": {
-          "codeless_confirm": "Yes, Lock Code Manager keeps holding the codes",
-          "codeless_decline": "No, hand this lock back to its own integration"
+        "title": "Lock Code Manager",
+        "data_description": {
+          "locks": "Locks whose own integration stores the PIN codes, which Lock Code Manager writes to and reads back.",
+          "codeless_locks": "Locks that keep no PIN codes of their own — an ESPHome lock, or any door you unlock with a keypad Home Assistant reads for you. Lock Code Manager stores the codes for these itself and never writes anything to the lock: a code is checked only when something calls the `lock_code_manager.use_credential` action with the code that was entered, which is then matched against your users and their schedules and recorded like any other use. See https://github.com/raman325/lock_code_manager/wiki/External-Keypads"
         }
       }
     }

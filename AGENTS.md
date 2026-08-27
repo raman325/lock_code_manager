@@ -99,9 +99,9 @@ entities.
   differently is treated like one that left and came back
 - One lock entity resolves to one provider across every entry, because whether a lock keeps
   codes of its own is a fact about the DEVICE. The config, options and reauth flows refuse a
-  submission whose answer contradicts another entry that manages the same member
-  (`_sibling_declarations`, error `codeless_conflict`), and ask about a member a sibling
-  declares so that agreeing is an answer this entry can give
+  submission that contradicts another entry managing the same member
+  (`_sibling_declarations`, error `codeless_conflict`), and keep a member a sibling declares
+  selectable in the codeless picker so that agreeing is a selection this entry can make
 - Two entries holding one lock therefore share a single `BaseLock`, keyed on the entity id.
   Release is by object identity, so it stays the exact inverse of the share; `BaseLock`
   defines no `__eq__`/`__hash__` so a stale instance a reload replaced can never pass for
@@ -123,35 +123,40 @@ entities.
 - Multi-step flow: select locks → configure slots → configure individual slot properties
 - Validates slots aren't already configured across other config entries
 - Supports YAML object mode for advanced slot configuration
-- The lock picker accepts ANY `lock` entity, so `_check_lock_selection` enforces at
-  submit time what the selector cannot express: an entity with no entity registry row
-  is refused outright (`base: lock_not_registered` -- the same predicate
-  `async_setup_entry` refuses on, and not grandfathered, because an entry holding one does
-  not load), and a newly selected unclaimed mqtt lock is refused with
-  `locks: unsupported_mqtt_lock` (grandfathered, because that entry does load). Both
-  accumulate, on separate error keys and separate placeholders so one submission renders
-  both. A submitted lock no provider claims (mqtt excepted -- it keeps its own refusal)
-  goes to the `codeless` menu step, which asks whether Lock Code Manager should hold that
-  lock's codes. `CodelessDeclarationFlow` is mixed into the config, reauth and options
-  flows, and either answer re-submits what was asked about: confirming saves through the
-  ordinary path, declining lands back on the form with `codeless_declined`
-- ONE member per question, and an answer applies to that member alone -- the
-  re-submission finds the next unanswered member and asks again. A single Yes/No over the
-  whole set let an answer aimed at a newly added lock strip the declaration off an
-  unrelated member. Which of two menu steps is shown depends on the population:
-  `codeless` for a lock nothing claims (declining refuses the submission),
-  `codeless_reconsider` for a member already declared -- by this entry or by another one --
-  that something now claims (declining hands the lock to that provider and saves). Every
-  declared member is asked about whatever dispatch now makes of it, so a declaration always
-  has a way back, and an answer that contradicts another entry managing the same member is
-  refused with `codeless_conflict` naming it
+- **Two lock pickers, disjoint by construction.** `locks` is filtered to
+  `CONFIG_FLOW_PLATFORMS` (every platform dispatch can answer for, plus mqtt, whose dispatch
+  is per DEVICE); `codeless_locks` offers every `lock` entity with `exclude_entities` set to
+  the ones a provider actually claims, computed from the entity registry as the form is
+  built. Both merge into `CONF_LOCKS`; membership in the second is what `declare_codeless`
+  records as `CONF_CODELESS`. All three surfaces -- config, reauth, options -- render both,
+  seeded by `_stored_selection` so each lock opens in the field that expresses what the
+  entry declares about it
+- An unrecognised-bridge mqtt lock appears in BOTH pickers, and that is expected: the
+  allowlist is per platform and the exclusion is per device. The user decides
+- `_check_lock_selection` is the backstop, not the UX -- selector filters are UI-only, and a
+  YAML import or direct submission can send anything. At most one message per key, so
+  refusals that can render together are accumulated and ones that cannot are guarded:
+  `base: lock_not_registered` (either field, not grandfathered -- an entry holding one does
+  not load); `locks: unsupported_mqtt_lock` else `locks: unclaimed_lock` (both grandfathered
+  against what the entry already holds in the ORDINARY field, so an old entry's unclaimed
+  lock does not refuse every later edit, while moving a declared member out is still
+  refused); `codeless_locks: lock_in_both_fields` else `codeless_conflict` else
+  `codeless_lock_claimed`. Placeholders are named apart (`unregistered_locks`, `locks`,
+  `codeless_locks`) so one flat mapping renders all three
+- `_declared_codeless` is what both the codeless picker and `codeless_lock_claimed`
+  treat as settled: a member this entry or a sibling already declares stays selectable
+  whatever dispatch now makes of it, because `resolve_member_provider_class` reads the
+  declaration first and an excluded member would leave that entry unable to save at all
 - Everything that reads a lock during a flow reads it through `_pending_config` -- the
-  entry's configuration as this submission would leave it, answers included -- so
-  capacity and allocation size a member against the provider it is about to become rather
-  than the one it is leaving. On write, `declare_codeless` prunes anything about members
-  the submission no longer holds -- a stored declaration AND an answer just given, since a
-  yes outlives a re-submission refused for some other reason -- so re-adding a lock is
-  asked about afresh
+  entry's configuration as this submission would leave it -- so capacity and allocation size
+  a member against the provider it is about to become rather than the one it is leaving. On
+  write, `declare_codeless` prunes anything about members the submission no longer holds, so
+  re-adding a lock finds nothing declared about it
+- `_async_discard_reclaimed_credentials` runs on every surface before the save: a member
+  that leaves the codeless field -- moved to the other picker or dropped from the entry --
+  loses its store there and then, rather than through the update listener, which an
+  unloaded, disabled or failed entry does not have. Gated on whether a sibling still
+  declares the member, because a DROPPED member is outside what any refusal looks at
 
 ### Entities
 

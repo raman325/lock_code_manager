@@ -155,6 +155,10 @@ CONF_MEMBERS = "members"
 # no credential storage of its own, so Lock Code Manager holds them instead.
 # See EntryConfig.is_codeless().
 CONF_CODELESS = "codeless"
+# The config-flow field that collects those members. A form key, never
+# stored: both lock pickers merge into CONF_LOCKS, and which picker a lock
+# came from is what CONF_CODELESS records.
+CONF_CODELESS_LOCKS = "codeless_locks"
 CONF_SLOTS = "slots"
 CONF_USERS = "users"
 CONF_NUM_USERS = "num_users"
