@@ -450,7 +450,6 @@ def test_a_rename_keeps_the_users_number(
     config = EntryConfig(
         locks=(),
         members={},
-        availability_entities=(),
         users={name: {} for name in names},
         assignment=assignment,
         extra={},

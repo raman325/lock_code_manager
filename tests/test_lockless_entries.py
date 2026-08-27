@@ -1,4 +1,4 @@
-"""Tests for entries that manage no locks, and for availability sources."""
+"""Tests for entries that manage no locks."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_SOURCE,
     ATTR_TARGET,
-    CONF_AVAILABILITY_ENTITIES,
     CONF_ENABLED,
     CONF_LOCKS,
     CONF_NAME,
@@ -34,7 +33,6 @@ def _config(**overrides):
     """Return a lock-less entry configuration."""
     return {
         CONF_LOCKS: [],
-        CONF_AVAILABILITY_ENTITIES: [],
         # Same input shape the rest of the suite uses, converted on the way
         # in, so this test is not asserting against a config shape it
         # invented for itself.
@@ -108,14 +106,14 @@ async def test_lockless_entry_answers_use_credential(hass: HomeAssistant) -> Non
     assert response["user"] == "test1"
 
 
-async def test_lockless_entry_without_sources_stays_available(
+async def test_lockless_entry_stays_available(
     hass: HomeAssistant,
 ) -> None:
     """
     Nothing to follow is not the same as nothing being up.
 
-    An entry that names no locks and no availability sources has nothing that
-    could go down, so its entities must not present as unavailable.
+    An entry with no locks has nothing that could go down, so its entities
+    must not present as unavailable.
     """
     await _setup(hass)
 
@@ -123,30 +121,6 @@ async def test_lockless_entry_without_sources_stays_available(
 
     # A state change somewhere the entry never named must not reach it.
     hass.states.async_set(KEYPAD_STATUS_ENTITY, STATE_UNAVAILABLE)
-    await hass.async_block_till_done()
-
-    assert hass.states.get(SLOT_1_ACTIVE).state != STATE_UNAVAILABLE
-
-
-async def test_lockless_entry_follows_its_availability_source(
-    hass: HomeAssistant,
-) -> None:
-    """A named source going down takes the entry's entities with it."""
-    hass.states.async_set(KEYPAD_STATUS_ENTITY, "on")
-    await hass.async_block_till_done()
-
-    await _setup(hass, **{CONF_AVAILABILITY_ENTITIES: [KEYPAD_STATUS_ENTITY]})
-
-    assert hass.states.get(SLOT_1_ACTIVE).state != STATE_UNAVAILABLE
-
-    hass.states.async_set(KEYPAD_STATUS_ENTITY, STATE_UNAVAILABLE)
-    await hass.async_block_till_done()
-
-    assert hass.states.get(SLOT_1_ACTIVE).state == STATE_UNAVAILABLE
-
-    # And comes back with it, so an offline keypad is a temporary condition
-    # rather than an entry that has to be reloaded.
-    hass.states.async_set(KEYPAD_STATUS_ENTITY, "on")
     await hass.async_block_till_done()
 
     assert hass.states.get(SLOT_1_ACTIVE).state != STATE_UNAVAILABLE

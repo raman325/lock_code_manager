@@ -176,7 +176,7 @@ class BaseLockCodeManagerEntity(Entity):
         if (tracker := self._available_state_tracker) is None:
             return
         tracker.async_update_listeners(
-            TrackStates(False, self._availability_sources(), set())
+            TrackStates(False, {lock.lock.entity_id for lock in self.locks}, set())
         )
         self._handle_available_state_update()
 
@@ -213,31 +213,17 @@ class BaseLockCodeManagerEntity(Entity):
         )
 
     @callback
-    def _availability_sources(self) -> set[str]:
-        """
-        Return the entities whose availability decides this entity's.
-
-        The entry's locks, plus any the user nominated. An entry with no
-        locks has nothing to follow otherwise, and the thing it exists for
-        -- a keypad this integration cannot manage -- is reachable only
-        because the user named it.
-        """
-        return {lock.lock.entity_id for lock in self.locks}.union(
-            self.config_entry.runtime_data.config.availability_entities
-        )
-
-    @callback
     def _is_available(self) -> bool:
         """Return whether entity should be available."""
-        if not (sources := self._availability_sources()):
-            # Nothing to follow is not the same as nothing being up. A
-            # lock-less entry answers for its credentials out of its own
+        if not self.locks:
+            # Nothing to follow is not the same as nothing being up. An entry
+            # with no locks answers for its credentials out of its own
             # configuration, which is present whenever the entry is loaded.
             return True
         return any(
             state.state != STATE_UNAVAILABLE
-            for source in sources
-            if (state := self.hass.states.get(source))
+            for lock in self.locks
+            if (state := self.hass.states.get(lock.lock.entity_id))
         )
 
     @callback
@@ -253,7 +239,9 @@ class BaseLockCodeManagerEntity(Entity):
             from_state = event.data["old_state"]
             to_state = event.data["new_state"]
 
-        if entity_id is not None and entity_id not in self._availability_sources():
+        if entity_id is not None and entity_id not in (
+            lock.lock.entity_id for lock in self.locks
+        ):
             return
 
         if (from_state and from_state.state != STATE_UNAVAILABLE) and (
@@ -286,7 +274,7 @@ class BaseLockCodeManagerEntity(Entity):
         self._register_callbacks()
         self._available_state_tracker = async_track_state_change_filtered(
             self.hass,
-            TrackStates(False, self._availability_sources(), set()),
+            TrackStates(False, {lock.lock.entity_id for lock in self.locks}, set()),
             self._handle_available_state_update,
         )
         self.async_on_remove(self._available_state_tracker.async_remove)

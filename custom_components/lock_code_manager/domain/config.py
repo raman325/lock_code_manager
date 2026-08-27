@@ -12,13 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_PIN
 from homeassistant.helpers import entity_registry as er
 
-from ..const import (
-    CONF_AVAILABILITY_ENTITIES,
-    CONF_LOCKS,
-    CONF_MEMBERS,
-    CONF_SLOTS,
-    CONF_USERS,
-)
+from ..const import CONF_LOCKS, CONF_MEMBERS, CONF_SLOTS, CONF_USERS
 from .names import normalize_name
 from .slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
@@ -37,14 +31,7 @@ _EMPTY_EXTRA: Mapping[str, Any] = MappingProxyType({})
 # The keys EntryConfig models directly. Everything else in the entry is
 # internal bookkeeping and rides along in `extra`.
 _CONFIG_KEYS = frozenset(
-    {
-        CONF_AVAILABILITY_ENTITIES,
-        CONF_LOCKS,
-        CONF_MEMBERS,
-        CONF_SLOTS,
-        CONF_USERS,
-        CONF_SLOT_ASSIGNMENT,
-    }
+    {CONF_LOCKS, CONF_MEMBERS, CONF_SLOTS, CONF_USERS, CONF_SLOT_ASSIGNMENT}
 )
 
 
@@ -147,11 +134,6 @@ class EntryConfig:
     # is read raw in several places that would all have to learn a new
     # element shape. No default, for the same reason `extra` has none.
     members: Mapping[str, Mapping[str, Any]]
-    # Entities this entry's own entities follow for availability, beyond its
-    # locks. An entry with no locks has nothing to follow otherwise, so the
-    # keypad it exists for is named here. No default, for the same reason
-    # `extra` has none.
-    availability_entities: tuple[str, ...]
     users: Mapping[str, Mapping[str, Any]]
     assignment: SlotAssignment
     # Every other top-level key in the entry, carried through verbatim. No
@@ -181,7 +163,6 @@ class EntryConfig:
         """Return a config for an entry with no locks and no users."""
         return cls(
             locks=(),
-            availability_entities=(),
             members=_EMPTY_MEMBERS,
             users=_EMPTY_USERS,
             assignment=SlotAssignment.empty(),
@@ -213,13 +194,6 @@ class EntryConfig:
             **{k: v for k, v in entry.data.items() if k not in _CONFIG_KEYS},
             **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
             CONF_LOCKS: entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, [])),
-            # Read per key beside the roster, for the reason the declarations
-            # below are: it names entities, not users, so a lagging side
-            # describes the same entities rather than renumbering anyone.
-            CONF_AVAILABILITY_ENTITIES: entry.options.get(
-                CONF_AVAILABILITY_ENTITIES,
-                entry.data.get(CONF_AVAILABILITY_ENTITIES, []),
-            ),
             # Read per key rather than from the side the users came from,
             # like the roster beside it: a declaration names the member it is
             # about, so a side that lags describes those same members and the
@@ -270,9 +244,6 @@ class EntryConfig:
             assignment = SlotAssignment.from_mapping(mapping)
         return cls(
             locks=tuple(mapping.get(CONF_LOCKS, [])),
-            availability_entities=tuple(
-                mapping.get(CONF_AVAILABILITY_ENTITIES, []) or ()
-            ),
             members=_member_declarations(mapping.get(CONF_MEMBERS, _EMPTY_MEMBERS)),
             users=MappingProxyType(
                 {
@@ -415,7 +386,6 @@ class EntryConfig:
         }
         return EntryConfig(
             locks=self.locks,
-            availability_entities=self.availability_entities,
             members=self.members,
             users=MappingProxyType(
                 {k: MappingProxyType(v) for k, v in new_users.items()}
@@ -446,7 +416,6 @@ class EntryConfig:
         new_users[stored][key] = value
         return EntryConfig(
             locks=self.locks,
-            availability_entities=self.availability_entities,
             members=self.members,
             users=MappingProxyType(
                 {k: MappingProxyType(v) for k, v in new_users.items()}
@@ -466,7 +435,6 @@ class EntryConfig:
         new_users[stored].pop(key, None)
         return EntryConfig(
             locks=self.locks,
-            availability_entities=self.availability_entities,
             members=self.members,
             users=MappingProxyType(
                 {k: MappingProxyType(v) for k, v in new_users.items()}
@@ -501,7 +469,6 @@ class EntryConfig:
         return {
             **dict(self.extra),
             CONF_LOCKS: list(self.locks),
-            CONF_AVAILABILITY_ENTITIES: list(self.availability_entities),
             CONF_MEMBERS: {
                 registry_id: dict(declared)
                 for registry_id, declared in self.members.items()
