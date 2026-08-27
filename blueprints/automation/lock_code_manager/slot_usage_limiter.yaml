@@ -148,6 +148,15 @@ triggers:
   - trigger: state
     entity_id: !input pin_used_entity
     id: pin_used
+    # A use is a new timestamp; neither of these is one. Belt to the
+    # conditions' braces, and deliberately not removed as redundant: Home
+    # Assistant drops extra attributes from an unavailable state, so the
+    # `operation` check below rejects these only because the attribute is
+    # missing. That stops being true the day someone gives that template a
+    # `default()`, and this says the intent outright.
+    not_to:
+      - unknown
+      - unavailable
   - trigger: state
     entity_id: !input enabled_switch
     id: slot_enabled
@@ -180,7 +189,9 @@ actions:
           # `event_type` is the kind of credential and names no entity.
           - condition: template
             value_template: >-
-              {{ trigger.to_state is not none
+              {{ trigger.from_state is not none
+                 and trigger.to_state is not none
+                 and trigger.from_state.state != 'unavailable'
                  and trigger.to_state.attributes.operation
                      in counted_operations
                  and (locks | count == 0
