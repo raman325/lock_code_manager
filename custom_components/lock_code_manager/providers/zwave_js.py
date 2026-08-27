@@ -35,7 +35,6 @@ from zwave_js_server.util.lock import get_usercode, get_usercodes
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
     ATTR_EVENT,
-    ATTR_EVENT_LABEL,
     ATTR_HOME_ID,
     ATTR_NODE_ID,
     ATTR_PARAMETERS,
@@ -1020,8 +1019,6 @@ class ZWaveJSLock(BaseLock):
                 ),
                 None,
             ),
-            action_text=evt.data.get(ATTR_EVENT_LABEL),
-            source_data=evt,
         )
 
     @property

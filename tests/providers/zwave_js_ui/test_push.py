@@ -10,17 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.lock_code_manager.const import (
-    ATTR_ACTION_TEXT,
-    ATTR_CODE_SLOT,
-    ATTR_EXTRA_DATA,
-    ATTR_FROM,
-    ATTR_TO,
-    EVENT_LOCK_STATE_CHANGED,
-)
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
@@ -444,20 +436,11 @@ class TestKeypadEvents:
     """Notification Command Class keypad operations on the node topic."""
 
     @pytest.mark.parametrize(
-        ("property_path", "expected_to_locked", "expected_action"),
+        ("property_path", "expected_to_locked"),
         [
-            pytest.param(
-                KEYPAD_UNLOCK_NAMED, False, "Keypad_unlock_operation", id="named_unlock"
-            ),
-            pytest.param(
-                KEYPAD_LOCK_NAMED, True, "Keypad_lock_operation", id="named_lock"
-            ),
-            pytest.param(
-                KEYPAD_UNLOCK_VALUEID,
-                False,
-                "Keypad_unlock_operation",
-                id="valueid_unlock",
-            ),
+            pytest.param(KEYPAD_UNLOCK_NAMED, False, id="named_unlock"),
+            pytest.param(KEYPAD_LOCK_NAMED, True, id="named_lock"),
+            pytest.param(KEYPAD_UNLOCK_VALUEID, False, id="valueid_unlock"),
         ],
     )
     async def test_a_keypad_operation_fires_a_code_slot_event(
@@ -466,7 +449,6 @@ class TestKeypadEvents:
         zui_lock_subscribed: ZWaveJSUILock,
         property_path: str,
         expected_to_locked: bool,
-        expected_action: str,
     ) -> None:
         """
         The event names the slot that operated the lock and which way it went.
@@ -475,24 +457,13 @@ class TestKeypadEvents:
         operation reported as an unlock (or the reverse) is worse than no
         event at all.
         """
-        events: list[Event] = []
-        hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+        fired = MagicMock()
+        zui_lock_subscribed.async_fire_code_slot_event = fired
 
         fire_node_value(hass, property_path, keypad_payload(3))
         await hass.async_block_till_done()
 
-        assert len(events) == 1
-        data = events[0].data
-        assert data[ATTR_CODE_SLOT] == 3
-        assert data[ATTR_ACTION_TEXT] == expected_action
-        if expected_to_locked:
-            assert (data[ATTR_FROM], data[ATTR_TO]) == ("unlocked", "locked")
-        else:
-            assert (data[ATTR_FROM], data[ATTR_TO]) == ("locked", "unlocked")
-        assert data[ATTR_EXTRA_DATA] == {
-            "topic": f"{ZUI_NODE_TOPIC}/{property_path}",
-            "value": {"userId": 3},
-        }
+        fired.assert_called_once_with(code_slot=3, to_locked=expected_to_locked)
 
     @pytest.mark.parametrize(
         "payload",
@@ -514,13 +485,13 @@ class TestKeypadEvents:
         payload: str,
     ) -> None:
         """An event nobody can attribute to a slot is dropped, not guessed at."""
-        events: list[Event] = []
-        hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+        fired = MagicMock()
+        zui_lock_subscribed.async_fire_code_slot_event = fired
 
         fire_node_value(hass, KEYPAD_UNLOCK_NAMED, payload)
         await hass.async_block_till_done()
 
-        assert events == []
+        fired.assert_not_called()
 
     async def test_a_non_keypad_notification_fires_nothing(
         self,
@@ -533,8 +504,8 @@ class TestKeypadEvents:
         Manual operations, RF operations, and lock jams all publish under the
         same label; only the two keypad events name a code slot.
         """
-        events: list[Event] = []
-        hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+        fired = MagicMock()
+        zui_lock_subscribed.async_fire_code_slot_event = fired
 
         for suffix in (
             "notification/endpoint_0/Access_Control/Manual_lock_operation",
@@ -546,7 +517,7 @@ class TestKeypadEvents:
             fire_node_value(hass, suffix, keypad_payload(3))
         await hass.async_block_till_done()
 
-        assert events == []
+        fired.assert_not_called()
 
 
 class TestForeignNodeTraffic:
@@ -585,14 +556,14 @@ class TestForeignNodeTraffic:
         ignored -- invisible to the coordinator, and a traceback per message.
         """
         lock = zui_lock_subscribed
-        events: list[Event] = []
-        hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+        fired = MagicMock()
+        zui_lock_subscribed.async_fire_code_slot_event = fired
 
         fire_node_value(hass, suffix, keypad_payload(3))
         await hass.async_block_till_done()
 
         lock.coordinator.push_update.assert_not_called()
-        assert events == []
+        fired.assert_not_called()
         assert [record for record in caplog.records if record.levelno >= ERROR] == []
 
     async def test_a_message_outside_the_subscribed_node_is_ignored(

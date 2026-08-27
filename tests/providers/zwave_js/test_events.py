@@ -17,21 +17,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from custom_components.lock_code_manager.const import (
-    ATTR_ACTION_TEXT,
-    ATTR_CODE_SLOT,
-    ATTR_FROM,
-    ATTR_TO,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_LOCK_STATE_CHANGED,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
-
-from .helpers import async_capture_events
 
 # ---------------------------------------------------------------------------
 # Push subscription tests
@@ -257,7 +250,7 @@ async def test_event_filter_matches_correct_node(
 # ---------------------------------------------------------------------------
 
 
-async def test_notification_event_keypad_lock_fires_lock_state_changed(
+async def test_notification_event_keypad_lock_fires_a_code_slot_event(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
@@ -265,13 +258,14 @@ async def test_notification_event_keypad_lock_fires_lock_state_changed(
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """Test that a keypad lock notification event fires EVENT_LOCK_STATE_CHANGED."""
+    """Test that a keypad lock notification event reaches the code slot event funnel."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Capture LCM lock state changed events
-    events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    fired = MagicMock()
+    zwave_js_lock.async_fire_code_slot_event = fired
 
     # Create a notification event matching the pattern from Home Assistant core tests
     # Type 6 = ACCESS_CONTROL, Event 5 = KEYPAD_LOCK_OPERATION
@@ -295,17 +289,12 @@ async def test_notification_event_keypad_lock_fires_lock_state_changed(
     lock_schlage_be469.receive_event(event)
     await hass.async_block_till_done()
 
-    # Verify the LCM event was fired
-    assert len(events) == 1
-    assert events[0].data[ATTR_CODE_SLOT] == 1
-    assert events[0].data[ATTR_ACTION_TEXT] == "Keypad lock operation"
-    assert events[0].data[ATTR_TO] == "locked"
-    assert events[0].data[ATTR_FROM] == "unlocked"
+    fired.assert_called_once_with(code_slot=1, to_locked=True)
 
     await zwave_js_lock.async_unload(False)
 
 
-async def test_notification_event_keypad_unlock_fires_lock_state_changed(
+async def test_notification_event_keypad_unlock_fires_a_code_slot_event(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
@@ -313,12 +302,13 @@ async def test_notification_event_keypad_unlock_fires_lock_state_changed(
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """Test that a keypad unlock notification event fires EVENT_LOCK_STATE_CHANGED."""
+    """Test that a keypad unlock notification event reaches the code slot event funnel."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    fired = MagicMock()
+    zwave_js_lock.async_fire_code_slot_event = fired
 
     # Type 6 = ACCESS_CONTROL, Event 6 = KEYPAD_UNLOCK_OPERATION
     event = ZwaveEvent(
@@ -341,11 +331,7 @@ async def test_notification_event_keypad_unlock_fires_lock_state_changed(
     lock_schlage_be469.receive_event(event)
     await hass.async_block_till_done()
 
-    assert len(events) == 1
-    assert events[0].data[ATTR_CODE_SLOT] == 2
-    assert events[0].data[ATTR_ACTION_TEXT] == "Keypad unlock operation"
-    assert events[0].data[ATTR_TO] == "unlocked"
-    assert events[0].data[ATTR_FROM] == "locked"
+    fired.assert_called_once_with(code_slot=2, to_locked=False)
 
     await zwave_js_lock.async_unload(False)
 
@@ -363,7 +349,8 @@ async def test_notification_event_non_access_control_ignored(
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+    fired = MagicMock()
+    zwave_js_lock.async_fire_code_slot_event = fired
 
     # Type 8 = POWER_MANAGEMENT (not ACCESS_CONTROL) → handler returns early
     event = ZwaveEvent(
@@ -386,7 +373,7 @@ async def test_notification_event_non_access_control_ignored(
     lock_schlage_be469.receive_event(event)
     await hass.async_block_till_done()
 
-    assert events == []
+    fired.assert_not_called()
 
     await zwave_js_lock.async_unload(False)
 

@@ -30,7 +30,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_TARGET,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
-    EVENT_LOCK_STATE_CHANGED,
     SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.domain.credentials import (
@@ -63,8 +62,8 @@ EXTERNAL_KEYPAD = "sensor.side_gate_keypad"
 EXTERNAL_TARGET = "cover.side_gate"
 
 # Every attribute the lock-shaped payload used to put on the entity. None of
-# them are the entity's to publish any more; they still travel on the
-# deprecated bus event.
+# them are the entity's to publish any more, and since 6.0 the lock-shaped
+# bus event that carried them is gone too -- so nothing publishes them.
 RETIRED_ATTRIBUTES = (
     "code_slot_name",
     "action_text",
@@ -114,7 +113,7 @@ async def test_the_recorded_attributes_are_the_unified_payload(
     assert state.state == STATE_UNKNOWN
 
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
+    lock.async_fire_code_slot_event(2, False)
     await hass.async_block_till_done()
 
     state = hass.states.get(SLOT_2_EVENT_ENTITY)
@@ -286,7 +285,7 @@ async def test_a_lock_observed_use_is_recorded_once(
     unsub = async_track_state_change_event(hass, [SLOT_2_EVENT_ENTITY], _collect)
 
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
+    lock.async_fire_code_slot_event(2, False)
     await hass.async_block_till_done()
     unsub()
 
@@ -376,7 +375,7 @@ async def test_uses_that_are_not_an_unlock_are_recorded_and_say_so(
     provider saw a use it could not classify.
     """
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(1, to_locked, "test", Event("test_source"))
+    lock.async_fire_code_slot_event(1, to_locked)
     await hass.async_block_till_done()
 
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
@@ -448,7 +447,7 @@ async def test_available_when_no_lock_reports_code_slot_events(
         assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
 
         lock: BaseLock = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-        lock.async_fire_code_slot_event(1, False, "test", Event("test_source"))
+        lock.async_fire_code_slot_event(1, False)
         await hass.async_block_till_done()
 
         recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
@@ -497,10 +496,10 @@ async def test_the_event_says_which_kind_of_credential_was_used(
     arrives, rather than having assumed there was only ever one.
     """
     events: list[Event] = []
-    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+    hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, events.append)
 
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(1, False, "test", Event("test_source"))
+    lock.async_fire_code_slot_event(1, False)
     await hass.async_block_till_done()
 
     assert events

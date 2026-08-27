@@ -30,15 +30,14 @@ from homeassistant.const import (
 from homeassistant.core import Event, HomeAssistant
 
 from custom_components.lock_code_manager.const import (
-    ATTR_ACTION_TEXT,
     ATTR_CODE_SLOT,
     ATTR_TARGET,
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
-    EVENT_LOCK_STATE_CHANGED,
     TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
@@ -433,7 +432,7 @@ class TestKeypadEvents:
         )
         assert hass.states.get(event_entity_id).state == STATE_UNKNOWN
         events: list[Event] = []
-        hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+        hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, events.append)
 
         fire_zui_node_value(
             hass,
@@ -442,10 +441,7 @@ class TestKeypadEvents:
         )
         await hass.async_block_till_done()
 
-        assert [event.data[ATTR_CODE_SLOT] for event in events] == [1]
-        assert [event.data[ATTR_ACTION_TEXT] for event in events] == [
-            "Keypad_unlock_operation"
-        ]
+        assert len(events) == 1
         state = hass.states.get(event_entity_id)
         assert state.state != STATE_UNKNOWN
         assert state.attributes[ATTR_CODE_SLOT] == 1

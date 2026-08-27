@@ -24,7 +24,7 @@ from homeassistant.components import automation
 from homeassistant.components.blueprint import models
 from homeassistant.components.template import config as template_config
 from homeassistant.const import ATTR_FRIENDLY_NAME, STATE_UNAVAILABLE
-from homeassistant.core import Event, HomeAssistant, ServiceCall, State, callback
+from homeassistant.core import HomeAssistant, ServiceCall, State, callback
 from homeassistant.helpers import entity_registry as er, template
 from homeassistant.setup import async_setup_component
 from homeassistant.util import yaml as yaml_util
@@ -32,7 +32,6 @@ from homeassistant.util import yaml as yaml_util
 from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_CODE_SLOT,
-    ATTR_CODE_SLOT_NAME,
     ATTR_SLOT_FIELD,
     ATTR_SOURCE,
     ATTR_TARGET,
@@ -133,7 +132,6 @@ def _fire_pin_used(
     config_entry,
     lock_entity_id: str,
     slot: int,
-    action_text: str = "test",
     *,
     to_locked: bool = False,
 ) -> None:
@@ -143,7 +141,7 @@ def _fire_pin_used(
     unlocked the door, True for one that locked it.
     """
     lock: BaseLock = config_entry.runtime_data.locks[lock_entity_id]
-    lock.async_fire_code_slot_event(slot, to_locked, action_text, Event("test_source"))
+    lock.async_fire_code_slot_event(slot, to_locked)
 
 
 # A keypad and a gate Lock Code Manager manages neither of, which is the
@@ -251,7 +249,7 @@ async def test_notifier_names_the_user_for_a_reported_use(
     # Should the payload ever gain `code_slot_name`, this test stops
     # exercising the fallback and should be rewritten rather than pass on.
     recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
-    assert ATTR_CODE_SLOT_NAME not in recorded.attributes
+    assert "code_slot_name" not in recorded.attributes
 
     assert len(captured) == 1
     call: ServiceCall = captured[0]
