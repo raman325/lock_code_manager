@@ -40,7 +40,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
     ATTR_CREDENTIAL_TYPE,
-    ATTR_ENABLE,
+    ATTR_ENABLE_IF_DISABLED,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_OPERATION,
@@ -2062,7 +2062,12 @@ async def test_set_credential_can_enable_in_the_same_call(
     await hass.services.async_call(
         DOMAIN,
         SERVICE_SET_CREDENTIAL,
-        {**common, CONF_NAME: "test1", ATTR_VALUE: "4321", ATTR_ENABLE: True},
+        {
+            **common,
+            CONF_NAME: "test1",
+            ATTR_VALUE: "4321",
+            ATTR_ENABLE_IF_DISABLED: True,
+        },
         blocking=True,
     )
     await hass.async_block_till_done()

@@ -310,9 +310,9 @@
           "name": "Value",
           "description": "The credential itself — the PIN, for a PIN credential. Surrounding whitespace is stripped."
         },
-        "enable": {
-          "name": "Enable",
-          "description": "Also turn this person on once the credential is set. Off by default, so somebody disabled stays disabled and their new credential is inert until you enable them."
+        "enable_if_disabled": {
+          "name": "Enable if disabled",
+          "description": "Turn this person on once the credential is set. Off by default, so somebody disabled stays disabled and their new credential is inert until you enable them. Never disables anybody."
         }
       }
     },

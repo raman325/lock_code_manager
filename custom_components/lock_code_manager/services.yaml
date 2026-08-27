@@ -200,7 +200,7 @@ set_credential:
       required: true
       selector:
         text:
-    enable:
+    enable_if_disabled:
       default: false
       selector:
         boolean:

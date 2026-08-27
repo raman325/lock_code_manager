@@ -157,7 +157,7 @@ async def async_set_credential(
     *,
     credential_type: str,
     value: str,
-    enable: bool = False,
+    enable_if_disabled: bool = False,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
 ) -> None:
@@ -176,7 +176,7 @@ async def async_set_credential(
     whitespace and validates the length against every bound lock. Writing the
     configuration directly here would be a second path that skips both.
 
-    ``enable`` turns the user on afterwards, which is what makes this the
+    ``enable_if_disabled`` turns the user on afterwards, which is what makes this the
     inverse of :func:`async_clear_credential` rather than half of it: clearing
     a credential disables the user, so setting one on somebody cleared earlier
     would otherwise leave a code that is present and inert. Off by default,
@@ -193,7 +193,7 @@ async def async_set_credential(
     _managed_credential_type(credential_type)
     coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
     await coordinator.async_request_pin_update(value)
-    if enable:
+    if enable_if_disabled:
         # Safe in this order, and only in this order: the write above refreshes
         # the entry's cached config before returning, so the PIN this checks
         # for is the one just set.
