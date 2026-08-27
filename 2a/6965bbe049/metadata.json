@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "2a6965bbe049",
+  "strategy": "manual-commit",
+  "branch": "pr4-rewrite",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "tests/common.py",
+    "tests/providers/codeless/__init__.py",
+    "tests/providers/codeless/conftest.py",
+    "tests/providers/codeless/test_e2e.py",
+    "tests/providers/codeless/test_provider.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_dispatch.py",
+    "tests/test_config.py",
+    "tests/test_config_flow.py",
+    "tests/test_queries.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2a/6965bbe049/0/metadata.json",
+      "transcript": "/2a/6965bbe049/0/full.jsonl",
+      "compact_transcript": "/2a/6965bbe049/0/transcript.jsonl",
+      "content_hash": "/2a/6965bbe049/0/content_hash.txt",
+      "prompt": "/2a/6965bbe049/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 22453,
+    "cache_read_tokens": 11233353,
+    "output_tokens": 12178,
+    "api_call_count": 12,
+    "subagent_tokens": {
+      "input_tokens": 521,
+      "cache_creation_tokens": 698563,
+      "cache_read_tokens": 47087472,
+      "output_tokens": 225264,
+      "api_call_count": 261
+    }
+  }
+}
