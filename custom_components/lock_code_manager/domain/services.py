@@ -157,6 +157,7 @@ async def async_set_credential(
     *,
     credential_type: str,
     value: str,
+    enable: bool = False,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
 ) -> None:
@@ -174,6 +175,17 @@ async def async_set_credential(
     because that is the authoritative gate for a credential write -- it strips
     whitespace and validates the length against every bound lock. Writing the
     configuration directly here would be a second path that skips both.
+
+    ``enable`` turns the user on afterwards, which is what makes this the
+    inverse of :func:`async_clear_credential` rather than half of it: clearing
+    a credential disables the user, so setting one on somebody cleared earlier
+    would otherwise leave a code that is present and inert. Off by default,
+    because giving a user a credential and letting them in are different
+    decisions and only the caller knows whether they are making both.
+
+    Not a field written alongside the PIN: enabling has its own rules -- it
+    refuses a user with no credential and clears the repair issue raised when
+    that happened -- and the second call is what runs them.
     """
     # Not checked for emptiness here: the schema strips and requires at least
     # one character, so an empty value never reaches this. Repeating that gate
@@ -181,6 +193,11 @@ async def async_set_credential(
     _managed_credential_type(credential_type)
     coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
     await coordinator.async_request_pin_update(value)
+    if enable:
+        # Safe in this order, and only in this order: the write above refreshes
+        # the entry's cached config before returning, so the PIN this checks
+        # for is the one just set.
+        await coordinator.async_request_active_toggle(True)
 
 
 async def async_clear_credential(

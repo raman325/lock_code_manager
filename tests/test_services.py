@@ -40,6 +40,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
     ATTR_CREDENTIAL_TYPE,
+    ATTR_ENABLE,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_OPERATION,
@@ -2005,3 +2006,67 @@ async def test_credential_actions_refuse_a_user_holding_no_slot(
             },
             blocking=True,
         )
+
+
+async def test_set_credential_leaves_the_user_alone_by_default(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Giving somebody a credential is not the same as letting them in.
+
+    A user cleared earlier stays off until somebody says otherwise, so a
+    credential set on them is present and inert rather than quietly live.
+    """
+    entry = lock_code_manager_config_entry
+    common = {"config_entry_id": entry.entry_id, ATTR_CREDENTIAL_TYPE: "pin"}
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_CLEAR_CREDENTIAL, {**common, CONF_NAME: "test1"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CREDENTIAL,
+        {**common, CONF_NAME: "test1", ATTR_VALUE: "4321"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_PIN] == "4321"
+    assert config.users["test1"][CONF_ENABLED] is False
+
+
+async def test_set_credential_can_enable_in_the_same_call(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    ``enable`` makes this the inverse of clearing rather than half of it.
+
+    Clearing disables, so without this a caller undoing a clear needs a
+    second action against a different entity to finish the job.
+    """
+    entry = lock_code_manager_config_entry
+    common = {"config_entry_id": entry.entry_id, ATTR_CREDENTIAL_TYPE: "pin"}
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_CLEAR_CREDENTIAL, {**common, CONF_NAME: "test1"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CREDENTIAL,
+        {**common, CONF_NAME: "test1", ATTR_VALUE: "4321", ATTR_ENABLE: True},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["test1"][CONF_PIN] == "4321"
+    assert config.users["test1"][CONF_ENABLED] is True

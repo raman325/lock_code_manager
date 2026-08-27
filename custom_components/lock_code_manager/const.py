@@ -40,6 +40,10 @@ ATTR_USERCODE = "usercode"
 # The credential itself on set_credential. Not ``usercode``: that name is
 # PIN-shaped, and this field carries whatever the credential type is.
 ATTR_VALUE = "value"
+# Opt-in on set_credential: turn the user on once the credential is set.
+# A verb, not a state -- omitting it leaves the user however they were,
+# where ``enabled: false`` would read as a request to disable them.
+ATTR_ENABLE = "enable"
 ATTR_FROM = "from"
 ATTR_TO = "to"
 ATTR_LCM_CONFIG_ENTRY_ID = "lock_code_manager_config_entry_id"

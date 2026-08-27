@@ -67,6 +67,7 @@ from .const import (
     ATTR_CODE,
     ATTR_CODE_SLOT,
     ATTR_CREDENTIAL_TYPE,
+    ATTR_ENABLE,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
@@ -617,6 +618,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             service.data[CONF_NAME],
             credential_type=service.data[ATTR_CREDENTIAL_TYPE],
             value=service.data[ATTR_VALUE],
+            enable=service.data[ATTR_ENABLE],
             config_entry_id=service.data.get("config_entry_id"),
             config_entry_title=service.data.get("config_entry_title"),
         )
@@ -639,6 +641,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 vol.Required(ATTR_VALUE): vol.All(
                     cv.string, vol.Strip, vol.Length(min=1)
                 ),
+                vol.Optional(ATTR_ENABLE, default=False): cv.boolean,
             }
         ),
     )

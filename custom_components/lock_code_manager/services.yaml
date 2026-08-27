@@ -200,6 +200,10 @@ set_credential:
       required: true
       selector:
         text:
+    enable:
+      default: false
+      selector:
+        boolean:
 
 clear_credential:
   fields:
