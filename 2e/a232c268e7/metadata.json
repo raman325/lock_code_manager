@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "2ea232c268e7",
+  "strategy": "manual-commit",
+  "branch": "chore/remove-deprecated-event",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/2e/a232c268e7/0/metadata.json",
+      "transcript": "/2e/a232c268e7/0/full.jsonl",
+      "compact_transcript": "/2e/a232c268e7/0/transcript.jsonl",
+      "content_hash": "/2e/a232c268e7/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 774972,
+    "cache_read_tokens": 46959829,
+    "output_tokens": 41962,
+    "api_call_count": 64
+  }
+}
