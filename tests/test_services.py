@@ -1303,12 +1303,7 @@ async def test_use_credential_valid(hass: HomeAssistant, validate_entry) -> None
         hass,
         {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"},
     )
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "alice",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: validate_entry.entry_id,
-    }
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
 
 
 async def test_use_credential_valid_by_title(
@@ -1319,12 +1314,7 @@ async def test_use_credential_valid_by_title(
         hass,
         {"config_entry_title": validate_entry.title, ATTR_CODE: "1234"},
     )
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "alice",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: validate_entry.entry_id,
-    }
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
 
 
 async def test_use_credential_unknown(hass: HomeAssistant, validate_entry) -> None:
@@ -1337,7 +1327,6 @@ async def test_use_credential_unknown(hass: HomeAssistant, validate_entry) -> No
         ATTR_VALID: False,
         ATTR_USER: None,
         ATTR_REASON: REASON_UNKNOWN_CODE,
-        ATTR_CONFIG_ENTRY_ID: None,
     }
 
 
@@ -1353,12 +1342,7 @@ async def test_use_credential_failure_reasons(
         hass,
         {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code},
     )
-    assert response == {
-        ATTR_VALID: False,
-        ATTR_USER: None,
-        ATTR_REASON: reason,
-        ATTR_CONFIG_ENTRY_ID: None,
-    }
+    assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
 
 
 @pytest.mark.parametrize(
@@ -1427,12 +1411,7 @@ async def test_use_credential_strips_padding_at_the_schema(
         hass,
         {"config_entry_id": validate_entry.entry_id, ATTR_CODE: " 1234 "},
     )
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "alice",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: validate_entry.entry_id,
-    }
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
 
 
 @pytest.mark.parametrize(
@@ -1448,10 +1427,10 @@ async def test_use_credential_requires_exactly_one_entry_selector(
     hass: HomeAssistant, validate_entry, selector: dict
 ) -> None:
     """
-    The entry is named exactly one way: by id, by title, or by its lock.
+    The entry is named by id or by title, never both and never neither.
 
-    Accepting two would leave the action free to pick, and they can
-    disagree; accepting none has no entry to answer about.
+    Accepting both would leave the action free to pick, and the two can
+    disagree; accepting neither has no entry to answer about.
     """
     with pytest.raises(vol.Invalid):
         await _call_use_credential(hass, {**selector, ATTR_CODE: "1234"})
@@ -1493,7 +1472,6 @@ async def test_use_credential_on_an_entry_with_no_slots(hass: HomeAssistant) -> 
         ATTR_VALID: False,
         ATTR_USER: None,
         ATTR_REASON: REASON_UNKNOWN_CODE,
-        ATTR_CONFIG_ENTRY_ID: None,
     }
 
     await hass.config_entries.async_unload(empty_entry.entry_id)
@@ -1537,12 +1515,7 @@ async def test_use_credential_matches_a_padded_stored_pin(hass: HomeAssistant) -
 
     assert await _call_use_credential(
         hass, {"config_entry_id": entry.entry_id, ATTR_CODE: "4321"}
-    ) == {
-        ATTR_VALID: True,
-        ATTR_USER: "dana",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: entry.entry_id,
-    }
+    ) == {ATTR_VALID: True, ATTR_USER: "dana", ATTR_REASON: None}
 
     # The whitespace-only slot holds no PIN, so nothing can match it -- least
     # of all a submission that is itself only padding.
@@ -1575,12 +1548,7 @@ async def test_use_credential_records_against_an_in_entry_lock(
         )
         await hass.async_block_till_done()
 
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "alice",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: validate_entry.entry_id,
-    }
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
     assert [event.data for event in unified] == [
         {
             ATTR_NAME: "alice",
@@ -1690,12 +1658,7 @@ async def test_use_credential_against_an_event_blind_lock_in_the_entry(
         )
         await hass.async_block_till_done()
 
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "alice",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: entry.entry_id,
-    }
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
     assert [event.data[ATTR_TARGET] for event in unified] == [
         EVENT_BLIND_LOCK_ENTITY_ID
     ]
@@ -1737,12 +1700,7 @@ async def test_use_credential_with_a_target_outside_the_entry(
         )
         await hass.async_block_till_done()
 
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "alice",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: validate_entry.entry_id,
-    }
+    assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
     assert [event.data[ATTR_TARGET] for event in unified] == ["cover.some_other_door"]
     assert deprecated == []
     recorded = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
@@ -1919,256 +1877,3 @@ async def test_a_declaration_survives_renaming_its_member(
     assert config.member(renamed) == {"placeholder": True}
     # The roster, which is keyed by entity id, is the half that goes stale.
     assert not config.has_lock(renamed.entity_id)
-
-
-SHARED_LOCK_ENTITY_ID = "lock.virtual_shared_by_two_entries"
-SHARED_CONDITION_ENTITY_ID = "input_boolean.shared_entries_gate"
-
-# Two configurations managing one lock, with the codes arranged so that every
-# cross-entry case has exactly one right answer: "1111" validates only in the
-# first, "2222" only in the second, "9999" is held back in both -- by a
-# condition in the first and by the enabled flag in the second, which is the
-# more restrictive of the two -- and "5555" validates in both.
-FIRST_SHARED_CONFIG = {
-    CONF_LOCKS: [SHARED_LOCK_ENTITY_ID],
-    CONF_SLOTS: {
-        1: {CONF_NAME: "amir", CONF_PIN: "1111", CONF_ENABLED: True},
-        2: {
-            CONF_NAME: "cleo",
-            CONF_PIN: "9999",
-            CONF_ENABLED: True,
-            CONF_CONDITION: SHARED_CONDITION_ENTITY_ID,
-        },
-        5: {CONF_NAME: "elena", CONF_PIN: "5555", CONF_ENABLED: True},
-    },
-}
-SECOND_SHARED_CONFIG = {
-    CONF_LOCKS: [SHARED_LOCK_ENTITY_ID],
-    CONF_SLOTS: {
-        3: {CONF_NAME: "bao", CONF_PIN: "2222", CONF_ENABLED: True},
-        4: {CONF_NAME: "dmitri", CONF_PIN: "9999", CONF_ENABLED: False},
-        6: {CONF_NAME: "farid", CONF_PIN: "5555", CONF_ENABLED: True},
-    },
-}
-
-
-@pytest.fixture(name="shared_lock_entries")
-async def shared_lock_entries_fixture(hass: HomeAssistant):
-    """Set up two loaded LCM entries that both manage one lock."""
-    virtual_entry = MockConfigEntry(domain="virtual")
-    virtual_entry.add_to_hass(hass)
-    lock_entity = er.async_get(hass).async_get_or_create(
-        "lock",
-        "virtual",
-        "virtual_shared_by_two_entries",
-        suggested_object_id="virtual_shared_by_two_entries",
-        config_entry=virtual_entry,
-    )
-    assert lock_entity.entity_id == SHARED_LOCK_ENTITY_ID
-    hass.states.async_set(SHARED_LOCK_ENTITY_ID, "locked")
-    hass.states.async_set(SHARED_CONDITION_ENTITY_ID, "off")
-
-    entries = []
-    for index, (title, config) in enumerate(
-        (("Shared First", FIRST_SHARED_CONFIG), ("Shared Second", SECOND_SHARED_CONFIG))
-    ):
-        entry = MockConfigEntry(
-            domain=DOMAIN,
-            title=title,
-            data=config,
-            unique_id=f"test_shared_lock_{index}",
-        )
-        entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        entries.append(entry)
-    await hass.async_block_till_done()
-
-    yield entries
-
-    for entry in entries:
-        await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def _call_use_credential_for_shared_lock(
-    hass: HomeAssistant, code: str
-) -> dict | None:
-    """Ask about the shared lock by naming it rather than an entry."""
-    return await _call_use_credential(
-        hass,
-        {
-            ATTR_LOCK_ENTITY_ID: SHARED_LOCK_ENTITY_ID,
-            ATTR_TARGET: SHARED_LOCK_ENTITY_ID,
-            ATTR_CODE: code,
-        },
-    )
-
-
-async def test_use_credential_resolves_the_entry_from_the_lock(
-    hass: HomeAssistant, validate_entry
-) -> None:
-    """
-    Naming the lock instead of an entry finds the entry that manages it.
-
-    The caller that needs this -- a keypad calling the action directly --
-    knows its own entities and nothing about which configuration holds the
-    credentials, so the resolved entry is reported back to it.
-    """
-    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-
-    response = await _call_use_credential(
-        hass, {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "1234"}
-    )
-    await hass.async_block_till_done()
-
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "alice",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: validate_entry.entry_id,
-    }
-    # The use was recorded against the entry it resolved, not merely reported.
-    assert [event.data[ATTR_CONFIG_ENTRY_ID] for event in unified] == [
-        validate_entry.entry_id
-    ]
-    recorded = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
-    assert recorded
-    assert recorded.state != STATE_UNKNOWN
-
-
-async def test_use_credential_by_lock_picks_the_entry_the_code_works_in(
-    hass: HomeAssistant, shared_lock_entries
-) -> None:
-    """
-    With two entries on one lock, the one the code validates in answers.
-
-    The search is validated rather than guessed: an entry that merely holds
-    the lock is not an answer, so the second entry wins here even though the
-    first is asked first.
-    """
-    first, second = shared_lock_entries
-    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-
-    response = await _call_use_credential_for_shared_lock(hass, "2222")
-    await hass.async_block_till_done()
-
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "bao",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: second.entry_id,
-    }
-    assert [
-        (event.data[ATTR_NAME], event.data[ATTR_CONFIG_ENTRY_ID]) for event in unified
-    ] == [("bao", second.entry_id)]
-    # bao's entity recorded the use and nobody in the other entry did.
-    assert (
-        hass.states.get(_slot_event_entity_id(hass, second, 3)).state != STATE_UNKNOWN
-    )
-    assert hass.states.get(_slot_event_entity_id(hass, first, 1)).state == STATE_UNKNOWN
-
-
-async def test_use_credential_by_lock_aggregates_the_failure_reason(
-    hass: HomeAssistant, shared_lock_entries
-) -> None:
-    """
-    A code held back in every entry reports the most restrictive reason.
-
-    "9999" waits on a condition in the first entry and is disabled outright
-    in the second, and being disabled outranks waiting. Reporting the first
-    entry's answer would tell the caller to come back later about a
-    credential that has been turned off. No entry accepted it, so none is
-    named, and a rejection is not a use.
-    """
-    fired = async_capture_events(hass, MATCH_ALL)
-
-    response = await _call_use_credential_for_shared_lock(hass, "9999")
-    await hass.async_block_till_done()
-
-    assert response == {
-        ATTR_VALID: False,
-        ATTR_USER: None,
-        ATTR_REASON: REASON_USER_DISABLED,
-        ATTR_CONFIG_ENTRY_ID: None,
-    }
-    assert [
-        event.event_type for event in fired if event.event_type.startswith(DOMAIN)
-    ] == []
-
-
-async def test_use_credential_by_lock_answers_once_when_both_entries_accept(
-    hass: HomeAssistant, shared_lock_entries
-) -> None:
-    """
-    A code valid in both entries produces one answer and one use.
-
-    Either entry would be an equally correct answer, so the rule only has to
-    be stable: the earliest entry Home Assistant lists wins. What must not
-    happen is two of anything -- two events would make one submission spend
-    two budgets on a usage limiter, and record the same entry twice.
-    """
-    first, second = shared_lock_entries
-    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-
-    response = await _call_use_credential_for_shared_lock(hass, "5555")
-    await hass.async_block_till_done()
-
-    assert response == {
-        ATTR_VALID: True,
-        ATTR_USER: "elena",
-        ATTR_REASON: None,
-        ATTR_CONFIG_ENTRY_ID: first.entry_id,
-    }
-    assert [
-        (event.data[ATTR_NAME], event.data[ATTR_CONFIG_ENTRY_ID]) for event in unified
-    ] == [("elena", first.entry_id)]
-    assert hass.states.get(_slot_event_entity_id(hass, first, 5)).state != STATE_UNKNOWN
-    assert (
-        hass.states.get(_slot_event_entity_id(hass, second, 6)).state == STATE_UNKNOWN
-    )
-
-
-async def test_use_credential_rejects_a_lock_no_entry_manages(
-    hass: HomeAssistant, validate_entry
-) -> None:
-    """
-    A lock outside every configuration is refused, not answered.
-
-    Naming a lock nothing manages is the same class of mistake as naming an
-    entry that does not exist, and answering "unknown code" would let a
-    typo in an automation read as a wrong PIN forever.
-    """
-    with pytest.raises(ServiceValidationError, match="lock.not_managed_at_all"):
-        await _call_use_credential(
-            hass,
-            {ATTR_LOCK_ENTITY_ID: "lock.not_managed_at_all", ATTR_CODE: "1234"},
-        )
-
-
-@pytest.mark.parametrize(
-    "selector",
-    [
-        pytest.param(
-            {"config_entry_id": "an_id", ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID},
-            id="id_and_lock",
-        ),
-        pytest.param(
-            {
-                "config_entry_title": "a title",
-                ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID,
-            },
-            id="title_and_lock",
-        ),
-    ],
-)
-async def test_use_credential_refuses_an_entry_and_a_lock_together(
-    hass: HomeAssistant, validate_entry, selector: dict
-) -> None:
-    """
-    The lock is a third way to name the entry, not an extra filter.
-
-    Accepting both would leave the action free to pick, and the two can
-    disagree: a lock the named entry does not manage has no consistent
-    answer at all.
-    """
-    with pytest.raises(vol.Invalid):
-        await _call_use_credential(hass, {**selector, ATTR_CODE: "1234"})
