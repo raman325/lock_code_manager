@@ -63,6 +63,12 @@ ATTR_CODE_LENGTH = "code_length"
 ATTR_CONFIGURED_CODE = "configured_code"
 ATTR_CONFIGURED_CODE_LENGTH = "configured_code_length"
 ATTR_LOCK_ENTITY_ID = "lock_entity_id"
+# Deliberately not ATTR_LOCK_ENTITY_ID: that one names a lock being operated
+# on -- a device a code is written to or read from -- while this one names a
+# member whose configuration should answer a question about a credential.
+# The two happen to accept the same entities today and stop being the same
+# question the moment a member is something other than a lock.
+ATTR_MEMBER_ENTITY_ID = "member_entity_id"
 ATTR_LOCK_NAME = "lock_name"
 ATTR_PIN_LENGTH = "pin_length"
 ATTR_LENGTH = "length"

@@ -110,7 +110,7 @@ async def async_use_credential(
     target: str,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
-    lock_entity_id: str | None = None,
+    member_entity_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Report a credential use to one entry, and answer whether it was valid.
@@ -127,23 +127,25 @@ async def async_use_credential(
     An entry's users are what a code is checked against, so the answer always
     comes from an entry -- and a code that no lock has ever been programmed
     with still has one. The caller names that entry one of three ways, and
-    ``lock_entity_id`` is there for the one that cannot name it at all: a
+    ``member_entity_id`` is there for the one that cannot name it at all: a
     keypad calling this action directly knows its own entities and nothing
-    about which configuration holds the credentials. Naming the lock hands
-    that lookup over, and the entry it resolved comes back in the response.
+    about which configuration holds the credentials. Naming a member of that
+    configuration hands the lookup over, and the entry it resolved comes back
+    in the response. Every member is a lock today, which is what the schema
+    accepts; the parameter is named for the question rather than for that.
 
-    ``lock_entity_id`` is not ``target``. The lock a credential is kept on
-    and the thing a credential was used against are routinely different --
+    ``member_entity_id`` is not ``target``. The member a credential is kept
+    on and the thing a credential was used against are routinely different --
     the documented garage recipe targets a cover, which is a member of
     nothing -- so the entry cannot be recovered from the attribution fields.
     """
     config_entries = (
-        get_loaded_config_entries_for_lock(hass, lock_entity_id)
-        if lock_entity_id is not None
+        get_loaded_config_entries_for_lock(hass, member_entity_id)
+        if member_entity_id is not None
         else [get_loaded_config_entry(hass, config_entry_id, config_entry_title)]
     )
     # One code path for both, so a caller that named the entry and one that
-    # named its lock cannot get different answers about the same entry.
+    # named a member of it cannot get different answers about the same entry.
     config_entry, result = validate_across_entries(config_entries, code)
 
     # The entry and the user are set together, exactly when the credential

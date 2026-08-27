@@ -314,11 +314,11 @@
         },
         "config_entry_title": {
           "name": "Config entry title",
-          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Supply exactly one of the config entry, the config entry title, or the lock."
+          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Supply exactly one of the config entry, the config entry title, or the member."
         },
-        "lock_entity_id": {
-          "name": "Lock",
-          "description": "A lock, named instead of the entry: Lock Code Manager works out which of its configurations manages that lock and checks the code against them, and the response names the one the code is valid in. For a caller that knows the lock but not the configuration — a keypad calling this action directly, for one. Supply exactly one of the config entry, the config entry title, or the lock. If several configurations manage the lock, the one the code is valid in answers, and if two of them accept it the one Home Assistant lists first does; if none accepts it, the response names no configuration and reports the most restrictive reason. Not the same as the target: the lock the credential is kept on is often not what it was used against."
+        "member_entity_id": {
+          "name": "Member",
+          "description": "A member of a Lock Code Manager configuration — a lock, today — named instead of the entry: Lock Code Manager works out which of its configurations holds that member and checks the code against them, and the response names the one the code is valid in. For a caller that knows the lock but not the configuration — a keypad calling this action directly, for one. Supply exactly one of the config entry, the config entry title, or the member. If several configurations hold the member, the one the code is valid in answers, and if two of them accept it the one Home Assistant lists first does; if none accepts it, the response names no configuration and reports the most restrictive reason. Not the same as the target: the member the credential is kept on is often not what it was used against."
         },
         "code": {
           "name": "Code",

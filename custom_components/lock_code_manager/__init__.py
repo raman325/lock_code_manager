@@ -68,6 +68,7 @@ from .const import (
     ATTR_CODE_SLOT,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
+    ATTR_MEMBER_ENTITY_ID,
     ATTR_SLOT,
     ATTR_SOURCE,
     ATTR_TARGET,
@@ -689,7 +690,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             target=call.data[ATTR_TARGET],
             config_entry_id=call.data.get("config_entry_id"),
             config_entry_title=call.data.get("config_entry_title"),
-            lock_entity_id=call.data.get(ATTR_LOCK_ENTITY_ID),
+            member_entity_id=call.data.get(ATTR_MEMBER_ENTITY_ID),
         )
 
     hass.services.async_register(
@@ -701,11 +702,15 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 {
                     **_ENTRY_SELECTOR,
                     # A third way to name the entry, in the same exclusive
-                    # group: a caller that knows the lock but not which
-                    # configuration manages it hands that lookup over. Two
+                    # group: a caller that knows the member but not which
+                    # configuration holds it hands that lookup over. Two
                     # ways of naming one entry can disagree, so the schema
                     # takes one and the action never has to choose.
-                    vol.Exclusive(ATTR_LOCK_ENTITY_ID, "entry"): cv.entity_domain(
+                    #
+                    # Every member is a lock today, so the domain stays
+                    # pinned; the field is named for the question it asks
+                    # rather than for what happens to answer it now.
+                    vol.Exclusive(ATTR_MEMBER_ENTITY_ID, "entry"): cv.entity_domain(
                         "lock"
                     ),
                     vol.Required(ATTR_CODE): vol.All(
@@ -719,7 +724,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                     vol.Required(ATTR_TARGET): cv.entity_id,
                 },
                 cv.has_at_least_one_key(
-                    "config_entry_id", "config_entry_title", ATTR_LOCK_ENTITY_ID
+                    "config_entry_id", "config_entry_title", ATTR_MEMBER_ENTITY_ID
                 ),
             )
         ),

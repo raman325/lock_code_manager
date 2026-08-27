@@ -42,6 +42,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CREDENTIAL_TYPE,
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
+    ATTR_MEMBER_ENTITY_ID,
     ATTR_OPERATION,
     ATTR_REASON,
     ATTR_SLOT,
@@ -1996,7 +1997,7 @@ async def _call_use_credential_for_shared_lock(
     return await _call_use_credential(
         hass,
         {
-            ATTR_LOCK_ENTITY_ID: SHARED_LOCK_ENTITY_ID,
+            ATTR_MEMBER_ENTITY_ID: SHARED_LOCK_ENTITY_ID,
             ATTR_TARGET: SHARED_LOCK_ENTITY_ID,
             ATTR_CODE: code,
         },
@@ -2016,7 +2017,7 @@ async def test_use_credential_resolves_the_entry_from_the_lock(
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
     response = await _call_use_credential(
-        hass, {ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "1234"}
+        hass, {ATTR_MEMBER_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID, ATTR_CODE: "1234"}
     )
     await hass.async_block_till_done()
 
@@ -2140,7 +2141,7 @@ async def test_use_credential_rejects_a_lock_no_entry_manages(
     with pytest.raises(ServiceValidationError, match="lock.not_managed_at_all"):
         await _call_use_credential(
             hass,
-            {ATTR_LOCK_ENTITY_ID: "lock.not_managed_at_all", ATTR_CODE: "1234"},
+            {ATTR_MEMBER_ENTITY_ID: "lock.not_managed_at_all", ATTR_CODE: "1234"},
         )
 
 
@@ -2148,15 +2149,18 @@ async def test_use_credential_rejects_a_lock_no_entry_manages(
     "selector",
     [
         pytest.param(
-            {"config_entry_id": "an_id", ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID},
-            id="id_and_lock",
+            {
+                "config_entry_id": "an_id",
+                ATTR_MEMBER_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID,
+            },
+            id="id_and_member",
         ),
         pytest.param(
             {
                 "config_entry_title": "a title",
-                ATTR_LOCK_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID,
+                ATTR_MEMBER_ENTITY_ID: VALIDATE_LOCK_ENTITY_ID,
             },
-            id="title_and_lock",
+            id="title_and_member",
         ),
     ],
 )
