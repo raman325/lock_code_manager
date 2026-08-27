@@ -13,6 +13,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
 from ..const import (
+    ATTR_CONFIG_ENTRY_ID,
     ATTR_REASON,
     ATTR_USER,
     ATTR_VALID,
@@ -28,8 +29,12 @@ from .events import (
 )
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
-from .queries import get_entry_config, get_loaded_config_entry
-from .validation import validate_credential
+from .queries import (
+    get_entry_config,
+    get_loaded_config_entries_for_lock,
+    get_loaded_config_entry,
+)
+from .validation import validate_across_entries
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,6 +110,7 @@ async def async_use_credential(
     target: str,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
+    lock_entity_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Report a credential use to one entry, and answer whether it was valid.
@@ -118,16 +124,32 @@ async def async_use_credential(
     so an automation that wants to react to a rejection does so from the
     response rather than from an event anyone else could see.
 
-    The entry is the target rather than a lock because an entry's users are
-    what a code is checked against, and a code that no lock has ever been
-    programmed with still has an answer here.
-    """
-    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
-    result = validate_credential(config_entry, code)
+    An entry's users are what a code is checked against, so the answer always
+    comes from an entry -- and a code that no lock has ever been programmed
+    with still has one. The caller names that entry one of three ways, and
+    ``lock_entity_id`` is there for the one that cannot name it at all: a
+    keypad calling this action directly knows its own entities and nothing
+    about which configuration holds the credentials. Naming the lock hands
+    that lookup over, and the entry it resolved comes back in the response.
 
-    # ``user`` is set exactly when the credential validated; reading it
-    # rather than ``valid`` is also what tells the type checker it is there.
-    if result.user is not None:
+    ``lock_entity_id`` is not ``target``. The lock a credential is kept on
+    and the thing a credential was used against are routinely different --
+    the documented garage recipe targets a cover, which is a member of
+    nothing -- so the entry cannot be recovered from the attribution fields.
+    """
+    config_entries = (
+        get_loaded_config_entries_for_lock(hass, lock_entity_id)
+        if lock_entity_id is not None
+        else [get_loaded_config_entry(hass, config_entry_id, config_entry_title)]
+    )
+    # One code path for both, so a caller that named the entry and one that
+    # named its lock cannot get different answers about the same entry.
+    config_entry, result = validate_across_entries(config_entries, code)
+
+    # The entry and the user are set together, exactly when the credential
+    # validated; reading them rather than ``valid`` is also what tells the
+    # type checker they are there.
+    if config_entry is not None and (user := result.user) is not None:
         # One event, whatever the target is. The entry's per-slot event
         # entity reads this off the bus and records every use it names, so
         # nothing here has to know what a target is or whether Lock Code
@@ -139,7 +161,7 @@ async def async_use_credential(
         async_fire_credential_used(
             hass,
             config_entry,
-            name=result.user,
+            name=user,
             source=source,
             target=target,
             # A PIN is what this action validates against.
@@ -154,6 +176,11 @@ async def async_use_credential(
         ATTR_VALID: result.valid,
         ATTR_USER: result.user,
         ATTR_REASON: result.reason,
+        # Set exactly when ``user`` is, and by the same rule: it names the
+        # entry the credential is valid in. A rejection has no such entry --
+        # every candidate turned it down -- so naming one of them would claim
+        # a credential lives somewhere it does not.
+        ATTR_CONFIG_ENTRY_ID: config_entry.entry_id if config_entry else None,
     }
 
 
