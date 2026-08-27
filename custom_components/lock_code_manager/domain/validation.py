@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from homeassistant.const import CONF_CONDITION
@@ -90,3 +91,53 @@ def validate_credential(
 
     name = get_entry_config(config_entry).name_for(active.slot_num)
     return ValidationResult(valid=True, user=name, reason=None)
+
+
+@callback
+def validate_across_entries(
+    config_entries: Sequence[LockCodeManagerConfigEntry], code: str
+) -> tuple[LockCodeManagerConfigEntry | None, ValidationResult]:
+    """
+    Validate ``code`` against several entries, and say which one answered.
+
+    For a caller that named a lock rather than an entry: several entries can
+    manage one lock, and the credential belongs to whichever of them accepts
+    it. The entry is returned alongside the verdict so the caller can report
+    where the answer came from, and so the use is recorded against the
+    configuration that owns the user rather than against a neighbour.
+
+    One submission gets one verdict however many entries are asked. The
+    first entry the credential is valid in wins; two entries that both
+    accept a code are equally correct answers, so the rule only has to be
+    stable, and the caller's order -- Home Assistant's own entry order --
+    is what every other cross-entry pass here already walks.
+
+    When no entry accepts it there is no entry to name. The reasons are
+    aggregated by the same precedence each entry applies among its own
+    slots, most restrictive winning, so a credential that is merely waiting
+    on a condition in one configuration is not reported as waiting when
+    another has turned it off outright.
+
+    Every entry is asked before anything acts on an answer. ``validate_credential``
+    is a pure query, so nothing can change between deciding and acting, and
+    the caller cannot announce a use against an entry that was only ever a
+    candidate.
+
+    At least one entry is required: with none there is neither a verdict to
+    give nor a reason to give it. Callers resolve the candidates first and
+    refuse an empty set there, where they can say what the caller named.
+    """
+    results = [
+        (config_entry, validate_credential(config_entry, code))
+        for config_entry in config_entries
+    ]
+    if matched := next((pair for pair in results if pair[1].valid), None):
+        return matched
+
+    reason = max(
+        # Every result here is a failure, so every reason is set; the filter
+        # is what says so to the type checker.
+        (result.reason for _, result in results if result.reason is not None),
+        key=REASON_PRECEDENCE.index,
+    )
+    return None, ValidationResult(valid=False, user=None, reason=reason)
