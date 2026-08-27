@@ -506,7 +506,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                     vol.Coerce(int), vol.Range(min=1)
                 ),
                 vol.Required(ATTR_USERCODE): vol.All(
-                    cv.string, str.strip, vol.Length(min=1)
+                    cv.string, vol.Strip, vol.Length(min=1)
                 ),
             }
         ),
@@ -604,7 +604,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 # Stripped here as the config flow strips its own field: a
                 # submitted code is stripped before it is matched, so a PIN
                 # stored with padding matches nothing anybody can type.
-                vol.Optional(CONF_PIN): vol.All(cv.string, str.strip),
+                vol.Optional(CONF_PIN): vol.All(cv.string, vol.Strip),
                 vol.Optional(CONF_ENABLED, default=True): cv.boolean,
                 vol.Optional(CONF_CONDITION): cv.entity_domain(
                     CONDITION_ENTITY_DOMAINS
@@ -698,7 +698,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         schema=_entry_schema(
             {
                 vol.Required(ATTR_CODE): vol.All(
-                    cv.string, str.strip, vol.Length(min=1)
+                    cv.string, vol.Strip, vol.Length(min=1)
                 ),
                 # Any domain, both of them: a credential is rarely entered
                 # on a lock, and what it was used against can be a cover, an

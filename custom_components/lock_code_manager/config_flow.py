@@ -48,7 +48,10 @@ _LOGGER = logging.getLogger(__name__)
 # compares a submitted code stripped, so a PIN stored with padding is one
 # nothing anybody can type will ever match. Not vol.Length(min=1) -- an
 # empty PIN is how a user without one is expressed.
-STRIPPED_PIN = vol.All(cv.string, str.strip)
+# vol.Strip rather than str.strip because this schema is also rendered: a
+# form is serialized for the frontend, and a bare callable has no JSON form
+# to serialize into.
+STRIPPED_PIN = vol.All(cv.string, vol.Strip)
 
 CODE_SLOT_SCHEMA = vol.Schema(
     {

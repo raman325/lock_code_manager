@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Generator
+from contextlib import ExitStack
 from datetime import timedelta
 import os
 from typing import Any
@@ -19,6 +20,7 @@ from pytest_homeassistant_custom_component.common import (
     mock_integration,
     mock_platform,
 )
+import voluptuous_serialize
 
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
@@ -26,10 +28,13 @@ from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigFlow
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowHandler
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
+from custom_components.lock_code_manager import config_flow, repairs
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.domain.models import SyncState
 from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
@@ -71,6 +76,60 @@ def auto_setup_mock_lock():
         "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLock, **INTEGRATIONS_CLASS_MAP},
     ):
+        yield
+
+
+def _flow_classes() -> list[type[FlowHandler]]:
+    """
+    Every flow this integration defines.
+
+    Discovered rather than listed so a flow added later is covered the day
+    it is written -- an unguarded flow is exactly the gap this checks for.
+    """
+    return [
+        obj
+        for module in (config_flow, repairs)
+        for obj in vars(module).values()
+        if isinstance(obj, type)
+        and issubclass(obj, FlowHandler)
+        and obj.__module__ == module.__name__
+    ]
+
+
+@pytest.fixture(autouse=True)
+def assert_flow_forms_serialize() -> Generator[None]:
+    """
+    Convert every form a flow shows the way the HTTP layer will.
+
+    A flow driven through ``async_configure`` gets the schema object back
+    untouched, so a validator the frontend has no representation for reaches
+    a real browser as an unknown error and never a failing test. Converting
+    here makes every test that shows a form the test that catches it.
+    """
+
+    def checked(cls: type[FlowHandler]) -> Any:
+        """
+        Wrap one class's own ``async_show_form``.
+
+        Resolved per class rather than once: these classes inherit different
+        implementations, and each uses a zero-argument ``super()`` bound to
+        the class that defines it.
+        """
+        original = cls.async_show_form
+
+        def _converted(self, **kwargs: Any):
+            result = original(self, **kwargs)
+            if schema := result.get("data_schema"):
+                voluptuous_serialize.convert(
+                    schema, custom_serializer=cv.custom_serializer
+                )
+            return result
+
+        return patch.object(cls, "async_show_form", _converted)
+
+    with ExitStack() as stack:
+        for cls in _flow_classes():
+            stack.enter_context(checked(cls))
         yield
 
 
