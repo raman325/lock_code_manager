@@ -449,7 +449,6 @@ def test_a_rename_keeps_the_users_number(
     assignment = SlotAssignment.empty().reconcile(names, start=start)
     config = EntryConfig(
         locks=(),
-        members={},
         users={name: {} for name in names},
         assignment=assignment,
         extra={},
