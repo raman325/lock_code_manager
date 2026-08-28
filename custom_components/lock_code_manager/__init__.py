@@ -451,6 +451,29 @@ async def async_migrate_entry(
             },
             version=5,
         )
+        # Each user's device already exists, owned by the entry and by no
+        # subentry. Adding their entities would drag it into the subentry
+        # implicitly, which Home Assistant deprecated: a device belongs to one
+        # subentry and is supposed to be moved deliberately.
+        dev_reg = dr.async_get(hass)
+        for subentry in config_entry.subentries.values():
+            slot_num = subentry.data.get(CONF_SLOT)
+            device = dev_reg.async_get_device(
+                identifiers={
+                    build_slot_device_identifier(config_entry.entry_id, slot_num)
+                }
+            )
+            if device is not None and subentry.subentry_id not in (
+                device.config_entries_subentries.get(config_entry.entry_id) or set()
+            ):
+                dev_reg.async_update_device(
+                    device.id,
+                    add_config_entry_id=config_entry.entry_id,
+                    add_config_subentry_id=subentry.subentry_id,
+                    remove_config_entry_id=config_entry.entry_id,
+                    remove_config_subentry_id=None,
+                )
+
         _LOGGER.info(
             "%s (%s): moved %d user(s) into subentries",
             config_entry.entry_id,

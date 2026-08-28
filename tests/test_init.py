@@ -2111,6 +2111,47 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_migration_v5_moves_an_existing_slot_device_to_its_user(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A device the entry already owns is moved into its user's subentry.
+
+    Every upgrading instance is in exactly this position: the devices were
+    created before subentries existed, so they belong to the entry and to no
+    subentry. Adding the user's entities would drag the device across
+    implicitly, which Home Assistant deprecated -- a device belongs to one
+    subentry and is meant to be moved deliberately.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"Housekeeper": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"housekeeper": 1},
+        },
+        unique_id="Existing Device Migration",
+        version=4,
+    )
+    config_entry.add_to_hass(hass)
+    dev_reg = dr.async_get(hass)
+    # The device as an upgrading instance already holds it: owned by the
+    # entry, in no subentry.
+    before = dev_reg.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={build_slot_device_identifier(config_entry.entry_id, 1)},
+        name="All Locks Housekeeper",
+    )
+    assert before.config_entries_subentries == {config_entry.entry_id: {None}}
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    subentry_id = next(iter(config_entry.subentries))
+    after = dev_reg.async_get(before.id)
+    assert after.config_entries_subentries == {config_entry.entry_id: {subentry_id}}
+
+
 async def test_migration_v5_drops_a_user_with_no_number(
     hass: HomeAssistant, caplog
 ) -> None:
