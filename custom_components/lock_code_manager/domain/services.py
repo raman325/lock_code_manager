@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_PIN
+from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
@@ -452,52 +452,66 @@ async def async_disable_user(
     await coordinator.async_request_active_toggle(False)
 
 
-async def async_add_user(
+async def async_add_users(
     hass: HomeAssistant,
-    name: str,
+    users: list[dict[str, Any]],
     *,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
-    pin: str | None = None,
-    enabled: bool = True,
-    condition: str | None = None,
 ) -> None:
     """
-    Add a user to an entry, on a slot number chosen by reading the locks.
+    Add one or more users to an entry, numbering them by reading the locks.
 
-    The caller names the person and nothing else. Allocation runs against
-    the entry's own locks, through the same path the config flow uses, so a
-    user added by service and one added in the editor cannot land on
-    different numbers or disagree about which are free.
+    All or nothing. Every name is validated, one allocation covers the whole
+    batch, and one write lands it. Partial success would leave the caller
+    working out which of a list arrived, and nothing here needs it: every way
+    this can fail -- a name that means somebody already here, a batch that
+    will not fit -- is knowable before anything is written.
+
+    Adding N users one call at a time would read the locks N times, which on a
+    battery lock is the difference between usable and not, and would settle
+    the entry N times over.
     """
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
 
-    if error := name_error(name):
-        raise ServiceValidationError(f"Invalid name {name!r}: {error}")
-    name = normalize_name(name)
-    # Two names meaning one person would collapse into a single key on the
-    # way into storage, taking one of their credentials with it.
-    if any(identity(known) == identity(name) for known in config.users):
-        raise ServiceValidationError(f"A user named {name!r} already exists")
+    additions: dict[str, dict[str, Any]] = {}
+    for entry in users:
+        name = entry[CONF_NAME]
+        if error := name_error(name):
+            raise ServiceValidationError(f"Invalid name {name!r}: {error}")
+        name = normalize_name(name)
+        # Checked against the batch as well as the entry: two names in one
+        # call meaning one person would collapse into a single key on the way
+        # into storage, taking one of their credentials with it.
+        if any(
+            identity(known) == identity(name) for known in (*config.users, *additions)
+        ):
+            raise ServiceValidationError(f"A user named {name!r} already exists")
 
-    # The same rule the editor enforces: a slot cannot be programmed without
-    # something to program.
-    if enabled and not pin:
-        raise ServiceValidationError(f"{name!r} cannot be enabled without a PIN")
+        pin = entry.get(CONF_PIN)
+        enabled = entry.get(CONF_ENABLED, True)
+        condition = entry.get(CONF_CONDITION)
 
-    if condition:
-        _async_validate_condition(hass, condition)
+        # The same rule the editor enforces: a slot cannot be programmed
+        # without something to program.
+        if enabled and not pin:
+            raise ServiceValidationError(f"{name!r} cannot be enabled without a PIN")
+        if condition:
+            _async_validate_condition(hass, condition)
 
-    user: dict[str, Any] = {CONF_ENABLED: enabled}
-    if pin:
-        user[CONF_PIN] = pin
-    if condition:
-        user[CONF_CONDITION] = condition
+        user: dict[str, Any] = {CONF_ENABLED: enabled}
+        if pin:
+            user[CONF_PIN] = pin
+        if condition:
+            user[CONF_CONDITION] = condition
+        additions[name] = user
 
     try:
+        # One read of the locks for the whole batch, sized to what the entry
+        # will hold once it lands.
         unavailable = await async_allocate_for(
-            hass, config_entry, config.locks, len(config.users) + 1
+            hass, config_entry, config.locks, len(config.users) + len(additions)
         )
     except SlotAllocationError as err:
         raise ServiceValidationError(
@@ -509,57 +523,69 @@ async def async_add_user(
         ) from err
 
     # Reconciled against the whole set rather than issued directly: everyone
-    # already here keeps their number by tenure, and only the newcomer is
+    # already here keeps their number by tenure, and only the newcomers are
     # given one.
     assignment = config.assignment.reconcile(
-        [*config.users, name], start=1, unavailable=unavailable
+        [*config.users, *additions], start=1, unavailable=unavailable
     )
     await _async_write_and_settle(
         hass,
         config_entry,
         EntryConfig(
             locks=config.locks,
-            users={**config.users, name: user},
+            users={**config.users, **additions},
             assignment=assignment,
             extra=config.extra,
         ).to_dict(),
     )
 
 
-async def async_delete_user(
+async def async_delete_users(
     hass: HomeAssistant,
-    name: str,
+    names: list[str],
     *,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
     clear_credentials: bool = True,
 ) -> None:
     """
-    Remove a user from an entry, and by default from the locks.
+    Remove one or more users from an entry, and by default from the locks.
 
-    ``clear_credentials=False`` hands the credential over rather than
-    deleting it: Lock Code Manager stops managing the slot and whatever is
-    programmed there keeps working. The intent cannot ride in the new
-    configuration, because the user it concerns is precisely what the new
-    configuration no longer has, so it is left for the update listener to
-    pick up as it processes this write.
+    All or nothing, and for the same reason as adding: an unknown name is the
+    caller's mistake, and reporting it after removing the others would leave
+    them working out what happened.
+
+    ``clear_credentials=False`` hands the credentials over rather than
+    deleting them: Lock Code Manager stops managing those slots and whatever
+    is programmed there keeps working. The intent cannot ride in the new
+    configuration, because the users it concerns are precisely what the new
+    configuration no longer has, so it is left for the update listener to pick
+    up as it processes this write.
     """
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
 
-    stored = next(
-        (known for known in config.users if identity(known) == identity(name)), None
-    )
-    if stored is None:
-        raise ServiceValidationError(f"No user named {name!r} in this config entry")
-
-    if not clear_credentials and (slot_num := config.assignment.slot(stored)):
-        config_entry.runtime_data.retained_pairs.update(
-            (lock_entity_id, slot_num) for lock_entity_id in config.locks
+    departing: set[str] = set()
+    for name in names:
+        stored = next(
+            (known for known in config.users if identity(known) == identity(name)),
+            None,
         )
+        if stored is None:
+            raise ServiceValidationError(f"No user named {name!r} in this config entry")
+        departing.add(stored)
+
+    if not clear_credentials:
+        for stored in departing:
+            if slot_num := config.assignment.slot(stored):
+                config_entry.runtime_data.retained_pairs.update(
+                    (lock_entity_id, slot_num) for lock_entity_id in config.locks
+                )
 
     remaining = {
-        known: fields for known, fields in config.users.items() if known != stored
+        known: fields
+        for known, fields in config.users.items()
+        if known not in departing
     }
     # No unavailable set and so no lock read: a departure issues no numbers,
     # and everyone remaining keeps theirs by tenure.

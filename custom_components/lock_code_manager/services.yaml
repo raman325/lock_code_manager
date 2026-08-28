@@ -13,27 +13,43 @@ add_user:
     config_entry_title:
       selector:
         text:
-    name:
+    users:
       required: true
+      example: |
+        - name: Sarah Chen
+          pin: "1234"
+        - name: Courier
+          pin: "9876"
+          enabled: false
       selector:
-        text:
-    pin:
-      selector:
-        text:
-    enabled:
-      default: true
-      selector:
-        boolean:
-    condition:
-      selector:
-        entity:
-          domain:
-            - binary_sensor
-            - calendar
-            - input_boolean
-            - schedule
-            - switch
-
+        object:
+          multiple: true
+          label_field: name
+          description_field: pin
+          fields:
+            name:
+              label: Name
+              required: true
+              selector:
+                text:
+            pin:
+              label: PIN
+              selector:
+                text:
+            enabled:
+              label: Enabled
+              selector:
+                boolean:
+            condition:
+              label: Condition entity
+              selector:
+                entity:
+                  domain:
+                    - binary_sensor
+                    - calendar
+                    - input_boolean
+                    - schedule
+                    - switch
 delete_user:
   fields:
     config_entry_id:
@@ -45,8 +61,10 @@ delete_user:
         text:
     name:
       required: true
+      example: '[\"Sarah Chen\", \"Courier\"]'
       selector:
         text:
+          multiple: true
     clear_credentials:
       default: true
       selector:
