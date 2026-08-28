@@ -36,21 +36,17 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.lock_code_manager.const import (
     ATTR_CLEAR_CREDENTIALS,
     ATTR_CODE,
-    ATTR_CODE_SLOT,
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
     ATTR_CREDENTIAL_TYPE,
     ATTR_ENABLE_IF_DISABLED,
     ATTR_LENGTH,
-    ATTR_LOCK_ENTITY_ID,
     ATTR_OPERATION,
     ATTR_REASON,
-    ATTR_SLOT,
     ATTR_SOURCE,
     ATTR_TARGET,
     ATTR_TEXT,
     ATTR_USER,
-    ATTR_USERCODE,
     ATTR_VALID,
     ATTR_VALUE,
     BUS_EVENT_CREDENTIAL_USED,
@@ -66,8 +62,6 @@ from custom_components.lock_code_manager.const import (
     SERVICE_ADD_USER,
     SERVICE_CLEAR_CONDITION,
     SERVICE_CLEAR_CREDENTIAL,
-    SERVICE_CLEAR_SLOT_CONDITION,
-    SERVICE_CLEAR_USERCODE,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_DISABLE_USER,
@@ -75,8 +69,6 @@ from custom_components.lock_code_manager.const import (
     SERVICE_GENERATE_PIN,
     SERVICE_SET_CONDITION,
     SERVICE_SET_CREDENTIAL,
-    SERVICE_SET_SLOT_CONDITION,
-    SERVICE_SET_USERCODE,
     SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.domain import services
@@ -97,267 +89,6 @@ from custom_components.lock_code_manager.providers.schlage import (
 from tests.providers.helpers import register_mock_service
 
 from .common import LOCK_1_ENTITY_ID, reading_for
-
-
-async def test_set_usercode_service(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_usercode service sets a code on the lock."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_internal_set_usercode = AsyncMock()
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_SET_USERCODE,
-        {
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_CODE_SLOT: 3,
-            ATTR_USERCODE: "9999",
-        },
-        blocking=True,
-    )
-
-    lock.async_internal_set_usercode.assert_awaited_once_with(3, "9999")
-
-
-async def test_set_usercode_service_lock_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_usercode service raises when lock is not managed."""
-    with pytest.raises(ServiceValidationError, match="not managed"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_USERCODE,
-            {
-                ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
-                ATTR_CODE_SLOT: 3,
-                ATTR_USERCODE: "1234",
-            },
-            blocking=True,
-        )
-
-
-async def test_clear_usercode_service(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_usercode service clears a code on the lock."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_internal_clear_usercode = AsyncMock()
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_CLEAR_USERCODE,
-        {
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_CODE_SLOT: 3,
-        },
-        blocking=True,
-    )
-
-    lock.async_internal_clear_usercode.assert_awaited_once_with(3)
-
-
-async def test_clear_usercode_service_lock_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_usercode service raises when lock is not managed."""
-    with pytest.raises(ServiceValidationError, match="not managed"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_CLEAR_USERCODE,
-            {
-                ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
-                ATTR_CODE_SLOT: 3,
-            },
-            blocking=True,
-        )
-
-
-async def test_set_slot_condition_service(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_slot_condition service assigns a condition entity to a slot."""
-    entry = lock_code_manager_config_entry
-    condition_entity_id = "binary_sensor.test_condition"
-    hass.states.async_set(condition_entity_id, STATE_ON)
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_SET_SLOT_CONDITION,
-        {
-            "config_entry_id": entry.entry_id,
-            ATTR_SLOT: 1,
-            CONF_ENTITY_ID: condition_entity_id,
-        },
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    # Verify the config entry was updated with the condition entity
-    updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
-    # After update, data is written via options then moved to data
-    # Check both options and data for the condition entity
-    assert (
-        get_entry_config(updated_entry).slot(1)[CONF_CONDITION] == condition_entity_id
-    )
-
-
-async def test_set_slot_condition_service_entry_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_slot_condition service raises when config entry not found."""
-    hass.states.async_set("binary_sensor.test_condition", STATE_ON)
-
-    with pytest.raises(ServiceValidationError, match="No lock code manager"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
-            {
-                "config_entry_id": "nonexistent_entry",
-                ATTR_SLOT: 1,
-                CONF_ENTITY_ID: "binary_sensor.test_condition",
-            },
-            blocking=True,
-        )
-
-
-async def test_set_slot_condition_service_slot_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_slot_condition service raises when slot not found."""
-    entry = lock_code_manager_config_entry
-    hass.states.async_set("binary_sensor.test_condition", STATE_ON)
-
-    with pytest.raises(ServiceValidationError, match="Slot.*not found"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
-            {
-                "config_entry_id": entry.entry_id,
-                ATTR_SLOT: 999,
-                CONF_ENTITY_ID: "binary_sensor.test_condition",
-            },
-            blocking=True,
-        )
-
-
-async def test_set_slot_condition_service_entity_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_slot_condition service raises when condition entity not found."""
-    entry = lock_code_manager_config_entry
-
-    with pytest.raises(ServiceValidationError, match="not found"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
-            {
-                "config_entry_id": entry.entry_id,
-                ATTR_SLOT: 1,
-                CONF_ENTITY_ID: "binary_sensor.nonexistent",
-            },
-            blocking=True,
-        )
-
-
-async def test_clear_slot_condition_service(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_slot_condition service removes a condition entity from a slot."""
-    entry = lock_code_manager_config_entry
-
-    # Slot 2 has a condition entity (calendar.test_1) configured in BASE_CONFIG
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_CLEAR_SLOT_CONDITION,
-        {
-            "config_entry_id": entry.entry_id,
-            ATTR_SLOT: 2,
-        },
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
-    assert CONF_CONDITION not in get_entry_config(updated_entry).slot(2)
-
-
-async def test_clear_slot_condition_service_entry_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_slot_condition service raises when config entry not found."""
-    with pytest.raises(ServiceValidationError, match="No lock code manager"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_CLEAR_SLOT_CONDITION,
-            {
-                "config_entry_id": "nonexistent_entry",
-                ATTR_SLOT: 1,
-            },
-            blocking=True,
-        )
-
-
-async def test_clear_slot_condition_service_slot_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_slot_condition service raises when slot not found."""
-    entry = lock_code_manager_config_entry
-
-    with pytest.raises(ServiceValidationError, match="Slot.*not found"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_CLEAR_SLOT_CONDITION,
-            {
-                "config_entry_id": entry.entry_id,
-                ATTR_SLOT: 999,
-            },
-            blocking=True,
-        )
-
-
-async def test_set_usercode_service_empty_usercode(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_usercode service raises when usercode is empty or whitespace."""
-    for usercode in ["", "   ", "\t\n"]:
-        with pytest.raises(
-            (ServiceValidationError, vol.MultipleInvalid),
-        ):
-            await hass.services.async_call(
-                DOMAIN,
-                SERVICE_SET_USERCODE,
-                {
-                    ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-                    ATTR_CODE_SLOT: 3,
-                    ATTR_USERCODE: usercode,
-                },
-                blocking=True,
-            )
 
 
 async def test_async_set_usercode_domain_function_rejects_empty_usercode(
@@ -387,10 +118,10 @@ async def test_get_loaded_config_entry_wrong_domain(
     with pytest.raises(ServiceValidationError, match="No lock code manager"):
         await hass.services.async_call(
             DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
+            SERVICE_SET_CONDITION,
             {
                 "config_entry_id": mock_lock_config_entry.entry_id,
-                ATTR_SLOT: 1,
+                CONF_NAME: "test1",
                 CONF_ENTITY_ID: "binary_sensor.test_condition",
             },
             blocking=True,
@@ -617,7 +348,6 @@ async def test_service_does_not_wait_when_the_write_changed_nothing(
     already wrote.
     """
     entry = lock_code_manager_config_entry
-    slot = get_entry_config(entry).assignment.slot("test1")
     hass.states.async_set("binary_sensor.settle_probe", STATE_ON)
 
     with patch.object(
@@ -625,10 +355,10 @@ async def test_service_does_not_wait_when_the_write_changed_nothing(
     ) as update:
         await hass.services.async_call(
             DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
+            SERVICE_SET_CONDITION,
             {
                 "config_entry_id": entry.entry_id,
-                ATTR_SLOT: slot,
+                CONF_NAME: "test1",
                 CONF_ENTITY_ID: "binary_sensor.settle_probe",
             },
             blocking=True,
@@ -651,7 +381,6 @@ async def test_service_reports_an_entry_that_never_settles(
     at all, and saying otherwise would report a working add as broken.
     """
     entry = lock_code_manager_config_entry
-    slot = get_entry_config(entry).assignment.slot("test1")
     hass.states.async_set("binary_sensor.settle_probe", STATE_ON)
 
     async def _never() -> None:
@@ -663,10 +392,10 @@ async def test_service_reports_an_entry_that_never_settles(
     ):
         await hass.services.async_call(
             DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
+            SERVICE_SET_CONDITION,
             {
                 "config_entry_id": entry.entry_id,
-                ATTR_SLOT: slot,
+                CONF_NAME: "test1",
                 CONF_ENTITY_ID: "binary_sensor.settle_probe",
             },
             blocking=True,
@@ -675,9 +404,9 @@ async def test_service_reports_an_entry_that_never_settles(
     assert "did not finish updating" in caplog.text
     # The write still landed; only the waiting gave up.
     assert (
-        get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).slot(
-            slot
-        )[CONF_CONDITION]
+        get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).users[
+            "test1"
+        ][CONF_CONDITION]
         == "binary_sensor.settle_probe"
     )
 
@@ -1109,46 +838,6 @@ async def test_services_require_one_identifier(
             {CONF_NAME: "Newcomer", CONF_PIN: "9876"},
             blocking=True,
         )
-
-
-async def test_slot_condition_services_accept_a_title(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """The pre-existing entry-taking services take a title too."""
-    entry = lock_code_manager_config_entry
-    condition_entity_id = "binary_sensor.by_title"
-    hass.states.async_set(condition_entity_id, STATE_ON)
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_SET_SLOT_CONDITION,
-        {
-            "config_entry_title": entry.title,
-            ATTR_SLOT: 1,
-            CONF_ENTITY_ID: condition_entity_id,
-        },
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-    assert (
-        get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).slot(1)[
-            CONF_CONDITION
-        ]
-        == condition_entity_id
-    )
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_CLEAR_SLOT_CONDITION,
-        {"config_entry_title": entry.title, ATTR_SLOT: 1},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-    assert CONF_CONDITION not in get_entry_config(
-        hass.config_entries.async_get_entry(entry.entry_id)
-    ).slot(1)
 
 
 VALIDATE_LOCK_ENTITY_ID = "lock.virtual_validate_service"
@@ -1931,51 +1620,6 @@ async def test_set_credential_refuses_a_kind_it_cannot_store(
         )
 
 
-@pytest.mark.parametrize(
-    "service,data,replacement",
-    [
-        (
-            SERVICE_SET_USERCODE,
-            {ATTR_CODE_SLOT: 1, ATTR_USERCODE: "4321"},
-            "set_credential",
-        ),
-        (SERVICE_CLEAR_USERCODE, {ATTR_CODE_SLOT: 1}, "clear_credential"),
-    ],
-)
-async def test_the_device_level_actions_say_they_are_deprecated(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    caplog: pytest.LogCaptureFixture,
-    service: str,
-    data: dict,
-    replacement: str,
-) -> None:
-    """
-    They still work, and they say what to use instead.
-
-    A warning rather than a note, because the caller has something to do
-    about it: these write straight to a device, so the code they set is one
-    Lock Code Manager treats as unmanaged.
-    """
-    caplog.clear()
-    await hass.services.async_call(
-        DOMAIN,
-        service,
-        {ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID, **data},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    deprecations = [
-        record
-        for record in caplog.records
-        if record.levelname == "WARNING" and "deprecated" in record.getMessage()
-    ]
-    assert len(deprecations) == 1
-    assert replacement in deprecations[0].getMessage()
-
-
 async def test_credential_actions_refuse_a_user_holding_no_slot(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -2223,46 +1867,6 @@ async def test_set_condition_refuses_an_unknown_user(
             },
             blocking=True,
         )
-
-
-@pytest.mark.parametrize(
-    "service,data,replacement",
-    [
-        (
-            SERVICE_SET_SLOT_CONDITION,
-            {ATTR_SLOT: 1, CONF_ENTITY_ID: "binary_sensor.test_condition"},
-            "set_condition",
-        ),
-        (SERVICE_CLEAR_SLOT_CONDITION, {ATTR_SLOT: 1}, "clear_condition"),
-    ],
-)
-async def test_the_slot_keyed_condition_actions_say_they_are_deprecated(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    caplog: pytest.LogCaptureFixture,
-    service: str,
-    data: dict,
-    replacement: str,
-) -> None:
-    """They still work, and they name what replaces them."""
-    hass.states.async_set("binary_sensor.test_condition", STATE_ON)
-    caplog.clear()
-    await hass.services.async_call(
-        DOMAIN,
-        service,
-        {"config_entry_id": lock_code_manager_config_entry.entry_id, **data},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    deprecations = [
-        record
-        for record in caplog.records
-        if record.levelname == "WARNING" and "deprecated" in record.getMessage()
-    ]
-    assert len(deprecations) == 1
-    assert replacement in deprecations[0].getMessage()
 
 
 async def test_set_condition_refuses_an_entity_that_does_not_exist(

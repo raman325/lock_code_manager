@@ -1207,7 +1207,7 @@ async def subscribe_code_slot(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/set_usercode",
+        vol.Required("type"): "lock_code_manager/write_unmanaged_code",
         vol.Required(ATTR_LOCK_ENTITY_ID): str,
         vol.Required(ATTR_CODE_SLOT): int,
         vol.Required(ATTR_USERCODE): str,
@@ -1234,7 +1234,7 @@ async def ws_set_usercode(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/clear_usercode",
+        vol.Required("type"): "lock_code_manager/clear_unmanaged_code",
         vol.Required(ATTR_LOCK_ENTITY_ID): str,
         vol.Required(ATTR_CODE_SLOT): int,
     }
@@ -1258,7 +1258,7 @@ async def ws_clear_usercode(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/set_slot_condition",
+        vol.Required("type"): "lock_code_manager/set_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
         vol.Exclusive(ATTR_USER_ENTITY_ID, "user"): cv.entity_id,
@@ -1311,7 +1311,7 @@ async def ws_set_slot_condition(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/clear_slot_condition",
+        vol.Required("type"): "lock_code_manager/clear_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
         vol.Exclusive(ATTR_USER_ENTITY_ID, "user"): cv.entity_id,

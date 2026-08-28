@@ -226,38 +226,6 @@
         }
       }
     },
-    "clear_slot_condition": {
-      "name": "Clear slot condition",
-      "description": "Deprecated — use Clear condition instead, which names the person rather than a slot number that can come to hold somebody else. Still works, and logs a warning. Remove a code slot's condition entity, leaving its PIN active whenever the slot is enabled.",
-      "fields": {
-        "config_entry_id": {
-          "name": "Config entry",
-          "description": "The Lock Code Manager entry that manages the slot."
-        },
-        "config_entry_title": {
-          "name": "Config entry title",
-          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
-        },
-        "slot": {
-          "name": "Code slot",
-          "description": "The code slot within that entry."
-        }
-      }
-    },
-    "clear_usercode": {
-      "name": "Clear usercode",
-      "description": "Clear a slot on a lock directly, bypassing Lock Code Manager's own configuration. The next sync will rewrite it if the slot is one Lock Code Manager manages.",
-      "fields": {
-        "lock_entity_id": {
-          "name": "Lock",
-          "description": "The lock to act on."
-        },
-        "code_slot": {
-          "name": "Code slot",
-          "description": "The code slot on the lock, addressed by its number."
-        }
-      }
-    },
     "delete_user": {
       "name": "Delete user",
       "description": "Remove a person from a Lock Code Manager config entry, and by default clear their credentials from its locks.",
@@ -389,46 +357,6 @@
         "enable_if_disabled": {
           "name": "Enable if disabled",
           "description": "Turn this person on once the credential is set. Off by default, so somebody disabled stays disabled and their new credential is inert until you enable them. Never disables anybody."
-        }
-      }
-    },
-    "set_slot_condition": {
-      "name": "Set slot condition",
-      "description": "Deprecated — use Set condition instead, which names the person rather than a slot number that can come to hold somebody else. Still works, and logs a warning. Attach a condition entity to a code slot. The slot's PIN is active only while that entity says so.",
-      "fields": {
-        "config_entry_id": {
-          "name": "Config entry",
-          "description": "The Lock Code Manager entry that manages the slot."
-        },
-        "config_entry_title": {
-          "name": "Config entry title",
-          "description": "The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
-        },
-        "slot": {
-          "name": "Code slot",
-          "description": "The code slot within that entry."
-        },
-        "entity_id": {
-          "name": "Condition entity",
-          "description": "The entity whose state decides when the slot's PIN is active."
-        }
-      }
-    },
-    "set_usercode": {
-      "name": "Set usercode",
-      "description": "Write a PIN directly to a slot on a lock, bypassing Lock Code Manager's own configuration. The next sync will overwrite it if the slot is one Lock Code Manager manages.",
-      "fields": {
-        "lock_entity_id": {
-          "name": "Lock",
-          "description": "The lock to act on."
-        },
-        "code_slot": {
-          "name": "Code slot",
-          "description": "The code slot on the lock, addressed by its number."
-        },
-        "usercode": {
-          "name": "Usercode",
-          "description": "The PIN to write."
         }
       }
     },
