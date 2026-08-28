@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "8836a10d91ba",
+  "strategy": "manual-commit",
+  "branch": "feat/users-as-subentries",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/config.py",
+    "custom_components/lock_code_manager/domain/services.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/88/36a10d91ba/0/metadata.json",
+      "transcript": "/88/36a10d91ba/0/full.jsonl",
+      "compact_transcript": "/88/36a10d91ba/0/transcript.jsonl",
+      "content_hash": "/88/36a10d91ba/0/content_hash.txt",
+      "prompt": "/88/36a10d91ba/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 162,
+    "cache_creation_tokens": 81253,
+    "cache_read_tokens": 73559966,
+    "output_tokens": 53948,
+    "api_call_count": 81,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  }
+}
