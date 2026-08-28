@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "a8d7bb2303de",
+  "strategy": "manual-commit",
+  "branch": "fix/blueprint-uses-removed-action",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/a8/d7bb2303de/0/metadata.json",
+      "transcript": "/a8/d7bb2303de/0/full.jsonl",
+      "compact_transcript": "/a8/d7bb2303de/0/transcript.jsonl",
+      "content_hash": "/a8/d7bb2303de/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 1172,
+    "cache_read_tokens": 836502,
+    "output_tokens": 813,
+    "api_call_count": 2
+  }
+}
