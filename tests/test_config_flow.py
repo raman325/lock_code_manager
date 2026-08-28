@@ -369,9 +369,7 @@ async def test_config_flow_ui_stores_a_padded_pin_stripped(
     )
 
     assert result["type"] == "create_entry"
-    assert flow_users(result) == {
-        "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}
-    }
+    assert flow_users(result) == {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
 
 
 async def test_config_flow_ui_rejects_a_whitespace_only_pin(
@@ -410,9 +408,7 @@ async def test_config_flow_yaml_stores_a_padded_pin_stripped(
         )
 
     assert result["type"] == "create_entry"
-    assert flow_users(result) == {
-        "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}
-    }
+    assert flow_users(result) == {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
 
 
 async def test_config_flow_yaml_rejects_a_whitespace_only_pin(
@@ -734,9 +730,7 @@ def _entry_with_users(
     return entry
 
 
-async def _start_user_subentry_flow(
-    hass: HomeAssistant, entry: MockConfigEntry
-) -> str:
+async def _start_user_subentry_flow(hass: HomeAssistant, entry: MockConfigEntry) -> str:
     """Open the flow that adds a user to an entry, and return its flow id."""
     result = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
@@ -2131,7 +2125,8 @@ async def test_an_entry_may_reuse_a_number_it_just_released(
     _, entry = await _start_options_flow(hass)
     # "User 1" held slot 1 and is gone.
     hass.config_entries.async_remove_subentry(
-        entry, next(iter(entry.subentries)),
+        entry,
+        next(iter(entry.subentries)),
     )
     flow_id = await _start_user_subentry_flow(hass, entry)
 

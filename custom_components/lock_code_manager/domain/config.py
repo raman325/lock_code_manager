@@ -141,9 +141,7 @@ class EntryConfig:
                 numbers[name] = slot
 
         return cls(
-            locks=tuple(
-                entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, []))
-            ),
+            locks=tuple(entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, []))),
             users=MappingProxyType(
                 {name: MappingProxyType(fields) for name, fields in users.items()}
             ),
@@ -644,6 +642,11 @@ def async_write_entry_config(
 
     # The entry's own half last: it is what the update listener keys on, so
     # letting it land after the subentries means the listener sees them.
-    if hass.config_entries.async_update_entry(entry, data=config.to_dict()):
+    #
+    # Options are cleared in the same write. `from_entry` reads the entry side
+    # options-first, because the options flow stages its submission there, so a
+    # write that left them standing would be invisible -- and, showing no diff,
+    # would not wake the listener that clears them either.
+    if hass.config_entries.async_update_entry(entry, data=config.to_dict(), options={}):
         changed = True
     return changed

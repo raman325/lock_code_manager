@@ -46,6 +46,7 @@ from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUIL
 from tests.common import code_entity_id, in_sync_entity_id, slot_entity_id
 from tests.conftest import async_advance_time
 
+from ...common import user_subentries
 from .conftest import (
     ZUI_API_BASE,
     ZUI_NODE_ID,
@@ -55,7 +56,6 @@ from .conftest import (
     async_discover_zui_lock,
     fire_zui_node_value,
 )
-from ...common import user_subentries
 
 # Door Lock is 98; User Code Command Class is 99.
 CC_USER_CODE_ID = 99
@@ -489,11 +489,11 @@ class TestApiOnlyManualGateway:
             },
         }
         entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=config,
-        unique_id="test_zui_manual",
-        subentries_data=user_subentries(config[CONF_SLOTS]),
-    )
+            domain=DOMAIN,
+            data=config,
+            unique_id="test_zui_manual",
+            subentries_data=user_subentries(config[CONF_SLOTS]),
+        )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -633,11 +633,11 @@ class TestMixedPushAndApiOnlyEntry:
             },
         }
         entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=config,
-        unique_id="test_zui_mixed",
-        subentries_data=user_subentries(config[CONF_SLOTS]),
-    )
+            domain=DOMAIN,
+            data=config,
+            unique_id="test_zui_mixed",
+            subentries_data=user_subentries(config[CONF_SLOTS]),
+        )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

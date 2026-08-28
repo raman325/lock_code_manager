@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from types import MappingProxyType
 import logging
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import voluptuous as vol
@@ -104,9 +104,8 @@ from .const import (
     Platform,
 )
 from .domain.config import (
-    EntryConfigDiff,
-    async_write_entry_config,
     EntryConfig,
+    EntryConfigDiff,
     build_slot_device_identifier,
     build_slot_unique_id,
     parse_slot_device_identifier,
@@ -131,7 +130,6 @@ from .domain.pin_generator import (
 )
 from .domain.queries import get_entry_config
 from .domain.references import async_notify_moved
-from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT
 from .domain.services import (
     async_add_users,
     async_clear_condition,
@@ -143,6 +141,7 @@ from .domain.services import (
     async_set_credential,
     async_use_credential,
 )
+from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT
 from .domain.slot_coordinator import SlotEntityCoordinator
 from .domain.unmanaged import async_sweep_unmanaged_codes
 from .domain.user_migration import migrate_to_users
@@ -446,9 +445,7 @@ async def async_migrate_entry(
         # and the reader now believes the subentries.
         hass.config_entries.async_update_entry(
             config_entry,
-            data={
-                k: v for k, v in config_entry.data.items() if k not in _MOVED_KEYS
-            },
+            data={k: v for k, v in config_entry.data.items() if k not in _MOVED_KEYS},
             options={
                 k: v for k, v in config_entry.options.items() if k not in _MOVED_KEYS
             },
@@ -1991,17 +1988,28 @@ async def _async_apply_entry_update(
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
 
-    # Use to_dict() so the stored data has plain dicts (not the read-only
-    # MappingProxyType wrappers EntryConfig uses internally) — HA's
-    # storage layer can't serialize MappingProxyType.
     _LOGGER.info(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
-    hass.config_entries.async_update_entry(
-        config_entry, data=new_config.to_dict(), options={}
-    )
-    # The async_update_entry above re-triggers this listener, which
-    # refreshes runtime_data.config at the top before the early-return.
+    # Only when there is something staged to settle. The options flow leaves
+    # its submission in `options` for this listener to fold into `data`;
+    # everything else writes `data` directly and clears `options` itself.
+    #
+    # Settling unconditionally corrupts those direct writes.
+    # `async_write_entry_config` reconciles the subentries and the entry in
+    # separate calls, each of which wakes this listener -- and a pass that
+    # woke between them would write back the half of the configuration it
+    # read, undoing the half that had already landed.
+    #
+    # to_dict() is what makes the stored data plain dicts rather than the
+    # read-only MappingProxyType wrappers EntryConfig uses internally, which
+    # Home Assistant's storage layer cannot serialize.
+    if config_entry.options:
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_config.to_dict(), options={}
+        )
+        # The async_update_entry above re-triggers this listener, which
+        # refreshes runtime_data.config at the top before the early-return.
 
     # Notify Lovelace dashboards to re-render when structure changes
     # (slots or locks added/removed), so strategy-generated cards update

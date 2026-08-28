@@ -26,6 +26,7 @@ from custom_components.lock_code_manager.providers.akuvox import (
     AkuvoxLock,
 )
 from tests.providers.helpers import register_mock_service
+
 from ...common import user_subentries
 
 LOCK_ENTITY_ID = "lock.local_akuvox_test_relay_a"

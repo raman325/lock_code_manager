@@ -39,6 +39,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.providers.zha import ZHALock
+
 from ...common import user_subentries
 
 # ZHA endpoint signature constants

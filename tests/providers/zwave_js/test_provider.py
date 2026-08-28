@@ -25,7 +25,6 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
-    CONF_SLOTS,
     DOMAIN,
 )
 from custom_components.lock_code_manager.domain.credentials import (
@@ -291,8 +290,9 @@ async def test_setup_registers_event_listener(
     mock_lock_helpers: dict,
 ) -> None:
     """Test that setup registers an event listener for Z-Wave JS events."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: []},
-    subentries_data=user_subentries({}))
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN, data={CONF_LOCKS: []}, subentries_data=user_subentries({})
+    )
     lcm_entry.add_to_hass(hass)
 
     assert len(zwave_js_lock._listeners) == 0
@@ -314,8 +314,9 @@ async def test_unload_cleans_up_push_subscription(
     mock_lock_helpers: dict,
 ) -> None:
     """Test that unload cleans up push subscriptions."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: []},
-    subentries_data=user_subentries({}))
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN, data={CONF_LOCKS: []}, subentries_data=user_subentries({})
+    )
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
@@ -345,7 +346,9 @@ async def test_hard_refresh_codes_calls_access_control(
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
-        subentries_data=user_subentries({"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}}),
+        subentries_data=user_subentries(
+            {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}}
+        ),
     )
     lcm_entry.add_to_hass(hass)
 
@@ -411,7 +414,9 @@ async def test_async_get_usercodes_returns_projection_with_managed_slots(
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
-        subentries_data=user_subentries({"3": {CONF_NAME: "User 3"}, "4": {CONF_NAME: "User 4"}}),
+        subentries_data=user_subentries(
+            {"3": {CONF_NAME: "User 3"}, "4": {CONF_NAME: "User 4"}}
+        ),
     )
     lcm_entry.add_to_hass(hass)
     # No users on the lock
@@ -443,7 +448,9 @@ async def test_async_get_usercodes_overlays_pin_credentials(
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
-        subentries_data=user_subentries({"1": {CONF_NAME: "User 1"}, "3": {CONF_NAME: "User 3"}}),
+        subentries_data=user_subentries(
+            {"1": {CONF_NAME: "User 1"}, "3": {CONF_NAME: "User 3"}}
+        ),
     )
     lcm_entry.add_to_hass(hass)
     mock_access_control.get_users_cached.return_value = [
@@ -494,7 +501,9 @@ async def test_async_get_usercodes_reports_occupied_uc_slot_as_unreadable(
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
-        subentries_data=user_subentries({"2": {CONF_NAME: "User 2"}, "3": {CONF_NAME: "User 3"}}),
+        subentries_data=user_subentries(
+            {"2": {CONF_NAME: "User 2"}, "3": {CONF_NAME: "User 3"}}
+        ),
     )
     lcm_entry.add_to_hass(hass)
     mock_access_control.get_users_cached.return_value = [
@@ -532,7 +541,9 @@ async def test_async_get_usercodes_reports_occupied_slot_with_no_user_as_unreada
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
-        subentries_data=user_subentries({"1": {CONF_NAME: "User 1"}, "3": {CONF_NAME: "User 3"}}),
+        subentries_data=user_subentries(
+            {"1": {CONF_NAME: "User 1"}, "3": {CONF_NAME: "User 3"}}
+        ),
     )
     lcm_entry.add_to_hass(hass)
     mock_access_control.get_users_cached.return_value = []
@@ -562,7 +573,9 @@ async def test_async_get_usercodes_readable_credential_outranks_uc_occupancy(
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
-        subentries_data=user_subentries({"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}}),
+        subentries_data=user_subentries(
+            {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}}
+        ),
     )
     lcm_entry.add_to_hass(hass)
     mock_access_control.get_users_cached.return_value = [
@@ -618,7 +631,9 @@ async def test_async_get_usercodes_skips_uc_occupancy_without_user_code_cc(
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
-        subentries_data=user_subentries({"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}}),
+        subentries_data=user_subentries(
+            {"1": {CONF_NAME: "User 1"}, "2": {CONF_NAME: "User 2"}}
+        ),
     )
     lcm_entry.add_to_hass(hass)
     mock_access_control.get_users_cached.return_value = []

@@ -25,8 +25,8 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
-from .helpers import create_node_from_fixture, setup_matter_integration_with_node
 from ...common import user_subentries
+from .helpers import create_node_from_fixture, setup_matter_integration_with_node
 
 MOCK_FABRIC_ID = 12341234
 MOCK_COMPR_FABRIC_ID = 1234

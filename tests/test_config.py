@@ -6,6 +6,9 @@ from types import SimpleNamespace
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigSubentryData
+from homeassistant.const import CONF_NAME, CONF_PIN
+
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOT,
@@ -25,7 +28,7 @@ from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
-from homeassistant.const import CONF_NAME, CONF_PIN
+
 from .common import user_subentries
 
 
@@ -342,6 +345,32 @@ def test_entry_config_from_entry_falls_back_to_data() -> None:
     config = EntryConfig.from_entry(entry)
     assert config.locks == ("lock.a",)
     assert set(config.slots.keys()) == {1}
+
+
+def test_entry_config_from_entry_ignores_a_subentry_that_is_not_a_user() -> None:
+    """
+    Only user subentries are users.
+
+    An entry may grow subentries of other types later, and reading one as a
+    user would put a stranger in the configuration -- with whatever integer
+    happened to be under a `slot` key as their credential position.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.a"]},
+        subentries_data=[
+            *user_subentries({1: {CONF_NAME: "User 1", CONF_PIN: "1234"}}),
+            ConfigSubentryData(
+                data={CONF_SLOT: 2},
+                subentry_type="something_else",
+                title="Not A User",
+                unique_id=None,
+            ),
+        ],
+    )
+    config = EntryConfig.from_entry(entry)
+    assert set(config.users) == {"User 1"}
+    assert set(config.slots) == {1}
 
 
 def test_entry_config_is_deeply_immutable() -> None:

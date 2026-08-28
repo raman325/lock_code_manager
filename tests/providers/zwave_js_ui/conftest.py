@@ -22,6 +22,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
+
 from ...common import user_subentries
 
 ZUI_PREFIX = "zwave"

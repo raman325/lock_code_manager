@@ -436,11 +436,7 @@ def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
     return tuple(
         ConfigSubentryData(
             data={
-                **{
-                    key: value
-                    for key, value in fields.items()
-                    if key != CONF_NAME
-                },
+                **{key: value for key, value in fields.items() if key != CONF_NAME},
                 CONF_SLOT: slot_num,
             },
             subentry_type=SUBENTRY_TYPE_USER,
@@ -451,9 +447,7 @@ def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
     )
 
 
-def write_entry_config(
-    hass: HomeAssistant, entry: ConfigEntry, config: dict
-) -> bool:
+def write_entry_config(hass: HomeAssistant, entry: ConfigEntry, config: dict) -> bool:
     """
     Reconfigure an entry from an old-shape LCM config mapping.
 
@@ -491,3 +485,20 @@ def entry_users(entry: ConfigEntry) -> dict[str, dict]:
         for subentry in entry.subentries.values()
         if subentry.subentry_type == SUBENTRY_TYPE_USER
     }
+
+
+def unnumbered_user_subentry(name: str, **fields) -> ConfigSubentryData:
+    """
+    Build a user subentry carrying no credential position.
+
+    Not something the integration writes -- allocation numbers everybody it
+    stores. It is what hand-edited storage or a half-finished write leaves
+    behind, and the guards that refuse to act on such a user are what these
+    tests are for.
+    """
+    return ConfigSubentryData(
+        data=fields,
+        subentry_type=SUBENTRY_TYPE_USER,
+        title=name,
+        unique_id=None,
+    )
