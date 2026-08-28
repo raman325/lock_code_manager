@@ -39,6 +39,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.providers.zha import ZHALock
+from ...common import user_subentries
 
 # ZHA endpoint signature constants
 SIG_EP_INPUT = 1
@@ -431,6 +432,11 @@ async def simple_lcm_config_entry(
         CONF_LOCKS: [zha_lock_entity.entity_id],
         CONF_SLOTS: ZHA_LCM_CONFIG_SLOTS,
     }
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zha_lcm")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zha_lcm",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     entry.add_to_hass(hass)
     return entry

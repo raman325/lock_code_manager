@@ -23,6 +23,7 @@ from custom_components.lock_code_manager.providers.schlage import (
     SchlageLock,
 )
 from tests.providers.helpers import register_mock_service
+from ...common import user_subentries
 
 LOCK_ENTITY_ID = "lock.schlage_test_schlage_lock"
 
@@ -76,7 +77,12 @@ async def simple_lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
         CONF_LOCKS: [LOCK_ENTITY_ID],
         CONF_SLOTS: SCHLAGE_LCM_CONFIG_SLOTS,
     }
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_schlage_lcm")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_schlage_lcm",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     entry.add_to_hass(hass)
     return entry
 

@@ -333,8 +333,9 @@ async def async_migrate_entry(
         hass.config_entries.async_update_entry(
             config_entry, data=new_data, options=new_options, version=4
         )
-        _async_rename_event_unique_ids(hass, config_entry)
-        if re_slugged := _async_rename_slot_entity_ids(hass, config_entry):
+        migrated = EntryConfig.from_mapping({**new_data, **new_options})
+        _async_rename_event_unique_ids(hass, config_entry, migrated)
+        if re_slugged := _async_rename_slot_entity_ids(hass, config_entry, migrated):
             _LOGGER.info(
                 "%s (%s): renamed %d entity id(s) onto their user's name: %s",
                 config_entry.entry_id,
@@ -1378,7 +1379,9 @@ def _async_remove_hub_device(
 
 @callback
 def _async_rename_event_unique_ids(
-    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    config: EntryConfig,
 ) -> None:
     """
     Re-key the event entity from ``pin_used`` to ``credential_used``.
@@ -1393,7 +1396,7 @@ def _async_rename_event_unique_ids(
     """
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
-    for slot_num in EntryConfig.from_entry(config_entry).slot_numbers:
+    for slot_num in config.slot_numbers:
         legacy = build_slot_unique_id(entry_id, slot_num, LEGACY_EVENT_PIN_USED)
         if not (entity_id := ent_reg.async_get_entity_id(EVENT_DOMAIN, DOMAIN, legacy)):
             continue
@@ -1449,7 +1452,9 @@ def _async_purge_dropped_slots(
 
 @callback
 def _async_rename_slot_entity_ids(
-    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    config: EntryConfig,
 ) -> list[tuple[str, str]]:
     """
     Re-slug every entity ID onto the name of whoever holds the slot.
@@ -1468,7 +1473,6 @@ def _async_rename_slot_entity_ids(
     """
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
-    config = EntryConfig.from_entry(config_entry)
     renamed: list[tuple[str, str]] = []
     for entity in er.async_entries_for_config_entry(ent_reg, entry_id):
         slot_num = parse_slot_unique_id(entry_id, entity.unique_id)

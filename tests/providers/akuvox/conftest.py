@@ -26,6 +26,7 @@ from custom_components.lock_code_manager.providers.akuvox import (
     AkuvoxLock,
 )
 from tests.providers.helpers import register_mock_service
+from ...common import user_subentries
 
 LOCK_ENTITY_ID = "lock.local_akuvox_test_relay_a"
 
@@ -70,7 +71,12 @@ async def lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
             2: {CONF_NAME: "slot2", CONF_PIN: "5678", CONF_ENABLED: True},
         },
     }
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_akuvox_lcm")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_akuvox_lcm",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     entry.add_to_hass(hass)
     return entry
 

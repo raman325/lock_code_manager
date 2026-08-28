@@ -628,7 +628,7 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     await hass.async_block_till_done()
 
     # Verify migration happened (v1 -> v2 calendar, then v2 -> v3 number_of_uses)
-    assert config_entry.version == 4
+    assert config_entry.version == 5
 
     # Read through the typed view: the entry is keyed by user now, and this
     # migration runs before that reshape in the same version bump.
@@ -2147,7 +2147,7 @@ async def test_migration_v3_to_v4_reshapes_to_users(hass: HomeAssistant) -> None
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert config_entry.version == 4
+    assert config_entry.version == 5
     config = get_entry_config(config_entry)
 
     # Names: repaired where they had to be, untouched where they did not.
@@ -2589,7 +2589,7 @@ async def test_migration_of_a_real_world_entry_shape(
     await hass.async_block_till_done()
 
     config = get_entry_config(entry)
-    assert entry.version == 4
+    assert entry.version == 5
     # Nobody lost, and nobody renumbered: the number is the entities' key.
     # Only the two people. Everything else held nothing and named nobody.
     assert sorted(config.assignment.slots.values()) == [1, 2]
@@ -3200,7 +3200,7 @@ async def test_a_per_lock_entity_survives_its_lock_leaving_the_registry(
     # ahead of it, so the rename still has to do something sensible.
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 4
+    assert entry.version == 5
 
     assert (
         ent_reg.async_get_entity_id(

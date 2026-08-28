@@ -53,7 +53,7 @@ async def stranded_fixture(
     """An entry, migrated to the swept version, whose lock came with a code."""
     entry = lock_code_manager_config_entry
     assert STRANDED_SLOT not in get_entry_config(entry).slots
-    assert entry.version == 4
+    assert entry.version == 5
     return entry
 
 

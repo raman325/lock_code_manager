@@ -17,7 +17,7 @@ from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAI
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentryData
 from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -28,6 +28,8 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_IN_SYNC,
     CONF_LOCKS,
+    CONF_SLOT,
+    SUBENTRY_TYPE_USER,
     CONF_SLOTS,
     DOMAIN,
 )
@@ -415,3 +417,30 @@ class MockCalendarEntity(CalendarEntity):
                 continue
             events.append(event)
         return events
+
+
+def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
+    """
+    Build the user subentries an LCM entry holds, from a slot-keyed dict.
+
+    Fixtures that add an entry without setting it up get no migration, so they
+    have to supply subentries themselves — users have not lived in entry data
+    since version 5. Takes the slot-keyed shape the fixtures already write so
+    only the plumbing changes, not what each test says it is configuring.
+    """
+    return tuple(
+        ConfigSubentryData(
+            data={
+                **{
+                    key: value
+                    for key, value in fields.items()
+                    if key != CONF_NAME
+                },
+                CONF_SLOT: slot_num,
+            },
+            subentry_type=SUBENTRY_TYPE_USER,
+            title=fields[CONF_NAME],
+            unique_id=None,
+        )
+        for slot_num, fields in slots.items()
+    )

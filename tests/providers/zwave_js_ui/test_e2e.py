@@ -55,6 +55,7 @@ from .conftest import (
     async_discover_zui_lock,
     fire_zui_node_value,
 )
+from ...common import user_subentries
 
 # Door Lock is 98; User Code Command Class is 99.
 CC_USER_CODE_ID = 99
@@ -171,7 +172,12 @@ async def lcm_config_entry(
             for slot_num, pin in E2E_SLOT_PINS.items()
         },
     }
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_e2e")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zui_e2e",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -482,7 +488,12 @@ class TestApiOnlyManualGateway:
                 for slot_num, pin in E2E_SLOT_PINS.items()
             },
         }
-        entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_manual")
+        entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zui_manual",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -621,7 +632,12 @@ class TestMixedPushAndApiOnlyEntry:
                 for slot_num, pin in E2E_SLOT_PINS.items()
             },
         }
-        entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_mixed")
+        entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zui_mixed",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

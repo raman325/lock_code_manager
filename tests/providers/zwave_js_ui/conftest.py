@@ -22,6 +22,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
+from ...common import user_subentries
 
 ZUI_PREFIX = "zwave"
 ZUI_HOME_HEX = "0xd4ee5a7a"
@@ -485,7 +486,12 @@ async def lcm_config_entry(
             2: {"name": "slot2", "pin": "5678", "enabled": True},
         },
     }
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui")
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zui",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     lcm_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(lcm_entry.entry_id)
     await hass.async_block_till_done()

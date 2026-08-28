@@ -26,6 +26,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
 from .helpers import create_node_from_fixture, setup_matter_integration_with_node
+from ...common import user_subentries
 
 MOCK_FABRIC_ID = 12341234
 MOCK_COMPR_FABRIC_ID = 1234
@@ -142,7 +143,12 @@ async def simple_lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
             2: {CONF_NAME: "slot2", CONF_PIN: "5678", CONF_ENABLED: True},
         },
     }
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_matter_lcm")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_matter_lcm",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     entry.add_to_hass(hass)
     return entry
 
