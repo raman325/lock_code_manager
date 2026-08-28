@@ -128,7 +128,7 @@ from .domain.pin_generator import (
     MIN_PIN_LENGTH,
     generate_pin,
 )
-from .domain.queries import get_entry_config
+from .domain.queries import get_entry_config, subentry_id_for_slot
 from .domain.references import async_notify_moved
 from .domain.services import (
     async_add_users,
@@ -1359,8 +1359,14 @@ def _async_reclaim_entities_from_foreign_devices(
         slot_num = parse_slot_unique_id(entry_id, entity.unique_id)
         if slot_num is None:
             continue
+        # Created under the user who holds the slot, like every other
+        # device this integration makes. Created bare, the first
+        # `async_add_entities` would pull it into that subentry implicitly --
+        # which Home Assistant deprecates, and on the very upgrade path this
+        # function exists to serve.
         slot_device = dev_reg.async_get_or_create(
             config_entry_id=entry_id,
+            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
             **build_slot_device_info(config_entry, slot_num),
         )
         _LOGGER.debug(
@@ -1975,11 +1981,16 @@ async def _async_apply_entry_update(
     # anchored the slot; slot-only providers leave the default no-op in
     # place. This runs before ``locks_to_remove`` processing so providers
     # in ``runtime_data.locks`` are still usable.
-    # Drained, not read: a hand-off applies to the write that requested it,
-    # and leaving the pair behind would spare the next occupant of that slot
-    # number the cleanup it does need.
+    # Consumed pair by pair, not drained wholesale. A hand-off applies to the
+    # write that requested it and must not outlive it -- leaving a pair behind
+    # would spare the next occupant of that number the cleanup it does need --
+    # but one `delete_user` call is several entry writes, one per departing
+    # user, and each wakes this listener. Taking the whole set on the first
+    # pass left every departure after the first one unprotected, and their
+    # credential was wiped off every lock despite the caller asking for it to
+    # be left programmed.
     retained_pairs = runtime_data.retained_pairs
-    runtime_data.retained_pairs = set()
+    runtime_data.retained_pairs = retained_pairs - diff.pairs_removed
     for lock_entity_id, slot_num in diff.pairs_removed:
         release_lock = runtime_data.locks.get(lock_entity_id)
         if release_lock is None:

@@ -54,14 +54,6 @@ OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.ScheduleUnlock: False,
 }
 
-OPERATION_SOURCE_NAMES: dict[int, str] = {
-    DoorLock.OperationEventSource.Keypad: "Keypad",
-    DoorLock.OperationEventSource.RF: "RF",
-    DoorLock.OperationEventSource.Manual: "Manual",
-    DoorLock.OperationEventSource.RFID: "RFID",
-    DoorLock.OperationEventSource.Indeterminate: "Unknown",
-}
-
 
 @dataclass(repr=False, eq=False)
 class ZHALock(BaseLock):
