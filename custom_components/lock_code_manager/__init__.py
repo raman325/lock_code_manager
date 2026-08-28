@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from types import MappingProxyType
 import logging
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from homeassistant.components.lovelace.resources import (
     ResourceStorageCollection,
     ResourceYAMLCollection,
 )
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryState, ConfigSubentry
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
@@ -74,6 +75,8 @@ from .const import (
     ATTR_VALUE,
     CONDITION_ENTITY_DOMAINS,
     CONF_CALENDAR,
+    CONF_LOCKS,
+    CONF_SLOT,
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
@@ -97,9 +100,12 @@ from .const import (
     SERVICE_USE_CREDENTIAL,
     STRATEGY_FILENAME,
     STRATEGY_PATH,
+    SUBENTRY_TYPE_USER,
     Platform,
 )
 from .domain.config import (
+    EntryConfigDiff,
+    async_write_entry_config,
     EntryConfig,
     build_slot_device_identifier,
     build_slot_unique_id,
@@ -125,6 +131,7 @@ from .domain.pin_generator import (
 )
 from .domain.queries import get_entry_config
 from .domain.references import async_notify_moved
+from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT
 from .domain.services import (
     async_add_users,
     async_clear_condition,
@@ -214,6 +221,10 @@ def _entry_schema(fields: dict[Any, Any]) -> vol.Schema:
             cv.has_at_least_one_key("config_entry_id", "config_entry_title"),
         )
     )
+
+
+# The keys that stopped living on the entry when users became subentries.
+_MOVED_KEYS = frozenset({CONF_USERS, CONF_SLOTS, CONF_SLOT_ASSIGNMENT})
 
 
 async def async_migrate_entry(
@@ -371,6 +382,81 @@ async def async_migrate_entry(
         # codes earlier versions left behind are offered up once, measured
         # against the configuration users will actually have.
         await async_sweep_unmanaged_codes(hass, config_entry)
+
+    if config_entry.version == 4:
+        # Users move out of entry data and into their own subentries, each
+        # carrying the credential position that used to live in the side
+        # table beside them. Nothing renames: unique IDs keep the slot
+        # number, so no entity loses its registry entry or its history.
+        side: Mapping[str, Any] = next(
+            (
+                candidate
+                for candidate in (config_entry.options, config_entry.data)
+                if CONF_USERS in candidate or CONF_SLOTS in candidate
+            ),
+            {},
+        )
+        config = EntryConfig.from_mapping(
+            {
+                **{k: v for k, v in config_entry.data.items() if k not in _MOVED_KEYS},
+                CONF_LOCKS: config_entry.options.get(
+                    CONF_LOCKS, config_entry.data.get(CONF_LOCKS, [])
+                ),
+                **{k: v for k, v in side.items() if k in _MOVED_KEYS},
+            }
+        )
+
+        unplaced = [
+            name for name in config.users if config.assignment.slot(name) is None
+        ]
+        for name in unplaced:
+            # Dropped for the reason EntryConfig already skips them: inventing
+            # a number would put this user's code on a position somebody else
+            # may hold. Named rather than silently discarded.
+            _LOGGER.warning(
+                "%s (%s): dropping %r, who has no slot number to move",
+                config_entry.entry_id,
+                config_entry.title,
+                name,
+            )
+        placed = {
+            name: fields
+            for name, fields in config.users.items()
+            if name not in unplaced
+        }
+
+        for name, fields in placed.items():
+            hass.config_entries.async_add_subentry(
+                config_entry,
+                ConfigSubentry(
+                    data=MappingProxyType(
+                        {**dict(fields), CONF_SLOT: config.assignment.slot(name)}
+                    ),
+                    subentry_type=SUBENTRY_TYPE_USER,
+                    title=name,
+                    unique_id=None,
+                ),
+            )
+
+        # The old keys go in the same write that bumps the version. Leaving
+        # them would give the entry two answers about who holds which number,
+        # and the reader now believes the subentries.
+        hass.config_entries.async_update_entry(
+            config_entry,
+            data={
+                k: v for k, v in config_entry.data.items() if k not in _MOVED_KEYS
+            },
+            options={
+                k: v for k, v in config_entry.options.items() if k not in _MOVED_KEYS
+            },
+            version=5,
+        )
+        _LOGGER.info(
+            "%s (%s): moved %d user(s) into subentries",
+            config_entry.entry_id,
+            config_entry.title,
+            len(placed),
+        )
 
     return True
 
@@ -830,27 +916,14 @@ def _setup_entry_after_start(
 
         config_entry.async_on_unload(_clear_listener_registered)
 
-    if config_entry.data:
-        # Move data into options so the update listener can work.
-        #
-        # Resolved through EntryConfig rather than by merging the two raw
-        # dicts: the sides may be in different shapes, and reading a mix
-        # discards whichever loses. EntryConfig picks one side whole.
-        #
-        # Built from the entry, NOT from the cached view: the cache is only
-        # refreshed by the update listener, which has not run yet, so a
-        # service call during startup would be overwritten by a stale
-        # snapshot.
-        hass.config_entries.async_update_entry(
-            config_entry,
-            data={},
-            options=EntryConfig.from_entry(config_entry).to_dict(),
-        )
-    else:
-        hass.async_create_task(
-            async_update_listener(hass, config_entry),
-            f"Initial setup for entities for {config_entry.entry_id}",
-        )
+    # Everything is new at setup, so the pass compares against nothing. The
+    # data-into-options move this used to do existed only so the listener had
+    # something staged to diff; users live in subentries now and the locks
+    # need no staging.
+    hass.async_create_task(
+        _async_apply_entry_update(hass, config_entry, EntryConfig.empty()),
+        f"Initial setup for entities for {config_entry.entry_id}",
+    )
 
 
 async def async_setup_entry(
@@ -1716,7 +1789,9 @@ async def async_update_listener(
 
 
 async def _async_apply_entry_update(
-    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    old_config: EntryConfig | None = None,
 ) -> None:
     """Bring entities, devices and locks into line with the entry."""
     # Refresh the cached EntryConfig on EVERY update — including entity-driven
@@ -1725,7 +1800,17 @@ async def _async_apply_entry_update(
     # entity-creation pass for those cases, but downstream readers via
     # runtime_data.config still need to see the current data.
     runtime_data = config_entry.runtime_data
-    runtime_data.config = EntryConfig.from_entry(config_entry)
+    # What the entry looked like when this pass started, captured before the
+    # refresh below overwrites it. Users live in subentries and locks may be
+    # on either side, so comparing the cached view against the current one
+    # is the only comparison that sees both.
+    # ``None`` means "compare against what we last saw". Setup passes an empty
+    # config instead, because at that point nothing has been created yet and
+    # every user is new -- diffing against the cache would find no changes and
+    # build nothing.
+    if old_config is None:
+        old_config = runtime_data.config
+    runtime_data.config = new_config = EntryConfig.from_entry(config_entry)
 
     # Notify per-slot coordinators so derived "active" state and condition-
     # entity subscriptions stay in sync with the refreshed config view.
@@ -1737,10 +1822,11 @@ async def _async_apply_entry_update(
 
     _async_rename_slot_devices(hass, config_entry)
 
-    # No need to do entity creation/removal work if there are no options
-    # because that only happens at the end of this function (data + empty
-    # options = the post-listener state we just wrote ourselves).
-    if not config_entry.options:
+    # Nothing changed means nothing to do -- which also makes this its own
+    # recursion guard, because the settle write at the end of this function
+    # produces no diff when it re-enters.
+    diff = EntryConfigDiff(old=old_config, new=new_config)
+    if not diff.has_changes:
         return
 
     ent_reg = er.async_get(hass)
@@ -1751,13 +1837,6 @@ async def _async_apply_entry_update(
 
     setup_tasks = runtime_data.setup_tasks
 
-    # Build EntryConfig views of data (old) and options (new) so all
-    # downstream slot lookups use int keys regardless of how the storage
-    # round-tripped them. Callers that need a plain dict (e.g. to hand
-    # back to async_update_entry at the end of this function) call
-    # to_dict() at the write site.
-    old_config = EntryConfig.from_mapping(config_entry.data)
-    new_config = EntryConfig.from_mapping(config_entry.options)
     new_slots = new_config.slots
 
     # Set up any platforms that the new slot configs need that haven't
@@ -1778,7 +1857,6 @@ async def _async_apply_entry_update(
         )
     await asyncio.gather(*setup_tasks.values())
 
-    diff = old_config - new_config
     slots_to_add = diff.slots_added
     slots_to_remove = diff.slots_removed
     locks_to_add = diff.locks_added

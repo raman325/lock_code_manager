@@ -8,10 +8,11 @@ import logging
 from types import MappingProxyType
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import CONF_NAME, CONF_PIN
+from homeassistant.core import HomeAssistant, callback
 
-from ..const import CONF_LOCKS, CONF_SLOTS, CONF_USERS
+from ..const import CONF_LOCKS, CONF_SLOT, CONF_SLOTS, CONF_USERS, SUBENTRY_TYPE_USER
 from .names import normalize_name
 from .slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
@@ -111,35 +112,47 @@ class EntryConfig:
     @classmethod
     def from_entry(cls, entry: ConfigEntry) -> EntryConfig:
         """
-        Build EntryConfig from a config entry, options-preferred.
+        Build EntryConfig from a config entry and its user subentries.
 
-        During an options-flow update the new configuration is in ``options``
-        while ``data`` still holds the old one. Bookkeeping is merged from both
-        sides: setup moves it from data into options and the listener moves it
-        back, so either side may hold it.
+        Users live in subentries; the locks and everything else live on the
+        entry. Each user's credential position is carried in their own
+        subentry rather than in a side table, so the two can no longer
+        disagree about who holds which number.
+
+        The entry side is still read options-first, because an options-flow
+        update leaves the new configuration in ``options`` while ``data``
+        still holds the old one.
         """
-        # ONE side holds the configuration and is read whole, options first:
-        # taking the shape keys independently would let an entry carry both
-        # shapes and silently discard whichever lost.
-        config_side: Mapping[str, Any] = next(
-            (
-                side
-                for side in (entry.options, entry.data)
-                if CONF_USERS in side or CONF_SLOTS in side
+        users: dict[str, dict[str, Any]] = {}
+        numbers: dict[str, int] = {}
+        for subentry in entry.subentries.values():
+            if subentry.subentry_type != SUBENTRY_TYPE_USER:
+                continue
+            name = normalize_name(subentry.title)
+            fields = {
+                key: value for key, value in subentry.data.items() if key != CONF_SLOT
+            }
+            users[name] = _normalized_user(fields)
+            if (slot := subentry.data.get(CONF_SLOT)) is not None:
+                numbers[name] = slot
+
+        return cls(
+            locks=tuple(
+                entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, []))
             ),
-            {},
+            users=MappingProxyType(
+                {name: MappingProxyType(fields) for name, fields in users.items()}
+            ),
+            assignment=SlotAssignment(numbers),
+            extra=MappingProxyType(
+                {
+                    key: value
+                    for side in (entry.data, entry.options)
+                    for key, value in side.items()
+                    if key not in _CONFIG_KEYS
+                }
+            ),
         )
-        merged: dict[str, Any] = {
-            **{k: v for k, v in entry.data.items() if k not in _CONFIG_KEYS},
-            **{k: v for k, v in entry.options.items() if k not in _CONFIG_KEYS},
-            CONF_LOCKS: entry.options.get(CONF_LOCKS, entry.data.get(CONF_LOCKS, [])),
-        }
-        # The assignment comes from the SAME side as the users it numbers, or
-        # it could pair users with numbering that predates them.
-        for key in (CONF_USERS, CONF_SLOTS, CONF_SLOT_ASSIGNMENT):
-            if key in config_side:
-                merged[key] = config_side[key]
-        return cls.from_mapping(merged)
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> EntryConfig:
@@ -351,17 +364,25 @@ class EntryConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """
-        Return a plain mutable dict suitable for ``async_update_entry``.
+        Return the ENTRY's own data, suitable for ``async_update_entry``.
 
-        Emits the user-keyed shape only, so a write cannot leave the entry in
-        a different shape than it was read in.
+        Users are not in here: they live in subentries, and
+        :func:`async_write_entry_config` is what puts them there. This carries
+        only what belongs to the entry itself, so a caller cannot write a user
+        into entry data by accident and give the entry two answers about who
+        holds a slot.
         """
         return {
             **dict(self.extra),
             CONF_LOCKS: list(self.locks),
-            CONF_USERS: {name: dict(user) for name, user in self.users.items()},
-            CONF_SLOT_ASSIGNMENT: dict(self.assignment.slots),
         }
+
+    def subentry_data(self, name: str) -> dict[str, Any]:
+        """Return the subentry ``data`` for one user, number included."""
+        data = dict(self.users[name])
+        if (slot_num := self.assignment.slot(name)) is not None:
+            data[CONF_SLOT] = slot_num
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -547,3 +568,60 @@ def parse_slot_unique_id(entry_id: str, unique_id: str) -> int | None:
     except ValueError:
         return None
     return slot_num if str(slot_num) == suffix else None
+
+
+@callback
+def async_write_entry_config(
+    hass: HomeAssistant, entry: ConfigEntry, config: EntryConfig
+) -> bool:
+    """
+    Reconcile an entry and its user subentries to ``config``.
+
+    The single write path. Callers build the configuration they want and hand
+    it over; deciding what belongs on the entry and what belongs in a subentry
+    happens here once, rather than at each of the places that write.
+
+    Returns whether anything actually changed, so a caller waiting for the
+    entry to react knows whether to expect it to.
+
+    Users are matched to existing subentries by identity, not by title, so a
+    rename updates the subentry somebody already has rather than removing them
+    and adding a stranger with the same credential.
+    """
+    changed = False
+    existing = {
+        identity(subentry.title): subentry
+        for subentry in entry.subentries.values()
+        if subentry.subentry_type == SUBENTRY_TYPE_USER
+    }
+
+    for name in config.users:
+        data = config.subentry_data(name)
+        subentry = existing.pop(identity(name), None)
+        if subentry is None:
+            hass.config_entries.async_add_subentry(
+                entry,
+                ConfigSubentry(
+                    data=MappingProxyType(data),
+                    subentry_type=SUBENTRY_TYPE_USER,
+                    title=name,
+                    unique_id=None,
+                ),
+            )
+            changed = True
+        elif dict(subentry.data) != data or subentry.title != name:
+            hass.config_entries.async_update_subentry(
+                entry, subentry, data=MappingProxyType(data), title=name
+            )
+            changed = True
+
+    # Whoever is left held a subentry the new configuration does not.
+    for subentry in existing.values():
+        hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+        changed = True
+
+    # The entry's own half last: it is what the update listener keys on, so
+    # letting it land after the subentries means the listener sees them.
+    if hass.config_entries.async_update_entry(entry, data=config.to_dict()):
+        changed = True
+    return changed
