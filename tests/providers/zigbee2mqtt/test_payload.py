@@ -244,8 +244,6 @@ def test_keypad_unlock_action_fires_code_slot_event() -> None:
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=3,
         to_locked=False,
-        action_text="keypad_unlock",
-        source_data={"action": "keypad_unlock", "action_user": 3},
     )
 
 
@@ -260,8 +258,6 @@ def test_keypad_lock_action_fires_code_slot_event() -> None:
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=1,
         to_locked=True,
-        action_text="keypad_lock",
-        source_data={"action": "keypad_lock", "action_user": 1},
     )
 
 
@@ -298,8 +294,6 @@ def test_rf_unlock_action_fires_event() -> None:
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=5,
         to_locked=False,
-        action_text="rf_unlock",
-        source_data={"action": "rf_unlock", "action_user": 5},
     )
 
 
@@ -338,7 +332,6 @@ def test_all_lock_actions_fire_event_with_correct_to_locked(
     call_kwargs = lock.async_fire_code_slot_event.call_args[1]
     assert call_kwargs["to_locked"] is expected_locked
     assert call_kwargs["code_slot"] == 2
-    assert call_kwargs["action_text"] == action
 
 
 def test_non_string_action_is_ignored() -> None:

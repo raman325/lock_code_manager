@@ -604,18 +604,10 @@ class ZHALock(BaseLock):
         )
 
         to_locked = OPERATION_TO_LOCKED.get(event_code)
-        source_name = OPERATION_SOURCE_NAMES.get(source, f"Source {source}")
-        action = "lock" if to_locked else "unlock" if to_locked is False else "event"
 
         self.async_fire_code_slot_event(
             code_slot=user_id if user_id > 0 else None,
             to_locked=to_locked,
-            action_text=f"{source_name} {action} operation",
-            source_data={
-                "source": source,
-                "event_code": event_code,
-                "user_id": user_id,
-            },
         )
 
     # -- Programming event support detection ---------------------------------

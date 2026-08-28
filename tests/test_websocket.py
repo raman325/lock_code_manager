@@ -24,7 +24,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
@@ -978,7 +978,7 @@ async def test_subscribe_code_slot_names_what_the_credential_was_used_on(
     assert data.get(ATTR_LAST_USED_LOCK) is None
 
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
+    lock.async_fire_code_slot_event(2, False)
     await hass.async_block_till_done()
 
     event_state = hass.states.get(SLOT_2_EVENT_ENTITY)

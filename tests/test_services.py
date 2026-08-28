@@ -55,7 +55,6 @@ from custom_components.lock_code_manager.const import (
     CONF_USERS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
-    EVENT_LOCK_STATE_CHANGED,
     REASON_CONDITION_NOT_MET,
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
@@ -1230,13 +1229,11 @@ async def test_use_credential_records_against_an_in_entry_lock(
     """
     A lock in the entry gets the use recorded on the slot's event entity.
 
-    The recording is the event entity's own reading of the unified event,
-    not a lock-shaped detour: the action reports something no lock
-    observed, so the deprecated lock-state event -- which would have to
-    claim a from/to state transition that never happened -- stays silent.
+    The recording is the event entity's own reading of the unified event.
+    The action reports something no lock observed, so there is no lock-shaped
+    detour for it to take.
     """
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
 
     with caplog.at_level(logging.DEBUG):
         response = await _call_use_credential(
@@ -1258,7 +1255,6 @@ async def test_use_credential_records_against_an_in_entry_lock(
             ATTR_OPERATION: CredentialOperation.UNKNOWN,
         }
     ]
-    assert deprecated == []
 
     state = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert state
@@ -1375,12 +1371,9 @@ async def test_use_credential_with_a_target_outside_the_entry(
 
     A cover is not a lock, is not in the entry, and could never be named by
     anything the entry knows -- and it is still alice's credential being
-    used, so her entity is where that belongs. Only the unified event
-    fires: the deprecated lock-shaped one would have to claim a from/to
-    transition that never happened.
+    used, so her entity is where that belongs.
     """
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     before = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert before
     assert before.state == STATE_UNKNOWN
@@ -1398,7 +1391,6 @@ async def test_use_credential_with_a_target_outside_the_entry(
 
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
     assert [event.data[ATTR_TARGET] for event in unified] == ["cover.some_other_door"]
-    assert deprecated == []
     recorded = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert recorded.state != STATE_UNKNOWN
     assert recorded.attributes[ATTR_TARGET] == "cover.some_other_door"
@@ -1444,7 +1436,6 @@ async def test_use_credential_never_publishes_the_source_entity_state(
     """
     hass.states.async_set(VALIDATE_SOURCE_ENTITY_ID, "1234")
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
 
     await _call_use_credential(
         hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
@@ -1452,7 +1443,7 @@ async def test_use_credential_never_publishes_the_source_entity_state(
     await hass.async_block_till_done()
 
     assert unified
-    for event in [*unified, *deprecated]:
+    for event in unified:
         assert "1234" not in json.dumps(event.data, default=str)
 
 

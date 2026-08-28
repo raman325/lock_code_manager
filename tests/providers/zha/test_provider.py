@@ -607,12 +607,6 @@ async def test_cluster_command_operation_event(
         mock_fire.assert_called_once_with(
             code_slot=3,
             to_locked=False,
-            action_text="Keypad unlock operation",
-            source_data={
-                "source": DoorLock.OperationEventSource.Keypad,
-                "event_code": DoorLock.OperationEvent.Unlock,
-                "user_id": 3,
-            },
         )
 
 

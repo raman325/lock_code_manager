@@ -9,11 +9,10 @@ from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
-    ATTR_CODE_SLOT,
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_LOCK_STATE_CHANGED,
 )
 from custom_components.lock_code_manager.domain.allocation import (
     async_check_slot_capacity,
@@ -149,15 +148,15 @@ async def test_a_returned_provider_stops_reporting_keypad_use(
     """
     zui_api_responder.set_result("sendCommand", SLOT_IS_EMPTY)
     events: list[Event] = []
-    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+    hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, events.append)
 
     fire_zui_node_value(hass, KEYPAD_UNLOCK, {"userId": 1})
     await hass.async_block_till_done()
-    assert [event.data[ATTR_CODE_SLOT] for event in events] == [1]
+    assert len(events) == 1
 
     # What an options flow does on its way to re-numbering the users.
     await async_read_occupancy(hass, None, [zui_lock.lock.entity_id], range(1, 3))
 
     fire_zui_node_value(hass, KEYPAD_UNLOCK, {"userId": 1})
     await hass.async_block_till_done()
-    assert [event.data[ATTR_CODE_SLOT] for event in events] == [1, 1]
+    assert len(events) == 2

@@ -18,11 +18,9 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
-    ATTR_CODE_SLOT,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_LOCK_STATE_CHANGED,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
@@ -225,7 +223,8 @@ class TestEvents:
         provider's event listener. We verify the listener is active by checking
         the provider has registered listeners.
         """
-        events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+        fired = MagicMock()
+        e2e_zwave_lock.async_fire_code_slot_event = fired
 
         event = ZwaveEvent(
             type="notification",
@@ -247,8 +246,7 @@ class TestEvents:
         lock_schlage_be469.receive_event(event)
         await hass.async_block_till_done()
 
-        assert len(events) == 1
-        assert events[0].data[ATTR_CODE_SLOT] == 1
+        fired.assert_called_once_with(code_slot=1, to_locked=True)
 
     async def test_push_credential_added_reaches_coordinator(
         self,

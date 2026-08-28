@@ -677,8 +677,6 @@ class ZWaveJSUILock(BaseMqttLock):
         self.async_fire_code_slot_event(
             code_slot=code_slot,
             to_locked=to_locked,
-            action_text=event_label,
-            source_data={"topic": topic, "value": value},
         )
 
     @callback
