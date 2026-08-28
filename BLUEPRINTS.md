@@ -252,7 +252,7 @@ use was against.
 ### Condition Linker
 
 A one-shot automation that assigns a condition entity to a user via
-the `lock_code_manager.set_slot_condition` service. Run it once from
+the `lock_code_manager.set_condition` service. Run it once from
 the Automations page, then delete or keep for reference.
 
 - Uses a synthetic event trigger that never fires automatically
@@ -263,7 +263,7 @@ the Automations page, then delete or keep for reference.
 | Input | Description | Default |
 | ----- | ----------- | ------- |
 | Lock Code Manager config entry | Config entry holding the user | Required |
-| Slot number | The user to assign the condition to (see [Finding a slot number](#finding-a-slot-number)) | Required |
+| Name | The person to assign the condition to, exactly as they are named in the config entry | Required |
 | Condition entity | Entity to use as the condition | Required |
 
 ---
