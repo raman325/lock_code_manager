@@ -604,20 +604,27 @@ def async_write_entry_config(
     Returns whether anything actually changed, so a caller waiting for the
     entry to react knows whether to expect it to.
 
-    Users are matched to existing subentries by identity, not by title, so a
-    rename updates the subentry somebody already has rather than removing them
-    and adding a stranger with the same credential.
+    Users are matched to existing subentries by the NUMBER they hold, falling
+    back to identity for anyone who has not been given one. Matching on the
+    name would make a rename look like a departure and an arrival: the old
+    subentry would be removed, taking that person's entities, their settings
+    and their history with it, and a stranger holding the same credential
+    would appear in their place.
     """
     changed = False
-    existing = {
-        identity(subentry.title): subentry
+    subentries = [
+        subentry
         for subentry in entry.subentries.values()
         if subentry.subentry_type == SUBENTRY_TYPE_USER
+    ]
+    existing = {
+        subentry.data.get(CONF_SLOT, identity(subentry.title)): subentry
+        for subentry in subentries
     }
 
     for name in config.users:
         data = config.subentry_data(name)
-        subentry = existing.pop(identity(name), None)
+        subentry = existing.pop(data.get(CONF_SLOT, identity(name)), None)
         if subentry is None:
             hass.config_entries.async_add_subentry(
                 entry,

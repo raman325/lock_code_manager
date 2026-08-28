@@ -2670,6 +2670,49 @@ async def test_a_slot_device_is_named_for_the_user_who_holds_it(
         )
 
 
+async def test_renaming_a_user_keeps_the_subentry_they_live_in(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A rename retitles the subentry somebody already has.
+
+    Matching users to subentries by name would make this a departure and an
+    arrival, and removing a subentry takes the entities bound to it -- so the
+    renamed user would lose their settings and their history, and get a fresh
+    set of entities with `_2` on the end.
+    """
+    entry = lock_code_manager_config_entry
+    ent_reg = er.async_get(hass)
+    before = next(
+        subentry
+        for subentry in entry.subentries.values()
+        if subentry.data[CONF_SLOT] == 1
+    )
+    entity_ids = {
+        registry_entry.entity_id
+        for registry_entry in er.async_entries_for_config_entry(ent_reg, entry.entry_id)
+        if registry_entry.config_subentry_id == before.subentry_id
+    }
+    assert entity_ids
+
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "Sherene"},
+        target={ATTR_ENTITY_ID: SLOT_1_NAME_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    after = entry.subentries[before.subentry_id]
+    assert after.title == "Sherene"
+    assert after.data[CONF_SLOT] == 1
+    # Every entity that was theirs is still theirs, under the same id.
+    assert entity_ids <= set(ent_reg.entities)
+
+
 async def test_renaming_a_user_renames_their_device(
     hass: HomeAssistant,
     mock_lock_config_entry,
