@@ -1,4 +1,4 @@
-import { mdiAccountPlus, mdiDiceMultiple, mdiEye, mdiEyeOff } from '@mdi/js';
+import { mdiAccountPlus, mdiCog, mdiDiceMultiple, mdiEye, mdiEyeOff } from '@mdi/js';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
@@ -53,6 +53,31 @@ export class LockCodeManagerAddUserCard extends LitElement {
 
             ha-svg-icon {
                 color: var(--primary-color);
+            }
+
+            .manage {
+                background: none;
+                border: none;
+                box-sizing: border-box;
+                color: var(--secondary-text-color);
+                cursor: pointer;
+                display: flex;
+                font: inherit;
+                font-size: 13px;
+                gap: 6px;
+                justify-content: center;
+                padding: 6px 16px 12px;
+                width: 100%;
+            }
+
+            .manage:hover {
+                color: var(--primary-color);
+                text-decoration: underline;
+            }
+
+            .manage ha-svg-icon {
+                --mdc-icon-size: 16px;
+                color: inherit;
             }
 
             .dialog-content {
@@ -261,6 +286,10 @@ export class LockCodeManagerAddUserCard extends LitElement {
                 <ha-svg-icon .path=${mdiAccountPlus}></ha-svg-icon>
                 <span class="label">Add user</span>
             </ha-card>
+            <button class="manage" @click=${this._manage}>
+                <ha-svg-icon .path=${mdiCog}></ha-svg-icon>
+                <span>Manage users in settings</span>
+            </button>
             ${this._showDialog ? this._renderDialog() : nothing}
         `;
     }
@@ -268,6 +297,24 @@ export class LockCodeManagerAddUserCard extends LitElement {
     /** Seam so a test can observe the reload without navigating the runner. */
     protected _reload(): void {
         window.location.reload();
+    }
+
+    /**
+     * Go to the entry's own page, where Home Assistant lists each user and
+     * offers its edit and delete dialogs.
+     *
+     * Navigation rather than opening that dialog here: Home Assistant's flow
+     * dialog ships in a lazily-loaded chunk a Lovelace view has no reason to
+     * have pulled in, and an unregistered custom element renders as nothing
+     * rather than failing. There is no URL that starts a subentry flow, so
+     * the page that hosts it is as close as a card can get.
+     */
+    private _manage(): void {
+        const anchor = this._config.config_entry_id
+            ? `#config_entry=${this._config.config_entry_id}`
+            : '';
+        history.pushState(null, '', `/config/integrations/integration/lock_code_manager${anchor}`);
+        window.dispatchEvent(new CustomEvent('location-changed'));
     }
 
     private _open(): void {

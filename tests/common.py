@@ -17,7 +17,7 @@ from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAI
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentryData
 from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -28,13 +28,20 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_IN_SYNC,
     CONF_LOCKS,
+    CONF_SLOT,
     CONF_SLOTS,
     DOMAIN,
+    SUBENTRY_TYPE_USER,
 )
 from custom_components.lock_code_manager.domain.allocation import build_lock_instance
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
+from custom_components.lock_code_manager.domain.config import (
+    EntryConfig,
+    async_write_entry_config,
+    build_slot_unique_id,
+)
 from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.slot_assignment import identity
 from custom_components.lock_code_manager.providers import BaseLock
 
 LOCK_1_ENTITY_ID = "lock.test_1"
@@ -415,3 +422,83 @@ class MockCalendarEntity(CalendarEntity):
                 continue
             events.append(event)
         return events
+
+
+def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
+    """
+    Build the user subentries an LCM entry holds, from a slot-keyed dict.
+
+    Fixtures that add an entry without setting it up get no migration, so they
+    have to supply subentries themselves — users have not lived in entry data
+    since version 5. Takes the slot-keyed shape the fixtures already write so
+    only the plumbing changes, not what each test says it is configuring.
+    """
+    return tuple(
+        ConfigSubentryData(
+            data={
+                **{key: value for key, value in fields.items() if key != CONF_NAME},
+                CONF_SLOT: slot_num,
+            },
+            subentry_type=SUBENTRY_TYPE_USER,
+            title=fields[CONF_NAME],
+            unique_id=None,
+        )
+        for slot_num, fields in slots.items()
+    )
+
+
+def write_entry_config(hass: HomeAssistant, entry: ConfigEntry, config: dict) -> bool:
+    """
+    Reconfigure an entry from an old-shape LCM config mapping.
+
+    Tests that used to reconfigure with ``async_update_entry(entry, data=...)``
+    have to reach both halves now — the entry and its user subentries — so they
+    go through the production write path rather than restating how it splits.
+    """
+    return async_write_entry_config(hass, entry, EntryConfig.from_mapping(config))
+
+
+def flow_users(result: dict) -> dict[str, dict]:
+    """Return a create-entry flow result's users by name, without their number."""
+    return {
+        subentry["title"]: {
+            key: value for key, value in subentry["data"].items() if key != CONF_SLOT
+        }
+        for subentry in result["subentries"]
+    }
+
+
+def flow_slots(result: dict) -> dict[str, int]:
+    """Return the numbers a create-entry flow result issued, keyed by identity."""
+    return {
+        identity(subentry["title"]): subentry["data"][CONF_SLOT]
+        for subentry in result["subentries"]
+    }
+
+
+def entry_users(entry: ConfigEntry) -> dict[str, dict]:
+    """Return a stored entry's users by name, without their number."""
+    return {
+        subentry.title: {
+            key: value for key, value in subentry.data.items() if key != CONF_SLOT
+        }
+        for subentry in entry.subentries.values()
+        if subentry.subentry_type == SUBENTRY_TYPE_USER
+    }
+
+
+def unnumbered_user_subentry(name: str, **fields) -> ConfigSubentryData:
+    """
+    Build a user subentry carrying no credential position.
+
+    Not something the integration writes -- allocation numbers everybody it
+    stores. It is what hand-edited storage or a half-finished write leaves
+    behind, and the guards that refuse to act on such a user are what these
+    tests are for.
+    """
+    return ConfigSubentryData(
+        data=fields,
+        subentry_type=SUBENTRY_TYPE_USER,
+        title=name,
+        unique_id=None,
+    )

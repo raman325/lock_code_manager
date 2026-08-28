@@ -85,6 +85,47 @@ describe('lcm-add-user', () => {
         });
     });
 
+    describe('managing users in settings', () => {
+        it('sends the browser to the entry that hosts the native user dialogs', () => {
+            const pushState = vi.spyOn(history, 'pushState');
+            const manage = card.shadowRoot!.querySelector<HTMLButtonElement>('button.manage');
+            expect(manage).not.toBeNull();
+
+            manage!.click();
+
+            expect(pushState).toHaveBeenCalledWith(
+                null,
+                '',
+                '/config/integrations/integration/lock_code_manager#config_entry=entry-1'
+            );
+            pushState.mockRestore();
+        });
+
+        it('opens no dialog of its own', () => {
+            card.shadowRoot!.querySelector<HTMLButtonElement>('button.manage')!.click();
+
+            expect(card.shadowRoot!.querySelector('ha-dialog')).toBeNull();
+        });
+
+        it('goes to the integration page unanchored when only a title is configured', async () => {
+            const byTitle = document.createElement('lcm-add-user') as unknown as AddUserCardElement;
+            byTitle.setConfig({ config_entry_title: 'All Locks', type: 'custom:lcm-add-user' });
+            byTitle.hass = createMockHassWithConnection();
+            container.appendChild(byTitle);
+            await flush();
+            const pushState = vi.spyOn(history, 'pushState');
+
+            byTitle.shadowRoot!.querySelector<HTMLButtonElement>('button.manage')!.click();
+
+            expect(pushState).toHaveBeenCalledWith(
+                null,
+                '',
+                '/config/integrations/integration/lock_code_manager'
+            );
+            pushState.mockRestore();
+        });
+    });
+
     describe('the card API Home Assistant calls', () => {
         it('offers a stub config the card editor accepts', () => {
             const stub = (

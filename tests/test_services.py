@@ -87,7 +87,7 @@ from custom_components.lock_code_manager.providers.schlage import (
 )
 from tests.providers.helpers import register_mock_service
 
-from .common import LOCK_1_ENTITY_ID, reading_for
+from .common import LOCK_1_ENTITY_ID, reading_for, unnumbered_user_subentry
 
 
 async def test_async_set_usercode_domain_function_rejects_empty_usercode(
@@ -1618,17 +1618,20 @@ async def test_credential_actions_refuse_a_user_holding_no_slot(
     """
     A user the configuration never numbered has no credential to change.
 
-    Reachable from stored configuration: a users block with no slot
-    assignment beside it leaves everybody unnumbered, which is exactly the
-    shape ``EntryConfig`` skips when it builds its slot view.
+    Reachable from stored configuration: a user subentry with no number in
+    it is exactly the shape ``EntryConfig`` skips when it builds its slot
+    view.
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_LOCKS: [LOCK_1_ENTITY_ID],
-            CONF_USERS: {"Unplaced": {CONF_PIN: "1234", CONF_ENABLED: True}},
-        },
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_PIN: "1234", CONF_ENABLED: True}
+            )
+        ],
         unique_id="unplaced",
+        version=5,
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)

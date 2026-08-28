@@ -70,6 +70,7 @@ from .common import (
     MockLCMLock,
     in_sync_entity_id,
     slot_entity_id,
+    write_entry_config,
 )
 from .conftest import (
     async_advance_time,
@@ -179,9 +180,7 @@ async def test_binary_sensor_entity(
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][2][CONF_CONDITION] = "calendar.test_2"
 
-    hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=new_config
-    )
+    write_entry_config(hass, lock_code_manager_config_entry, new_config)
     await hass.async_block_till_done()
 
     # Changing to a different calendar should deactivate the slot
@@ -799,7 +798,7 @@ async def test_condition_entity_subscription_updates_on_config_change(
     new_config = copy.deepcopy(config)
     new_config[CONF_SLOTS][1][CONF_CONDITION] = "input_boolean.access_2"
 
-    hass.config_entries.async_update_entry(config_entry, data=new_config)
+    write_entry_config(hass, config_entry, new_config)
     await hass.async_block_till_done()
 
     # Now the slot should be inactive because access_2 is OFF

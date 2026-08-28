@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Container, Iterable, Mapping, Sequence
+from collections.abc import Collection, Container, Iterable, Mapping, Sequence
 import logging
 from typing import Any
 
@@ -11,7 +11,11 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
@@ -27,10 +31,12 @@ from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
     CONF_NUM_USERS,
+    CONF_SLOT,
     CONF_USERS,
     DEFAULT_NUM_USERS,
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
+    SUBENTRY_TYPE_USER,
 )
 from .domain.allocation import (
     SlotAllocationError,
@@ -267,10 +273,60 @@ async def _allocate_for(
     return unavailable, {}, {}
 
 
+def _validate_user_form(
+    hass: HomeAssistant,
+    user_input: dict[str, Any],
+    taken: Collection[str],
+) -> tuple[str | None, dict[str, Any], dict[str, str], dict[str, Any]]:
+    """
+    Validate one user's submitted form against the names already spoken for.
+
+    Shared by the setup flow, which collects users before the entry exists,
+    and the subentry flow, which adds and edits them afterwards. One
+    definition of a valid user, so the two routes cannot answer differently.
+
+    ``taken`` is whichever names this submission must not collide with -- for
+    an edit, everybody except the user being edited.
+    """
+    errors: dict[str, str] = {}
+    placeholders: dict[str, Any] = {}
+
+    if _slot_enabled_without_pin(user_input):
+        errors[CONF_PIN] = "missing_pin_if_enabled"
+
+    name: str | None = None
+    if error := name_error(user_input.get(CONF_NAME)):
+        errors[CONF_NAME] = error
+    else:
+        # Normalize BOTH sides. Comparing a stripped candidate against
+        # unstripped stored names lets "Raman " and "Raman" both through in
+        # one order but not the other.
+        name = normalize_name(user_input[CONF_NAME])
+        if any(other.casefold() == name.casefold() for other in taken):
+            errors[CONF_NAME] = "name_not_unique"
+
+    if entity_id := user_input.get(CONF_CONDITION):
+        entity_entry = er.async_get(hass).async_get(entity_id)
+        if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
+            errors[CONF_CONDITION] = "excluded_platform"
+            placeholders["integration"] = entity_entry.platform
+            placeholders["docs_url"] = (
+                "https://github.com/raman325/lock_code_manager/wiki/"
+                "Unsupported-Condition-Entity-Integrations"
+            )
+
+    if errors:
+        return None, {}, errors, placeholders
+
+    fields = CODE_SLOT_SCHEMA({**user_input, CONF_NAME: name})
+    del fields[CONF_NAME]
+    return name, fields, errors, placeholders
+
+
 class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for Lock Code Manager."""
 
-    VERSION = 4
+    VERSION = 5
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self) -> None:
@@ -386,41 +442,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         }
 
         if user_input is not None:
-            if _slot_enabled_without_pin(user_input):
-                errors[CONF_PIN] = "missing_pin_if_enabled"
-
-            if error := name_error(user_input.get(CONF_NAME)):
-                errors[CONF_NAME] = error
-            else:
-                # Normalize BOTH sides. Comparing a stripped candidate against
-                # unstripped stored names lets "Raman " and "Raman" both
-                # through in one order but not the other.
-                user_input[CONF_NAME] = normalize_name(user_input[CONF_NAME])
-                if any(
-                    name.casefold() == user_input[CONF_NAME].casefold()
-                    for name in self.data[CONF_USERS]
-                ):
-                    errors[CONF_NAME] = "name_not_unique"
-
-            # A single registry lookup covers the excluded-platform check.
-            # self.ent_reg is set in async_step_user, which always runs first.
-            if entity_id := user_input.get(CONF_CONDITION):
-                entity_entry = self.ent_reg.async_get(entity_id)
-                if (
-                    entity_entry
-                    and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS
-                ):
-                    errors[CONF_CONDITION] = "excluded_platform"
-                    description_placeholders["integration"] = entity_entry.platform
-                    description_placeholders["docs_url"] = (
-                        "https://github.com/raman325/lock_code_manager/wiki/"
-                        "Unsupported-Condition-Entity-Integrations"
-                    )
+            name, fields, errors, placeholders = _validate_user_form(
+                self.hass, user_input, self.data[CONF_USERS]
+            )
+            description_placeholders.update(placeholders)
 
             if not errors:
-                validated = CODE_SLOT_SCHEMA(user_input)
-                name = validated.pop(CONF_NAME)
-                self.data[CONF_USERS][name] = validated
+                assert name is not None
+                self.data[CONF_USERS][name] = fields
                 configured = len(self.data[CONF_USERS])
                 if configured >= self._users_to_configure:
                     return await self._async_finish_ui_setup()
@@ -442,8 +471,24 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         assignment = SlotAssignment.empty().reconcile(
             self.data[CONF_USERS], start=1, unavailable=self._unavailable
         )
-        self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
-        return self.async_create_entry(title=self.title, data=self.data)
+        return self._async_create_entry(assignment)
+
+    def _async_create_entry(self, assignment: SlotAssignment) -> dict[str, Any]:
+        """
+        Create the entry, with each collected user in their own subentry.
+
+        Handed to Home Assistant in one piece: a flow creating an entry has
+        nothing to write to yet, so it cannot go through
+        :func:`async_write_entry_config` the way every later edit does.
+        """
+        config = EntryConfig.from_mapping(
+            {**self.data, CONF_SLOT_ASSIGNMENT: dict(assignment.slots)}
+        )
+        return self.async_create_entry(
+            title=self.title,
+            data=config.to_dict(),
+            subentries=config.subentries(),
+        )
 
     async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
         """Take a block of users, then allocate their numbers."""
@@ -488,8 +533,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 assignment = SlotAssignment.empty().reconcile(
                     users, start=1, unavailable=unavailable
                 )
-                self.data[CONF_SLOT_ASSIGNMENT] = dict(assignment.slots)
-                return self.async_create_entry(title=self.title, data=self.data)
+                return self._async_create_entry(assignment)
 
         return self.async_show_form(
             step_id="yaml",
@@ -626,6 +670,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         """Get options flow."""
         return LockCodeManagerOptionsFlow()
 
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Return the subentry flows this entry supports."""
+        return {SUBENTRY_TYPE_USER: LockCodeManagerUserSubentryFlow}
+
 
 class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
     """Options flow for Lock Code Manager."""
@@ -633,81 +685,30 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Edit the entry's users. Numbers are not part of this."""
+        """
+        Edit the entry's locks. Users are not part of this.
+
+        Each user is a subentry with a flow of their own, so this form has one
+        field. Two ways to write the same dataset was the recurring failure the
+        subentry move set out to end, and an options flow that still offered
+        the users would be exactly that.
+        """
         errors: dict[str, str] = {}
         description_placeholders: dict[str, Any] = {}
-        if not user_input:
-            user_input = {}
+        config = get_entry_config(self.config_entry)
 
         if user_input:
-            # Accumulated alongside the users validation rather than
-            # short-circuiting it: both refusals render together, so one round
-            # trip shows everything wrong with the submission.
-            lock_errors, lock_placeholders = _check_unclaimed_mqtt_locks(
-                self.hass,
-                user_input[CONF_LOCKS],
-                get_entry_config(self.config_entry).locks,
+            errors, description_placeholders = _check_unclaimed_mqtt_locks(
+                self.hass, user_input[CONF_LOCKS], config.locks
             )
-            errors.update(lock_errors)
-            description_placeholders.update(lock_placeholders)
-
-            (
-                users,
-                validation_errors,
-                validation_placeholders,
-            ) = await _async_validate_users_yaml(
-                self.hass,
-                self.config_entry,
-                user_input[CONF_USERS],
-                user_input[CONF_LOCKS],
-            )
-            errors.update(validation_errors)
-            description_placeholders.update(validation_placeholders)
-
             if not errors:
-                assert users is not None
-                (
-                    unavailable,
-                    allocation_errors,
-                    allocation_placeholders,
-                ) = await _allocate_for(
-                    self.hass,
-                    self.config_entry,
-                    user_input[CONF_LOCKS],
-                    len(users),
+                # Only the entry's own half. The users are untouched in their
+                # subentries, and `extra` carries whatever else the entry
+                # holds so a form with one field does not erase the rest.
+                return self.async_create_entry(
+                    title="",
+                    data={**dict(config.extra), CONF_LOCKS: user_input[CONF_LOCKS]},
                 )
-                if unavailable is None:
-                    errors.update(allocation_errors)
-                    description_placeholders.update(allocation_placeholders)
-                else:
-                    config = get_entry_config(self.config_entry)
-                    # Reconciled against what the entry already holds, so a
-                    # user who was here before keeps their number and only
-                    # newcomers are issued one. Moving somebody would rewrite
-                    # their credential on every lock.
-                    assignment = config.assignment.reconcile(
-                        users, start=1, unavailable=unavailable
-                    )
-                    # Written through EntryConfig so whatever else the entry
-                    # carries survives the edit. Building the dict by hand
-                    # drops every key this form does not ask about.
-                    return self.async_create_entry(
-                        title="",
-                        data=EntryConfig(
-                            locks=tuple(user_input[CONF_LOCKS]),
-                            users=users,
-                            assignment=assignment,
-                            extra=config.extra,
-                        ).to_dict(),
-                    )
-
-        config = get_entry_config(self.config_entry)
-        # Plain dict/list, because the form selectors cannot serialize the
-        # deeply read-only mappings EntryConfig uses internally.
-        defaults = {
-            CONF_LOCKS: list(config.locks),
-            CONF_USERS: {name: dict(user) for name, user in config.users.items()},
-        }
 
         return self.async_show_form(
             step_id="init",
@@ -715,15 +716,117 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Required(
                         CONF_LOCKS,
-                        default=user_input.get(CONF_LOCKS, defaults[CONF_LOCKS]),
+                        default=(user_input or {}).get(CONF_LOCKS, list(config.locks)),
                     ): LOCK_ENTITY_SELECTOR,
-                    vol.Required(
-                        CONF_USERS,
-                        default=user_input.get(CONF_USERS, defaults[CONF_USERS]),
-                    ): SLOTS_YAML_SELECTOR,
                 }
             ),
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=True,
+        )
+
+
+class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
+    """Add or edit one user of a Lock Code Manager entry."""
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Add a user, issuing them a credential position."""
+        entry = self._get_entry()
+        config = get_entry_config(entry)
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, Any] = {}
+
+        if user_input is not None:
+            name, fields, errors, placeholders = _validate_user_form(
+                self.hass, user_input, config.users
+            )
+            description_placeholders.update(placeholders)
+
+            if not errors:
+                assert name is not None
+                # Asked for room for everyone the entry will hold, not for one
+                # more: allocation answers about a whole configuration, and a
+                # lock too full for the result must refuse before anything is
+                # written.
+                (
+                    unavailable,
+                    allocation_errors,
+                    allocation_placeholders,
+                ) = await _allocate_for(
+                    self.hass, entry, config.locks, len(config.users) + 1
+                )
+                if unavailable is None:
+                    errors.update(allocation_errors)
+                    description_placeholders.update(allocation_placeholders)
+                else:
+                    # Reconciled against what the entry already holds, so
+                    # everybody already here keeps their number and only the
+                    # newcomer is issued one.
+                    assignment = config.assignment.reconcile(
+                        {**config.users, name: fields},
+                        start=1,
+                        unavailable=unavailable,
+                    )
+                    return self.async_create_entry(
+                        title=name,
+                        data={**fields, CONF_SLOT: assignment.slot(name)},
+                    )
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=self.add_suggested_values_to_schema(
+                CODE_SLOT_SCHEMA, user_input or {}
+            ),
+            errors=errors,
+            description_placeholders=description_placeholders,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Edit a user, who keeps the position they already hold."""
+        entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        config = get_entry_config(entry)
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, Any] = {}
+        held = normalize_name(subentry.title)
+
+        if user_input is not None:
+            name, fields, errors, placeholders = _validate_user_form(
+                self.hass,
+                user_input,
+                [other for other in config.users if other != held],
+            )
+            description_placeholders.update(placeholders)
+
+            if not errors:
+                assert name is not None
+                # The number rides along untouched. It is what every identifier
+                # and every lock's credential index is keyed on, so a rename
+                # that moved it would rewrite this user's code on every lock
+                # and orphan their entities.
+                return self.async_update_and_abort(
+                    entry,
+                    subentry,
+                    title=name,
+                    data={**fields, CONF_SLOT: subentry.data[CONF_SLOT]},
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                CODE_SLOT_SCHEMA,
+                user_input
+                or {
+                    key: value
+                    for key, value in subentry.data.items()
+                    if key != CONF_SLOT
+                }
+                | {CONF_NAME: subentry.title},
+            ),
+            errors=errors,
+            description_placeholders=description_placeholders,
         )

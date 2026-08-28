@@ -20,7 +20,7 @@ from ..const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .allocation import SlotAllocationError, async_allocate_for
-from .config import EntryConfig
+from .config import EntryConfig, async_write_entry_config
 from .credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from .events import (
     CredentialOperation,
@@ -41,7 +41,7 @@ _SETTLE_TIMEOUT = 30
 
 
 async def _async_write_and_settle(
-    hass: HomeAssistant, config_entry: ConfigEntry, options: dict[str, Any]
+    hass: HomeAssistant, config_entry: ConfigEntry, config: EntryConfig
 ) -> None:
     """
     Write the entry, and wait for it to have finished reacting.
@@ -58,7 +58,7 @@ async def _async_write_and_settle(
     """
     runtime_data = config_entry.runtime_data
     runtime_data.settled.clear()
-    if not hass.config_entries.async_update_entry(config_entry, options=options):
+    if not async_write_entry_config(hass, config_entry, config):
         # Nothing changed, so no listener will run and nothing will set the
         # event. Waiting here would burn the whole timeout for no reason.
         return
@@ -345,7 +345,7 @@ async def async_set_condition(
     new_config = get_entry_config(config_entry).with_slot_field_set(
         slot_num, CONF_CONDITION, entity_id
     )
-    await _async_write_and_settle(hass, config_entry, new_config.to_dict())
+    await _async_write_and_settle(hass, config_entry, new_config)
 
 
 async def async_clear_condition(
@@ -367,7 +367,7 @@ async def async_clear_condition(
     new_config = get_entry_config(config_entry).with_slot_field_removed(
         slot_num, CONF_CONDITION
     )
-    await _async_write_and_settle(hass, config_entry, new_config.to_dict())
+    await _async_write_and_settle(hass, config_entry, new_config)
 
 
 async def async_set_slot_condition(
@@ -387,7 +387,7 @@ async def async_set_slot_condition(
     _async_validate_condition(hass, entity_id)
 
     new_config = config.with_slot_field_set(slot, CONF_CONDITION, entity_id)
-    await _async_write_and_settle(hass, config_entry, new_config.to_dict())
+    await _async_write_and_settle(hass, config_entry, new_config)
 
 
 async def async_clear_slot_condition(
@@ -404,7 +404,7 @@ async def async_clear_slot_condition(
         raise ServiceValidationError(f"Slot {slot} not found in config entry")
 
     new_config = config.with_slot_field_removed(slot, CONF_CONDITION)
-    await _async_write_and_settle(hass, config_entry, new_config.to_dict())
+    await _async_write_and_settle(hass, config_entry, new_config)
 
 
 async def async_enable_user(
@@ -536,7 +536,7 @@ async def async_add_users(
             users={**config.users, **additions},
             assignment=assignment,
             extra=config.extra,
-        ).to_dict(),
+        ),
     )
 
 
@@ -597,5 +597,5 @@ async def async_delete_users(
             users=remaining,
             assignment=config.assignment.reconcile(remaining, start=1),
             extra=config.extra,
-        ).to_dict(),
+        ),
     )

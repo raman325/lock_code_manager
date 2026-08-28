@@ -7,6 +7,7 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from homeassistant.components.calendar import (
@@ -71,7 +72,6 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_PIN,
     CONF_SLOTS,
-    CONF_USERS,
     DOMAIN,
     SERVICE_USE_CREDENTIAL,
 )
@@ -79,9 +79,6 @@ from custom_components.lock_code_manager.domain.config import build_slot_unique_
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.slot_assignment import (
-    CONF_SLOT_ASSIGNMENT,
-)
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
@@ -106,6 +103,8 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_EVENT_ENTITY,
+    unnumbered_user_subentry,
+    user_subentries,
 )
 from .conftest import async_initial_tick, async_trigger_sync_tick
 
@@ -3416,19 +3415,22 @@ class TestAddressingASlotByUser:
         on the wrong person.
         """
 
-        class _Entry:
-            runtime_data = None
-            data = {
-                CONF_USERS: {
-                    "Ada-Lovelace": {CONF_ENABLED: True},
-                    "Ada Lovelace": {CONF_ENABLED: True},
-                },
-                CONF_SLOT_ASSIGNMENT: {"ada-lovelace": 1, "ada lovelace": 2},
-            }
-            options: dict = {}
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: []},
+            subentries_data=user_subentries(
+                {
+                    1: {CONF_NAME: "Ada-Lovelace", CONF_ENABLED: True},
+                    2: {CONF_NAME: "Ada Lovelace", CONF_ENABLED: True},
+                }
+            ),
+            unique_id="ambiguous-slug",
+            version=5,
+        )
+        entry.add_to_hass(hass)
 
         with pytest.raises(ServiceValidationError, match="more than one user"):
-            _slot_from(hass, _Entry(), {CONF_NAME: "ada lovelace"})
+            _slot_from(hass, entry, {CONF_NAME: "ada lovelace"})
 
     async def test_clearing_a_condition_for_an_unknown_user_is_refused(
         self,
@@ -3453,13 +3455,19 @@ class TestAddressingASlotByUser:
     def test_a_user_with_no_slot_yet_is_refused(self, hass: HomeAssistant) -> None:
         """A user allocation has not numbered has nothing to address."""
 
-        class _Entry:
-            runtime_data = None
-            data = {CONF_USERS: {"Pending": {CONF_ENABLED: False}}}
-            options: dict = {}
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: []},
+            subentries_data=[
+                unnumbered_user_subentry("Pending", **{CONF_ENABLED: False})
+            ],
+            unique_id="unnumbered",
+            version=5,
+        )
+        entry.add_to_hass(hass)
 
         with pytest.raises(ServiceValidationError, match="not been given a slot"):
-            _slot_from(hass, _Entry(), {CONF_NAME: "pending"})
+            _slot_from(hass, entry, {CONF_NAME: "pending"})
 
     async def test_setting_a_condition_for_an_unknown_user_is_refused(
         self,

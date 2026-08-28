@@ -46,6 +46,7 @@ from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUIL
 from tests.common import code_entity_id, in_sync_entity_id, slot_entity_id
 from tests.conftest import async_advance_time
 
+from ...common import user_subentries
 from .conftest import (
     ZUI_API_BASE,
     ZUI_NODE_ID,
@@ -171,7 +172,12 @@ async def lcm_config_entry(
             for slot_num, pin in E2E_SLOT_PINS.items()
         },
     }
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_e2e")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zui_e2e",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -482,7 +488,12 @@ class TestApiOnlyManualGateway:
                 for slot_num, pin in E2E_SLOT_PINS.items()
             },
         }
-        entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_manual")
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=config,
+            unique_id="test_zui_manual",
+            subentries_data=user_subentries(config[CONF_SLOTS]),
+        )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -621,7 +632,12 @@ class TestMixedPushAndApiOnlyEntry:
                 for slot_num, pin in E2E_SLOT_PINS.items()
             },
         }
-        entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_mixed")
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=config,
+            unique_id="test_zui_mixed",
+            subentries_data=user_subentries(config[CONF_SLOTS]),
+        )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

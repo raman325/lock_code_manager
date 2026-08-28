@@ -147,6 +147,11 @@ CONF_CONDITIONS = "conditions"
 CONF_ENTITIES = "entities"
 CONF_LOCKS = "locks"
 CONF_SLOTS = "slots"
+# A user is a config subentry of this type. The person, not the credential
+# store they are written to -- a "member" is the lock side of the entry.
+SUBENTRY_TYPE_USER = "user"
+# Where a user's credential position is kept inside their subentry's data.
+CONF_SLOT = "slot"
 CONF_USERS = "users"
 CONF_NUM_USERS = "num_users"
 
