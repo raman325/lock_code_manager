@@ -795,11 +795,17 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
         description_placeholders: dict[str, Any] = {}
         held = normalize_name(subentry.title)
 
+        # Everybody except the person being edited. Both the name check and,
+        # below, the count allocation is asked for are about the OTHERS: the
+        # edited user is already in `config.users`, so counting them again
+        # refuses on a lock with exactly enough room, and reconciling against
+        # a dict that still holds their old name issues their new one a
+        # second number.
+        others = {other: user for other, user in config.users.items() if other != held}
+
         if user_input is not None:
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass,
-                user_input,
-                [other for other in config.users if other != held],
+                self.hass, user_input, others
             )
             description_placeholders.update(placeholders)
 
@@ -822,7 +828,7 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                         allocation_errors,
                         allocation_placeholders,
                     ) = await _allocate_for(
-                        self.hass, entry, config.locks, len(config.users) + 1
+                        self.hass, entry, config.locks, len(others) + 1
                     )
                     if unavailable is None:
                         errors.update(allocation_errors)
@@ -831,7 +837,7 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                             subentry, user_input, errors, description_placeholders
                         )
                     held_slot = config.assignment.reconcile(
-                        {**config.users, name: fields},
+                        {**others, name: fields},
                         start=1,
                         unavailable=unavailable,
                     ).slot(name)

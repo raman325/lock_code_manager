@@ -806,6 +806,85 @@ async def test_editing_a_user_who_has_no_number_issues_one(
     assert entry.subentries[subentry.subentry_id].data[CONF_SLOT] == 1
 
 
+async def test_repairing_an_unnumbered_user_fits_on_a_lock_with_exactly_enough_room(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    The repair asks for room for the OTHERS plus this one, not for one extra.
+
+    The user being edited is already in the entry's users, so counting them
+    again refuses on a lock with exactly enough room -- naming a user count
+    that does not exist -- and the dialog that exists to repair the record
+    becomes one that can only fail.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[
+            *user_subentries({1: {CONF_NAME: "Alice", CONF_PIN: "1111"}}),
+            unnumbered_user_subentry("Nomad", **{CONF_ENABLED: False}),
+        ],
+        unique_id="unnumbered-exact-fit",
+    )
+    entry.add_to_hass(hass)
+    subentry = next(s for s in entry.subentries.values() if s.title == "Nomad")
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+    )
+
+    # Two slots on the lock, Alice holds one, and two users all told.
+    with (
+        patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=2)),
+        _holding(),
+    ):
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Nomad", CONF_ENABLED: True, CONF_PIN: "4242"},
+        )
+
+    assert result["type"] == "abort"
+    assert entry.subentries[subentry.subentry_id].data[CONF_SLOT] == 2
+
+
+async def test_repairing_an_unnumbered_user_while_renaming_them_wastes_no_slot(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    A repair that also renames issues one number, from the bottom.
+
+    Reconciling against a dict that still holds the old name puts the same
+    person in twice under two identities, so the new one is numbered around
+    the old one and the lowest free position is burned for good.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[unnumbered_user_subentry("Nomad", **{CONF_ENABLED: False})],
+        unique_id="unnumbered-renamed",
+    )
+    entry.add_to_hass(hass)
+    subentry = next(iter(entry.subentries.values()))
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+    )
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Zed", CONF_ENABLED: True, CONF_PIN: "4242"},
+        )
+
+    assert result["type"] == "abort"
+    assert entry.subentries[subentry.subentry_id].title == "Zed"
+    assert entry.subentries[subentry.subentry_id].data[CONF_SLOT] == 1
+
+
 async def test_editing_an_unnumbered_user_refuses_when_the_lock_cannot_be_read(
     hass: HomeAssistant, mock_lock_config_entry
 ):

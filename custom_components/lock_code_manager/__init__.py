@@ -1828,6 +1828,36 @@ async def async_update_listener(
         config_entry.runtime_data.settled.set()
 
 
+@callback
+def _async_settle_options(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    config: EntryConfig,
+) -> None:
+    """
+    Fold a staged options submission into the entry's own data.
+
+    `data` is where the configuration lives; `options` is a staging area,
+    because an options flow cannot write `data` itself. Settling is what keeps
+    that true, so it happens on every path out of the update listener.
+
+    Only when something is actually staged. Settling unconditionally would
+    corrupt the direct writes: `async_write_entry_config` reconciles the
+    subentries and the entry in separate calls, each of which wakes the
+    listener, and a pass that woke between them would write back the half of
+    the configuration it had read -- undoing the half that had already landed.
+    Those callers clear `options` themselves, so this is a no-op for them.
+
+    ``to_dict()`` is what makes the stored data plain dicts rather than the
+    read-only ``MappingProxyType`` wrappers ``EntryConfig`` uses internally,
+    which Home Assistant's storage layer cannot serialize.
+    """
+    if config_entry.options:
+        hass.config_entries.async_update_entry(
+            config_entry, data=config.to_dict(), options={}
+        )
+
+
 async def _async_apply_entry_update(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -1867,6 +1897,11 @@ async def _async_apply_entry_update(
     # produces no diff when it re-enters.
     diff = EntryConfigDiff(old=old_config, new=new_config)
     if not diff.has_changes:
+        # Settled here too. An options submission that changes nothing reaches
+        # this return, and leaving it staged would strand it in `options` for
+        # good -- read in preference to `data` for as long as the entry
+        # exists, then cleared by the next write that touches the entry.
+        _async_settle_options(hass, config_entry, new_config)
         return
 
     ent_reg = er.async_get(hass)
@@ -2021,31 +2056,7 @@ async def _async_apply_entry_update(
     _LOGGER.info(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
-    # Only when there is something staged to settle. The options flow leaves
-    # its submission in `options` for this listener to fold into `data`;
-    # everything else writes `data` directly and clears `options` itself.
-    #
-    # An options submission that changes nothing does not reach here at all --
-    # the diff above is empty and returns first -- so `options` is left
-    # standing. Harmless while it holds what the options flow writes, which is
-    # `data`'s own contents; a field that lived in `options` WITHOUT also being
-    # in `data` would go stale there, so do not add one.
-    #
-    # Settling unconditionally corrupts those direct writes.
-    # `async_write_entry_config` reconciles the subentries and the entry in
-    # separate calls, each of which wakes this listener -- and a pass that
-    # woke between them would write back the half of the configuration it
-    # read, undoing the half that had already landed.
-    #
-    # to_dict() is what makes the stored data plain dicts rather than the
-    # read-only MappingProxyType wrappers EntryConfig uses internally, which
-    # Home Assistant's storage layer cannot serialize.
-    if config_entry.options:
-        hass.config_entries.async_update_entry(
-            config_entry, data=new_config.to_dict(), options={}
-        )
-        # The async_update_entry above re-triggers this listener, which
-        # refreshes runtime_data.config at the top before the early-return.
+    _async_settle_options(hass, config_entry, new_config)
 
     # Notify Lovelace dashboards to re-render when structure changes
     # (slots or locks added/removed), so strategy-generated cards update
