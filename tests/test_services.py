@@ -2287,3 +2287,310 @@ async def test_set_condition_refuses_an_entity_that_does_not_exist(
             },
             blocking=True,
         )
+
+
+async def test_add_user_takes_a_list_and_places_all_of_them(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Several people arrive in one call, each with their own number."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_USERS: [
+                {CONF_NAME: "Newcomer", CONF_PIN: "9876"},
+                {CONF_NAME: "Second", CONF_PIN: "5432"},
+            ],
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["Newcomer"][CONF_PIN] == "9876"
+    assert config.users["Second"][CONF_PIN] == "5432"
+    numbers = {config.assignment.slot(n) for n in ("Newcomer", "Second")}
+    assert None not in numbers
+    assert len(numbers) == 2
+
+
+async def test_adding_a_batch_reads_the_locks_no_more_than_adding_one(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    The batch is allocated once, not once per person.
+
+    Allocation reads every lock to find free numbers. Doing that per user
+    would make a five-guest booking five round trips to a battery lock, which
+    is the difference between usable and not.
+    """
+    entry = lock_code_manager_config_entry
+
+    def _add(users: list[dict]) -> int:
+        return len(users)
+
+    with reading_for() as read_for:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": entry.entry_id,
+                CONF_USERS: [{CONF_NAME: "Solo", CONF_PIN: "1111"}],
+            },
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+        for_one = len(read_for)
+
+    with reading_for() as read_for:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": entry.entry_id,
+                CONF_USERS: [
+                    {CONF_NAME: f"Batch{n}", CONF_PIN: f"222{n}"} for n in range(4)
+                ],
+            },
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+        for_four = len(read_for)
+
+    assert for_four == for_one
+
+
+async def test_add_user_is_all_or_nothing(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    One bad name in a batch writes none of it.
+
+    Every way this can fail is knowable before anything is written, so a
+    partial write would be a choice rather than a necessity.
+    """
+    entry = lock_code_manager_config_entry
+    before = set(get_entry_config(entry).users)
+
+    with pytest.raises(ServiceValidationError, match="already exists"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": entry.entry_id,
+                CONF_USERS: [
+                    {CONF_NAME: "Fine", CONF_PIN: "9876"},
+                    {CONF_NAME: "test1", CONF_PIN: "5432"},
+                ],
+            },
+            blocking=True,
+        )
+    await hass.async_block_till_done()
+
+    assert set(get_entry_config(entry).users) == before
+
+
+async def test_add_user_refuses_two_names_meaning_one_person_in_one_call(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    The batch is checked against itself, not just against the entry.
+
+    Two spellings of one person would collapse into a single key on the way
+    into storage, taking one of their credentials with it.
+    """
+    with pytest.raises(ServiceValidationError, match="already exists"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_USERS: [
+                    {CONF_NAME: "Sarah Chen", CONF_PIN: "9876"},
+                    {CONF_NAME: "  sarah chen ", CONF_PIN: "5432"},
+                ],
+            },
+            blocking=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({CONF_NAME: "Newcomer", CONF_PIN: "9876"}, id="released-flat"),
+        pytest.param(
+            {CONF_USERS: {CONF_NAME: "Newcomer", CONF_PIN: "9876"}}, id="single-mapping"
+        ),
+        pytest.param(
+            {CONF_USERS: [{CONF_NAME: "Newcomer", CONF_PIN: "9876"}]}, id="list-of-one"
+        ),
+    ],
+)
+async def test_add_user_accepts_the_released_shape_and_the_list(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    payload: dict,
+) -> None:
+    """
+    All three spellings land the same person.
+
+    The flat shape is what every released automation sends; it is folded into
+    a list before validation so nothing downstream knows two shapes.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {"config_entry_id": entry.entry_id, **payload},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert config.users["Newcomer"][CONF_PIN] == "9876"
+
+
+async def test_add_user_refuses_both_shapes_at_once(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Mixing the shapes is a caller error, not something to guess at."""
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                CONF_NAME: "Flat",
+                CONF_USERS: [{CONF_NAME: "Listed", CONF_PIN: "9876"}],
+            },
+            blocking=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        pytest.param("test1", id="released-single-string"),
+        pytest.param(["test1"], id="list-of-one"),
+    ],
+)
+async def test_delete_user_accepts_a_name_or_a_list(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    names,
+) -> None:
+    """The field kept its name, so released calls validate unchanged."""
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {"config_entry_id": entry.entry_id, CONF_NAME: names},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert "test1" not in get_entry_config(entry).users
+
+
+async def test_delete_user_removes_several_and_is_all_or_nothing(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A name that is not here stops the whole removal."""
+    entry = lock_code_manager_config_entry
+    before = set(get_entry_config(entry).users)
+
+    with pytest.raises(ServiceValidationError, match="No user named"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_DELETE_USER,
+            {"config_entry_id": entry.entry_id, CONF_NAME: ["test1", "Nobody"]},
+            blocking=True,
+        )
+    await hass.async_block_till_done()
+    assert set(get_entry_config(entry).users) == before
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {"config_entry_id": entry.entry_id, CONF_NAME: ["test1", "test2"]},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert not get_entry_config(entry).users
+
+
+async def test_the_batch_is_allocated_for_everyone_it_will_add(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Allocation is sized to the whole batch, not to one person.
+
+    Asking for one number and then handing out four would place users past
+    what the locks reported they can hold -- the refusal that exists for
+    exactly that case would never fire, because it was asked the wrong
+    question.
+    """
+    entry = lock_code_manager_config_entry
+    existing = len(get_entry_config(entry).users)
+    asked_for: list[int] = []
+
+    async def _spy(hass, config_entry, locks, num_users, config=None):
+        asked_for.append(num_users)
+        return frozenset()
+
+    with patch(
+        "custom_components.lock_code_manager.domain.services.async_allocate_for",
+        _spy,
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": entry.entry_id,
+                CONF_USERS: [
+                    {CONF_NAME: f"Batch{n}", CONF_PIN: f"111{n}"} for n in range(4)
+                ],
+            },
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    assert asked_for == [existing + 4]
+
+
+async def test_add_user_with_nobody_named_reports_the_missing_field(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A call naming nobody falls through to the schema.
+
+    The normalizer has nothing to fold, and saying so is the schema's job --
+    inventing an error here would give two different messages for one mistake.
+    """
+    with pytest.raises(vol.Invalid, match="users"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {"config_entry_id": lock_code_manager_config_entry.entry_id},
+            blocking=True,
+        )
