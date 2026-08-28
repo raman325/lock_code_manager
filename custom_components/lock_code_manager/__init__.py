@@ -79,6 +79,7 @@ from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_CALENDAR,
     CONF_SLOTS,
+    CONF_USERS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
     LEGACY_EVENT_PIN_USED,
@@ -133,12 +134,12 @@ from .domain.pin_generator import (
 from .domain.queries import get_entry_config
 from .domain.references import async_notify_moved
 from .domain.services import (
-    async_add_user,
+    async_add_users,
     async_clear_condition,
     async_clear_credential,
     async_clear_slot_condition,
     async_clear_usercode,
-    async_delete_user,
+    async_delete_users,
     async_disable_user,
     async_enable_user,
     async_set_condition,
@@ -172,6 +173,49 @@ _ENTRY_SELECTOR = {
     vol.Exclusive("config_entry_id", "entry"): cv.string,
     vol.Exclusive("config_entry_title", "entry"): cv.string,
 }
+
+
+# One user, as `add_user` takes them.
+USER_ENTRY_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_NAME): cv.string,
+        # Stripped here as the config flow strips its own field: a submitted
+        # code is stripped before it is matched, so a PIN stored with padding
+        # matches nothing anybody can type.
+        vol.Optional(CONF_PIN): vol.All(cv.string, vol.Strip),
+        vol.Optional(CONF_ENABLED, default=True): cv.boolean,
+        vol.Optional(CONF_CONDITION): cv.entity_domain(CONDITION_ENTITY_DOMAINS),
+    }
+)
+
+# The fields a pre-6.0 `add_user` call carried at the top level.
+_FLAT_USER_FIELDS = (CONF_NAME, CONF_PIN, CONF_ENABLED, CONF_CONDITION)
+
+
+def _flat_user_to_list(data: dict[str, Any]) -> dict[str, Any]:
+    """
+    Accept the released flat shape as a one-user list.
+
+    ``add_user`` used to take ``name``/``pin``/``enabled``/``condition`` at the
+    top level. Those calls have no ``users`` key for ``ensure_list`` to reach,
+    so they are folded into one here -- before validation, so everything after
+    this point sees a list and nothing has to know two shapes.
+
+    A call already using ``users`` is left alone. Both keys together is a
+    caller mixing shapes, which is refused rather than guessed at.
+    """
+    if CONF_USERS in data:
+        if any(field in data for field in _FLAT_USER_FIELDS):
+            raise vol.Invalid(
+                f"Use either {CONF_USERS} or the individual user fields, not both"
+            )
+        return data
+    if CONF_NAME not in data:
+        # Nothing to fold. Let the schema below report what is missing.
+        return data
+    user = {field: data[field] for field in _FLAT_USER_FIELDS if field in data}
+    rest = {key: value for key, value in data.items() if key not in _FLAT_USER_FIELDS}
+    return {**rest, CONF_USERS: [user]}
 
 
 def _entry_schema(fields: dict[Any, Any]) -> vol.Schema:
@@ -767,39 +811,38 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         )
 
     async def _add_user(service: ServiceCall) -> None:
-        """Add a user to an entry."""
-        await async_add_user(
+        """Add one or more users to an entry."""
+        await async_add_users(
             hass,
-            service.data[CONF_NAME],
+            service.data[CONF_USERS],
             config_entry_id=service.data.get("config_entry_id"),
             config_entry_title=service.data.get("config_entry_title"),
-            pin=service.data.get(CONF_PIN),
-            enabled=service.data[CONF_ENABLED],
-            condition=service.data.get(CONF_CONDITION),
         )
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_ADD_USER,
         _add_user,
-        schema=_entry_schema(
-            {
-                vol.Required(CONF_NAME): cv.string,
-                # Stripped here as the config flow strips its own field: a
-                # submitted code is stripped before it is matched, so a PIN
-                # stored with padding matches nothing anybody can type.
-                vol.Optional(CONF_PIN): vol.All(cv.string, vol.Strip),
-                vol.Optional(CONF_ENABLED, default=True): cv.boolean,
-                vol.Optional(CONF_CONDITION): cv.entity_domain(
-                    CONDITION_ENTITY_DOMAINS
-                ),
-            }
+        schema=vol.All(
+            # Before validation, so there is exactly one shape from here on.
+            _flat_user_to_list,
+            _entry_schema(
+                {
+                    # ``ensure_list`` so a single user may be given as one
+                    # mapping rather than a list of one. NOT vol.Coerce(list),
+                    # which on a mapping returns its KEYS -- a user dict would
+                    # silently become users named "name" and "pin".
+                    vol.Required(CONF_USERS): vol.All(
+                        cv.ensure_list, [USER_ENTRY_SCHEMA]
+                    ),
+                }
+            ),
         ),
     )
 
     async def _delete_user(service: ServiceCall) -> None:
-        """Remove a user from an entry."""
-        await async_delete_user(
+        """Remove one or more users from an entry."""
+        await async_delete_users(
             hass,
             service.data[CONF_NAME],
             config_entry_id=service.data.get("config_entry_id"),
@@ -813,7 +856,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         _delete_user,
         schema=_entry_schema(
             {
-                vol.Required(CONF_NAME): cv.string,
+                # The field keeps its name, so a released call passing a single
+                # string still validates -- it just arrives as a one-item list.
+                vol.Required(CONF_NAME): vol.All(cv.ensure_list, [cv.string]),
                 vol.Optional(ATTR_CLEAR_CREDENTIALS, default=True): cv.boolean,
             }
         ),
