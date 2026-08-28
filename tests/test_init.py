@@ -42,6 +42,7 @@ from custom_components.lock_code_manager import (
     _async_reclaim_entities_from_foreign_devices,
     _async_setup_new_locks,
     _setup_entry_after_start,
+    async_migrate_entry,
     async_remove_config_entry_device,
     async_remove_entry,
     async_unload_lock,
@@ -76,6 +77,7 @@ from custom_components.lock_code_manager.domain.slot_assignment import (
     identity,
 )
 from custom_components.lock_code_manager.domain.user_migration import migrate_to_users
+from custom_components.lock_code_manager.entity import build_slot_device_info
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
@@ -2135,17 +2137,22 @@ async def test_migration_v5_moves_an_existing_slot_device_to_its_user(
     )
     config_entry.add_to_hass(hass)
     dev_reg = dr.async_get(hass)
-    # The device as an upgrading instance already holds it: owned by the
-    # entry, in no subentry.
+    # Registered through the same DeviceInfo the entities themselves carry, so
+    # the identifier is the one production writes. Spelling it out here let an
+    # earlier version of this test agree with a migration that looked the
+    # device up by a malformed identifier: both were wrong in the same way, so
+    # the test passed and the migration did nothing on a real instance.
     before = dev_reg.async_get_or_create(
         config_entry_id=config_entry.entry_id,
-        identifiers={build_slot_device_identifier(config_entry.entry_id, 1)},
-        name="All Locks Housekeeper",
+        **build_slot_device_info(config_entry, 1),
     )
     assert before.config_entries_subentries == {config_entry.entry_id: {None}}
 
-    await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
+    # The migration alone, not a full setup. Setting the entry up would add
+    # this user's entities, and that drags the device across by itself -- so
+    # the end state is the same whether the migration moved it or not, and a
+    # test that only looked at the end state could not tell the difference.
+    assert await async_migrate_entry(hass, config_entry)
 
     subentry_id = next(iter(config_entry.subentries))
     after = dev_reg.async_get(before.id)

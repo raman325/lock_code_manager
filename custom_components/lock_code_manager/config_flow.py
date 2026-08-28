@@ -13,6 +13,7 @@ from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigSubentry,
     ConfigSubentryFlow,
     SubentryFlowResult,
 )
@@ -808,13 +809,52 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 # and every lock's credential index is keyed on, so a rename
                 # that moved it would rewrite this user's code on every lock
                 # and orphan their entities.
+                #
+                # A subentry with no number at all is not something this
+                # integration writes -- hand-edited storage or a half-finished
+                # write leaves one. Editing it issues one rather than raising,
+                # because a dialog that can only fail leaves the user with no
+                # way to repair the record from the UI.
+                held_slot = subentry.data.get(CONF_SLOT)
+                if held_slot is None:
+                    (
+                        unavailable,
+                        allocation_errors,
+                        allocation_placeholders,
+                    ) = await _allocate_for(
+                        self.hass, entry, config.locks, len(config.users) + 1
+                    )
+                    if unavailable is None:
+                        errors.update(allocation_errors)
+                        description_placeholders.update(allocation_placeholders)
+                        return self._async_show_reconfigure(
+                            subentry, user_input, errors, description_placeholders
+                        )
+                    held_slot = config.assignment.reconcile(
+                        {**config.users, name: fields},
+                        start=1,
+                        unavailable=unavailable,
+                    ).slot(name)
+
                 return self.async_update_and_abort(
                     entry,
                     subentry,
                     title=name,
-                    data={**fields, CONF_SLOT: subentry.data[CONF_SLOT]},
+                    data={**fields, CONF_SLOT: held_slot},
                 )
 
+        return self._async_show_reconfigure(
+            subentry, user_input, errors, description_placeholders
+        )
+
+    def _async_show_reconfigure(
+        self,
+        subentry: ConfigSubentry,
+        user_input: dict[str, Any] | None,
+        errors: dict[str, str],
+        description_placeholders: dict[str, Any],
+    ) -> SubentryFlowResult:
+        """Render the edit form, prefilled from the submission or the record."""
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=self.add_suggested_values_to_schema(

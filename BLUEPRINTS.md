@@ -318,5 +318,9 @@ every other.
 > `event_type` as a lock must read `target` instead, and
 > `lock_code_manager_config_entry_id`, `code_slot_name`, `action_text`,
 > `notification_source`, `from`, `to`, `state`, `entity_id`, `device_id`,
-> `extra_data` and `lock_config_entry_id` are gone from the entity. They all still travel on the deprecated
-> `lock_code_manager_lock_state_changed` bus event, which keeps firing.
+> `extra_data` and `lock_config_entry_id` are gone from the entity, and gone
+> entirely: the `lock_code_manager_lock_state_changed` bus event that used to
+> carry them was removed in 6.0. What survives of them is on
+> `lock_code_manager_credential_used` — `target` for the lock, `name` for the
+> person, `operation` for what the lock did — and the target entity's own state
+> for the rest.

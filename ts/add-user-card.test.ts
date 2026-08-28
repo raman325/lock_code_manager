@@ -505,9 +505,7 @@ describe('lcm-add-user', () => {
                 {
                     data: {
                         config_entry_id: 'entry-1',
-                        enabled: true,
-                        name: 'Raman',
-                        pin: '1234'
+                        users: [{ enabled: true, name: 'Raman', pin: '1234' }]
                     },
                     domain: 'lock_code_manager',
                     service: 'add_user'
@@ -520,14 +518,14 @@ describe('lcm-add-user', () => {
             card._name = 'Raman';
             await card._commit();
 
-            expect(calls[0].data).not.toHaveProperty('pin');
+            expect(calls[0].data.users[0]).not.toHaveProperty('pin');
         });
 
         it('trims the name', async () => {
             card._name = '  Raman  ';
             await card._commit();
 
-            expect(calls[0].data.name).toBe('Raman');
+            expect(calls[0].data.users[0].name).toBe('Raman');
         });
 
         it('passes an unticked Enabled through', async () => {
@@ -535,7 +533,7 @@ describe('lcm-add-user', () => {
             card._enabled = false;
             await card._commit();
 
-            expect(calls[0].data.enabled).toBe(false);
+            expect(calls[0].data.users[0].enabled).toBe(false);
         });
 
         it('addresses the entry by title when configured that way', async () => {
@@ -567,14 +565,14 @@ describe('lcm-add-user', () => {
             card._condition = 'calendar.guests';
             await card._commit();
 
-            expect(calls[0].data).toMatchObject({ condition: 'calendar.guests' });
+            expect(calls[0].data.users[0]).toMatchObject({ condition: 'calendar.guests' });
         });
 
         it('omits the condition when none was picked', async () => {
             card._name = 'Raman';
             await card._commit();
 
-            expect(calls[0].data).not.toHaveProperty('condition');
+            expect(calls[0].data.users[0]).not.toHaveProperty('condition');
         });
 
         it('asks for a name instead of adding a blank user', async () => {

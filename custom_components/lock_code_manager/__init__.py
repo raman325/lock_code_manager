@@ -457,10 +457,17 @@ async def async_migrate_entry(
         # subentry and is supposed to be moved deliberately.
         dev_reg = dr.async_get(hass)
         for subentry in config_entry.subentries.values():
-            slot_num = subentry.data.get(CONF_SLOT)
+            # Every subentry written above carries one; `placed` excluded
+            # anybody who did not. Indexed rather than `.get` so a subentry
+            # that somehow lacks one raises here instead of looking up the
+            # device named "{entry_id}|None" and quietly finding nothing.
+            slot_num = subentry.data[CONF_SLOT]
             device = dev_reg.async_get_device(
                 identifiers={
-                    build_slot_device_identifier(config_entry.entry_id, slot_num)
+                    (
+                        DOMAIN,
+                        build_slot_device_identifier(config_entry.entry_id, slot_num),
+                    )
                 }
             )
             if device is not None and subentry.subentry_id not in (
@@ -2017,6 +2024,12 @@ async def _async_apply_entry_update(
     # Only when there is something staged to settle. The options flow leaves
     # its submission in `options` for this listener to fold into `data`;
     # everything else writes `data` directly and clears `options` itself.
+    #
+    # An options submission that changes nothing does not reach here at all --
+    # the diff above is empty and returns first -- so `options` is left
+    # standing. Harmless while it holds what the options flow writes, which is
+    # `data`'s own contents; a field that lived in `options` WITHOUT also being
+    # in `data` would go stale there, so do not add one.
     #
     # Settling unconditionally corrupts those direct writes.
     # `async_write_entry_config` reconciles the subentries and the entry in
