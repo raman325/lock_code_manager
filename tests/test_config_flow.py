@@ -51,6 +51,7 @@ from .common import (
     flow_slots,
     flow_users,
     reading_for,
+    unnumbered_user_subentry,
     user_subentries,
 )
 from .providers.zigbee2mqtt.conftest import async_discover_z2m_lock
@@ -767,6 +768,77 @@ async def test_adding_a_user_issues_the_next_free_number(
     assert result["type"] == "create_entry"
     # "User 1" holds 1, and the lock itself holds nothing.
     assert result["data"] == {CONF_ENABLED: True, CONF_PIN: "5678", CONF_SLOT: 2}
+
+
+async def test_editing_a_user_who_has_no_number_issues_one(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    A subentry carrying no number can still be edited.
+
+    Not a state this integration writes -- hand-edited storage or a
+    half-finished write leaves one. Reading the number back unguarded made the
+    edit dialog raise, so the only record a user might actually need to repair
+    was the one record the UI could not touch.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[unnumbered_user_subentry("Nomad", **{CONF_ENABLED: False})],
+        unique_id="unnumbered-edit",
+    )
+    entry.add_to_hass(hass)
+    subentry = next(iter(entry.subentries.values()))
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+    )
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Nomad", CONF_ENABLED: True, CONF_PIN: "4242"},
+        )
+
+    assert result["type"] == "abort"
+    assert entry.subentries[subentry.subentry_id].data[CONF_SLOT] == 1
+
+
+async def test_editing_an_unnumbered_user_refuses_when_the_lock_cannot_be_read(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """Issuing a number needs an occupancy read, which can refuse like any other."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[unnumbered_user_subentry("Nomad", **{CONF_ENABLED: False})],
+        unique_id="unnumbered-unreadable",
+    )
+    entry.add_to_hass(hass)
+    subentry = next(iter(entry.subentries.values()))
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+    )
+
+    async def _unreadable(self, slots=None):
+        raise LockCodeManagerError("lock is asleep")
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _unreadable):
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Nomad", CONF_ENABLED: True, CONF_PIN: "4242"},
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+    # Refused, so the record is untouched -- no half-written number.
+    assert CONF_SLOT not in entry.subentries[subentry.subentry_id].data
 
 
 async def test_editing_a_user_keeps_the_number_they_hold(
@@ -2459,3 +2531,43 @@ async def test_reauth_completes_around_a_grandfathered_unclaimed_lock(
 
     assert result["type"] == "abort"
     assert result["reason"] == "locks_updated"
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        pytest.param(("config", "error"), id="config"),
+        pytest.param(("config_subentries", "user", "error"), id="user-subentry"),
+    ],
+)
+def test_every_allocation_refusal_has_a_sentence(category: tuple[str, ...]) -> None:
+    """
+    Every reason allocation can refuse is spelled out in each flow that allocates.
+
+    Both the setup flow and the subentry flow call `_allocate_for` and render
+    whatever `translation_key` comes back as `{"base": key}`. A key with no
+    string renders as the key: a user whose lock is full or asleep is shown
+    `too_many_users` instead of the sentence saying so.
+
+    Read out of the source rather than listed here -- a list would just be a
+    second place to forget.
+    """
+    source = (
+        Path("custom_components/lock_code_manager/domain/allocation.py")
+        .read_text()
+        .replace("\n", " ")
+    )
+    raised = set(re.findall(r"SlotAllocationError\(\s*\"([a-z_]+)\"", source))
+    assert raised, "found no refusal keys -- this test stopped reading the source"
+
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+    section = strings
+    for key in category:
+        section = section[key]
+
+    assert raised <= set(section), (
+        f"{'.'.join(category)} is missing a sentence for "
+        f"{sorted(raised - set(section))}"
+    )

@@ -127,13 +127,12 @@ entities.
    (`lock_code_manager_credential_used`) when a credential is used, carrying
    the user's name, the config entry, and the `source`/`target` entities. This
    is the event consumers should build on.
-7. The same call also fires `EVENT_LOCK_STATE_CHANGED`
-   (`lock_code_manager_lock_state_changed`), the older lock-shaped event. It is
-   retained for backward compatibility while consumers migrate to the unified
-   event above, with no removal version set and no runtime deprecation
-   warning. Nothing inside the integration listens to it -- the per-slot
-   `credential_used` event entity records from the unified event only, which
-   is what lets it record a use whose target is not a lock at all.
+7. That is the only bus event. The older lock-shaped
+   `lock_code_manager_lock_state_changed` was removed in 6.0; it was built
+   around the lock rather than the person and carried a `code_slot` that tied
+   every consumer to a number the integration reassigns. The per-slot
+   `credential_used` event entity records from the unified event, which is
+   what lets it record a use whose target is not a lock at all.
 
 ### Sync State Machine (`sync.py`)
 

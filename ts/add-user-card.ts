@@ -529,15 +529,22 @@ export class LockCodeManagerAddUserCard extends LitElement {
         this._error = undefined;
         try {
             await this.hass.callService('lock_code_manager', 'add_user', {
-                enabled: this._enabled,
-                name,
                 // Either/or, never both: the action treats the two as
                 // exclusive and refuses a call that carries the pair.
                 ...(this._config.config_entry_id
                     ? { config_entry_id: this._config.config_entry_id }
                     : { config_entry_title: this._config.config_entry_title }),
-                ...(this._pin && { pin: this._pin }),
-                ...(this._condition && { condition: this._condition })
+                // The list shape the action declares. The flat one still works,
+                // through a shim kept for calls written before 6.0 -- but the
+                // shipped card should not be the thing keeping that shim alive.
+                users: [
+                    {
+                        enabled: this._enabled,
+                        name,
+                        ...(this._pin && { pin: this._pin }),
+                        ...(this._condition && { condition: this._condition })
+                    }
+                ]
             });
         } catch (err) {
             this._error = err instanceof Error ? err.message : String(err);
