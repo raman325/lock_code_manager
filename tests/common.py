@@ -29,14 +29,19 @@ from custom_components.lock_code_manager.const import (
     ATTR_IN_SYNC,
     CONF_LOCKS,
     CONF_SLOT,
-    SUBENTRY_TYPE_USER,
     CONF_SLOTS,
     DOMAIN,
+    SUBENTRY_TYPE_USER,
 )
 from custom_components.lock_code_manager.domain.allocation import build_lock_instance
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
+from custom_components.lock_code_manager.domain.config import (
+    EntryConfig,
+    async_write_entry_config,
+    build_slot_unique_id,
+)
 from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.slot_assignment import identity
 from custom_components.lock_code_manager.providers import BaseLock
 
 LOCK_1_ENTITY_ID = "lock.test_1"
@@ -444,3 +449,45 @@ def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
         )
         for slot_num, fields in slots.items()
     )
+
+
+def write_entry_config(
+    hass: HomeAssistant, entry: ConfigEntry, config: dict
+) -> bool:
+    """
+    Reconfigure an entry from an old-shape LCM config mapping.
+
+    Tests that used to reconfigure with ``async_update_entry(entry, data=...)``
+    have to reach both halves now — the entry and its user subentries — so they
+    go through the production write path rather than restating how it splits.
+    """
+    return async_write_entry_config(hass, entry, EntryConfig.from_mapping(config))
+
+
+def flow_users(result: dict) -> dict[str, dict]:
+    """Return a create-entry flow result's users by name, without their number."""
+    return {
+        subentry["title"]: {
+            key: value for key, value in subentry["data"].items() if key != CONF_SLOT
+        }
+        for subentry in result["subentries"]
+    }
+
+
+def flow_slots(result: dict) -> dict[str, int]:
+    """Return the numbers a create-entry flow result issued, keyed by identity."""
+    return {
+        identity(subentry["title"]): subentry["data"][CONF_SLOT]
+        for subentry in result["subentries"]
+    }
+
+
+def entry_users(entry: ConfigEntry) -> dict[str, dict]:
+    """Return a stored entry's users by name, without their number."""
+    return {
+        subentry.title: {
+            key: value for key, value in subentry.data.items() if key != CONF_SLOT
+        }
+        for subentry in entry.subentries.values()
+        if subentry.subentry_type == SUBENTRY_TYPE_USER
+    }

@@ -19,6 +19,8 @@ from custom_components.lock_code_manager.domain.util import (
     mask_pin,
 )
 
+from .common import user_subentries
+
 INSTANCE_ID = "test-instance-uuid"
 LOCK = "lock.front_door"
 
@@ -178,13 +180,11 @@ async def test_build_pin_deobfuscation_map_skips_empty_pin_slots(
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_LOCKS: [],
-            CONF_SLOTS: {
+        data={CONF_LOCKS: []},
+        subentries_data=user_subentries({
                 1: {CONF_NAME: "a", CONF_PIN: "1234", CONF_ENABLED: True},
                 2: {CONF_NAME: "b", CONF_PIN: "", CONF_ENABLED: False},
-            },
-        },
+            }),
     )
     entry.add_to_hass(hass)
 

@@ -35,7 +35,7 @@ from custom_components.lock_code_manager.domain.exceptions import LockDisconnect
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
-from .common import MockLCMLock, MockLCMPushLock
+from .common import MockLCMLock, MockLCMPushLock, write_entry_config
 
 
 def _make_lock(
@@ -1357,9 +1357,10 @@ async def test_desired_credential_disabled_slot_is_empty(
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """A disabled slot's desired credential is empty even with a configured PIN."""
-    hass.config_entries.async_update_entry(
+    write_entry_config(
+        hass,
         lcm_config_entry,
-        data={
+        {
             CONF_LOCKS: [],
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "1234", CONF_ENABLED: False}},
         },
@@ -1373,9 +1374,10 @@ async def test_desired_credential_enabled_blank_pin_is_empty(
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """An enabled slot with no configured PIN has an empty desired credential."""
-    hass.config_entries.async_update_entry(
+    write_entry_config(
+        hass,
         lcm_config_entry,
-        data={
+        {
             CONF_LOCKS: [],
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "", CONF_ENABLED: True}},
         },
@@ -1389,9 +1391,10 @@ async def test_desired_credential_enabled_with_pin_is_known(
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """An enabled slot with a configured PIN yields that PIN as the desired credential."""
-    hass.config_entries.async_update_entry(
+    write_entry_config(
+        hass,
         lcm_config_entry,
-        data={
+        {
             CONF_LOCKS: [],
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "4242", CONF_ENABLED: True}},
         },

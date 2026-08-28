@@ -8,7 +8,11 @@ import logging
 from types import MappingProxyType
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigSubentry,
+    ConfigSubentryData,
+)
 from homeassistant.const import CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 
@@ -383,6 +387,24 @@ class EntryConfig:
         if (slot_num := self.assignment.slot(name)) is not None:
             data[CONF_SLOT] = slot_num
         return data
+
+    def subentries(self) -> tuple[ConfigSubentryData, ...]:
+        """
+        Return this config's users as the subentries an entry holds them in.
+
+        For a flow creating an entry, which hands Home Assistant the whole
+        entry at once and so cannot go through
+        :func:`async_write_entry_config`.
+        """
+        return tuple(
+            ConfigSubentryData(
+                data=self.subentry_data(name),
+                subentry_type=SUBENTRY_TYPE_USER,
+                title=name,
+                unique_id=None,
+            )
+            for name in self.users
+        )
 
 
 @dataclass(frozen=True, slots=True)

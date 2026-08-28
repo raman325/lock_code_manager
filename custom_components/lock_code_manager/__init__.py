@@ -231,6 +231,13 @@ async def async_migrate_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
     """Migrate old entry data to new format."""
+    # The unmanaged-code sweep runs against the finished entry, at the bottom,
+    # not from the step that introduced it: it asks every entry what it
+    # manages, and an entry stopped part-way through the chain answers out of
+    # a shape the reader no longer believes -- reporting its own codes as
+    # nobody's.
+    sweep_unmanaged = config_entry.version <= 3
+
     if config_entry.version == 1:
         _LOGGER.debug(
             "%s (%s): Migrating from version 1 to 2",
@@ -378,11 +385,6 @@ async def async_migrate_entry(
                 ", ".join(sorted(renamed, key=int)),
             )
         _async_remove_hub_device(hass, config_entry)
-        # Last, and part of the same version bump: from here on a slot
-        # leaving the configuration takes its credential with it, so the
-        # codes earlier versions left behind are offered up once, measured
-        # against the configuration users will actually have.
-        await async_sweep_unmanaged_codes(hass, config_entry)
 
     if config_entry.version == 4:
         # Users move out of entry data and into their own subentries, each
@@ -458,6 +460,13 @@ async def async_migrate_entry(
             config_entry.title,
             len(placed),
         )
+
+    if sweep_unmanaged:
+        # Part of the version 3 bump: from there on a slot leaving the
+        # configuration takes its credential with it, so the codes earlier
+        # versions left behind are offered up once, measured against the
+        # configuration users will actually have.
+        await async_sweep_unmanaged_codes(hass, config_entry)
 
     return True
 

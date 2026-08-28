@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.diagnostics import (
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID
+from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, write_entry_config
 
 # SlotCode sentinel values as they appear after _mask_code
 _SENTINEL_VALUES = {"empty", "unreadable_code", None}
@@ -213,7 +213,7 @@ async def test_mask_code_covers_missing_and_edge_case_credentials(
         CONF_PIN: "9999",
         CONF_ENABLED: False,
     }
-    hass.config_entries.async_update_entry(entry, options=new_config)
+    write_entry_config(hass, entry, new_config)
     await hass.async_block_till_done()
     assert pin_address(3) not in coordinator.data
 
