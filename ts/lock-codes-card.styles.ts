@@ -360,6 +360,18 @@ const lockCodesCardComponentStyles = css`
         font-style: italic;
     }
 
+    .write-error {
+        background: var(--lcm-error-color, #b00020);
+        border-radius: 4px;
+        box-sizing: border-box;
+        color: white;
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 8px;
+        padding: 8px 12px;
+        width: 100%;
+    }
+
     /* Summary table */
     .summary-table {
         border-collapse: collapse;

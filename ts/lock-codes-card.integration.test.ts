@@ -360,6 +360,28 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._editValue).toBe('');
         });
 
+        it('editing one slot does not unmask every other code on the card', () => {
+            // `_revealed` is card-global and `_formatCode` reads it for every
+            // row, so revealing to edit one unmanaged slot put every managed
+            // user's PIN on screen in cleartext -- and `_saveCode` never
+            // restored it, so they stayed there after the write landed.
+            (card as any)._revealed = false;
+
+            (card as any)._startEditing({ stopPropagation: () => {} }, { code: 'empty', slot: 1 });
+
+            expect((card as any)._revealed).toBe(false);
+        });
+
+        it('leaves the codes masked after the write lands', async () => {
+            (card as any)._revealed = false;
+            (card as any)._editValue = '1234';
+            (card as any)._startEditing({ stopPropagation: () => {} }, { code: 'empty', slot: 1 });
+
+            await (card as any)._saveCode(1);
+
+            expect((card as any)._revealed).toBe(false);
+        });
+
         it('_startEditing prefills edit value for regular code', () => {
             const mockEvent = { stopPropagation: () => {} };
             (card as any)._startEditing(mockEvent, { slot: 3, code: '9876' });
@@ -654,15 +676,22 @@ describe('LockCodesCard integration', () => {
             expect(sendMessagePromiseMock).not.toHaveBeenCalled();
         });
 
-        it('handles sendMessagePromise errors gracefully', async () => {
+        it('tells the user when the write was refused', async () => {
+            // A refused write used to reach console.error and nothing else, so
+            // the row sat there with the typed value and "Enter to save" --
+            // indistinguishable from a submission that never happened.
             (card as any)._editValue = '1234';
             (card as any)._saving = false;
-            sendMessagePromiseMock.mockRejectedValueOnce(new Error('Network error'));
-            const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+            (card as any)._editingSlot = 1;
+            sendMessagePromiseMock.mockRejectedValueOnce(new Error('Code already in use'));
+
             await (card as any)._saveCode(1);
-            expect(consoleSpy).toHaveBeenCalled();
+
+            expect((card as any)._writeError).toBe('Code already in use');
             expect((card as any)._saving).toBe(false);
-            consoleSpy.mockRestore();
+            // Still editing, so the message sits beside what it is about.
+            expect((card as any)._editingSlot).toBe(1);
+            expect((card as any)._editValue).toBe('1234');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
