@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "a3fbd4f54295",
+  "strategy": "manual-commit",
+  "branch": "fix/card-write-error-scope",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/a3/fbd4f54295/0/metadata.json",
+      "transcript": "/a3/fbd4f54295/0/full.jsonl",
+      "compact_transcript": "/a3/fbd4f54295/0/transcript.jsonl",
+      "content_hash": "/a3/fbd4f54295/0/content_hash.txt",
+      "prompt": "/a3/fbd4f54295/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3819,
+    "cache_creation_tokens": 11292451,
+    "cache_read_tokens": 952824320,
+    "output_tokens": 1438031,
+    "api_call_count": 1920,
+    "subagent_tokens": {
+      "input_tokens": 384,
+      "cache_creation_tokens": 492894,
+      "cache_read_tokens": 25215345,
+      "output_tokens": 118567,
+      "api_call_count": 192
+    }
+  }
+}
