@@ -693,6 +693,21 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._editingSlot).toBe(1);
             expect((card as any)._editValue).toBe('1234');
         });
+
+        it('a failed write does not follow you to the next row', async () => {
+            // The banner renders above the whole slot list, so a failure left
+            // over from slot 1 reads as if it belongs to whatever row you
+            // moved on to.
+            (card as any)._editingSlot = 1;
+            (card as any)._editValue = '1234';
+            sendMessagePromiseMock.mockRejectedValueOnce(new Error('Code already in use'));
+            await (card as any)._saveCode(1);
+            expect((card as any)._writeError).toBe('Code already in use');
+
+            (card as any)._startEditing({ stopPropagation: () => {} }, { code: 'empty', slot: 2 });
+
+            expect((card as any)._writeError).toBeUndefined();
+        });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
