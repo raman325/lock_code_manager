@@ -596,6 +596,43 @@ async def test_delete_user_service_can_hand_the_credential_over(
     assert not entry.runtime_data.retained_pairs
 
 
+async def test_delete_user_hands_over_every_credential_not_just_the_first(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A batch hand-off applies to everybody in it.
+
+    One `delete_user` call is several entry writes -- a subentry removal per
+    departing user -- and each one wakes the update listener. The listener
+    drained the whole hand-off set on its first pass, so from the second user
+    onward the credential the caller explicitly asked to leave programmed was
+    wiped off every lock instead.
+    """
+    entry = lock_code_manager_config_entry
+    for lock in entry.runtime_data.locks.values():
+        lock.async_release_managed_slot = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: ["test1", "test2"],
+            ATTR_CLEAR_CREDENTIALS: False,
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert not config.users
+    for lock in entry.runtime_data.locks.values():
+        lock.async_release_managed_slot.assert_not_called()
+    assert not entry.runtime_data.retained_pairs
+
+
 async def test_delete_user_service_unknown_name(
     hass: HomeAssistant,
     mock_lock_config_entry,

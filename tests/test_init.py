@@ -2113,6 +2113,33 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_an_options_submission_that_changes_nothing_still_settles(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    `options` is a staging area, and it is emptied even when nothing changed.
+
+    The update listener returns early when the submission produces no diff,
+    and that was the one path out of it that skipped settling. What was left
+    behind read fine -- `options` holds what `data` holds -- right up until
+    the next write cleared it, which would take anything that lived only
+    there with it.
+    """
+    entry = lock_code_manager_config_entry
+    locks = list(get_entry_config(entry).locks)
+    assert entry.options == {}
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={CONF_LOCKS: locks}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert entry.options == {}
+    assert entry.data[CONF_LOCKS] == locks
+
+
 async def test_migration_v5_moves_an_existing_slot_device_to_its_user(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:

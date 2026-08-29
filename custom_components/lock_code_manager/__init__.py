@@ -128,7 +128,7 @@ from .domain.pin_generator import (
     MIN_PIN_LENGTH,
     generate_pin,
 )
-from .domain.queries import get_entry_config
+from .domain.queries import get_entry_config, subentry_id_for_slot
 from .domain.references import async_notify_moved
 from .domain.services import (
     async_add_users,
@@ -1359,8 +1359,14 @@ def _async_reclaim_entities_from_foreign_devices(
         slot_num = parse_slot_unique_id(entry_id, entity.unique_id)
         if slot_num is None:
             continue
+        # Created under the user who holds the slot, like every other
+        # device this integration makes. Created bare, the first
+        # `async_add_entities` would pull it into that subentry implicitly --
+        # which Home Assistant deprecates, and on the very upgrade path this
+        # function exists to serve.
         slot_device = dev_reg.async_get_or_create(
             config_entry_id=entry_id,
+            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
             **build_slot_device_info(config_entry, slot_num),
         )
         _LOGGER.debug(
@@ -1828,6 +1834,36 @@ async def async_update_listener(
         config_entry.runtime_data.settled.set()
 
 
+@callback
+def _async_settle_options(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    config: EntryConfig,
+) -> None:
+    """
+    Fold a staged options submission into the entry's own data.
+
+    `data` is where the configuration lives; `options` is a staging area,
+    because an options flow cannot write `data` itself. Settling is what keeps
+    that true, so it happens on every path out of the update listener.
+
+    Only when something is actually staged. Settling unconditionally would
+    corrupt the direct writes: `async_write_entry_config` reconciles the
+    subentries and the entry in separate calls, each of which wakes the
+    listener, and a pass that woke between them would write back the half of
+    the configuration it had read -- undoing the half that had already landed.
+    Those callers clear `options` themselves, so this is a no-op for them.
+
+    ``to_dict()`` is what makes the stored data plain dicts rather than the
+    read-only ``MappingProxyType`` wrappers ``EntryConfig`` uses internally,
+    which Home Assistant's storage layer cannot serialize.
+    """
+    if config_entry.options:
+        hass.config_entries.async_update_entry(
+            config_entry, data=config.to_dict(), options={}
+        )
+
+
 async def _async_apply_entry_update(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -1867,6 +1903,11 @@ async def _async_apply_entry_update(
     # produces no diff when it re-enters.
     diff = EntryConfigDiff(old=old_config, new=new_config)
     if not diff.has_changes:
+        # Settled here too. An options submission that changes nothing reaches
+        # this return, and leaving it staged would strand it in `options` for
+        # good -- read in preference to `data` for as long as the entry
+        # exists, then cleared by the next write that touches the entry.
+        _async_settle_options(hass, config_entry, new_config)
         return
 
     ent_reg = er.async_get(hass)
@@ -1940,11 +1981,16 @@ async def _async_apply_entry_update(
     # anchored the slot; slot-only providers leave the default no-op in
     # place. This runs before ``locks_to_remove`` processing so providers
     # in ``runtime_data.locks`` are still usable.
-    # Drained, not read: a hand-off applies to the write that requested it,
-    # and leaving the pair behind would spare the next occupant of that slot
-    # number the cleanup it does need.
+    # Consumed pair by pair, not drained wholesale. A hand-off applies to the
+    # write that requested it and must not outlive it -- leaving a pair behind
+    # would spare the next occupant of that number the cleanup it does need --
+    # but one `delete_user` call is several entry writes, one per departing
+    # user, and each wakes this listener. Taking the whole set on the first
+    # pass left every departure after the first one unprotected, and their
+    # credential was wiped off every lock despite the caller asking for it to
+    # be left programmed.
     retained_pairs = runtime_data.retained_pairs
-    runtime_data.retained_pairs = set()
+    runtime_data.retained_pairs = retained_pairs - diff.pairs_removed
     for lock_entity_id, slot_num in diff.pairs_removed:
         release_lock = runtime_data.locks.get(lock_entity_id)
         if release_lock is None:
@@ -2021,31 +2067,7 @@ async def _async_apply_entry_update(
     _LOGGER.info(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
-    # Only when there is something staged to settle. The options flow leaves
-    # its submission in `options` for this listener to fold into `data`;
-    # everything else writes `data` directly and clears `options` itself.
-    #
-    # An options submission that changes nothing does not reach here at all --
-    # the diff above is empty and returns first -- so `options` is left
-    # standing. Harmless while it holds what the options flow writes, which is
-    # `data`'s own contents; a field that lived in `options` WITHOUT also being
-    # in `data` would go stale there, so do not add one.
-    #
-    # Settling unconditionally corrupts those direct writes.
-    # `async_write_entry_config` reconciles the subentries and the entry in
-    # separate calls, each of which wakes this listener -- and a pass that
-    # woke between them would write back the half of the configuration it
-    # read, undoing the half that had already landed.
-    #
-    # to_dict() is what makes the stored data plain dicts rather than the
-    # read-only MappingProxyType wrappers EntryConfig uses internally, which
-    # Home Assistant's storage layer cannot serialize.
-    if config_entry.options:
-        hass.config_entries.async_update_entry(
-            config_entry, data=new_config.to_dict(), options={}
-        )
-        # The async_update_entry above re-triggers this listener, which
-        # refreshes runtime_data.config at the top before the early-return.
+    _async_settle_options(hass, config_entry, new_config)
 
     # Notify Lovelace dashboards to re-render when structure changes
     # (slots or locks added/removed), so strategy-generated cards update
