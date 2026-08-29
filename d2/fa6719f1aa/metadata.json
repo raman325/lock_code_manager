@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "d2fa6719f1aa",
+  "strategy": "manual-commit",
+  "branch": "fix/release-must-not-adopt",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d2/fa6719f1aa/0/metadata.json",
+      "transcript": "/d2/fa6719f1aa/0/full.jsonl",
+      "compact_transcript": "/d2/fa6719f1aa/0/transcript.jsonl",
+      "content_hash": "/d2/fa6719f1aa/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 31067,
+    "cache_read_tokens": 20994361,
+    "output_tokens": 18994,
+    "api_call_count": 30
+  }
+}
