@@ -13,15 +13,23 @@ from zwave_js_server.const.command_class.lock import CodeSlotStatus
 from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.node import Node
 
-from homeassistant.core import HomeAssistant
+from homeassistant.const import ATTR_NAME
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CREDENTIAL_TYPE,
+    ATTR_OPERATION,
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.credentials import pin_address
+from custom_components.lock_code_manager.domain.credentials import (
+    CredentialType,
+    pin_address,
+)
+from custom_components.lock_code_manager.domain.events import CredentialOperation
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
@@ -248,6 +256,51 @@ async def test_event_filter_matches_correct_node(
 # ---------------------------------------------------------------------------
 # Notification event tests (operation events — lock/unlock)
 # ---------------------------------------------------------------------------
+
+
+async def test_a_keypad_press_reaches_the_bus_as_a_credential_used_event(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """
+    A keypad press on a configured slot produces the event consumers subscribe to.
+
+    The tests below stop at ``async_fire_code_slot_event``, which proves this
+    provider's notification decoding calls the funnel but not that anything
+    reaches the bus -- and the funnel stays silent for a slot no entry
+    manages, which is what those tests configure. This one goes the whole
+    way, on the provider whose decoding is the most intricate.
+    """
+    events: list[Event] = []
+    hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, events.append)
+
+    lock_schlage_be469.receive_event(
+        ZwaveEvent(
+            type="notification",
+            data={
+                "source": "node",
+                "event": "notification",
+                "nodeId": lock_schlage_be469.node_id,
+                "endpointIndex": 0,
+                "ccId": 113,
+                "args": {
+                    "type": 6,  # ACCESS_CONTROL
+                    "event": 6,  # KEYPAD_UNLOCK_OPERATION
+                    "label": "Access Control",
+                    "eventLabel": "Keypad unlock operation",
+                    "parameters": {"userId": 1},
+                },
+            },
+        )
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    # The person, not the number they occupy.
+    assert events[0].data[ATTR_NAME] == "slot1"
+    assert events[0].data[ATTR_OPERATION] == CredentialOperation.UNLOCK
+    assert events[0].data[ATTR_CREDENTIAL_TYPE] == CredentialType.PIN
 
 
 async def test_notification_event_keypad_lock_fires_a_code_slot_event(
