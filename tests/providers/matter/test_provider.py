@@ -2906,10 +2906,25 @@ class TestReleaseManagedSlot:
         call = mock_clear_user.call_args
         assert 42 in call.args or call.kwargs.get("user_index") == 42
 
-    async def test_release_adopts_legacy_untagged_user_at_credential_index(
+    async def test_release_leaves_an_untagged_user_alone(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
-        """A legacy user owning a PIN at credential_index=slot is treated as the slot's owner."""
+        """
+        Releasing never adopts, because ClearUser cannot be undone.
+
+        An untagged user owning a PIN at this credential index is as likely to
+        be one the homeowner made in the vendor's app as a pre-tag LCM user --
+        the index alone cannot tell them apart. The set path may adopt,
+        because the write that follows retags a wrong guess; the release path
+        may not, because ClearUser cascades to the user's credentials and
+        nothing follows to correct anything.
+
+        The accepted cost is the mirror case: a pre-tag LCM user whose slot
+        was never re-written since upgrading keeps their PIN when the user is
+        removed. That is recoverable and visible -- the code shows on the lock
+        card as unmanaged and can be cleared there -- whereas deleting a
+        credential this integration never wrote is neither.
+        """
         mock_clear_user = AsyncMock(return_value=None)
         with (
             self._patch_users(
@@ -2925,9 +2940,7 @@ class TestReleaseManagedSlot:
         ):
             await matter_lock.async_release_managed_slot(3)
 
-        mock_clear_user.assert_called_once()
-        call = mock_clear_user.call_args
-        assert 99 in call.args or call.kwargs.get("user_index") == 99
+        mock_clear_user.assert_not_called()
 
     async def test_release_no_op_when_no_lcm_user(
         self, hass: HomeAssistant, matter_lock: MatterLock
