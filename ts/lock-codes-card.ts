@@ -45,12 +45,19 @@ class LockCodesCard extends LockCodesCardBase {
     /** Whether we're saving (to prevent double-submit) */
     @state() private _saving = false;
 
+    /**
+     * A refused write, shown beside the row it is about.
+     *
+     * Separate from `_error`, which replaces the whole slot list: a write
+     * that failed must leave the row and the typed value on screen.
+     */
+    @state() private _writeError?: string;
+
     _config?: LockCodesCardConfig;
     _data?: LockCoordinatorData;
     _error?: string;
 
     /** Whether codes were revealed before editing started */
-    private _wasRevealedBeforeEdit = false;
 
     set hass(hass: HomeAssistant) {
         this._hass = hass;
@@ -169,6 +176,11 @@ class LockCodesCard extends LockCodesCardBase {
                 }
                 <div class="card-content">
                     ${
+                        this._writeError
+                            ? html`<div class="write-error" role="alert">${this._writeError}</div>`
+                            : nothing
+                    }
+                    ${
                         this._error
                             ? html`<div class="message">${this._error}</div>`
                             : this._renderSlots()
@@ -182,14 +194,16 @@ class LockCodesCard extends LockCodesCardBase {
     // Editing methods for unmanaged slots
     private _startEditing(e: Event, slot: LockCoordinatorSlotData): void {
         e.stopPropagation();
-        this._wasRevealedBeforeEdit = this._revealed;
-        // For editing, we need the actual code - trigger reveal if masked
-        if (!this._revealed) {
-            this._revealed = true;
-            this._unsubscribe();
-            void this._subscribe();
-        }
-        // Get the current code value (if any); sentinels are not editable values
+        // Deliberately does NOT reveal. `_revealed` is card-global and
+        // `_formatCode` reads it for every row, so revealing to edit one
+        // unmanaged slot put every managed user's PIN on screen in cleartext
+        // -- and `_saveCode` never restored it, so they stayed there.
+        //
+        // Nothing is lost by not revealing: the prefill below reads the
+        // CURRENT payload, which is still masked at this point because the
+        // resubscribe it used to kick off had not landed yet. It has always
+        // prefilled empty for a masked slot.
+        // Sentinels are not editable values.
         const currentCode =
             isSlotOccupied(slot.code) && slot.code !== SLOT_CODE_UNREADABLE
                 ? String(slot.code)
@@ -220,18 +234,14 @@ class LockCodesCard extends LockCodesCardBase {
     private _cancelEdit(): void {
         this._editingSlot = null;
         this._editValue = '';
-        // Restore reveal state if it was changed for editing
-        if (this._revealed !== this._wasRevealedBeforeEdit) {
-            this._revealed = this._wasRevealedBeforeEdit;
-            this._unsubscribe();
-            void this._subscribe();
-        }
+        this._writeError = undefined;
     }
 
     private async _saveCode(slot: number | string): Promise<void> {
         if (!this._hass || !this._config || this._saving) return;
 
         this._saving = true;
+        this._writeError = undefined;
         const usercode = this._editValue.trim();
 
         try {
@@ -254,8 +264,11 @@ class LockCodesCard extends LockCodesCardBase {
             this._editingSlot = null;
             this._editValue = '';
         } catch (err) {
-            // eslint-disable-next-line no-console -- User-facing error, no logger available in card
-            console.error('Failed to set usercode:', err);
+            // Stays in edit mode with the typed value intact, so the message
+            // sits beside what it is about. Without it a refused write --
+            // a duplicate code, a lock that would not take it -- looked
+            // exactly like a submission that never happened.
+            this._writeError = err instanceof Error ? err.message : String(err);
         } finally {
             this._saving = false;
         }
