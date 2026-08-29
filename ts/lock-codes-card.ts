@@ -57,8 +57,6 @@ class LockCodesCard extends LockCodesCardBase {
     _data?: LockCoordinatorData;
     _error?: string;
 
-    /** Whether codes were revealed before editing started */
-
     set hass(hass: HomeAssistant) {
         this._hass = hass;
         void this._subscribe();
@@ -194,6 +192,10 @@ class LockCodesCard extends LockCodesCardBase {
     // Editing methods for unmanaged slots
     private _startEditing(e: Event, slot: LockCoordinatorSlotData): void {
         e.stopPropagation();
+        // Belongs to the row it happened on. Moving to another row without
+        // cancelling first would otherwise leave the previous row's failure
+        // on screen above the one now being typed into.
+        this._writeError = undefined;
         // Deliberately does NOT reveal. `_revealed` is card-global and
         // `_formatCode` reads it for every row, so revealing to edit one
         // unmanaged slot put every managed user's PIN on screen in cleartext
