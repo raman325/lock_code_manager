@@ -280,11 +280,17 @@ class MockLCMLock(BaseLock):
         self.service_calls["set_usercode"].append((code_slot, usercode, name))
         return WriteResult.CONFIRMED
 
-    async def async_clear_usercode(self, code_slot: int) -> bool:
+    async def async_clear_usercode(
+        self, code_slot: int, *, adopt_untagged: bool = True
+    ) -> bool:
         """
         Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
+
+        ``adopt_untagged`` is accepted and ignored: this lock is slot-only, so
+        it has no users to adopt. Matching the base signature is what lets the
+        release path pass it without special-casing the double.
         """
         if code_slot not in self.codes:
             return False
