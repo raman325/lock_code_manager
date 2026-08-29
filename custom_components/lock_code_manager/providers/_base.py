@@ -1247,7 +1247,9 @@ class BaseLock:
         if result.changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
-    async def async_clear_usercode(self, code_slot: int) -> bool:
+    async def async_clear_usercode(
+        self, code_slot: int, *, adopt_untagged: bool = True
+    ) -> bool:
         """
         Clear a usercode on a code slot via the User->Credential primitives.
 
@@ -1265,6 +1267,14 @@ class BaseLock:
         -- and True when the provider cannot determine whether a change
         occurred, so the coordinator refreshes and verifies the actual
         state.
+
+        ``adopt_untagged`` is what separates a clear from a release. Clearing
+        a slot LCM still manages may adopt an untagged owner: the slot is
+        ours, adoption is how a pre-tag install is taken over, and the write
+        that follows corrects a wrong guess. Releasing a slot LCM no longer
+        manages may not -- the premise has inverted, nothing follows to
+        correct anything, and the untagged user at that index is as likely to
+        be somebody else's as ours.
         """
         if not self.supports_native_users:
             ref = CredentialRef(
@@ -1298,15 +1308,19 @@ class BaseLock:
                 if credential.slot == code_slot
             )
         except StopIteration:
-            owner_user_id = next(
-                (
-                    user.user_id
-                    for user in users
-                    if parse_tag(user.name or "")[0] is None
-                    for credential in user.pin_credentials
-                    if credential.slot == code_slot
-                ),
-                None,
+            owner_user_id = (
+                next(
+                    (
+                        user.user_id
+                        for user in users
+                        if parse_tag(user.name or "")[0] is None
+                        for credential in user.pin_credentials
+                        if credential.slot == code_slot
+                    ),
+                    None,
+                )
+                if adopt_untagged
+                else None
             )
         if owner_user_id is None:
             # No user owns this slot's credential -- nothing to clear.
@@ -1322,6 +1336,8 @@ class BaseLock:
         self,
         code_slot: int,
         source: Literal["sync", "direct"] = "direct",
+        *,
+        adopt_untagged: bool = True,
     ) -> bool:
         """
         Clear a usercode on a code slot.
@@ -1341,7 +1357,9 @@ class BaseLock:
         # keys PENDING_CONFIRMATION on this dict).
         self._pending_writes.pop(pin_address(code_slot), None)
         changed = await self._execute_rate_limited(
-            "clear", self.async_clear_usercode, code_slot
+            "clear",
+            partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
+            code_slot,
         )
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
@@ -1727,7 +1745,9 @@ class BaseLock:
         that user instead; the cascade defined by the lock's protocol
         removes its credentials, so they must not also clear here.
         """
-        await self.async_internal_clear_usercode(slot)
+        # Never adopts: see ``async_clear_usercode``. A slot LCM no longer
+        # manages has no claim on whoever owns the credential at that index.
+        await self.async_internal_clear_usercode(slot, adopt_untagged=False)
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """

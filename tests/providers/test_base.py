@@ -39,9 +39,11 @@ from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
 from custom_components.lock_code_manager.domain.credentials import (
+    Credential,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    User,
     pin_address,
 )
 from custom_components.lock_code_manager.domain.events import CredentialOperation
@@ -54,6 +56,9 @@ from custom_components.lock_code_manager.domain.exceptions import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers._base import BaseLock
+from custom_components.lock_code_manager.providers._util import (
+    make_tagged_name,
+)
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, MockLCMLock
 
 TEST_OPERATION_DELAY = 0.01
@@ -2347,3 +2352,116 @@ async def test_a_lock_that_was_set_up_is_not_set_up_again_on_every_check(
 
     await lock.coordinator.async_shutdown()
     await lock.async_unload(False)
+
+
+class _NativeUserOwnerResolutionLock(MockNativeUserLock):
+    """
+    A native-user lock that uses the BASE's owner resolution.
+
+    ``MockLCMLock`` overrides ``async_clear_usercode`` with a slot-only
+    shortcut, which is what most tests want and what makes it useless for
+    exercising the two-pass owner lookup. This delegates back to the base so
+    the resolution under test is the real one.
+    """
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        """Advertise PIN support so the base's write paths engage."""
+        return _pin_capabilities()
+
+    async def async_clear_usercode(
+        self, code_slot: int, *, adopt_untagged: bool = True
+    ) -> bool:
+        """Resolve the owner the way a real native-user provider does."""
+        return await BaseLock.async_clear_usercode(
+            self, code_slot, adopt_untagged=adopt_untagged
+        )
+
+
+def _lock_user(user_id: int, name: str | None, pin_slot: int) -> User:
+    """Build a lock-side user owning one PIN credential."""
+    return User(
+        user_id=user_id,
+        name=name,
+        credentials=(Credential(type=CredentialType.PIN, slot=pin_slot, state=None),),
+    )
+
+
+async def test_releasing_a_slot_does_not_delete_an_untagged_users_credential(
+    hass: HomeAssistant,
+):
+    """
+    Releasing never adopts an untagged owner.
+
+    The clear path may: the slot is still LCM's, adoption is how a pre-tag
+    install is taken over, and the write that follows corrects a wrong guess.
+    Releasing has the opposite premise -- the slot is no longer LCM's, and
+    nothing follows -- so an untagged user holding a PIN at that index, which
+    is as likely to be one somebody else made, must be left alone.
+    """
+    lock = _make_base_test_lock(
+        hass, "release_untagged", _NativeUserOwnerResolutionLock
+    )
+    deleted = AsyncMock(return_value=True)
+    with (
+        patch.object(
+            lock,
+            "async_get_users",
+            AsyncMock(
+                return_value=[
+                    _lock_user(99, "Alice", 3),  # untagged: not ours to delete
+                ]
+            ),
+        ),
+        patch.object(lock, "async_delete_credential", deleted),
+    ):
+        await lock.async_release_managed_slot(3)
+
+    deleted.assert_not_called()
+
+
+async def test_releasing_a_slot_deletes_the_credential_of_its_tagged_user(
+    hass: HomeAssistant,
+):
+    """The user LCM demonstrably created is still torn down."""
+    lock = _make_base_test_lock(hass, "release_tagged", _NativeUserOwnerResolutionLock)
+    deleted = AsyncMock(return_value=True)
+    with (
+        patch.object(
+            lock,
+            "async_get_users",
+            AsyncMock(
+                return_value=[
+                    _lock_user(99, make_tagged_name(3, "Raman"), 3),
+                ]
+            ),
+        ),
+        patch.object(lock, "async_delete_credential", deleted),
+    ):
+        await lock.async_release_managed_slot(3)
+
+    deleted.assert_called_once()
+    assert deleted.call_args.args[0].user_id == 99
+
+
+async def test_clearing_a_managed_slot_still_adopts_an_untagged_owner(
+    hass: HomeAssistant,
+):
+    """The upgrade path this scoping must not break: a clear may still adopt."""
+    lock = _make_base_test_lock(hass, "clear_adopts", _NativeUserOwnerResolutionLock)
+    deleted = AsyncMock(return_value=True)
+    with (
+        patch.object(
+            lock,
+            "async_get_users",
+            AsyncMock(
+                return_value=[
+                    _lock_user(99, "Alice", 3),
+                ]
+            ),
+        ),
+        patch.object(lock, "async_delete_credential", deleted),
+    ):
+        await lock.async_clear_usercode(3)
+
+    deleted.assert_called_once()
+    assert deleted.call_args.args[0].user_id == 99

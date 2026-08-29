@@ -769,7 +769,9 @@ class MatterLock(BaseLock):
                 return slot
         return user.user_id
 
-    async def _find_user_index_for_slot(self, slot: int) -> int | None:
+    async def _find_user_index_for_slot(
+        self, slot: int, *, adopt_untagged: bool = True
+    ) -> int | None:
         """
         Return the ``user_index`` of the user LCM owns for ``slot``, if any.
 
@@ -795,6 +797,14 @@ class MatterLock(BaseLock):
            PIN at index ``B``; matching on ``cred.slot == slot`` alone
            would mis-adopt slot-A's user as slot-B's anchor.
 
+        ``adopt_untagged`` turns the second lookup off. The set path wants it:
+        the slot is ours, and the write that follows rewrites the name to the
+        tagged form, so a wrong guess corrects itself. The release path must
+        not have it -- ``ClearUser`` cascades to the user's credentials,
+        nothing follows to correct anything, and the untagged user holding a
+        PIN at that index is as likely to be one the homeowner made in the
+        vendor's app as one of ours.
+
         Returns ``None`` when neither lookup matches.
         """
         users = await self.async_get_users()
@@ -805,6 +815,8 @@ class MatterLock(BaseLock):
                 if existing.name and parse_tag(existing.name)[0] == slot
             )
         except StopIteration:
+            if not adopt_untagged:
+                return None
             return next(
                 (
                     existing.user_id
@@ -834,9 +846,11 @@ class MatterLock(BaseLock):
 
         Called by the base teardown path when the slot is removed from
         LCM config (see ``__init__.py``'s ``pairs_removed`` loop). Looks
-        up the lock-side user via the same find-or-adopt logic the set
-        path uses, then deletes it. Matter's ClearUser cascade then
-        removes the user's PIN credential automatically.
+        up the lock-side user by its ``lcm:<slot>:`` tag ONLY, never by
+        adoption, then deletes it. Matter's ClearUser cascade then removes
+        the user's PIN credential automatically -- which is exactly why
+        adoption is forbidden here: it would irreversibly delete a
+        credential this integration never created.
 
         Tolerates "no user found": the slot may have never had an LCM
         user on this lock (e.g. the user was already removed out-of-band,
@@ -844,7 +858,7 @@ class MatterLock(BaseLock):
         transport failures bubble up so the base wraps them in a warning
         and the teardown still completes.
         """
-        user_index = await self._find_user_index_for_slot(slot)
+        user_index = await self._find_user_index_for_slot(slot, adopt_untagged=False)
         if user_index is None:
             LOGGER.debug(
                 "Lock %s: no LCM-owned user to release for slot %s",
