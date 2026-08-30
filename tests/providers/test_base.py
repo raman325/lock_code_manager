@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Collection
+import contextlib
 from datetime import datetime, timedelta
 import logging
 import time
@@ -60,6 +61,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
@@ -1449,6 +1451,56 @@ async def test_on_integration_loaded_logs_debug_on_transient_reconnect_failure(
     assert lock._setup_running is False
 
 
+async def test_a_reconnect_whose_probe_times_out_rearms_the_retry(
+    hass: HomeAssistant,
+) -> None:
+    """
+    A bounded probe that times out on reconnect is a connectivity failure.
+
+    The deferred flag is the only thing that arms another attempt, and
+    `_async_run_provider_setup` clears it on the way in -- so an escaping
+    TimeoutError would spend the retry and leave the lock un-set-up until
+    someone reloaded the integration by hand. It would also skip the
+    coordinator refresh and push subscription that run after the try, leaving
+    a push provider unsubscribed for the life of the entry.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "reconnect_probe_timeout", config_entry=config_entry
+    )
+    lock = MockNativeUserLock(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    lock._lcm_config_entry = config_entry
+    lock._min_operation_delay = 0
+
+    loaded_entry = MagicMock()
+    loaded_entry.state = ConfigEntryState.LOADED
+    lock.lock_config_entry = loaded_entry
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        patch.object(lock, "async_get_capabilities", _never_returns),
+        patch.object(lock, "subscribe_push_updates") as subscribed,
+        patch.object(type(lock), "supports_push", property(lambda _s: True)),
+    ):
+        # Returns rather than raising out of the reconnect handler.
+        await asyncio.wait_for(lock._async_on_integration_loaded(), timeout=5)
+
+    assert lock._setup_deferred is True
+    assert lock._setup_running is False
+    assert lock._setup_succeeded is False
+    # The work after the try still ran.
+    subscribed.assert_called_once()
+
+
 class MockNativeUserLock(MockLCMLock):
     """Mock lock that opts into the native-user capability validation."""
 
@@ -2646,3 +2698,178 @@ async def test_clearing_a_managed_slot_still_adopts_an_untagged_owner(
 
     deleted.assert_called_once()
     assert deleted.call_args.args[0].user_id == 99
+
+
+async def test_a_wedged_operation_is_cut_off_and_reported_as_a_disconnect(
+    hass: HomeAssistant,
+):
+    """
+    A call that never returns ends as `LockDisconnected`, not silence.
+
+    `LockDisconnected` rather than `LockOperationFailed` because only one of
+    them can act. A failure charges the SLOT breaker, which is windowed at
+    three strikes in five minutes -- and any budget longer than that window
+    resets the count on every retry, so it can never trip. A disconnection
+    charges the LOCK breaker, which counts consecutively.
+    """
+    lock = _make_base_test_lock(hass, "wedged_op")
+    lock._min_operation_delay = 0
+    entered = asyncio.Event()
+
+    async def _never_returns(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+    ):
+        with pytest.raises(LockDisconnected, match="no answer within"):
+            await asyncio.wait_for(
+                lock._execute_rate_limited("set", _never_returns), timeout=5
+            )
+
+    assert entered.is_set()
+
+
+async def test_a_wedged_operation_stops_blocking_every_other_slot(
+    hass: HomeAssistant,
+):
+    """
+    The mutex comes back, which is the actual defect in issue #1523.
+
+    A call that never returned held `_aio_lock`, so every other slot on that
+    lock queued behind it forever and the reporter's three PIN changes sat
+    unsynced for seven hours. Reporting the stall would have made that
+    visible; only cutting the call off makes the other slots move again.
+    """
+    lock = _make_base_test_lock(hass, "wedged_frees_mutex")
+    lock._min_operation_delay = 0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+    ):
+        wedged = asyncio.create_task(lock._execute_rate_limited("set", _never_returns))
+        with contextlib.suppress(LockDisconnected):
+            await asyncio.wait_for(wedged, timeout=5)
+
+        # The slot behind it now gets its turn.
+        result = await asyncio.wait_for(
+            lock._execute_rate_limited("get", AsyncMock(return_value="through")),
+            timeout=5,
+        )
+
+    assert result == "through"
+    assert not lock._aio_lock.locked()
+
+
+async def test_the_timeout_uses_the_providers_own_budget(hass: HomeAssistant):
+    """
+    A provider that walks every slot in one call gets to say how long that is.
+
+    ZHA, zigbee2mqtt and zwave-js-ui read the slots in turn, so the honest
+    budget is per-slot; the flat ten minutes would cut off a slow-but-working
+    lock partway through its walk. The constant is deliberately left at its
+    real value -- reading it instead of the property is the mutation this has
+    to catch, and it would surface as a test that hangs for ten minutes.
+    """
+    lock = _make_base_test_lock(hass, "own_budget")
+    lock._min_operation_delay = 0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    assert base_module.OPERATION_TIMEOUT > 60
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        pytest.raises(LockDisconnected),
+    ):
+        await asyncio.wait_for(
+            lock._execute_rate_limited("get", _never_returns), timeout=5
+        )
+
+
+async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
+    hass: HomeAssistant,
+):
+    """
+    The probe is bounded too, not just the read that follows it.
+
+    It runs before the coordinator exists and goes through neither
+    `_execute_rate_limited` nor any budget of the provider's own --
+    `MatterLock.async_get_capabilities` awaits `get_lock_info` bare. Bounding
+    only the initial read would leave setup parking on the call before it.
+    """
+    lock = _make_base_test_lock(hass, "probe_hangs", MockNativeUserLock)
+    lock._min_operation_delay = 0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        patch.object(lock, "async_get_capabilities", _never_returns),
+        patch.object(lock, "async_get_usercodes", AsyncMock(return_value={})),
+    ):
+        await asyncio.wait_for(
+            lock.async_setup_internal(lock.lock_config_entry), timeout=5
+        )
+
+    # Degraded, not dropped: setup finished and the retry path is armed.
+    assert lock._setup_succeeded is False
+    assert lock._setup_complete.is_set()
+
+
+@pytest.mark.parametrize(
+    "entry_state",
+    [ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.NOT_LOADED],
+)
+async def test_setup_does_not_hang_on_a_lock_that_never_answers(
+    hass: HomeAssistant, entry_state: ConfigEntryState
+):
+    """
+    Setup gives up on the initial read instead of parking on it.
+
+    Setup runs while Home Assistant holds the entry's lock, so a read that
+    never returns leaves it in `setup_in_progress` and takes reload and remove
+    with it -- the same trap the bounded teardown fixes at the other end of the
+    lifecycle. Cancelling a read is safe: it mutates nothing.
+
+    Both branches are covered because they call different coordinator methods,
+    and only one of them raises on failure.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN, state=entry_state)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", f"setup_hangs_{entry_state.value}", config_entry=config_entry
+    )
+    lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+    lock._min_operation_delay = 0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        patch.object(lock, "async_get_usercodes", _never_returns),
+    ):
+        # Completes rather than hanging.
+        await asyncio.wait_for(
+            lock.async_setup_internal(lock.lock_config_entry), timeout=5
+        )
+
+    assert lock.coordinator is not None
+    assert lock.coordinator.last_update_success is False
+    # Home Assistant's coordinator records the cancellation on its own, but as
+    # a bare CancelledError that formats as the empty string -- which would
+    # make the log line report the failure without naming it.
+    assert "no answer within" in str(lock.coordinator.last_exception)

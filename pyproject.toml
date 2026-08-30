@@ -137,6 +137,10 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 norecursedirs = [".git", "testing_config", ".hypothesis"]
+# A test that hangs is a test that reports nothing. Several regressions in the
+# sync/teardown paths surface as an unbounded wait rather than a failure, and
+# without this they reach CI as a job timeout with no test named.
+timeout = 60
 
 [tool.mypy]
 ignore_missing_imports = true

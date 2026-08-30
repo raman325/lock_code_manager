@@ -77,13 +77,44 @@ from ..domain.queries import (
     get_entry_config,
     get_managed_slots,
 )
-from ..domain.util import lock_display_name, mask_pin, per_lock_issue_id
+from ..domain.util import (
+    lock_display_name,
+    mask_pin,
+    per_lock_issue_id,
+)
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)
 
 MIN_OPERATION_DELAY = 2.0
+
+# How long one device operation may run before the lock is treated as gone.
+#
+# Chosen to be longer than any legitimate operation rather than to be a tight
+# bound. It must not preempt the providers' own recovery: `zwave_js_ui` gives
+# an API call 60s and turns its own expiry into `LockDisconnected`, which drops
+# the gateway binding and rebinds; ZHA can legitimately spend ~84s on a single
+# ZCL command to a battery lock (zigpy forces a 28s reply timeout for end
+# devices, inside three attempts). Anything near those misreports a
+# healthy-but-slow lock as broken and preempts a real recovery path.
+#
+# Cancelling is safe at THIS budget and would not be at a shorter one. Schlage
+# and Matter both delete a credential before writing its replacement, so a
+# cancel mid-sequence can leave a door with no working PIN -- but only if the
+# call was going to finish. Ten minutes in, the credential is already gone
+# whichever half is stuck, and the wedge, not the cancel, is what took it. What
+# the cancel buys back is `_aio_lock`, so the slot leaves SYNCING and the next
+# tick retries the whole sequence. Issue #1523 had three PIN changes sit
+# unsynced for seven hours behind one such call.
+#
+# A FLOOR, not the whole answer. One `_execute_rate_limited` call is one
+# provider call, but on several providers one provider call is a sequential
+# walk of every managed slot -- so the honest budget is per-slot, and those
+# providers raise it through `operation_timeout_seconds`. Ten flaky slots on
+# ZHA legitimately reach ~840s; cutting that off would be the misdiagnosis
+# this constant exists to avoid.
+OPERATION_TIMEOUT = 600.0
 
 
 # How long an optimistic write waits for confirmation (push event or hard-refresh
@@ -320,7 +351,28 @@ class BaseLock:
                 self.lock.entity_id,
             )
 
-            result = await func(*args, **kwargs)
+            try:
+                async with asyncio.timeout(self.operation_timeout_seconds):
+                    result = await func(*args, **kwargs)
+            except TimeoutError as err:
+                # A disconnection, not an operation failure, and the
+                # distinction decides whether anything happens at all. A
+                # failure charges the SLOT breaker, which is windowed -- three
+                # strikes inside five minutes -- so at a budget longer than
+                # that window the count resets on every retry and it can never
+                # trip. A disconnection charges the LOCK breaker, which counts
+                # consecutively: three trips `unreachable`, the tick gates on
+                # it, and backoff stops the hammering. It self-heals on the
+                # next successful poll too, where a suspended slot would wait
+                # for someone to edit the PIN.
+                #
+                # It is the honest word besides: a lock that has answered
+                # nothing in this long is not reachable.
+                raise LockDisconnected(
+                    f"Cannot {_OPERATION_MESSAGES[operation_type]} "
+                    f"{self.lock.entity_id} - no answer within "
+                    f"{self.operation_timeout_seconds:.0f}s"
+                ) from err
             self._last_operation_time = time.monotonic()
             return result
 
@@ -407,6 +459,17 @@ class BaseLock:
     def _raise_not_implemented(self, method_name: str, guidance: str = "") -> NoReturn:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
+
+    @property
+    def operation_timeout_seconds(self) -> float:
+        """
+        How long an operation may run before the lock is treated as gone.
+
+        Overridden by providers whose single operation is a sequential walk of
+        every managed slot: their honest budget is per-slot, and the base's
+        flat one would report a slow-but-working lock as dead.
+        """
+        return OPERATION_TIMEOUT
 
     @property
     def display_name(self) -> str:
@@ -764,6 +827,20 @@ class BaseLock:
                     await self._async_run_provider_setup(config_entry)
                     self._setup_succeeded = True
                     self._clear_setup_validation_issue()
+            except TimeoutError:
+                # Distinct from the transport failures below, and warned
+                # rather than logged at info: those mean the lock answered
+                # "no", this means it did not answer at all. A lock that is
+                # merely still coming up raises LockDisconnected instead of
+                # going quiet, so silence here is a wedge, not a slow boot.
+                LOGGER.warning(
+                    "Capability probe for %s got no answer within %.0fs; its "
+                    "integration is likely wedged rather than slow. Entities "
+                    "will be created but unavailable, and setup is retried "
+                    "when that integration reloads or reconnects.",
+                    self.lock.entity_id,
+                    self.operation_timeout_seconds,
+                )
             except (LockDisconnected, LockOperationFailed) as err:
                 LOGGER.warning(
                     "Provider setup failed for %s: %s. Coordinator will be "
@@ -797,27 +874,47 @@ class BaseLock:
                 self.coordinator = LockUsercodeUpdateCoordinator(
                     self.hass, self, config_entry
                 )
-                if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
-                    try:
-                        await self.coordinator.async_config_entry_first_refresh()
-                    except (ConfigEntryNotReady, UpdateFailed) as err:
-                        # Expected while the lock/integration is still coming
-                        # up; the entities already surface the unavailability.
-                        LOGGER.info(
-                            "Failed to fetch initial data for lock %s: %s. "
-                            "Entities will be created but unavailable until lock is ready.",
-                            lock_entity_id,
-                            err,
-                        )
-                else:
-                    await self.coordinator.async_refresh()
-                    if not self.coordinator.last_update_success:
-                        LOGGER.info(
-                            "Failed to fetch initial data for lock %s: %s. "
-                            "Entities will be created but unavailable until lock is ready.",
-                            lock_entity_id,
-                            self.coordinator.last_exception,
-                        )
+                # Bounded, unlike the write path. Setup runs while Home
+                # Assistant holds this entry's lock, so a read that never
+                # returns parks it in `setup_in_progress` and takes reload and
+                # remove down with it -- the same trap `async_stop`'s bounded
+                # wait exists for, at the other end of the lifecycle.
+                #
+                # Cancelling a READ is safe: it mutates nothing, so there is no
+                # half-written sequence to leave behind. That is what makes a
+                # deadline right here and wrong around a write.
+                #
+                # Shares `operation_timeout_seconds` because it answers the same
+                # question -- what is longer than any legitimate operation on
+                # this lock -- and a second, smaller number would give up on a
+                # slow-but-working one.
+                refresh_budget = self.operation_timeout_seconds
+                try:
+                    async with asyncio.timeout(refresh_budget):
+                        if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
+                            await self.coordinator.async_config_entry_first_refresh()
+                        else:
+                            await self.coordinator.async_refresh()
+                except ConfigEntryNotReady, UpdateFailed:
+                    # Reported by the shared check below, which also catches
+                    # the refreshes that record a failure without raising one.
+                    pass
+                except TimeoutError:
+                    # The coordinator already recorded the cancellation this
+                    # timeout raised through it -- but it recorded a bare
+                    # CancelledError, which formats as the empty string and
+                    # would leave the report below saying nothing at all.
+                    self.coordinator.async_set_update_error(
+                        TimeoutError(f"no answer within {refresh_budget:.0f}s")
+                    )
+
+                if not self.coordinator.last_update_success:
+                    LOGGER.info(
+                        "Failed to fetch initial data for lock %s: %s. "
+                        "Entities will be created but unavailable until lock is ready.",
+                        lock_entity_id,
+                        self.coordinator.last_exception,
+                    )
 
                 if self.supports_push:
                     if (
@@ -843,7 +940,14 @@ class BaseLock:
         """
         self._setup_deferred = False
         if self.supports_native_users:
-            caps = await self._get_cached_capabilities()
+            # Bounded like the initial read, and for the same reason: setup
+            # runs while Home Assistant holds the entry's lock, and this probe
+            # goes through neither `_execute_rate_limited` nor any budget of
+            # the provider's own -- `MatterLock.async_get_capabilities` awaits
+            # `get_lock_info` bare. A probe is a read, so cancelling it is
+            # safe.
+            async with asyncio.timeout(self.operation_timeout_seconds):
+                caps = await self._get_cached_capabilities()
             if CredentialType.PIN not in caps.credential_types:
                 # A degenerate-but-successful probe was just cached;
                 # invalidate it so the reconnect-path revalidation
@@ -924,7 +1028,12 @@ class BaseLock:
         self._setup_running = True
         try:
             await self._async_run_provider_setup(self._lcm_config_entry)
-        except LockDisconnected, LockOperationFailed:
+        except LockDisconnected, LockOperationFailed, TimeoutError:
+            # TimeoutError because the capability probe is bounded: a lock that
+            # answers nothing is a connectivity failure like any other, and it
+            # has to re-arm the deferred flag. Letting it escape instead would
+            # skip the coordinator refresh and push subscription below, leaving
+            # a push provider unsubscribed for the life of the entry.
             self._setup_deferred = True
             LOGGER.debug(
                 "Provider setup failed for %s, will retry on next reconnect",

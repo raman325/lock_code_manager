@@ -1341,7 +1341,6 @@ async def test_remove_entry_cleans_up_repair_issues(
             translation_key="lock_setup_failed",
             translation_placeholders={"lock_entity_id": lock_id, "error": "test"},
         )
-
     # Call the remove hook directly so the fixture teardown (which
     # async_unloads the entry) still sees a registered entry. HA calls
     # this hook only on actual entry deletion -- not on unload, reload,

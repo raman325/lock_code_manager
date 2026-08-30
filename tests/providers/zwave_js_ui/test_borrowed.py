@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -20,10 +22,13 @@ from custom_components.lock_code_manager.domain.allocation import (
     async_max_slot,
     async_read_occupancy,
 )
+from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.unmanaged import (
     async_sweep_unmanaged_codes,
 )
-from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
+from custom_components.lock_code_manager.providers.zwave_js_ui import (
+    ZWaveJSUILock,
+)
 
 from .conftest import (
     ZWaveJSUIApiResponder,
@@ -80,6 +85,35 @@ async def test_the_occupancy_read_returns_the_transport_it_borrowed(
     assert occupancy.is_known
     assert transport.opened
     assert transport.live == []
+    assert transport.disposed == [zui_lock_answering]
+
+
+async def test_a_lock_that_cannot_be_read_is_unknown_rather_than_free(
+    hass: HomeAssistant, zui_lock_answering: str
+) -> None:
+    """
+    A read that raises leaves the lock unknown, and the transport still closes.
+
+    The two failure directions are not symmetric: refusing to issue a number
+    blocks the user from adding somebody, but issuing an occupied one
+    overwrites a credential on a real door. So an unreadable lock is treated
+    as unknown, never as empty -- and the borrowed transport is disposed of on
+    the way out regardless, or every config flow that hit a sulking lock would
+    leak one.
+    """
+    with (
+        patch.object(
+            ZWaveJSUILock,
+            "async_internal_get_occupied_indices",
+            side_effect=LockDisconnected("no answer"),
+        ),
+        track_zui_transport() as transport,
+    ):
+        occupancy = await async_read_occupancy(
+            hass, None, [zui_lock_answering], range(1, 3)
+        )
+
+    assert not occupancy.is_known
     assert transport.disposed == [zui_lock_answering]
 
 
