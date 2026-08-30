@@ -2771,6 +2771,53 @@ async def test_unloading_cancels_a_watchdog_still_in_flight(hass: HomeAssistant)
     task.cancel()
 
 
+@pytest.mark.parametrize(
+    "entry_state",
+    [ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.NOT_LOADED],
+)
+async def test_setup_does_not_hang_on_a_lock_that_never_answers(
+    hass: HomeAssistant, entry_state: ConfigEntryState
+):
+    """
+    Setup gives up on the initial read instead of parking on it.
+
+    Setup runs while Home Assistant holds the entry's lock, so a read that
+    never returns leaves it in `setup_in_progress` and takes reload and remove
+    with it -- the same trap the bounded teardown fixes at the other end of the
+    lifecycle. Cancelling a read is safe: it mutates nothing.
+
+    Both branches are covered because they call different coordinator methods,
+    and only one of them raises on failure.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN, state=entry_state)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", f"setup_hangs_{entry_state.value}", config_entry=config_entry
+    )
+    lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+    lock._min_operation_delay = 0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(type(lock), "stall_watchdog_seconds", property(lambda _s: 0.05)),
+        patch.object(lock, "async_get_usercodes", _never_returns),
+    ):
+        # Completes rather than hanging.
+        await asyncio.wait_for(
+            lock.async_setup_internal(lock.lock_config_entry), timeout=5
+        )
+
+    assert lock.coordinator is not None
+    assert lock.coordinator.last_update_success is False
+    # Home Assistant's coordinator records the cancellation on its own, but as
+    # a bare CancelledError that formats as the empty string -- which would
+    # make the log line report the failure without naming it.
+    assert "no answer within" in str(lock.coordinator.last_exception)
+
+
 async def test_the_stall_report_is_scoped_to_the_entry(hass: HomeAssistant):
     """
     A bound lock scopes its report on the entry id, not on the instance.

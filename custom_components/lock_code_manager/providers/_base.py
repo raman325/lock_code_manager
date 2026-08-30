@@ -952,27 +952,47 @@ class BaseLock:
                 self.coordinator = LockUsercodeUpdateCoordinator(
                     self.hass, self, config_entry
                 )
-                if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
-                    try:
-                        await self.coordinator.async_config_entry_first_refresh()
-                    except (ConfigEntryNotReady, UpdateFailed) as err:
-                        # Expected while the lock/integration is still coming
-                        # up; the entities already surface the unavailability.
-                        LOGGER.info(
-                            "Failed to fetch initial data for lock %s: %s. "
-                            "Entities will be created but unavailable until lock is ready.",
-                            lock_entity_id,
-                            err,
-                        )
-                else:
-                    await self.coordinator.async_refresh()
-                    if not self.coordinator.last_update_success:
-                        LOGGER.info(
-                            "Failed to fetch initial data for lock %s: %s. "
-                            "Entities will be created but unavailable until lock is ready.",
-                            lock_entity_id,
-                            self.coordinator.last_exception,
-                        )
+                # Bounded, unlike the write path. Setup runs while Home
+                # Assistant holds this entry's lock, so a read that never
+                # returns parks it in `setup_in_progress` and takes reload and
+                # remove down with it -- the same trap `async_stop`'s bounded
+                # wait exists for, at the other end of the lifecycle.
+                #
+                # Cancelling a READ is safe: it mutates nothing, so there is no
+                # half-written sequence to leave behind. That is what makes a
+                # deadline right here and wrong around a write.
+                #
+                # Shares `stall_watchdog_seconds` because it answers the same
+                # question -- what is longer than any legitimate operation on
+                # this lock -- and a second, smaller number would give up on a
+                # slow-but-working one.
+                refresh_budget = self.stall_watchdog_seconds
+                try:
+                    async with asyncio.timeout(refresh_budget):
+                        if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
+                            await self.coordinator.async_config_entry_first_refresh()
+                        else:
+                            await self.coordinator.async_refresh()
+                except ConfigEntryNotReady, UpdateFailed:
+                    # Reported by the shared check below, which also catches
+                    # the refreshes that record a failure without raising one.
+                    pass
+                except TimeoutError:
+                    # The coordinator already recorded the cancellation this
+                    # timeout raised through it -- but it recorded a bare
+                    # CancelledError, which formats as the empty string and
+                    # would leave the report below saying nothing at all.
+                    self.coordinator.async_set_update_error(
+                        TimeoutError(f"no answer within {refresh_budget:.0f}s")
+                    )
+
+                if not self.coordinator.last_update_success:
+                    LOGGER.info(
+                        "Failed to fetch initial data for lock %s: %s. "
+                        "Entities will be created but unavailable until lock is ready.",
+                        lock_entity_id,
+                        self.coordinator.last_exception,
+                    )
 
                 if self.supports_push:
                     if (
