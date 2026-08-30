@@ -1233,7 +1233,7 @@ async def test_the_stall_budget_scales_with_the_slot_walk(
     minutes would call a slow-but-working lock dead once the slot count got
     high enough. That is the misdiagnosis the watchdog exists to avoid.
     """
-    flat = base_module.OPERATION_WATCHDOG
+    flat = base_module.OPERATION_TIMEOUT
     assert Zigbee2MQTTLock._per_slot_read_budget < BaseMqttLock._per_slot_read_budget
 
     with patch.object(
@@ -1241,10 +1241,10 @@ async def test_the_stall_budget_scales_with_the_slot_walk(
         "managed_slots",
         property(lambda _self: frozenset(range(1, 200))),
     ):
-        assert z2m_lock.stall_watchdog_seconds > flat
+        assert z2m_lock.operation_timeout_seconds > flat
 
     with patch.object(
         type(z2m_lock), "managed_slots", property(lambda _self: frozenset())
     ):
         # No slots to walk, so no reason to be more patient than the default.
-        assert z2m_lock.stall_watchdog_seconds == flat
+        assert z2m_lock.operation_timeout_seconds == flat

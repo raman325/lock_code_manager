@@ -1239,17 +1239,17 @@ async def test_the_stall_budget_scales_with_the_slot_walk(
     would call a slow-but-working lock dead somewhere around eight slots,
     which is the misdiagnosis the watchdog exists to avoid.
     """
-    flat = base_module.OPERATION_WATCHDOG
+    flat = base_module.OPERATION_TIMEOUT
 
     with patch.object(
         type(zha_lock),
         "managed_slots",
         property(lambda _self: frozenset(range(1, 11))),
     ):
-        assert zha_lock.stall_watchdog_seconds > flat
+        assert zha_lock.operation_timeout_seconds > flat
 
     with patch.object(
         type(zha_lock), "managed_slots", property(lambda _self: frozenset())
     ):
         # No slots to walk, so no reason to be more patient than the default.
-        assert zha_lock.stall_watchdog_seconds == flat
+        assert zha_lock.operation_timeout_seconds == flat

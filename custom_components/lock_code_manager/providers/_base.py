@@ -8,7 +8,7 @@ See ARCHITECTURE.md for the provider interface contract.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection
 import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -81,7 +81,6 @@ from ..domain.util import (
     lock_display_name,
     mask_pin,
     per_lock_issue_id,
-    stall_issue_id,
 )
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
@@ -90,33 +89,32 @@ _LOGGER = logging.getLogger(__name__)
 
 MIN_OPERATION_DELAY = 2.0
 
-# How long one device operation may run before it is reported as stalled.
+# How long one device operation may run before the lock is treated as gone.
 #
-# A WATCHDOG, not a deadline: it never cancels the operation. Several providers
-# mutate device state in more than one step -- Schlage and Matter both delete a
-# credential and then write its replacement -- so cancelling mid-sequence can
-# take a working PIN off a door and leave nothing in its place. A stalled write
-# is bad; a silently deleted credential is worse.
+# Chosen to be longer than any legitimate operation rather than to be a tight
+# bound. It must not preempt the providers' own recovery: `zwave_js_ui` gives
+# an API call 60s and turns its own expiry into `LockDisconnected`, which drops
+# the gateway binding and rebinds; ZHA can legitimately spend ~84s on a single
+# ZCL command to a battery lock (zigpy forces a 28s reply timeout for end
+# devices, inside three attempts). Anything near those misreports a
+# healthy-but-slow lock as broken and preempts a real recovery path.
 #
-# It also must not preempt the providers' own recovery. `zwave_js_ui` gives an
-# API call 60s and turns its own expiry into `LockDisconnected`, which drops the
-# gateway binding and rebinds; ZHA can legitimately spend ~84s on a single ZCL
-# command to a battery lock (zigpy forces a 28s reply timeout for end devices,
-# inside three attempts). Anything at or below those preempts a real recovery
-# path and misreports a healthy-but-slow lock as broken.
-#
-# Ten minutes is therefore chosen to be longer than any legitimate operation,
-# not to be a tight bound. What it buys is that a wedged provider stops being
-# invisible: issue #1523 had three PIN changes sit unsynced for seven hours with
-# nothing in the log, no repair, and no signal of any kind.
+# Cancelling is safe at THIS budget and would not be at a shorter one. Schlage
+# and Matter both delete a credential before writing its replacement, so a
+# cancel mid-sequence can leave a door with no working PIN -- but only if the
+# call was going to finish. Ten minutes in, the credential is already gone
+# whichever half is stuck, and the wedge, not the cancel, is what took it. What
+# the cancel buys back is `_aio_lock`, so the slot leaves SYNCING and the next
+# tick retries the whole sequence. Issue #1523 had three PIN changes sit
+# unsynced for seven hours behind one such call.
 #
 # A FLOOR, not the whole answer. One `_execute_rate_limited` call is one
 # provider call, but on several providers one provider call is a sequential
 # walk of every managed slot -- so the honest budget is per-slot, and those
-# providers raise it through `stall_watchdog_seconds`. Ten flaky slots on ZHA
-# legitimately reach ~840s; reporting that as "not responding" would be the
-# same misdiagnosis this constant exists to avoid.
-OPERATION_WATCHDOG = 600.0
+# providers raise it through `operation_timeout_seconds`. Ten flaky slots on
+# ZHA legitimately reach ~840s; cutting that off would be the misdiagnosis
+# this constant exists to avoid.
+OPERATION_TIMEOUT = 600.0
 
 
 # How long an optimistic write waits for confirmation (push event or hard-refresh
@@ -270,14 +268,6 @@ class BaseLock:
     # and failed -- that one has a diagnosis, this one has never been asked.
     _setup_deferred: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
-    # Watchdogs armed by operations still in flight. An operation abandoned by
-    # `async_stop`'s bounded wait keeps running after its entry has gone, and
-    # its watchdog would otherwise report a stall against the entry that
-    # replaced it -- or clear that replacement's own live report.
-    _unloaded: bool = field(default=False, init=False, repr=False)
-    _stall_watchdogs: set[asyncio.Task[None]] = field(
-        default_factory=set, init=False, repr=False
-    )
     _rejected_code_slots: set[int] = field(default_factory=set, init=False)
     # Slots whose most recent write from this integration was a clear that
     # changed something. See ``last_write_was_clear``.
@@ -361,143 +351,30 @@ class BaseLock:
                 self.lock.entity_id,
             )
 
-            async with self._watching_for_a_stall(operation_type):
-                result = await func(*args, **kwargs)
+            try:
+                async with asyncio.timeout(self.operation_timeout_seconds):
+                    result = await func(*args, **kwargs)
+            except TimeoutError as err:
+                # A disconnection, not an operation failure, and the
+                # distinction decides whether anything happens at all. A
+                # failure charges the SLOT breaker, which is windowed -- three
+                # strikes inside five minutes -- so at a budget longer than
+                # that window the count resets on every retry and it can never
+                # trip. A disconnection charges the LOCK breaker, which counts
+                # consecutively: three trips `unreachable`, the tick gates on
+                # it, and backoff stops the hammering. It self-heals on the
+                # next successful poll too, where a suspended slot would wait
+                # for someone to edit the PIN.
+                #
+                # It is the honest word besides: a lock that has answered
+                # nothing in this long is not reachable.
+                raise LockDisconnected(
+                    f"Cannot {_OPERATION_MESSAGES[operation_type]} "
+                    f"{self.lock.entity_id} - no answer within "
+                    f"{self.operation_timeout_seconds:.0f}s"
+                ) from err
             self._last_operation_time = time.monotonic()
             return result
-
-    @final
-    @contextlib.asynccontextmanager
-    async def _watching_for_a_stall(self, operation_type: str) -> AsyncIterator[None]:
-        """
-        Report an operation that runs past ``OPERATION_WATCHDOG``.
-
-        Watches; never intervenes. The operation keeps running and its result,
-        whenever it arrives, is used exactly as it would have been -- so a
-        provider that mutates device state in several steps cannot be torn in
-        half by this, and a provider's own timeout still fires first and still
-        drives its own recovery.
-
-        What it changes is that the stall becomes visible. Until now a call
-        that never returned held ``_aio_lock`` and pinned its slot in SYNCING,
-        which the tick short-circuits on, so the slot stopped reconciling for
-        the life of the config entry with nothing logged anywhere (#1523).
-        """
-        # Background, so it is excluded from `async_block_till_done`. As a
-        # foreground task this is a bare `sleep(600)` that Home Assistant's
-        # own shutdown would wait out.
-        stalled = self.hass.async_create_background_task(
-            self._async_report_stall(operation_type),
-            f"lcm_watchdog_{self.lock.entity_id}",
-        )
-        self._stall_watchdogs.add(stalled)
-        try:
-            yield
-        finally:
-            self._stall_watchdogs.discard(stalled)
-            # Retrieved so a failure here cannot surface as a stray "Task
-            # exception was never retrieved".
-            if (
-                stalled.done()
-                and not stalled.cancelled()
-                and (failed := stalled.exception()) is not None
-            ):
-                # Not debug: what just broke is the mechanism whose whole
-                # job is to stop a failure going unnoticed. The operation's
-                # own warning still fires, so the visible symptom is a log
-                # saying the lock is stalled with no repair to match it.
-                LOGGER.error(
-                    "Stall watchdog for %s failed and raised no report: %s",
-                    self.lock.entity_id,
-                    failed,
-                )
-            stalled.cancel()
-            # Cleared by ANY operation that finished, not only one that had
-            # tripped the watchdog: the report is identified by entry and lock,
-            # which outlive the operation object, so after a reload the only
-            # instance that could clear a standing report is gone and the fresh
-            # one would work perfectly while the notice stayed up for good.
-            #
-            # Only once NOTHING is still in flight, though. Most operations
-            # serialize on `_aio_lock`, but `async_setup` does not -- it is
-            # watched from `_async_run_provider_setup`, outside the mutex -- so
-            # a poll finishing beside a wedged setup would otherwise clear a
-            # report whose own watchdog can never fire again.
-            if not self._stall_watchdogs:
-                self._clear_stall_issue()
-
-    async def _async_report_stall(self, operation_type: str) -> None:
-        """Wait out the watchdog, then say the lock is not answering."""
-        budget = self.stall_watchdog_seconds
-        await asyncio.sleep(budget)
-        LOGGER.warning(
-            "%s: %s operation has not returned after %.0fs. The lock is not "
-            "answering and every other operation on it is waiting behind this "
-            "one. Fix the lock's own integration first; reloading Lock Code "
-            "Manager will not release the stuck operation, though it is safe to "
-            "do afterwards",
-            self.lock.entity_id,
-            operation_type,
-            budget,
-        )
-        async_create_issue(
-            self.hass,
-            DOMAIN,
-            self._stall_issue_id,
-            is_fixable=False,
-            is_persistent=False,
-            severity=IssueSeverity.WARNING,
-            translation_key="lock_stalled",
-            translation_placeholders={
-                "lock_entity_id": self.display_name,
-                "operation": operation_type,
-                "seconds": f"{budget:.0f}",
-            },
-        )
-
-    @property
-    def _stall_issue_id(self) -> str:
-        """
-        Identify this entry's stall report for this lock.
-
-        Scoped to the entry, not just the lock, so entry-removal cleanup drops
-        only the report it owns.
-
-        Note what this does NOT buy. `_find_shared_lock_instance` gives every
-        entry managing one lock the SAME provider instance, so there is one
-        `_aio_lock` and one watchdog between them, and `_lcm_config_entry`
-        keeps whichever entry set the instance up. Two entries therefore
-        cannot hold two concurrent reports for one lock; what they can do is
-        file a report under an entry that has since been removed.
-        """
-        # `id(self)` when there is no entry yet -- allocation builds throwaway
-        # providers that read locks before setup. A constant there would put
-        # every such instance back on one shared id, which is the collision
-        # this property exists to avoid. The report is transient, so an id that
-        # does not survive a restart costs nothing.
-        scope = (
-            self._lcm_config_entry.entry_id
-            if self._lcm_config_entry
-            else f"unbound{id(self)}"
-        )
-        return stall_issue_id(scope, self.lock.entity_id)
-
-    @final
-    @callback
-    def _clear_stall_issue(self) -> None:
-        """
-        Dismiss the stall report once an operation completes.
-
-        Nothing once unloaded. A reload keeps the entry id, so the operation
-        this instance was abandoned mid-way through by `async_stop`'s bounded
-        wait would otherwise land later and delete the REPLACEMENT instance's
-        live report -- which nothing re-raises, because the replacement's own
-        watchdog already fired. Cancelling the watchdogs in `async_unload`
-        stops the raise half of that; this is the clear half.
-        """
-        if self._unloaded:
-            return
-        async_delete_issue(self.hass, DOMAIN, self._stall_issue_id)
 
     @final
     def _serialize_sequence(self) -> contextlib.AbstractAsyncContextManager[None]:
@@ -584,15 +461,15 @@ class BaseLock:
         raise ProviderNotImplementedError(self, method_name, guidance)
 
     @property
-    def stall_watchdog_seconds(self) -> float:
+    def operation_timeout_seconds(self) -> float:
         """
-        How long an operation may run before it is reported as stalled.
+        How long an operation may run before the lock is treated as gone.
 
         Overridden by providers whose single operation is a sequential walk of
         every managed slot: their honest budget is per-slot, and the base's
         flat one would report a slow-but-working lock as dead.
         """
-        return OPERATION_WATCHDOG
+        return OPERATION_TIMEOUT
 
     @property
     def display_name(self) -> str:
@@ -962,7 +839,7 @@ class BaseLock:
                     "will be created but unavailable, and setup is retried "
                     "when that integration reloads or reconnects.",
                     self.lock.entity_id,
-                    self.stall_watchdog_seconds,
+                    self.operation_timeout_seconds,
                 )
             except (LockDisconnected, LockOperationFailed) as err:
                 LOGGER.warning(
@@ -1007,11 +884,11 @@ class BaseLock:
                 # half-written sequence to leave behind. That is what makes a
                 # deadline right here and wrong around a write.
                 #
-                # Shares `stall_watchdog_seconds` because it answers the same
+                # Shares `operation_timeout_seconds` because it answers the same
                 # question -- what is longer than any legitimate operation on
                 # this lock -- and a second, smaller number would give up on a
                 # slow-but-working one.
-                refresh_budget = self.stall_watchdog_seconds
+                refresh_budget = self.operation_timeout_seconds
                 try:
                     async with asyncio.timeout(refresh_budget):
                         if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
@@ -1069,7 +946,7 @@ class BaseLock:
             # the provider's own -- `MatterLock.async_get_capabilities` awaits
             # `get_lock_info` bare. A probe is a read, so cancelling it is
             # safe.
-            async with asyncio.timeout(self.stall_watchdog_seconds):
+            async with asyncio.timeout(self.operation_timeout_seconds):
                 caps = await self._get_cached_capabilities()
             if CredentialType.PIN not in caps.credential_types:
                 # A degenerate-but-successful probe was just cached;
@@ -1079,13 +956,7 @@ class BaseLock:
                 raise LockCodeManagerProviderError(
                     f"{self.lock.entity_id}: lock does not advertise PIN credential support"
                 )
-        # Watched but NOT bounded, unlike the probe above. `async_setup` is not
-        # a read on every provider: akuvox and schlage run an unmanaged-code
-        # tagging pass here, which writes to the lock. Cancelling that mid-pass
-        # is the failure this integration refuses to risk, so a wedged setup is
-        # reported and left alone -- the same trade the write path makes.
-        async with self._watching_for_a_stall("setup"):
-            await self.async_setup(config_entry)
+        await self.async_setup(config_entry)
 
     @final
     @callback
@@ -1225,22 +1096,6 @@ class BaseLock:
             # setup-failed repair would otherwise outlive it. Non-permanent
             # unloads (reload, restart) keep it — the condition does too.
             self._clear_setup_validation_issue()
-            # Same for a standing stall report. `async_remove_entry` covers
-            # the entry being deleted, but a lock can leave an entry that
-            # stays alive (`async_release_locks`, via the options flow), and
-            # nothing else can clear the report once this instance is gone.
-            self._clear_stall_issue()
-
-        for watchdog in self._stall_watchdogs:
-            # Retrieved before the reference is dropped, for the same reason
-            # `_watching_for_a_stall` does it: an already-failed watchdog
-            # discarded unread surfaces as a stray "Task exception was never
-            # retrieved" at collection time.
-            if watchdog.done() and not watchdog.cancelled():
-                watchdog.exception()
-            watchdog.cancel()
-        self._stall_watchdogs.clear()
-        self._unloaded = True
 
         if self._config_entry_state_unsub:
             self._config_entry_state_unsub()

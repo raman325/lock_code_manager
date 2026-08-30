@@ -60,10 +60,10 @@ class BaseMqttLock(BaseLock):
     _per_slot_read_budget: ClassVar[float] = 60.0
 
     @property
-    def stall_watchdog_seconds(self) -> float:
+    def operation_timeout_seconds(self) -> float:
         """Scale with the slot walk rather than reporting a slow lock as dead."""
         return max(
-            super().stall_watchdog_seconds,
+            super().operation_timeout_seconds,
             self._per_slot_read_budget * max(len(self.managed_slots), 1),
         )
 

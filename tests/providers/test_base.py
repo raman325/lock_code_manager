@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Collection
+import contextlib
 from datetime import datetime, timedelta
 import logging
 import time
@@ -60,7 +61,6 @@ from custom_components.lock_code_manager.domain.exceptions import (
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.util import stall_issue_id
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
@@ -1484,7 +1484,9 @@ async def test_a_reconnect_whose_probe_times_out_rearms_the_retry(
         await asyncio.Event().wait()
 
     with (
-        patch.object(type(lock), "stall_watchdog_seconds", property(lambda _s: 0.05)),
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
         patch.object(lock, "async_get_capabilities", _never_returns),
         patch.object(lock, "subscribe_push_updates") as subscribed,
         patch.object(type(lock), "supports_push", property(lambda _s: True)),
@@ -2698,296 +2700,97 @@ async def test_clearing_a_managed_slot_still_adopts_an_untagged_owner(
     assert deleted.call_args.args[0].user_id == 99
 
 
-async def test_a_stalled_operation_is_reported_without_being_cancelled(
+async def test_a_wedged_operation_is_cut_off_and_reported_as_a_disconnect(
     hass: HomeAssistant,
 ):
     """
-    A wedged provider becomes visible, and is left running.
+    A call that never returns ends as `LockDisconnected`, not silence.
 
-    Issue #1523: a call that never returned held `_aio_lock` and pinned its
-    slot in SYNCING, which the tick short-circuits on -- so the slot stopped
-    reconciling entirely, with nothing in the log and no repair. Three PIN
-    changes sat unsynced for seven hours.
-
-    Reported rather than cancelled on purpose. Schlage and Matter both delete
-    a credential and then write its replacement, so cancelling mid-sequence
-    can take a working PIN off a door and put nothing back.
+    `LockDisconnected` rather than `LockOperationFailed` because only one of
+    them can act. A failure charges the SLOT breaker, which is windowed at
+    three strikes in five minutes -- and any budget longer than that window
+    resets the count on every retry, so it can never trip. A disconnection
+    charges the LOCK breaker, which counts consecutively.
     """
-    lock = _make_base_test_lock(hass, "stalled_op")
-    running = asyncio.Event()
+    lock = _make_base_test_lock(hass, "wedged_op")
+    lock._min_operation_delay = 0
+    entered = asyncio.Event()
 
     async def _never_returns(*_args, **_kwargs):
-        running.set()
+        entered.set()
         await asyncio.Event().wait()
 
-    with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
-        task = hass.async_create_task(lock._execute_rate_limited("set", _never_returns))
-        await running.wait()
-        await asyncio.sleep(0.05)
-
-        issue = ir.async_get(hass).async_get_issue(DOMAIN, lock._stall_issue_id)
-        assert issue is not None
-        assert issue.translation_placeholders["operation"] == "set"
-
-        # Watched, not interrupted: the operation is still running, which is
-        # the whole distinction from the timeout this replaced.
-        assert not task.done()
-        task.cancel()
-
-
-async def test_the_stall_report_clears_once_an_operation_completes(
-    hass: HomeAssistant,
-):
-    """The notice is transient: it goes as soon as the lock answers again."""
-    lock = _make_base_test_lock(hass, "stall_clears")
-    lock._min_operation_delay = 0
-    slow = asyncio.Event()
-
-    async def _slow(*_args, **_kwargs):
-        await slow.wait()
-        return "ok"
-
-    with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
-        task = hass.async_create_task(lock._execute_rate_limited("get", _slow))
-        await asyncio.sleep(0.05)
-        registry = ir.async_get(hass)
-        issue_id = lock._stall_issue_id
-        assert registry.async_get_issue(DOMAIN, issue_id) is not None
-
-        slow.set()
-        assert await task == "ok"
-
-    assert registry.async_get_issue(DOMAIN, issue_id) is None
-
-
-async def test_the_watchdog_waits_for_the_providers_own_budget(
-    hass: HomeAssistant,
-):
-    """
-    A provider that raised its budget is not reported at the base floor.
-
-    The three providers whose single operation walks every slot legitimately
-    run past the flat ten minutes; reading the constant instead of the
-    property would report them dead at it.
-    """
-    lock = _make_base_test_lock(hass, "budget_honoured")
-    lock._min_operation_delay = 0
-    answered = asyncio.Event()
-
-    async def _slow(*_args, **_kwargs):
-        await answered.wait()
-        return "ok"
-
-    with (
-        patch.object(base_module, "OPERATION_WATCHDOG", 0.01),
-        patch.object(
-            type(lock), "stall_watchdog_seconds", property(lambda _self: 30.0)
-        ),
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
     ):
-        task = hass.async_create_task(lock._execute_rate_limited("get", _slow))
-        # Well past the floor, nowhere near this provider's own budget.
-        await asyncio.sleep(0.05)
-        assert ir.async_get(hass).async_get_issue(DOMAIN, lock._stall_issue_id) is None
+        with pytest.raises(LockDisconnected, match="no answer within"):
+            await asyncio.wait_for(
+                lock._execute_rate_limited("set", _never_returns), timeout=5
+            )
 
-        answered.set()
-        assert await task == "ok"
-
-
-async def test_unloading_cancels_a_watchdog_still_in_flight(hass: HomeAssistant):
-    """
-    A watchdog must not outlive the instance that armed it.
-
-    `async_stop`'s bounded wait abandons a wedged operation, so its watchdog
-    would otherwise fire after the entry is gone -- reporting a stall against
-    whatever replaced it, or clearing that replacement's own live report.
-    """
-    lock = _make_base_test_lock(hass, "unload_cancels")
-    running = asyncio.Event()
-
-    async def _never_returns(*_args, **_kwargs):
-        running.set()
-        await asyncio.Event().wait()
-
-    with patch.object(base_module, "OPERATION_WATCHDOG", 0.05):
-        task = hass.async_create_task(lock._execute_rate_limited("set", _never_returns))
-        await running.wait()
-        assert lock._stall_watchdogs
-        watchdog = next(iter(lock._stall_watchdogs))
-
-        await lock.async_unload(False)
-
-        # The task itself, not just the set the code emptied a line earlier.
-        await asyncio.sleep(0)
-        assert watchdog.cancelled()
-
-        # Past the budget the cancelled watchdog would have fired by now.
-        await asyncio.sleep(0.1)
-        assert ir.async_get(hass).async_get_issue(DOMAIN, lock._stall_issue_id) is None
-    task.cancel()
+    assert entered.is_set()
 
 
-async def test_unloading_reads_a_watchdog_that_already_failed(
+async def test_a_wedged_operation_stops_blocking_every_other_slot(
     hass: HomeAssistant,
 ):
     """
-    Unload retrieves a failed watchdog's exception rather than dropping it.
+    The mutex comes back, which is the actual defect in issue #1523.
 
-    `_watching_for_a_stall` only gets to do that when its operation returns.
-    A wedged operation never does, so if the watchdog fired and blew up in the
-    meantime, unload is the last hand to touch the task -- and an unread
-    exception surfaces as a stray "Task exception was never retrieved" at
-    collection, which the test harness fails runs on.
+    A call that never returned held `_aio_lock`, so every other slot on that
+    lock queued behind it forever and the reporter's three PIN changes sat
+    unsynced for seven hours. Reporting the stall would have made that
+    visible; only cutting the call off makes the other slots move again.
     """
-    lock = _make_base_test_lock(hass, "unload_reads_failure")
+    lock = _make_base_test_lock(hass, "wedged_frees_mutex")
     lock._min_operation_delay = 0
-    running = asyncio.Event()
 
     async def _never_returns(*_args, **_kwargs):
-        running.set()
         await asyncio.Event().wait()
 
-    with (
-        patch.object(base_module, "OPERATION_WATCHDOG", 0.01),
-        patch.object(
-            base_module, "async_create_issue", side_effect=RuntimeError("boom")
-        ),
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
     ):
-        task = asyncio.create_task(lock._execute_rate_limited("set", _never_returns))
-        await running.wait()
-        # Long enough for the watchdog to fire and fail while the operation
-        # it is watching is still going.
-        await asyncio.sleep(0.05)
-        watchdog = next(iter(lock._stall_watchdogs))
-        assert watchdog.done() and watchdog.exception() is not None
+        wedged = asyncio.create_task(lock._execute_rate_limited("set", _never_returns))
+        with contextlib.suppress(LockDisconnected):
+            await asyncio.wait_for(wedged, timeout=5)
 
-        await lock.async_unload(False)
+        # The slot behind it now gets its turn.
+        result = await asyncio.wait_for(
+            lock._execute_rate_limited("get", AsyncMock(return_value="through")),
+            timeout=5,
+        )
 
-    task.cancel()
+    assert result == "through"
+    assert not lock._aio_lock.locked()
 
 
-async def test_an_abandoned_operation_does_not_clear_the_next_instances_report(
-    hass: HomeAssistant,
-):
+async def test_the_timeout_uses_the_providers_own_budget(hass: HomeAssistant):
     """
-    An unloaded instance stops clearing reports; a reload keeps the entry id.
+    A provider that walks every slot in one call gets to say how long that is.
 
-    `async_stop`'s bounded wait abandons a wedged operation, and when it
-    finally returns its `finally` runs -- against an id built from an entry id
-    the REPLACEMENT instance is using too. Nothing re-raises what it deletes,
-    because the replacement's own watchdog has already fired. Cancelling the
-    watchdogs stops the raise half of this; the clear half needs its own stop.
+    ZHA, zigbee2mqtt and zwave-js-ui read the slots in turn, so the honest
+    budget is per-slot; the flat ten minutes would cut off a slow-but-working
+    lock partway through its walk. The constant is deliberately left at its
+    real value -- reading it instead of the property is the mutation this has
+    to catch, and it would surface as a test that hangs for ten minutes.
     """
-    lock = _make_base_test_lock(hass, "abandoned_clear")
+    lock = _make_base_test_lock(hass, "own_budget")
     lock._min_operation_delay = 0
-    running = asyncio.Event()
-    finish = asyncio.Event()
-
-    async def _wedges_then_returns(*_args, **_kwargs):
-        running.set()
-        await finish.wait()
-
-    task = asyncio.create_task(lock._execute_rate_limited("set", _wedges_then_returns))
-    await running.wait()
-
-    # The entry unloads while the operation is still out there.
-    await lock.async_unload(False)
-
-    # Its replacement, on the same entry, raises its own report.
-    replacement_issue = lock._stall_issue_id
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        replacement_issue,
-        is_fixable=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="lock_stalled",
-    )
-
-    # Now the abandoned operation lands.
-    finish.set()
-    await asyncio.wait_for(task, timeout=5)
-
-    assert ir.async_get(hass).async_get_issue(DOMAIN, replacement_issue) is not None
-
-
-async def test_a_completing_poll_does_not_clear_a_wedged_setups_report(
-    hass: HomeAssistant,
-):
-    """
-    The clear waits until nothing is still in flight.
-
-    Most operations serialize on `_aio_lock`, so "an operation finished" and
-    "nothing is stalled" are the same statement. `async_setup` is watched from
-    outside that mutex, so a poll can finish beside a wedged setup -- and the
-    setup's own watchdog has already fired, so nothing would raise the report
-    again.
-    """
-    lock = _make_base_test_lock(hass, "poll_beside_setup")
-    lock._min_operation_delay = 0
-    lock._lcm_config_entry = lock.lock_config_entry
-    setup_running = asyncio.Event()
 
     async def _never_returns(*_args, **_kwargs):
-        setup_running.set()
         await asyncio.Event().wait()
 
-    with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
-        # Stands in for `async_setup`: watched, but outside `_aio_lock`.
-        async def _wedged_setup():
-            async with lock._watching_for_a_stall("setup"):
-                await _never_returns()
-
-        wedged = asyncio.create_task(_wedged_setup())
-        await setup_running.wait()
-        await asyncio.sleep(0.05)
-        issue_id = lock._stall_issue_id
-        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
-
-        # A poll completes normally while the setup is still stuck.
-        await lock._execute_rate_limited("get", AsyncMock(return_value={}))
-
-    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
-    wedged.cancel()
-
-
-async def test_an_armed_watchdog_does_not_hold_up_block_till_done(
-    hass: HomeAssistant,
-):
-    """
-    The watchdog is an observer, so nothing may wait on it.
-
-    A foreground `hass.async_create_task` lands in the set
-    `async_block_till_done` waits on -- and this task is a bare
-    `sleep(OPERATION_WATCHDOG)`. Home Assistant calls `async_block_till_done`
-    during shutdown, so arming a watchdog would make shutdown wait out the
-    full budget behind an operation that is already stuck.
-    """
-    lock = _make_base_test_lock(hass, "watchdog_blocks")
-    lock._min_operation_delay = 0
-    running = asyncio.Event()
-    finish = asyncio.Event()
-
-    async def _slow(*_args, **_kwargs):
-        running.set()
-        await finish.wait()
-        return "ok"
-
-    # Far longer than the timeout below, so a foreground watchdog cannot
-    # simply outrun the assertion.
-    with patch.object(base_module, "OPERATION_WATCHDOG", 300.0):
-        # A plain asyncio task, deliberately: a hass one would land in the
-        # same set and this would end up blocking on the operation rather
-        # than on its watchdog, which is the thing under test.
-        task = asyncio.create_task(lock._execute_rate_limited("get", _slow))
-        await running.wait()
-        assert lock._stall_watchdogs
-
-        # Returns WHILE the watchdog is still armed, because a background
-        # task is not in the set this waits on.
-        await asyncio.wait_for(hass.async_block_till_done(), timeout=5)
-
-        finish.set()
-        assert await task == "ok"
+    assert base_module.OPERATION_TIMEOUT > 60
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        pytest.raises(LockDisconnected),
+    ):
+        await asyncio.wait_for(
+            lock._execute_rate_limited("get", _never_returns), timeout=5
+        )
 
 
 async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
@@ -3008,7 +2811,9 @@ async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
         await asyncio.Event().wait()
 
     with (
-        patch.object(type(lock), "stall_watchdog_seconds", property(lambda _s: 0.05)),
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
         patch.object(lock, "async_get_capabilities", _never_returns),
         patch.object(lock, "async_get_usercodes", AsyncMock(return_value={})),
     ):
@@ -3019,36 +2824,6 @@ async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
     # Degraded, not dropped: setup finished and the retry path is armed.
     assert lock._setup_succeeded is False
     assert lock._setup_complete.is_set()
-
-
-async def test_a_stall_report_does_not_outlive_the_lock_it_names(
-    hass: HomeAssistant,
-):
-    """
-    Removing a lock from an entry clears its stall report.
-
-    `async_remove_entry` covers the entry being deleted, but a lock can leave
-    an entry that stays alive -- `async_release_locks`, reached from the
-    options flow. Nothing else can clear the report once this instance is
-    gone, and the repair tells the user to go fix a lock that is no longer
-    managed.
-    """
-    lock = _make_base_test_lock(hass, "released_with_report")
-    lock._lcm_config_entry = lock.lock_config_entry
-    issue_id = lock._stall_issue_id
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        issue_id,
-        is_fixable=False,
-        severity=ir.IssueSeverity.WARNING,
-        translation_key="lock_stalled",
-    )
-    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
-
-    await lock.async_unload(True)
-
-    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
 
 
 @pytest.mark.parametrize(
@@ -3082,7 +2857,9 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
         await asyncio.Event().wait()
 
     with (
-        patch.object(type(lock), "stall_watchdog_seconds", property(lambda _s: 0.05)),
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
         patch.object(lock, "async_get_usercodes", _never_returns),
     ):
         # Completes rather than hanging.
@@ -3096,137 +2873,3 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
     # a bare CancelledError that formats as the empty string -- which would
     # make the log line report the failure without naming it.
     assert "no answer within" in str(lock.coordinator.last_exception)
-
-
-async def test_the_stall_report_is_scoped_to_the_entry(hass: HomeAssistant):
-    """
-    A bound lock scopes its report on the entry id, not on the instance.
-
-    Every other stall test runs on an unbound lock and so exercises the
-    `unbound{id(self)}` fallback -- which is unique per instance, and would
-    make a mutation that dropped the entry scope entirely look fine.
-    """
-    lock = _make_base_test_lock(hass, "scoped_report")
-    entry = MockConfigEntry(domain=DOMAIN, entry_id="entry-under-test")
-    entry.add_to_hass(hass)
-    lock._lcm_config_entry = entry
-
-    assert lock._stall_issue_id == stall_issue_id(entry.entry_id, lock.lock.entity_id)
-    assert entry.entry_id in lock._stall_issue_id
-
-
-async def test_one_entrys_recovery_does_not_clear_anothers_stall_report(
-    hass: HomeAssistant,
-):
-    """
-    Two entries can manage one lock, and each reports for itself.
-
-    Sharing one per-lock report meant whichever entry's operation returned
-    first deleted the other's -- putting a lock that is still wedged back into
-    exactly the silence this exists to break, and durably, because the other
-    watchdog has already fired and will not fire again for that operation.
-    """
-    stuck = _make_base_test_lock(hass, "shared_lock_stuck")
-    recovering = _make_base_test_lock(hass, "shared_lock_ok")
-    # One lock entity, two entries -- what `_lock_managed_by_other_entry` is for.
-    recovering.lock = stuck.lock
-    recovering._min_operation_delay = 0
-    # Bound to real, distinct entries: unbound locks fall back to an id keyed on
-    # object identity, which would pass this test even with the entry scope gone.
-    for lock, entry_id in ((stuck, "entry-a"), (recovering, "entry-b")):
-        entry = MockConfigEntry(domain=DOMAIN, entry_id=entry_id)
-        entry.add_to_hass(hass)
-        lock._lcm_config_entry = entry
-    assert stuck._stall_issue_id != recovering._stall_issue_id
-    assert "entry-a" in stuck._stall_issue_id
-
-    answered = asyncio.Event()
-
-    async def _never_returns(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    async def _eventually(*_args, **_kwargs):
-        await answered.wait()
-        return "ok"
-
-    registry = ir.async_get(hass)
-    with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
-        stuck_task = hass.async_create_task(
-            stuck._execute_rate_limited("set", _never_returns)
-        )
-        other_task = hass.async_create_task(
-            recovering._execute_rate_limited("get", _eventually)
-        )
-        await asyncio.sleep(0.05)
-        assert registry.async_get_issue(DOMAIN, stuck._stall_issue_id) is not None
-
-        answered.set()
-        assert await other_task == "ok"
-
-        # The entry that recovered cleared its own report and nobody else's.
-        assert registry.async_get_issue(DOMAIN, recovering._stall_issue_id) is None
-        assert registry.async_get_issue(DOMAIN, stuck._stall_issue_id) is not None
-        stuck_task.cancel()
-
-
-async def test_a_watchdog_that_itself_fails_does_not_leak_its_exception(
-    hass: HomeAssistant,
-):
-    """
-    The watchdog failing must not take the operation down with it.
-
-    Its exception is retrieved rather than left on a discarded task, which
-    Home Assistant surfaces as a stray "Task exception was never retrieved"
-    and the test harness fails runs on.
-    """
-    lock = _make_base_test_lock(hass, "watchdog_boom")
-    lock._min_operation_delay = 0
-    answered = asyncio.Event()
-
-    async def _slow(*_args, **_kwargs):
-        await answered.wait()
-        return "ok"
-
-    with (
-        patch.object(base_module, "OPERATION_WATCHDOG", 0.01),
-        patch.object(
-            base_module, "async_create_issue", side_effect=RuntimeError("boom")
-        ),
-    ):
-        with patch.object(base_module.LOGGER, "error") as logged:
-            task = hass.async_create_task(lock._execute_rate_limited("get", _slow))
-            # Long enough for the watchdog to fire and blow up on its own.
-            await asyncio.sleep(0.05)
-            answered.set()
-            # The operation still succeeds; the watchdog's failure does not
-            # propagate into it.
-            assert await task == "ok"
-
-    # Reported, not swallowed. What just broke is the mechanism whose whole
-    # job is to stop a failure going unnoticed, so the retrieval has to leave
-    # a trace -- otherwise the log says the lock is stalled and no repair ever
-    # appears to match it.
-    assert logged.called
-    assert "boom" in str(logged.call_args)
-
-    await asyncio.sleep(0)
-
-
-async def test_a_prompt_operation_raises_no_stall_report(hass: HomeAssistant):
-    """The watchdog is silent for work that finishes in time."""
-    lock = _make_base_test_lock(hass, "prompt_op")
-    lock._min_operation_delay = 0
-
-    async def _prompt(*_args, **_kwargs):
-        return "ok"
-
-    assert await lock._execute_rate_limited("get", _prompt) == "ok"
-    assert ir.async_get(hass).async_get_issue(DOMAIN, lock._stall_issue_id) is None
-    # And the watchdog is not left sleeping out its ten minutes behind it.
-    await asyncio.sleep(0)
-    assert not [
-        task
-        for task in asyncio.all_tasks()
-        if "lcm_watchdog" in (task.get_name() or "")
-        and not (task.done() or task.cancelling())
-    ]

@@ -72,14 +72,6 @@ if TYPE_CHECKING:
     from .models import LockCodeManagerConfigEntry
 
 
-# How long unload waits for an in-flight tick before leaving it to run.
-#
-# Long enough that an ordinary operation finishes and unload stays orderly,
-# short enough that a wedged provider cannot hold the entry's setup lock. The
-# alternative -- cancelling -- lands mid-operation, and a provider that deletes
-# a credential before writing its replacement would be torn between the two.
-STOP_TICK_WAIT = 30.0
-
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -317,16 +309,6 @@ class SlotSyncManager:
         a tick mid ``_perform_sync`` should be allowed to finish so the lock
         operation completes; ``_started=False`` keeps it from scheduling
         more work.
-
-        That wait is BOUNDED. A provider call that never returns leaves its
-        tick pending forever, and unload runs before the platforms are
-        unloaded and while Home Assistant holds the entry's setup lock -- so
-        an unbounded wait parks the entry in `unload_in_progress` and takes
-        reload, remove and re-setup down with it, leaving a restart as the
-        only way out (issue #1523). Past the bound the tick is left running
-        against a manager that has already stopped: `_started` is False, so
-        it schedules nothing further, and whatever it is waiting on either
-        lands harmlessly or never does.
         """
         if not self._started:
             return
@@ -344,25 +326,11 @@ class SlotSyncManager:
             task for task in self._tick_tasks if task is not current and not task.done()
         }
         if pending:
-            finished, still_running = await asyncio.wait(
-                pending, timeout=STOP_TICK_WAIT
-            )
-            if still_running:
-                # Deliberately not cancelled: cancelling lands mid-operation,
-                # and providers that delete a credential before writing its
-                # replacement would be torn between the two.
-                _LOGGER.warning(
-                    "%s: %d in-flight tick(s) did not finish within %.0fs; "
-                    "leaving them to run so unload can complete. The lock is "
-                    "not answering",
-                    self._log_prefix,
-                    len(still_running),
-                    STOP_TICK_WAIT,
-                )
-            for task in finished:
-                if task.cancelled():
-                    continue
-                if (result := task.exception()) is not None:
+            tick_results = await asyncio.gather(*pending, return_exceptions=True)
+            for result in tick_results:
+                if isinstance(result, Exception) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
                     _LOGGER.warning(
                         "%s: In-flight tick raised during stop: %s",
                         self._log_prefix,
@@ -560,12 +528,6 @@ class SlotSyncManager:
 
     async def _disable_slot(self, reason: str) -> None:
         """Disable the slot and create a repair issue."""
-        # Nothing once stopped, as with `_write_state`: a tick abandoned by
-        # `async_stop`'s bounded wait lands later and would act on an entry
-        # that has unloaded -- or, on a reload, on the one that replaced it.
-        if not self._started:
-            return
-
         try:
             await async_disable_slot(
                 self._hass,
@@ -606,15 +568,7 @@ class SlotSyncManager:
         Records the desired target so the slot stays suspended until that
         target changes or it returns to sync, rather than resuming on
         unrelated coordinator updates.
-
-        Does nothing once stopped, for the same reason ``_write_state`` does
-        not: a tick abandoned by ``async_stop``'s bounded wait lands later and
-        runs its error paths against an entry that has already unloaded, and
-        would otherwise raise a repair for a slot nothing manages any more --
-        possibly after the entry has been set up again.
         """
-        if not self._started:
-            return
         self._state = SyncState.SUSPENDED
         self._code_suspend_target = (snapshot.active_state, snapshot.credential_state)
         self._breaker_reset_requested = True
@@ -649,12 +603,6 @@ class SlotSyncManager:
         disabled issue there is unrelated). The per-lock ``slot_suspended``
         issue is cleared regardless of active state.
         """
-        # Nothing once stopped, as with `_write_state`: a tick abandoned by
-        # `async_stop`'s bounded wait lands later and would act on an entry
-        # that has unloaded -- or, on a reload, on the one that replaced it.
-        if not self._started:
-            return
-
         entry_id = self._config_entry.entry_id
         if snapshot.active_state == STATE_ON:
             async_delete_issue(
@@ -946,16 +894,7 @@ class SlotSyncManager:
             # Connectivity failure: feed the lock breaker so repeated failures
             # converge to "unreachable" alongside poll failures (recovers via a
             # successful poll/push).
-            #
-            # Not once stopped. The coordinator is NOT this manager's to speak
-            # for: one BaseLock is shared by every entry managing the lock, so
-            # a tick abandoned by `async_stop`'s bounded wait would charge a
-            # breaker a live entry is still relying on -- and past the alert
-            # threshold `_apply_backoff` raises a PERSISTENT `lock_offline`
-            # repair, which outlives the entry that is gone and the restart
-            # after it.
-            if self._started:
-                self._coordinator.note_connectivity_failure()
+            self._coordinator.note_connectivity_failure()
             self._state = SyncState.OUT_OF_SYNC
             return
         except LockOperationUnsupported as err:
@@ -1014,11 +953,7 @@ class SlotSyncManager:
             # Sync succeeded — refresh coordinator to verify.
             # Skip for push providers — they update coordinator optimistically
             # via push_update() and refreshing from cache could read stale data.
-            # `self._started` for the same reason as the failure path above:
-            # the coordinator is shared, so a straggler must not drive a poll
-            # (and the backoff bookkeeping behind it) on another entry's
-            # behalf.
-            if not self._lock.supports_push and self._started:
+            if not self._lock.supports_push:
                 try:
                     await self._coordinator.async_refresh()
                 except Exception:
