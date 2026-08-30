@@ -74,6 +74,9 @@ RENAMES_KEY = "migration_renames"
 ATTR_CLEAR_CREDENTIALS = "clear_credentials"
 ATTR_SLOT = "slot"
 ATTR_SLOT_NUM = "slot_num"
+# Marks the final event of a slot subscription: the user is gone, and the
+# card must stop rendering them rather than fall back to a payload of nulls.
+ATTR_REMOVED = "removed"
 ATTR_CODE_LENGTH = "code_length"
 ATTR_CONFIGURED_CODE = "configured_code"
 ATTR_CONFIGURED_CODE_LENGTH = "configured_code_length"

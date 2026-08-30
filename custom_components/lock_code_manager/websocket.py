@@ -80,6 +80,7 @@ from .const import (
     ATTR_LOCK_NAME,
     ATTR_MANAGED,
     ATTR_PIN_LENGTH,
+    ATTR_REMOVED,
     ATTR_SCHEDULE,
     ATTR_SCHEDULE_NEXT_EVENT,
     ATTR_SLOT,
@@ -1133,6 +1134,22 @@ async def subscribe_code_slot(
 
     @callback
     def _send_update(next_event: dict[str, Any] | None = None) -> None:
+        # Re-checked on every update, not just at subscribe time. A user can
+        # be deleted from anywhere -- another browser, the entry's own page,
+        # an action -- and the payload for a slot nobody holds is all nulls,
+        # which a card cannot tell apart from "entities not created yet"
+        # during setup. So it would keep rendering the departed person, tinted
+        # active, named "Unnamed".
+        if not get_entry_config(config_entry).has_slot(slot_num):
+            connection.send_event(
+                msg["id"], {ATTR_SLOT_NUM: slot_num, ATTR_REMOVED: True}
+            )
+            # Popped rather than just unsubscribed, so a later teardown of the
+            # connection does not call it a second time.
+            if (unsub := connection.subscriptions.pop(msg["id"], None)) is not None:
+                unsub()
+            return
+
         # Re-resolve entity IDs each time to pick up entities created after
         # subscription was established
         current_entities, current_in_sync, _ = _resolve_entity_ids()
