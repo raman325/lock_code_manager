@@ -72,6 +72,7 @@ from custom_components.lock_code_manager.const import (
     CONF_ENTITIES,
     CONF_LOCKS,
     CONF_PIN,
+    CONF_SLOT,
     CONF_SLOTS,
     DOMAIN,
     SERVICE_DELETE_USER,
@@ -525,6 +526,46 @@ async def test_subscribe_code_slot_says_so_when_the_user_is_deleted(
     # another payload when the entry reloaded.
     await ws_client.send_json({"id": 2, "type": "ping"})
     assert (await ws_client.receive_json())["id"] == 2
+
+
+async def test_subscribe_code_slot_ends_when_the_subentry_is_removed(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    Home Assistant's own delete closes the subscription too.
+
+    A user can be removed straight from the entry's page, which never touches
+    this integration's actions. That path is exactly what the add-user card's
+    "Manage users in settings" link sends people to, so it is the one most
+    likely to be used from a browser other than the one holding the card.
+    """
+    entry = lock_code_manager_config_entry
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: entry.entry_id,
+            ATTR_SLOT: 1,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    assert (await ws_client.receive_json())["event"][CONF_NAME] == "test1"
+
+    subentry = next(
+        subentry
+        for subentry in entry.subentries.values()
+        if subentry.data[CONF_SLOT] == 1
+    )
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+    await hass.async_block_till_done()
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    assert event["event"] == {ATTR_SLOT_NUM: 1, ATTR_REMOVED: True}
 
 
 async def test_subscribe_code_slot_includes_sync_status_once_determined(
