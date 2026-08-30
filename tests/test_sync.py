@@ -11,6 +11,7 @@ import pytest
 
 from homeassistant.const import CONF_PIN, STATE_OFF, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
     async_create_issue,
@@ -1660,6 +1661,40 @@ class TestAsyncStopAwaitsInFlightTick:
         await manager.async_stop()
 
         assert cancelled.cancelled()
+
+    async def test_a_late_tick_does_not_suspend_a_stopped_slot(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        A tick abandoned by the bounded wait cannot raise a repair afterwards.
+
+        It lands after the entry has unloaded -- possibly after it has been set
+        up again -- and would otherwise create a `slot_suspended` repair for a
+        slot nothing manages any more.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        snapshot = manager._resolve_credential_snapshot()
+
+        await manager.async_stop()
+        assert not manager._started
+
+        manager._suspend_slot(snapshot, "should not be raised")
+        manager._clear_resolved_issues(snapshot)
+        await manager._disable_slot("should not be acted on")
+
+        assert manager._state is not SyncState.SUSPENDED
+        assert (
+            ir.async_get(hass).async_get_issue(
+                DOMAIN,
+                f"slot_suspended_{lock_code_manager_config_entry.entry_id}"
+                f"_{LOCK_1_ENTITY_ID}_1",
+            )
+            is None
+        )
 
     async def test_async_stop_is_idempotent(
         self,

@@ -560,6 +560,12 @@ class SlotSyncManager:
 
     async def _disable_slot(self, reason: str) -> None:
         """Disable the slot and create a repair issue."""
+        # Nothing once stopped, as with `_write_state`: a tick abandoned by
+        # `async_stop`'s bounded wait lands later and would act on an entry
+        # that has unloaded -- or, on a reload, on the one that replaced it.
+        if not self._started:
+            return
+
         try:
             await async_disable_slot(
                 self._hass,
@@ -600,7 +606,15 @@ class SlotSyncManager:
         Records the desired target so the slot stays suspended until that
         target changes or it returns to sync, rather than resuming on
         unrelated coordinator updates.
+
+        Does nothing once stopped, for the same reason ``_write_state`` does
+        not: a tick abandoned by ``async_stop``'s bounded wait lands later and
+        runs its error paths against an entry that has already unloaded, and
+        would otherwise raise a repair for a slot nothing manages any more --
+        possibly after the entry has been set up again.
         """
+        if not self._started:
+            return
         self._state = SyncState.SUSPENDED
         self._code_suspend_target = (snapshot.active_state, snapshot.credential_state)
         self._breaker_reset_requested = True
@@ -635,6 +649,12 @@ class SlotSyncManager:
         disabled issue there is unrelated). The per-lock ``slot_suspended``
         issue is cleared regardless of active state.
         """
+        # Nothing once stopped, as with `_write_state`: a tick abandoned by
+        # `async_stop`'s bounded wait lands later and would act on an entry
+        # that has unloaded -- or, on a reload, on the one that replaced it.
+        if not self._started:
+            return
+
         entry_id = self._config_entry.entry_id
         if snapshot.active_state == STATE_ON:
             async_delete_issue(

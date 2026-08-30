@@ -36,7 +36,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import NoReturn, final
+from typing import ClassVar, NoReturn, final
 
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
@@ -57,7 +57,7 @@ class BaseMqttLock(BaseLock):
     # the managed slots one at a time -- deliberately, so the bridge and the
     # lock's firmware answer each read before the next goes out -- so the
     # stall budget is this times the number of slots, not a flat figure.
-    _per_slot_read_budget: float = 60.0
+    _per_slot_read_budget: ClassVar[float] = 60.0
 
     @property
     def stall_watchdog_seconds(self) -> float:

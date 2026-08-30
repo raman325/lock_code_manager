@@ -7,7 +7,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from functools import partial
 import json
-from typing import Any, Literal, NoReturn
+from typing import Any, ClassVar, Literal, NoReturn
 
 from homeassistant.components.mqtt import (
     async_publish,
@@ -118,7 +118,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
     """Class to represent Zigbee2MQTT lock."""
 
     # `_async_read_slot` waits 10s per slot before giving up on that slot.
-    _per_slot_read_budget: float = 10.0
+    _per_slot_read_budget: ClassVar[float] = 10.0
 
     _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
         init=False, default_factory=dict

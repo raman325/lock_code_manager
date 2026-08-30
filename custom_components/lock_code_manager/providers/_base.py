@@ -77,7 +77,12 @@ from ..domain.queries import (
     get_entry_config,
     get_managed_slots,
 )
-from ..domain.util import lock_display_name, mask_pin, per_lock_issue_id
+from ..domain.util import (
+    lock_display_name,
+    mask_pin,
+    per_lock_issue_id,
+    stall_issue_id,
+)
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
 
@@ -265,6 +270,13 @@ class BaseLock:
     # and failed -- that one has a diagnosis, this one has never been asked.
     _setup_deferred: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
+    # Watchdogs armed by operations still in flight. An operation abandoned by
+    # `async_stop`'s bounded wait keeps running after its entry has gone, and
+    # its watchdog would otherwise report a stall against the entry that
+    # replaced it -- or clear that replacement's own live report.
+    _stall_watchdogs: set[asyncio.Task[None]] = field(
+        default_factory=set, init=False, repr=False
+    )
     _rejected_code_slots: set[int] = field(default_factory=set, init=False)
     # Slots whose most recent write from this integration was a clear that
     # changed something. See ``last_write_was_clear``.
@@ -374,20 +386,29 @@ class BaseLock:
             self._async_report_stall(operation_type),
             f"lcm_watchdog_{self.lock.entity_id}",
         )
+        self._stall_watchdogs.add(stalled)
         try:
             yield
         finally:
-            # Cleared only by an operation that actually finished, so a stall
-            # the user has been told about stays on screen until it does.
-            if stalled.done() and not stalled.cancelled():
-                if (failed := stalled.exception()) is not None:
-                    # Retrieved so it cannot surface as a stray "Task exception
-                    # was never retrieved"; no report was raised, so none to
-                    # clear.
-                    LOGGER.debug("Stall watchdog itself failed: %s", failed)
-                else:
-                    self._clear_stall_issue()
+            self._stall_watchdogs.discard(stalled)
+            # Retrieved so a failure here cannot surface as a stray "Task
+            # exception was never retrieved".
+            if (
+                stalled.done()
+                and not stalled.cancelled()
+                and (failed := stalled.exception()) is not None
+            ):
+                LOGGER.debug("Stall watchdog itself failed: %s", failed)
             stalled.cancel()
+            # Cleared by ANY operation that finished, not only one that had
+            # tripped the watchdog. The report is identified by entry and lock,
+            # which outlive the operation object -- so after a reload the only
+            # instance that could clear a standing report is gone, and the
+            # fresh one would work perfectly while the notice stayed up for
+            # good. Deleting an id that is not there is a no-op, and within one
+            # instance nothing else can have completed anyway: whatever reaches
+            # here held `_aio_lock` throughout.
+            self._clear_stall_issue()
 
     async def _async_report_stall(self, operation_type: str) -> None:
         """Wait out the watchdog, then say the lock is not answering."""
@@ -439,7 +460,7 @@ class BaseLock:
             if self._lcm_config_entry
             else f"unbound{id(self)}"
         )
-        return f"lock_stalled_{scope}_{self.lock.entity_id}"
+        return stall_issue_id(scope, self.lock.entity_id)
 
     @final
     @callback
@@ -1121,6 +1142,10 @@ class BaseLock:
             # setup-failed repair would otherwise outlive it. Non-permanent
             # unloads (reload, restart) keep it — the condition does too.
             self._clear_setup_validation_issue()
+
+        for watchdog in self._stall_watchdogs:
+            watchdog.cancel()
+        self._stall_watchdogs.clear()
 
         if self._config_entry_state_unsub:
             self._config_entry_state_unsub()

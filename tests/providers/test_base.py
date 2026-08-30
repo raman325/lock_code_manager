@@ -60,6 +60,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.util import stall_issue_id
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
@@ -2711,6 +2712,82 @@ async def test_the_stall_report_clears_once_an_operation_completes(
     assert registry.async_get_issue(DOMAIN, issue_id) is None
 
 
+async def test_the_watchdog_waits_for_the_providers_own_budget(
+    hass: HomeAssistant,
+):
+    """
+    A provider that raised its budget is not reported at the base floor.
+
+    The three providers whose single operation walks every slot legitimately
+    run past the flat ten minutes; reading the constant instead of the
+    property would report them dead at it.
+    """
+    lock = _make_base_test_lock(hass, "budget_honoured")
+    lock._min_operation_delay = 0
+    answered = asyncio.Event()
+
+    async def _slow(*_args, **_kwargs):
+        await answered.wait()
+        return "ok"
+
+    with (
+        patch.object(base_module, "OPERATION_WATCHDOG", 0.01),
+        patch.object(
+            type(lock), "stall_watchdog_seconds", property(lambda _self: 30.0)
+        ),
+    ):
+        task = hass.async_create_task(lock._execute_rate_limited("get", _slow))
+        # Well past the floor, nowhere near this provider's own budget.
+        await asyncio.sleep(0.05)
+        assert ir.async_get(hass).async_get_issue(DOMAIN, lock._stall_issue_id) is None
+
+        answered.set()
+        assert await task == "ok"
+
+
+async def test_unloading_cancels_a_watchdog_still_in_flight(hass: HomeAssistant):
+    """
+    A watchdog must not outlive the instance that armed it.
+
+    `async_stop`'s bounded wait abandons a wedged operation, so its watchdog
+    would otherwise fire after the entry is gone -- reporting a stall against
+    whatever replaced it, or clearing that replacement's own live report.
+    """
+    lock = _make_base_test_lock(hass, "unload_cancels")
+    running = asyncio.Event()
+
+    async def _never_returns(*_args, **_kwargs):
+        running.set()
+        await asyncio.Event().wait()
+
+    task = hass.async_create_task(lock._execute_rate_limited("set", _never_returns))
+    await running.wait()
+    assert lock._stall_watchdogs
+
+    await lock.async_unload(False)
+
+    assert not lock._stall_watchdogs
+    assert ir.async_get(hass).async_get_issue(DOMAIN, lock._stall_issue_id) is None
+    task.cancel()
+
+
+async def test_the_stall_report_is_scoped_to_the_entry(hass: HomeAssistant):
+    """
+    A bound lock scopes its report on the entry id, not on the instance.
+
+    Every other stall test runs on an unbound lock and so exercises the
+    `unbound{id(self)}` fallback -- which is unique per instance, and would
+    make a mutation that dropped the entry scope entirely look fine.
+    """
+    lock = _make_base_test_lock(hass, "scoped_report")
+    entry = MockConfigEntry(domain=DOMAIN, entry_id="entry-under-test")
+    entry.add_to_hass(hass)
+    lock._lcm_config_entry = entry
+
+    assert lock._stall_issue_id == stall_issue_id(entry.entry_id, lock.lock.entity_id)
+    assert entry.entry_id in lock._stall_issue_id
+
+
 async def test_one_entrys_recovery_does_not_clear_anothers_stall_report(
     hass: HomeAssistant,
 ):
@@ -2727,7 +2804,14 @@ async def test_one_entrys_recovery_does_not_clear_anothers_stall_report(
     # One lock entity, two entries -- what `_lock_managed_by_other_entry` is for.
     recovering.lock = stuck.lock
     recovering._min_operation_delay = 0
+    # Bound to real, distinct entries: unbound locks fall back to an id keyed on
+    # object identity, which would pass this test even with the entry scope gone.
+    for lock, entry_id in ((stuck, "entry-a"), (recovering, "entry-b")):
+        entry = MockConfigEntry(domain=DOMAIN, entry_id=entry_id)
+        entry.add_to_hass(hass)
+        lock._lcm_config_entry = entry
     assert stuck._stall_issue_id != recovering._stall_issue_id
+    assert "entry-a" in stuck._stall_issue_id
 
     answered = asyncio.Event()
 

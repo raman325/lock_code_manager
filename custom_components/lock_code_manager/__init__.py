@@ -157,6 +157,7 @@ from .domain.util import (
     deobfuscate_pins,
     lock_display_name,
     per_lock_issue_id,
+    stall_issue_id,
 )
 from .entity import build_slot_device_info
 from .providers import BaseLock
@@ -1319,7 +1320,7 @@ async def async_remove_entry(
     for lock_entity_id in config.locks:
         # Entry-scoped, so it is this entry's report being dropped and not a
         # co-managing entry's.
-        async_delete_issue(hass, DOMAIN, f"lock_stalled_{entry_id}_{lock_entity_id}")
+        async_delete_issue(hass, DOMAIN, stall_issue_id(entry_id, lock_entity_id))
     for lock_entity_id in config.locks:
         # Only delete per-lock issues if no other LCM entry manages this lock.
         if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
