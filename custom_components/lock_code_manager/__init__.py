@@ -1317,6 +1317,10 @@ async def async_remove_entry(
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
+        # Entry-scoped, so it is this entry's report being dropped and not a
+        # co-managing entry's.
+        async_delete_issue(hass, DOMAIN, f"lock_stalled_{entry_id}_{lock_entity_id}")
+    for lock_entity_id in config.locks:
         # Only delete per-lock issues if no other LCM entry manages this lock.
         if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
             for issue_key in PER_LOCK_ISSUE_KEYS:

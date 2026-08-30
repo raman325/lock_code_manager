@@ -104,6 +104,13 @@ MIN_OPERATION_DELAY = 2.0
 # not to be a tight bound. What it buys is that a wedged provider stops being
 # invisible: issue #1523 had three PIN changes sit unsynced for seven hours with
 # nothing in the log, no repair, and no signal of any kind.
+#
+# A FLOOR, not the whole answer. One `_execute_rate_limited` call is one
+# provider call, but on several providers one provider call is a sequential
+# walk of every managed slot -- so the honest budget is per-slot, and those
+# providers raise it through `stall_watchdog_seconds`. Ten flaky slots on ZHA
+# legitimately reach ~840s; reporting that as "not responding" would be the
+# same misdiagnosis this constant exists to avoid.
 OPERATION_WATCHDOG = 600.0
 
 
@@ -373,25 +380,32 @@ class BaseLock:
             # Cleared only by an operation that actually finished, so a stall
             # the user has been told about stays on screen until it does.
             if stalled.done() and not stalled.cancelled():
-                self._clear_stall_issue()
+                if (failed := stalled.exception()) is not None:
+                    # Retrieved so it cannot surface as a stray "Task exception
+                    # was never retrieved"; no report was raised, so none to
+                    # clear.
+                    LOGGER.debug("Stall watchdog itself failed: %s", failed)
+                else:
+                    self._clear_stall_issue()
             stalled.cancel()
 
     async def _async_report_stall(self, operation_type: str) -> None:
         """Wait out the watchdog, then say the lock is not answering."""
-        await asyncio.sleep(OPERATION_WATCHDOG)
+        budget = self.stall_watchdog_seconds
+        await asyncio.sleep(budget)
         LOGGER.warning(
             "%s: %s operation has not returned after %.0fs. The lock is not "
             "answering and every other operation on it is waiting behind this "
-            "one. Reloading the config entry clears it once the lock or its "
-            "integration is healthy again",
+            "one. Fix the lock's own integration -- reloading Lock Code Manager "
+            "will not release the stuck operation",
             self.lock.entity_id,
             operation_type,
-            OPERATION_WATCHDOG,
+            budget,
         )
         async_create_issue(
             self.hass,
             DOMAIN,
-            per_lock_issue_id("lock_stalled", self.lock.entity_id),
+            self._stall_issue_id,
             is_fixable=False,
             is_persistent=False,
             severity=IssueSeverity.WARNING,
@@ -399,17 +413,38 @@ class BaseLock:
             translation_placeholders={
                 "lock_entity_id": self.display_name,
                 "operation": operation_type,
-                "seconds": f"{OPERATION_WATCHDOG:.0f}",
+                "seconds": f"{budget:.0f}",
             },
         )
+
+    @property
+    def _stall_issue_id(self) -> str:
+        """
+        Identify this entry's stall report for this lock.
+
+        Scoped to the entry, not just the lock: two entries can manage the same
+        lock (see `_lock_managed_by_other_entry`), each with its own provider
+        instance and its own watchdog. Sharing one id let whichever finished
+        first delete the other's report, putting a still-stalled lock back into
+        exactly the silence this exists to break.
+        """
+        # `id(self)` when there is no entry yet -- allocation builds throwaway
+        # providers that read locks before setup. A constant there would put
+        # every such instance back on one shared id, which is the collision
+        # this property exists to avoid. The report is transient, so an id that
+        # does not survive a restart costs nothing.
+        scope = (
+            self._lcm_config_entry.entry_id
+            if self._lcm_config_entry
+            else f"unbound{id(self)}"
+        )
+        return f"lock_stalled_{scope}_{self.lock.entity_id}"
 
     @final
     @callback
     def _clear_stall_issue(self) -> None:
         """Dismiss the stall report once an operation completes."""
-        async_delete_issue(
-            self.hass, DOMAIN, per_lock_issue_id("lock_stalled", self.lock.entity_id)
-        )
+        async_delete_issue(self.hass, DOMAIN, self._stall_issue_id)
 
     @final
     def _serialize_sequence(self) -> contextlib.AbstractAsyncContextManager[None]:
@@ -494,6 +529,17 @@ class BaseLock:
     def _raise_not_implemented(self, method_name: str, guidance: str = "") -> NoReturn:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
+
+    @property
+    def stall_watchdog_seconds(self) -> float:
+        """
+        How long an operation may run before it is reported as stalled.
+
+        Overridden by providers whose single operation is a sequential walk of
+        every managed slot: their honest budget is per-slot, and the base's
+        flat one would report a slow-but-working lock as dead.
+        """
+        return OPERATION_WATCHDOG
 
     @property
     def display_name(self) -> str:

@@ -53,6 +53,20 @@ from .const import LOGGER
 class BaseMqttLock(BaseLock):
     """Base class for a lock addressed through an MQTT bridge."""
 
+    # What one slot's read costs on this transport. `_async_read_slots` walks
+    # the managed slots one at a time -- deliberately, so the bridge and the
+    # lock's firmware answer each read before the next goes out -- so the
+    # stall budget is this times the number of slots, not a flat figure.
+    _per_slot_read_budget: float = 60.0
+
+    @property
+    def stall_watchdog_seconds(self) -> float:
+        """Scale with the slot walk rather than reporting a slow lock as dead."""
+        return max(
+            super().stall_watchdog_seconds,
+            self._per_slot_read_budget * max(len(self.managed_slots), 1),
+        )
+
     # Whether any slot read on this instance has ever come back with something
     # the lock said, rather than silence. Latched on, never cleared: what it
     # records is a property of the bridge and the lock's firmware, and neither

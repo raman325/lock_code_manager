@@ -117,6 +117,9 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
 class Zigbee2MQTTLock(BaseMqttLock):
     """Class to represent Zigbee2MQTT lock."""
 
+    # `_async_read_slot` waits 10s per slot before giving up on that slot.
+    _per_slot_read_budget: float = 10.0
+
     _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
         init=False, default_factory=dict
     )

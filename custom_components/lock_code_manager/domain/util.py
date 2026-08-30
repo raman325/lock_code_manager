@@ -65,12 +65,7 @@ _LOGGER = logging.getLogger(__name__)
 # the provider base), but cleanup on entry removal iterates this tuple —
 # add new per-lock issue keys here or their persistent issues orphan when
 # the entry is deleted.
-PER_LOCK_ISSUE_KEYS = (
-    "lock_offline",
-    "lock_setup_failed",
-    "lock_dropped",
-    "lock_stalled",
-)
+PER_LOCK_ISSUE_KEYS = ("lock_offline", "lock_setup_failed", "lock_dropped")
 
 
 def per_lock_issue_id(key: str, lock_entity_id: str) -> str:

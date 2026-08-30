@@ -22,6 +22,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
 )
+from custom_components.lock_code_manager.domain import sync as sync_module
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     WriteResult,
@@ -1564,6 +1565,101 @@ class TestAsyncStopAwaitsInFlightTick:
 
         # Tick task should not have raised
         assert tick_task.exception() is None
+
+    async def test_async_stop_gives_up_on_a_wedged_tick(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        Unload completes even when a provider call never returns.
+
+        Awaiting rather than cancelling is right -- cancelling lands
+        mid-operation, and a provider that deletes a credential before writing
+        its replacement would be torn between the two. But an unbounded wait
+        parks the entry in `unload_in_progress` while Home Assistant holds its
+        setup lock, so reload, remove and re-setup all block behind it and a
+        restart is the only way out. That is the second half of issue #1523,
+        and it is what made "reload the integration" bad advice.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+
+        wedged = asyncio.Event()
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+
+        async def _never_returns(code_slot, usercode, name=None, **kwargs):
+            wedged.set()
+            await asyncio.Event().wait()
+
+        with (
+            patch.object(lock_provider, "async_set_usercode", _never_returns),
+            patch.object(sync_module, "STOP_TICK_WAIT", 0.05),
+        ):
+            tick_task = hass.async_create_task(manager._async_tick())
+            await asyncio.wait_for(wedged.wait(), timeout=5)
+
+            # Returns rather than blocking on the tick that will never finish.
+            await asyncio.wait_for(manager.async_stop(), timeout=5)
+
+        # Left running deliberately, against a manager that has already stopped.
+        assert not tick_task.done()
+        assert not manager._started
+        tick_task.cancel()
+
+    async def test_async_stop_reports_a_tick_that_raised(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A tick that finished by raising is still surfaced during stop."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        release = asyncio.Event()
+
+        async def _boom() -> None:
+            await release.wait()
+            raise RuntimeError("tick boom")
+
+        # Added while still pending, so async_stop collects and awaits it.
+        failed = hass.async_create_task(_boom())
+        manager._tick_tasks.add(failed)
+        release.set()
+
+        with caplog.at_level(logging.WARNING):
+            await manager.async_stop()
+
+        assert "In-flight tick raised during stop" in caplog.text
+        assert failed.done()
+
+    async def test_async_stop_skips_a_cancelled_tick(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A cancelled tick is not asked for an exception it does not have."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        async def _waits() -> None:
+            await asyncio.Event().wait()
+
+        cancelled = hass.async_create_task(_waits())
+        manager._tick_tasks.add(cancelled)
+        cancelled.cancel()
+
+        # Would raise CancelledError if the guard were not there.
+        await manager.async_stop()
+
+        assert cancelled.cancelled()
 
     async def test_async_stop_is_idempotent(
         self,

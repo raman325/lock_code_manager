@@ -72,6 +72,14 @@ if TYPE_CHECKING:
     from .models import LockCodeManagerConfigEntry
 
 
+# How long unload waits for an in-flight tick before leaving it to run.
+#
+# Long enough that an ordinary operation finishes and unload stays orderly,
+# short enough that a wedged provider cannot hold the entry's setup lock. The
+# alternative -- cancelling -- lands mid-operation, and a provider that deletes
+# a credential before writing its replacement would be torn between the two.
+STOP_TICK_WAIT = 30.0
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -309,6 +317,16 @@ class SlotSyncManager:
         a tick mid ``_perform_sync`` should be allowed to finish so the lock
         operation completes; ``_started=False`` keeps it from scheduling
         more work.
+
+        That wait is BOUNDED. A provider call that never returns leaves its
+        tick pending forever, and unload runs before the platforms are
+        unloaded and while Home Assistant holds the entry's setup lock -- so
+        an unbounded wait parks the entry in `unload_in_progress` and takes
+        reload, remove and re-setup down with it, leaving a restart as the
+        only way out (issue #1523). Past the bound the tick is left running
+        against a manager that has already stopped: `_started` is False, so
+        it schedules nothing further, and whatever it is waiting on either
+        lands harmlessly or never does.
         """
         if not self._started:
             return
@@ -326,11 +344,25 @@ class SlotSyncManager:
             task for task in self._tick_tasks if task is not current and not task.done()
         }
         if pending:
-            tick_results = await asyncio.gather(*pending, return_exceptions=True)
-            for result in tick_results:
-                if isinstance(result, Exception) and not isinstance(
-                    result, asyncio.CancelledError
-                ):
+            finished, still_running = await asyncio.wait(
+                pending, timeout=STOP_TICK_WAIT
+            )
+            if still_running:
+                # Deliberately not cancelled: cancelling lands mid-operation,
+                # and providers that delete a credential before writing its
+                # replacement would be torn between the two.
+                _LOGGER.warning(
+                    "%s: %d in-flight tick(s) did not finish within %.0fs; "
+                    "leaving them to run so unload can complete. The lock is "
+                    "not answering",
+                    self._log_prefix,
+                    len(still_running),
+                    STOP_TICK_WAIT,
+                )
+            for task in finished:
+                if task.cancelled():
+                    continue
+                if (result := task.exception()) is not None:
                     _LOGGER.warning(
                         "%s: In-flight tick raised during stop: %s",
                         self._log_prefix,

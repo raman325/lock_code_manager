@@ -60,7 +60,6 @@ from custom_components.lock_code_manager.domain.exceptions import (
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
@@ -2667,32 +2666,24 @@ async def test_a_stalled_operation_is_reported_without_being_cancelled(
     """
     lock = _make_base_test_lock(hass, "stalled_op")
     running = asyncio.Event()
-    cancelled = False
 
     async def _never_returns(*_args, **_kwargs):
-        nonlocal_marker = None  # noqa: F841
         running.set()
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            raise
+        await asyncio.Event().wait()
 
     with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
         task = hass.async_create_task(lock._execute_rate_limited("set", _never_returns))
         await running.wait()
         await asyncio.sleep(0.05)
 
-        issue = ir.async_get(hass).async_get_issue(
-            DOMAIN, per_lock_issue_id("lock_stalled", lock.lock.entity_id)
-        )
+        issue = ir.async_get(hass).async_get_issue(DOMAIN, lock._stall_issue_id)
         assert issue is not None
         assert issue.translation_placeholders["operation"] == "set"
 
-        # Still running: the operation was watched, not interrupted.
+        # Watched, not interrupted: the operation is still running, which is
+        # the whole distinction from the timeout this replaced.
         assert not task.done()
         task.cancel()
-
-    assert not cancelled
 
 
 async def test_the_stall_report_clears_once_an_operation_completes(
@@ -2711,13 +2702,94 @@ async def test_the_stall_report_clears_once_an_operation_completes(
         task = hass.async_create_task(lock._execute_rate_limited("get", _slow))
         await asyncio.sleep(0.05)
         registry = ir.async_get(hass)
-        issue_id = per_lock_issue_id("lock_stalled", lock.lock.entity_id)
+        issue_id = lock._stall_issue_id
         assert registry.async_get_issue(DOMAIN, issue_id) is not None
 
         slow.set()
         assert await task == "ok"
 
     assert registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_one_entrys_recovery_does_not_clear_anothers_stall_report(
+    hass: HomeAssistant,
+):
+    """
+    Two entries can manage one lock, and each reports for itself.
+
+    Sharing one per-lock report meant whichever entry's operation returned
+    first deleted the other's -- putting a lock that is still wedged back into
+    exactly the silence this exists to break, and durably, because the other
+    watchdog has already fired and will not fire again for that operation.
+    """
+    stuck = _make_base_test_lock(hass, "shared_lock_stuck")
+    recovering = _make_base_test_lock(hass, "shared_lock_ok")
+    # One lock entity, two entries -- what `_lock_managed_by_other_entry` is for.
+    recovering.lock = stuck.lock
+    recovering._min_operation_delay = 0
+    assert stuck._stall_issue_id != recovering._stall_issue_id
+
+    answered = asyncio.Event()
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    async def _eventually(*_args, **_kwargs):
+        await answered.wait()
+        return "ok"
+
+    registry = ir.async_get(hass)
+    with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
+        stuck_task = hass.async_create_task(
+            stuck._execute_rate_limited("set", _never_returns)
+        )
+        other_task = hass.async_create_task(
+            recovering._execute_rate_limited("get", _eventually)
+        )
+        await asyncio.sleep(0.05)
+        assert registry.async_get_issue(DOMAIN, stuck._stall_issue_id) is not None
+
+        answered.set()
+        assert await other_task == "ok"
+
+        # The entry that recovered cleared its own report and nobody else's.
+        assert registry.async_get_issue(DOMAIN, recovering._stall_issue_id) is None
+        assert registry.async_get_issue(DOMAIN, stuck._stall_issue_id) is not None
+        stuck_task.cancel()
+
+
+async def test_a_watchdog_that_itself_fails_does_not_leak_its_exception(
+    hass: HomeAssistant,
+):
+    """
+    The watchdog failing must not take the operation down with it.
+
+    Its exception is retrieved rather than left on a discarded task, which
+    Home Assistant surfaces as a stray "Task exception was never retrieved"
+    and the test harness fails runs on.
+    """
+    lock = _make_base_test_lock(hass, "watchdog_boom")
+    lock._min_operation_delay = 0
+    answered = asyncio.Event()
+
+    async def _slow(*_args, **_kwargs):
+        await answered.wait()
+        return "ok"
+
+    with (
+        patch.object(base_module, "OPERATION_WATCHDOG", 0.01),
+        patch.object(
+            base_module, "async_create_issue", side_effect=RuntimeError("boom")
+        ),
+    ):
+        task = hass.async_create_task(lock._execute_rate_limited("get", _slow))
+        # Long enough for the watchdog to fire and blow up on its own.
+        await asyncio.sleep(0.05)
+        answered.set()
+        # The operation still succeeds; the watchdog's failure is swallowed.
+        assert await task == "ok"
+
+    await asyncio.sleep(0)
 
 
 async def test_a_prompt_operation_raises_no_stall_report(hass: HomeAssistant):
@@ -2729,9 +2801,12 @@ async def test_a_prompt_operation_raises_no_stall_report(hass: HomeAssistant):
         return "ok"
 
     assert await lock._execute_rate_limited("get", _prompt) == "ok"
-    assert (
-        ir.async_get(hass).async_get_issue(
-            DOMAIN, per_lock_issue_id("lock_stalled", lock.lock.entity_id)
-        )
-        is None
-    )
+    assert ir.async_get(hass).async_get_issue(DOMAIN, lock._stall_issue_id) is None
+    # And the watchdog is not left sleeping out its ten minutes behind it.
+    await asyncio.sleep(0)
+    assert not [
+        task
+        for task in asyncio.all_tasks()
+        if "lcm_watchdog" in (task.get_name() or "")
+        and not (task.done() or task.cancelling())
+    ]
