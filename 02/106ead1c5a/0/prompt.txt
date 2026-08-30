@@ -1,0 +1,599 @@
+both merged. Open a PR for v6 into main. Run code review after you've opened the PR
+
+---
+
+<task-notification>
+<task-id>aab3e8c385923e7f3</task-id>
+<tool-use-id>toolu_01WTxjZi53WaVgJ4JJgJwJqa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/aab3e8c385923e7f3.output</output-file>
+<status>completed</status>
+<summary>Agent "Review v6 removals and back-compat" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review of PR #1514 (`origin/v6` → `main`). Three real findings.
+
+---
+
+## CRITICAL — the migration's device-move is a no-op in production, and its test can't detect that
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py:461-465`
+
+```python
+device = dev_reg.async_get_device(
+    identifiers={
+        build_slot_device_identifier(config_entry.entry_id, slot_num)
+    }
+)
+```
+
+`async_get_device` takes `set[tuple[str, str]]`. This passes a set containing a bare **string**. Every other call site in the repo gets it right — `__init__.py:1305`, `__init__.py:1576`, `diagnostics.py:169-173`, and critically `entity.py:56-57`, which is what actually *creates* these devices:
+
+```python
+identifiers={(DOMAIN, build_slot_device_identifier(config_entry.entry_id, slot_num))}
+```
+
+The lookup misses a dict index keyed by tuples, so it returns `None` — no `TypeError`, no log. I verified this directly against the project's own venv: with a device registered the production way, the tuple lookup finds it and the bare-string lookup returns `None`.
+
+**Why the test doesn't catch it.** `tests/test_init.py:2140-2145` builds the device with the *same* malformed identifier the buggy code searches for:
+
+```python
+identifiers={build_slot_device_identifier(config_entry.entry_id, 1)},
+```
+
+Bug and test agree with each other and disagree with production. I changed only that one line to the tuple form and re-ran: still green — because entity setup re-parents the device anyway. But that is precisely the path the code comment (lines 454-457) exists to avoid. With the corrected identifier, HA logs:
+
+&gt; Detected that custom integration 'lock_code_manager' **assigns an existing device to a different config subentry** … this silently moves the device.
+
+`homeassistant/helpers/device_registry.py:1947-1954` — `breaks_in_ha_version="2027.8.0"`.
+
+**Failure scenario:** every installation upgrading from v4 takes the deprecated implicit path instead of the deliberate one. One warning per slot device on every startup today; a hard failure on HA Core 2027.8. The migration is a one-way door with no code-level rollback, so this lands silently on all upgraders.
+
+**Fix:** `identifiers={(DOMAIN, build_slot_device_identifier(config_entry.entry_id, slot_num))}` — and fix the test the same way, so it stops validating its own assumption. Note `slot_num` there is `subentry.data.get(CONF_SLOT)`, which is `None`-able by type; migration's `placed` filter makes it safe today, but the `.get` invites `"{entry_id}|None"` later.
+
+---
+
+## HIGH — the subentry flow can show users an untranslated error key
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/config_flow.py:753-762` surfaces `SlotAllocationError.translation_key` as `{"base": key}` (via `_allocate_for`, line 272). Reachable keys from `domain/allocation.py`: `slot_out_of_range` (:180), `search_limit_reached` (:306), `numbers_needed_exceed_capacity` (:311, :453), `too_many_users` (:320, :411), `occupancy_unknown` (:435).
+
+`strings.json` / `translations/en.json` `config_subentries.user.error` defines only: `excluded_platform`, `missing_pin_if_enabled`, `name_not_unique`, `name_required`, `slot_out_of_range`, `slots_already_configured`.
+
+**Missing: `too_many_users`, `numbers_needed_exceed_capacity`, `occupancy_unknown`, `search_limit_reached`.**
+
+**Failure scenario:** a user clicks "Add user" on an entry whose lock is full or asleep. Allocation refuses with `occupancy_unknown` or `too_many_users`, and the dialog renders the bare key instead of the sentence explaining that the lock is out of slots or unreachable. This is the *only* way to add a user now, so it is the path where that message matters most. Same keys exist under `options.error` — they were left behind there when the options flow stopped handling users, and were never carried into the subentry section that inherited the work.
+
+Related, cosmetic: `config_subentries.user.error.slots_already_configured` is an orphan (only producer is `_check_common_slots`, reachable solely from `async_step_reauth_confirm`), and eight now-unreachable keys linger under `options.error` (`strings.json:133-140`).
+
+---
+
+## HIGH — shipped docs tell users a removed event still fires
+
+`/Users/raman/projects/lock_code_manager/BLUEPRINTS.md:321-322`
+
+&gt; `extra_data` and `lock_config_entry_id` are gone from the entity. They all still travel on the deprecated `lock_code_manager_lock_state_changed` bus event, **which keeps firing.**
+
+Nothing fires it — zero occurrences of `lock_state_changed` anywhere under `custom_components/` at `origin/v6`. The only bus event is `BUS_EVENT_CREDENTIAL_USED` (`const.py:113`, fired at `domain/events.py:93`).
+
+**Failure scenario:** this is a *breaking-change note* — the paragraph whose whole job is to tell users how to recover `code_slot_name`, `action_text`, `from`, `to` after the entity dropped them. A user follows it, writes `event_type: lock_code_manager_lock_state_changed`, the automation loads clean, and never fires. Exactly the class of failure the `set_slot_condition` blueprint hit: parses fine, dies at runtime, green test suite. `AGENTS.md:130-136` carries the same false claim ("It is retained for backward compatibility").
+
+---
+
+## Clean results worth recording
+
+- **Blueprints: clean.** Every `lock_code_manager.*` call resolves — `condition_linker.yaml:66` correctly uses `set_condition`. No removed service anywhere in `blueprints/`, `services.yaml`, `strings.json`, `icons.json`, `README.md`. `credential_used.yaml:118`'s trigger and all seven variables it reads match `domain/events.py:93-104` exactly.
+- **`services.yaml` ↔ `strings.json` ↔ `icons.json`: clean.** All three list the identical 12 services; both removed pairs were deleted from all three. `strings.json` and `translations/en.json` are structurally identical (recursive key-tree diff empty both directions).
+- **The built bundle is genuinely rebuilt, not stale.** I want to flag this because the 2-line diff stat looks exactly like a stale artifact. It isn't: all four websocket renames landed, the new `_manage` handler and `.manage` CSS from `ts/add-user-card.ts` are compiled in, and the minifier reallocated its mangled identifiers across ~25 hunks — something no hand-edit or `sed` produces.
+- **Websocket contract: clean.** All seven command types the TS sends exist in `websocket.py`; the 8-line diff is purely the four `type` renames, so no field can silently read `undefined`.
+- **The name-write path is properly guarded.** `slot_coordinator.py:219-238` validates emptiness and uniqueness *before* calling `_write_config_fields`, so `with_user_renamed`'s silent `return self` on collision is never the thing the user hits. The comment at :223-226 names that exact hazard. Worth noting since `EntryConfig` has several `return self` no-op branches — this is the one that would have mattered.
+
+## One thing to decide, not a defect
+
+`ts/add-user-card.ts:531` calls `add_user` with the flat shape (`name`/`enabled`/`pin`/`condition` at top level), while `add_user` now declares `vol.Required(CONF_USERS)` (`__init__.py:790-806`). It works only via the back-compat shim `_flat_user_to_list` (`__init__.py:189-213`). No failure today — but the shipped card is now the sole consumer of a path described as "the fields a pre-6.0 call carried." When that shim goes, the Add User button breaks with a voluptuous error toast, and no frontend test would catch it (they mock `callService`). Either send `users: [{...}]` now, or note on the shim that the bundled card depends on it.</result>
+<usage><subagent_tokens>156363</subagent_tokens><tool_uses>57</tool_uses><duration_ms>531495</duration_ms></usage>
+</task-notification>
+
+---
+
+run review again. I am not clear on what hte issue/concern is regarding options, can you explain?
+
+---
+
+fix it and you acn do it in the open PR directly
+
+---
+
+<task-notification>
+<task-id>abe65a7bbf01fea90</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/abe65a7bbf01fea90.output</output-file>
+<status>completed</status>
+<summary>Agent "Review full v6 end state" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Four real findings, all reproduced against `origin/fix/v6-review-findings`. The suite is green (2306 passed) and ruff is clean, so none of these are caught today.
+
+---
+
+## 1. HIGH — `clear_credentials: false` only honours the first name
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py:1946-1947`
+
+```python
+retained_pairs = runtime_data.retained_pairs
+runtime_data.retained_pairs = set()
+```
+
+`async_delete_users` stages every departing user's `(lock, slot)` pairs into `runtime_data.retained_pairs` (`domain/services.py:581`) and then makes **one** call to `async_write_entry_config`. But that function is now N writes, not one: `domain/config.py:647` calls `async_remove_subentry` once per departing user, and HA's `_async_update_entry` starts each update listener as an **eager** task. So pass 1 begins executing inside the *first* `async_remove_subentry`, drains the whole `retained_pairs` set, and matches it against a diff that contains only the first user. Pass 2 (started inside the second `async_remove_subentry`) finds `retained_pairs` empty and calls `async_release_managed_slot` on the second user's slot.
+
+Reproduced: entry with `Guest0` (slot 3) and `Guest1` (slot 4), two locks.
+
+```yaml
+action: lock_code_manager.delete_user
+data:
+  config_entry_id: ...
+  name: [Guest0, Guest1]
+  clear_credentials: false
+```
+
+`async_release_managed_slot` was called with `[4, 4]` — Guest1's PIN was wiped from both locks despite the explicit hand-off. Guest0's was correctly retained. The service is documented as "Lock Code Manager stops managing those slots and whatever is programmed there keeps working"; for everyone after the first it does the opposite, irreversibly.
+
+The fix is to discard pairs as they are consumed rather than draining wholesale — e.g. `runtime_data.retained_pairs -= diff.pairs_removed` after the loop, keeping the rest for the passes still to come.
+
+---
+
+## 2. HIGH — deleting a user while the entry is unloaded leaves the PIN on the lock
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py:946-947`
+
+The only thing that clears a departing user's credential is the update listener, and it is registered in `_setup_entry_after_start` and torn down by `async_on_unload`. HA's `async_remove_subentry` has no integration hook — it removes the subentry, the entities and the device, and schedules `entry.update_listeners`, which is empty when the entry is not loaded. v6 is the first release where a user can be deleted without going through LCM code at all; in v5 both routes (`delete_user` service via `get_loaded_config_entry`, and the options flow via `_allocate_for`) required a loaded entry.
+
+Reproduced: set up the entry, `async_unload`, `async_remove_subentry` for `test1` (slot 1), reload. After reload the lock still reports `{1: SlotCredential(present=True, pin='1234')}` and no entry manages slot 1. The same applies to a disabled entry, and to one sitting in `SETUP_ERROR` — which is exactly the state reauth exists for, so "lock entity missing → reauth → user tidies up the roster while they're in there" is a plausible path.
+
+Nothing recovers it: `async_sweep_unmanaged_codes` runs only from `async_migrate_entry`, and the setup pass diffs against `EntryConfig.empty()` so `pairs_removed` is always empty. The PIN keeps opening the door and the slot number is burned (allocation refuses a number it can still read a code on). This is the `#1453` failure mode through a new door.
+
+`_async_prune_orphaned_slot_devices` (`__init__.py:1593`) already computes the exact signal at setup — slot devices whose number is no longer configured — so the cheapest fix is to release those pairs on the locks before pruning the devices.
+
+---
+
+## 3. MEDIUM — `_async_write_and_settle` can release while a pass is still running
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/domain/services.py:60-67`
+
+Same root cause as #1: one logical write is now N listener wakes. `settled` is set by whichever pass finishes first, not the last, so a service returns while later passes are still working.
+
+Reproduced: four guests, `delete_user` with all four names, with one lock's `async_release_managed_slot` slower than the others (a sleeping Z-Wave node, say). The call returned after 6 of 8 credentials had been cleared.
+
+The `_async_write_and_settle` docstring already concedes "another write landing at the same time can release the wait early" — but that was written when a single logical operation produced a single pass. It is now the normal case for any multi-name `add_user`/`delete_user`, and the promise the function exists to make ("a script that adds a user and then sets their PIN through the new text entity would find nothing to set") no longer holds for batches. Note `test_add_user_service_returns_once_the_entities_exist` and `test_delete_user_service_returns_once_the_entities_are_gone` both use a single name, so neither covers this.
+
+If `async_write_entry_config` returned how many entry updates it made, the waiter could count settle events instead of waiting for one.
+
+---
+
+## 4. MEDIUM — the reclaim path creates the slot device with no subentry
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py:1362-1365`
+
+```python
+slot_device = dev_reg.async_get_or_create(
+    config_entry_id=entry_id,
+    **build_slot_device_info(config_entry, slot_num),
+)
+```
+
+Every other device/entity creation site now passes `config_subentry_id=subentry_id_for_slot(...)`; this one does not. On an install upgrading from a pre-2026.8 registry the reclaim runs before the platforms, creates the slot device owned by the entry with no subentry, and the first `async_add_entities(..., config_subentry_id=&lt;sub&gt;)` silently moves it. HA logs:
+
+&gt; Detected that custom integration 'lock_code_manager' assigns an existing device to a different config subentry ... this silently moves the device. A device belongs to one subentry ... at `custom_components/lock_code_manager/binary_sensor.py`, line 54 ... **This will stop working in Home Assistant 2027.8.0**, please create a bug report
+
+Reproduced by running the existing `test_setup_reclaims_entities_left_on_a_split_device` scenario and reading `caplog`. The device does land in the right subentry today, so it is functionally correct for now — but it is a dated breakage in a first-party deprecation, on the exact upgrade path v6 is aimed at. Passing `subentry_id_for_slot(config_entry, slot_num)` here fixes it. A grep of the full suite for that message returns 0, so nothing else in the codebase trips it.
+
+---
+
+## Nit
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/zha.py:57` — `OPERATION_SOURCE_NAMES` is now dead; its only consumer was the `action_text` the `lock_state_changed` removal deleted. Ruff does not flag module-level dicts, so it was carried along.
+
+## Checked and clean
+
+Slot-reuse ordering (allocation reads occupancy and refuses a number whose code it can still read, so a newcomer cannot land on an uncleared predecessor); the rename path through `async_write_entry_config`'s slot-keyed matching; `EntryConfig.empty()` at setup (`pairs_removed` is correctly empty, `retained_pairs` is empty, the options settle write is correctly conditional); `async_unload_entry`/`async_remove_entry`; the reauth write, which no longer touches users; diagnostics, which builds its own structure and does not dump `entry.as_dict()`, so subentry PINs are not exposed; the shipped `www/generated/lock-code-manager.js` bundle, which matches the TS sources for both the renamed websocket commands and the new `users: [...]` payload; and translation coverage for every error key the subentry flow and allocation can raise.</result>
+<usage><subagent_tokens>248907</subagent_tokens><tool_uses>83</tool_uses><duration_ms>1140410</duration_ms></usage>
+</task-notification>
+
+---
+
+One more review of v6 now that the rest is merged
+
+---
+
+<task-notification>
+<task-id>af65ce565726933b8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/af65ce565726933b8.output</output-file>
+<status>completed</status>
+<summary>Agent "Review v6 provider layer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Provider layer review of PR #1514 (`origin/main...origin/v6`), read at `origin/v6`.
+
+## Summary
+
+The event-field removal is clean. I verified repo-wide that nothing still references `ATTR_ACTION_TEXT`, `ATTR_CODE_SLOT_NAME`, `ATTR_NOTIFICATION_SOURCE`, `ATTR_EXTRA_DATA`, `ATTR_FROM`/`ATTR_TO`, `ATTR_LCM_CONFIG_ENTRY_ID`, `ATTR_LOCK_CONFIG_ENTRY_ID`, `EVENT_LOCK_STATE_CHANGED`, or `_serialize_source_data` — in code, comments, blueprints, or shipped config. I ran an AST sweep for module-level constants in every provider that are now referenced ≤ once and found no other `OPERATION_SOURCE_NAMES`-style leftovers. No provider lost data it still uses: `data` (matter), `source`/`event_code` (zha), `event_label` (zwave_js_ui), `payload`/`action` (zigbee2mqtt) all still feed live logic. No provider reads a name out of a location v6 moved — `providers/` touches config in exactly one place (`_base.py:2074`, via `get_entry_config().name_for()`), and all seven `credential_used` fields are structurally guaranteed because every provider funnels through `async_fire_code_slot_event` and the base fills the payload itself.
+
+Three findings.
+
+---
+
+### 1. HIGH — Matter's release path can delete a lock user LCM never created
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/matter.py:847` calls `_find_user_index_for_slot` (defined at `:772`), whose **second** lookup (`:808-817`) adopts *any untagged* lock user that owns a PIN credential at `cred.slot == slot`. `async_delete_user` (`:819`) then issues Matter `ClearUser`, whose spec cascade removes that user and all of its credentials.
+
+That fallback is defensible on the *set* path — it re-adopts a pre-6.0 LCM user and rewrites its name. On the *release* path it is not symmetric: the set path's worst case is a mis-adopted user gets renamed and re-PINned; the release path's worst case is the irreversible deletion of a credential LCM never wrote.
+
+Concrete failure: a Matter lock where the homeowner added a PIN through the manufacturer's app or Apple Home. Matter auto-allocated it credential index 1, and its user is untagged. In LCM you add "Guest", who gets slot 1, and never fill in a PIN (or the lock is offline when the write is attempted) — so no `lcm:1:` user is ever created on that lock. You then delete "Guest". `diff.pairs_removed` is purely configuration-derived (`domain/config.py:457-499`), so the release fires for a slot that never held anything. The canonical pass finds no `lcm:1:` user, the legacy pass matches the homeowner's user at credential index 1, and `ClearUser` destroys it. Nothing in LCM reports why that person is locked out.
+
+Two amplifiers:
+- The release loop runs for **every** lock in the entry, not just the one the slot was written to (`__init__.py:1996-2009`). An entry with three Matter locks fires this at all three.
+- It is not idempotent in the dangerous direction: the second call for the same slot cannot find LCM's own (now-deleted) user, so it falls to the adoption pass. The docstring at `matter.py:841-845` claims it "tolerates no user found", but the fallback means that branch is often not the one taken.
+
+Recommendation: the release path should use the canonical (tag-matched) lookup only. Give `_find_user_index_for_slot` a flag, or split out a `_find_tagged_user_index_for_slot`, and have `async_release_managed_slot` call that. Adoption belongs to the write path, which can repair a wrong guess; teardown cannot.
+
+### 2. MEDIUM — same adoption flaw in the base default release, via `async_clear_usercode`
+
+`providers/_base.py:1730` (`async_release_managed_slot`) → `async_internal_clear_usercode` → `async_clear_usercode`, whose native-user owner resolution has the identical two-pass structure at `_base.py:1292-1310`. The fallback at `:1301-1310` matches an **untagged** user owning a PIN at `credential.slot == code_slot`.
+
+Reached from a *sync clear* this is correct — the slot is LCM's, and adopting the pre-tag credential is the point. Reached from `async_release_managed_slot` the premise has inverted: the slot is no longer LCM's, and there is no follow-up write to correct a wrong guess. On zwave_js under the User Credential CC, `credential_index_follows_slot` is True, so a foreign controller's user with a PIN at credential slot N is very likely to collide with LCM slot N; releasing slot N deletes that credential. Less destructive than the Matter case (credential only, not the whole user), but the same root cause.
+
+Worth fixing together with #1 — probably a `scope` parameter on the shared resolution rather than a second resolver, per the "a second read path skips the repairs" lesson.
+
+### 3. LOW — dead parameter left by the event-field removal (sibling of `OPERATION_SOURCE_NAMES`)
+
+`providers/zwave_js_ui.py:648` — `_process_notification`'s `topic` parameter is now unread. Its only use was `source_data={"topic": topic, "value": value}`, deleted in this PR; the call site at `:581` still passes it. I diffed unused-argument analysis between `origin/main` and `origin/v6` across all nine providers, and this is the **only** newly-dead one — no other siblings.
+
+---
+
+### Note on test coverage (not a code defect)
+
+`tests/providers/zwave_js/test_events.py` converted the three keypad-notification tests from capturing a real bus event to `zwave_js_lock.async_fire_code_slot_event = fired` plus `fired.assert_called_once_with(...)`. That is a test one level from the truth: after this change no zwave_js test proves a keypad notification produces an actual `credential_used` event on the bus. `tests/providers/test_base.py` still covers the funnel generically, so the gap is zwave_js-specific — but it is the provider whose notification decoding is most intricate, and the assertion would be equally cheap against the real event.</result>
+<usage><subagent_tokens>174854</subagent_tokens><tool_uses>71</tool_uses><duration_ms>500355</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a07834d4c09f0bf08</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a07834d4c09f0bf08.output</output-file>
+<status>completed</status>
+<summary>Agent "Review v6 frontend and websocket" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed at `origin/v6`: all of `ts/` (strategies, three cards, two editors, subscription mixin), `custom_components/lock_code_manager/websocket.py`, and `tests/test_frontend_contract.py`. I verified the three scenarios empirically — Python probes against the real backend (`get_config_entry_data`, `subscribe_code_slot` through a rename and through both deletion paths) and vitest probes against the real card — rather than by reading alone.
+
+## Critical
+
+**1. Saving an unmanaged code leaves every PIN on the lock card in cleartext (confidence 92)**
+`/Users/raman/projects/lock_code_manager/ts/lock-codes-card.ts:183-205` (`_startEditing`), `:223-231` (`_cancelEdit`), `:232-262` (`_saveCode` — in this PR's diff).
+
+`_startEditing` flips the card-global `this._revealed = true` and resubscribes with `reveal: true`. `_cancelEdit` restores `_wasRevealedBeforeEdit`. `_saveCode` never does.
+
+`_formatCode` (`:753-755`) gates masking on that same card-global flag, so it applies to *every* slot on the card, managed ones included.
+
+Failure: a `lcm-lock-codes` card at the default `code_display: 'masked_with_reveal'`, on a lock with LCM-managed users plus one unmanaged slot. Click the unmanaged slot's code → every code on the card un-masks, including each managed user's PIN. Press Enter → the write succeeds, edit mode exits, and every PIN stays on screen in cleartext until someone notices the eye or reloads. Verified by execution: `AFTER SAVE _revealed = true, _editingSlot = null`; `AFTER CANCEL _revealed = false`.
+
+Fix: restore `this._revealed = this._wasRevealedBeforeEdit` (and resubscribe) in `_saveCode`, the way `_cancelEdit` does — a `finally` block covers both exits.
+
+**2. The reveal that `_startEditing` triggers buys nothing, so the exposure above is pure cost (confidence 90)**
+`/Users/raman/projects/lock_code_manager/ts/lock-codes-card.ts:192-199`.
+
+The comment says "For editing, we need the actual code - trigger reveal if masked", but `currentCode` is computed from `slot.code` in the *current* (still masked) payload, on the line after the resubscribe is kicked off. For a masked occupied slot the payload is `{code: null, code_length: 4}`, so `isSlotOccupied(slot.code)` is false and `_editValue` is `''`. The revealed payload arrives later and nothing re-reads it. Verified: `EDIT VALUE after starting edit on a masked occupied slot: ""` with `_revealed: true`.
+
+Also note this fires for `code_display: 'masked'` too — a card explicitly configured "Always Masked" still resubscribes with `reveal: true` and pulls every managed user's cleartext PIN over the websocket on the first edit click. Nothing renders it, but it is a card asking for what it was configured not to show.
+
+Fix: drop the `_revealed` flip from `_startEditing` entirely. If the box should prefill, do it from the resubscribe's first payload.
+
+## Important
+
+**3. Deleting a user leaves a live "Unnamed" ghost card, and this PR added the path that reaches it (confidence 84)**
+`custom_components/lock_code_manager/websocket.py:1079-1108` (`subscribe_code_slot`), `ts/slot-card.ts:308-320` (`_renderFromData`), `ts/add-user-card.ts:302-317` (`_manage`, new in this PR).
+
+`subscribe_code_slot` resolves `slot_num` once and checks `has_slot(slot_num)` once, at subscribe time. Nothing re-checks it. I confirmed against a live backend, through both the `delete_user` action and HA's native `async_remove_subentry`, that the subscription stays open and keeps emitting:
+
+```
+{'slot_num': 1, 'name': '', 'pin': None, 'enabled': None, 'active': None,
+ 'entities': {'active': None, 'enabled': None, 'name': None, 'pin': None},
+ 'locks': [{'entity_id': 'lock.test_1', 'in_sync': None, 'code': '1234'}, ...]}
+```
+
+`_renderFromData` then picks `stateClass` by `enabled === false` / `active === false` — both are `null`, not `false` — so the card keeps the **active/blue tint**, `_renderStateChip` says "Unknown", and `_renderHeroName` shows "Unnamed". No error, no removal, and the same payload is indistinguishable from "user exists, entities not created yet" during setup, which is why the card can't tell.
+
+`slot-card.ts:1270-1276` calls `this._reload()` for exactly this reason ("without a reload it would sit here showing the person who was removed, PIN and all"). That mitigation only covers the browser that clicked Remove. This PR adds the "Manage users in settings" button, which deliberately routes users to the integrations page where HA's subentry delete dialog has no such hook — plus any second tab or second dashboard has none either.
+
+Fix: re-evaluate `get_entry_config(config_entry).has_slot(slot_num)` inside `_send_update`; when it goes false, `connection.send_error(...)` / tear the subscription down so the card can say the user is gone instead of rendering a blank one.
+
+**4. A failed unmanaged-code write tells the user nothing (confidence 82)**
+`/Users/raman/projects/lock_code_manager/ts/lock-codes-card.ts:255-258` (in this PR's diff).
+
+```js
+} catch (err) {
+    // eslint-disable-next-line no-console -- User-facing error, no logger available in card
+    console.error('Failed to set usercode:', err);
+}
+```
+
+The comment claims user-facing; nothing user-facing happens. `ws_set_usercode` is wrapped in `ws_handle_service_errors` and the backend really does raise here — `DuplicateCodeError` and provider write failures both surface as ws errors. The card stays in edit mode showing "Enter to save, Esc to cancel" with the typed value intact, so it reads as if nothing was submitted. The sibling slot card already has `_setActionError` for precisely this.
+
+## Checked and clean
+
+- **User with no slot number.** `get_config_entry_data` returns `{'1': {...}, '2': {...}}` with the unnumbered user absent (`EntryConfig.__post_init__` skips them), so `generateView` builds no section. Consistent with `_slot_from` refusing them ("has not been given a slot yet"), and the subentry flow assigns `CONF_SLOT` at creation, refusing when allocation has no room. Behaves as designed.
+- **Rename while a card is open.** Verified: the subscription survives and the next payload carries the new name (`{'name': 'Renamed', 'pin': '1234'}`). Entity IDs do not move on rename — `_async_rename_slot_entity_ids` runs only in the v3→v4 migration — so `user_entity_id`, which `generate-view.ts:53-61` always supplies, stays valid. One caveat, pre-existing: the docstring at `ts/slot-card.ts:505-508` claims the inline rename is safe because "it addresses itself by an entity rather than by this", but `slot-card-editor.ts:281-296` deletes `user_entity_id` whenever a name is typed, so a hand-added card renamed from its own hero is stranded on the next reveal-toggle or reload with "No user named 'X'".
+- **Payload keys.** Every field the TS reads matches what the backend emits — `SlotCardData`, `SlotCardLockStatus`, `ConditionEntityInfo`, `LockCoordinatorSlotData`, `LockCodeManagerConfigEntryDataResponse`. All four renamed command strings were updated in the TS; no old name survives anywhere in the tree. `add_user`'s new `users: [...]` shape matches `USER_ENTRY_SCHEMA`, and `delete_user`'s `name` string is accepted by `vol.All(cv.ensure_list, [cv.string])`.
+- **`config_entry.as_json_fragment`** carries no `data`, so moving users into subentries did not put PINs into `get_config_entry_data`'s response. `entities` uses `as_partial_dict`, also PIN-free. The slot card's per-lock `code` field is mapped into `LockSyncStatus` at `slot-card.ts:332-333` but never rendered.
+
+## What `test_frontend_contract.py` does not pin
+
+Relevant because this is a rename PR and none of the renames were covered:
+
+- The seven websocket `type` strings. Four were renamed here; rename one side alone and nothing fails — the card just gets `unknown_command`.
+- The addressee field names `user_entity_id` / `name` / `slot`, shared by `subscribe_code_slot`, `set_condition` and `clear_condition`.
+- The `SlotCardData` and `LockCoordinatorSlotData` payload keys. Only `SlotInfo` (`{name, condition}`) is pinned, which is the smallest of the three payloads.
+- `delete_user`'s `name` + `clear_credentials`, called by `slot-card.ts::_commitRemove`. `add_user` got a new pin this round; its sibling did not.
+- `websocket.py:157` (`_slot_unique_id`) and `:611`/`:792` (the in-sync unique ID) re-implement `build_slot_unique_id` inline. The contract test pins the TS side against `build_slot_unique_id` only, so a change there would leave the TS in agreement with the builder and websocket.py silently resolving nothing.</result>
+<usage><subagent_tokens>252435</subagent_tokens><tool_uses>93</tool_uses><duration_ms>923711</duration_ms></usage>
+</task-notification>
+
+---
+
+resolve conflicts on 1514 then run code review one more time
+
+---
+
+while we are waiting, see what PRs are still open and clean up stale branches and worktrees
+
+---
+
+are 1504/1493/1481 linked to 1514 so they close wehen merged?
+
+---
+
+once this is done, we have to resolve 1518, seems like a bad bug
+
+---
+
+ok merged. All that's left is 1514 and I will hold off on that one for a bit. Can you look at PR 714 or 741 in the FutureTense/keymaster repo? I was told there's an issue with the schlage provider in keymaster that may be a problem in LCM too
+
+---
+
+rebase and resolve conflicts on 1514
+
+---
+
+fix 1520
+
+---
+
+merged
+
+---
+
+check 1523 after
+
+---
+
+what is that pending write ttl used for? 60 seconds seems like a reasonable amount of time, locks should be flirs devices so should always be wakeable right?
+
+---
+
+yes
+
+---
+
+run code review
+
+---
+
+<task-notification>
+<task-id>a86b180f9f1233117</task-id>
+<tool-use-id>toolu_01G292bCTQQf6BK1MTfQNZbq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a86b180f9f1233117.output</output-file>
+<status>completed</status>
+<summary>Agent "Review the timeout fix" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Reviewed `origin/fix/hung-write-parks-slot` (2 files, +82/-2): `custom_components/lock_code_manager/providers/_base.py` and `tests/providers/test_base.py`. Full suite green on the branch (2336 passed, 3 skipped, 97s). I ran targeted probe tests against the real `_execute_rate_limited` for the cancellation cases.
+
+## The mechanics are right — points 1, 2, 4, 5 check out
+
+**Timeout semantics (1).** `asyncio.timeout` is used correctly and the mutex always unwinds. I verified empirically:
+- Outer-task cancellation mid-call: propagates as `CancelledError` (not relabelled), `_aio_lock.locked()` is `False` afterward. CPython's `uncancel() &lt;= self._cancelling` guard does the right thing.
+- `func` swallowing `CancelledError` and returning a value: the call reports **success** with that value, and `task.cancelling()` is back to 0. That's inherent to `asyncio.timeout`, not a defect here, and nothing in this repo swallows it — `_set_credential`'s `except Exception` doesn't catch it, and `zwave_js_ui._async_api_call_at`'s explicit `except asyncio.CancelledError` re-raises when `cancelling() &gt; 0`, which is exactly the state the deadline leaves the task in. No lock stays held, no task leaks.
+
+**The `expired()` check (2).** Sound. The `except` clause sits outside the `async with`, so `__aexit__` has already moved `EXPIRING → EXPIRED` and `expired()` is `True` for our deadline in every ordering. Nested `asyncio.timeout`/`wait_for` inside a provider: the inner context is in `ENTERED` when our deadline fires, so it passes `CancelledError` through and only ours converts — correct. The simultaneous case does relabel (I confirmed: a provider raising its own `TimeoutError` out of our cancellation yields `LockOperationFailed`), but `expired()` being true means 60s genuinely elapsed, so the message is accurate. Non-issue.
+
+**`_last_operation_time` in `finally` (4).** Correct for the timeout case. Note it also changes pacing for *ordinary* failures — previously only a successful call reset the clock, now any exception does, so a fast `DuplicateCodeError`-free failure inside `func` now costs the next operation a 2s wait. Defensible, just broader than the stated intent.
+
+**Sync state machine (5).** `LockOperationFailed` lands in `sync.py:920`, which does exactly one `_slot_breaker.record_failure()` then `self._state = SyncState.OUT_OF_SYNC` and returns. The slot genuinely leaves SYNCING, breaker charged once. `LockOperationUnsupported` is handled ahead of it, and a timeout can't be that subclass. Correct.
+
+## Findings
+
+### Critical (90)
+
+**1. `OPERATION_TIMEOUT` (60.0) is not greater than `zwave_js_ui.API_CALL_TIMEOUT` (60.0), and starts earlier — so it preempts it and disables the gateway-rebinding recovery.**
+
+`_base.py:104` vs `zwave_js_ui.py:60`. Inside one `_execute_rate_limited`, the outer deadline starts at `_base.py:342`; the inner `asyncio.wait_for(future, API_CALL_TIMEOUT)` (`zwave_js_ui.py:1123`) starts strictly later — after `_async_resolve_api_base()` (cold path: up to `GATEWAY_DISCOVERY_TIMEOUT` 3s + `GATEWAY_LOCAL_TIMEOUT` 5s probes), after the ≤1s `SUBSCRIBE_SETTLE_DELAY` sleep, and after the publish. The outer therefore always fires first. Deterministic, not a race.
+
+Failure scenario: the zwave-js-ui gateway is renamed or moved to a different broker address. The next write publishes into a topic nobody answers. Intended path — `wait_for` raises `TimeoutError` at 60s → `LockDisconnected("Timed out waiting for zwave-js-ui ...")` (`zwave_js_ui.py:1126`) → `_async_api_call`'s `except LockDisconnected` clears `self._api_base`, probes the gateway's home id, and calls `_invalidate_gateway_scan()` so every lock behind that scan re-resolves. Actual path with this PR — our deadline cancels the task at 60s, `except asyncio.CancelledError` sees `cancelling() &gt; 0` and re-raises, we convert to `LockOperationFailed`. `except LockDisconnected` never runs. **`_api_base` is never dropped, the shared scan is never invalidated, and the lock stays bound to a dead gateway until the integration reloads** — while the slot breaker suspends the slot after three ticks with a "communication issues" repair that names the wrong cause.
+
+The same inversion hits reads: `_async_read_slot` (`zwave_js_ui.py:1256`) deliberately does *not* catch `LockDisconnected` ("A disconnect is deliberately not caught: it is a lost transport ... the reconnect path only runs if it reaches the caller"). With the outer deadline winning, that disconnect never materialises and the reconnect path never runs.
+
+Fix: `OPERATION_TIMEOUT` must be strictly greater than the longest per-call budget any provider sets — or the base should exempt/enlarge for providers that declare their own. A bare `120.0` still doesn't fix finding 2.
+
+### Important (85)
+
+**2. The timed region is not "a single device operation" on the per-index providers — it is N of them, and 60s is below what several of them legitimately spend.**
+
+The PR comment at `_base.py:88-92` claims the deadline "measures device I/O rather than time this operation spent queued." The `MIN_OPERATION_DELAY` half of that is true as written — `await asyncio.sleep(delay)` is at line 333, the deadline opens at line 342. But the region still contains an unbounded serial loop on several providers, and that loop is by design:
+
+- `_mqtt.py:211 _async_read_slots` — "One request per index, in order, so the bridge and the lock's firmware answer each read before the next goes out."
+- `zwave_js_ui.async_get_users` (line 1223) — one `sendCommand` per slot, each with its own 60s mesh budget. **One unanswered slot already exceeds the whole operation deadline.** The provider's own docstring (`zwave_js_ui.py:1158`) says a FLiRS lock missing its wake window "times one out routinely."
+- `zigbee2mqtt._async_read_slot` (line 645) — `wait_for(future, timeout=10.0)` per slot, returns `None` and continues. **7 unanswered slots = 70s.**
+- `zha.async_get_users` (line 368) — one `cluster.get_pin_code()` per slot with no cap; zigpy's APS reply timeout is seconds, so ~12 failing slots reaches 60s.
+- `zwave_js.async_hard_refresh_codes` (line 1131) — `access_control.get_users()` + `get_all_credentials()` are the *fresh* (non-`_cached`) variants; the driver enumerates every user id on the device. On a lock reporting 30+ users over a mesh that drops responses (the #1397 profile), this is minutes.
+
+Two concrete regressions, both the *inverse* of behaviour the code deliberately built:
+
+- **Poll:** `_async_read_slots`' docstring says an all-unreadable return "is a successful poll as far as the coordinator is concerned: it resets the connectivity breaker, un-suspends the slots" — the partial result is load-bearing precisely to avoid an oscillation "flipping every slot in and out of sync." A 60s cap discards the partial result entirely: `async_internal_get_usercodes` raises, `coordinator.py:501-507` turns it into `UpdateFailed`, and the whole lock goes unavailable. The hourly hard refresh — "the only recurring read a push provider makes," and the thing that notices a drifted subscription — is the most exposed path.
+- **Allocation:** `async_internal_get_occupied_indices` catches `LockCodeManagerError` (which `LockOperationFailed` is) and returns `None`; `allocation.py:430` then raises `SlotAllocationError("occupancy_unknown")`. Adding N users asks about `range(...)` of N indices in **one** `_execute_rate_limited` call, so on a per-index provider a bulk add becomes a user-facing "occupancy unknown" failure at roughly N &gt; 6 (z2m) or N ≥ 1 unanswered slot (zwave-js-ui).
+
+Fix options: scale the deadline by the number of indices the call will address, apply it inside `_async_read_slots` per slot rather than around the batch, or make it a `BaseLock` property providers can raise.
+
+**3. The fix bounds one call, not unload — `async_stop` can still take N × 60s.**
+
+`sync.py:301` `async_stop` deliberately does not cancel in-flight ticks; it `gather`s them. Each slot has its own sync manager and its own tick, and they all serialise on the shared `_aio_lock`. When the device is wedged, ticket 1 times out at 60s, ticket 2 acquires the mutex, sleeps 2s, calls the same wedged provider, and gets a **fresh** 60s budget. Ten slots ⇒ unload blocks ~620s. The PR's claim that "`async_stop` could not finish, so the entry would not unload" is improved but not resolved from the user's point of view. Consider a per-lock "wedged" latch, or having `async_stop` cancel rather than await once a timeout has been observed.
+
+### Tests (80)
+
+The three new tests are sound and each kills its mutation — dropping the `if not deadline.expired(): raise` guard fails `test_a_providers_own_timeout_is_not_relabelled_as_ours`; inverting it fails `test_a_write_that_never_returns_fails_instead_of_hanging`. `patch.object(base_module, "OPERATION_TIMEOUT", 0.05)` works because the constant is read from module globals at call time. Two gaps:
+
+- **Nothing pins that an outer cancellation is not relabelled.** This is the property `async_stop`/unload depends on — a spurious `LockOperationFailed` during teardown would be logged as "In-flight tick raised during stop" and mask a real shutdown. I verified it works today, but it rests entirely on CPython's `uncancel() &lt;= self._cancelling` guard and is untested here. Add: start `_execute_rate_limited` on a task, cancel the task, assert `CancelledError` (not `LockOperationFailed`) and `not lock._aio_lock.locked()`.
+- **Nothing pins that the rate-limit sleep is outside the timed region.** The comment block makes that a load-bearing claim; a refactor moving `asyncio.sleep(delay)` below line 342 would be silent. Set `_min_operation_delay` above `OPERATION_TIMEOUT`, set `_last_operation_time = time.monotonic()`, and assert the operation still succeeds.</result>
+<usage><subagent_tokens>129463</subagent_tokens><tool_uses>48</tool_uses><duration_ms>612383</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9ae5c589254e1112</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/cd25197e-81d9-435c-8440-0c69e8b578bf/tasks/a9ae5c589254e1112.output</output-file>
+<status>completed</status>
+<summary>Agent "Review timeout blast radius" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verification complete. Here is my report.
+
+## Review of PR #1525 — system-level effects
+
+Reviewing `origin/fix/hung-write-parks-slot`. I did not review the timeout's own mechanics. Everything below is verified against the branch content and, where it depends on external behaviour, against the actual upstream source (`zigpy`, `zwave-js-server-python`, `node-zwave-js`).
+
+The change is well-reasoned in isolation and its comment block is unusually honest about the trade it makes. The problem is that three of its downstream consequences invert the outcome it is trying to produce.
+
+---
+
+### 1. HIGH — With 3 or more managed slots on the wedged lock, the slot breaker can never trip, so the slot never suspends
+
+`/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py:338` — the deadline starts *after* `async with self._aio_lock`. The PR comment justifies this deliberately. But the wait on `_aio_lock` is unbounded, and the slot breaker is a **windowed** breaker.
+
+Trace, wedged provider, N managed slots on one lock:
+
+- Every slot is `OUT_OF_SYNC`, ticking every 2s (`const.py:209`).
+- Each tick sets `_state = SYNCING` (`domain/sync.py:867`) *before* `_perform_sync`, so `_async_tick` short-circuits subsequent timers (`sync.py:706-712`). Exactly one in-flight tick per slot, all queued FIFO on `_aio_lock`.
+- Each holds the mutex for the full 60s, then times out. A given slot gets its next turn after N × ~62s.
+- `CircuitBreaker.record_failure` (`domain/resilience.py:47-57`) resets the count whenever `now - first_failure &gt; window`. Trip requires 3 failures with 2 gaps inside `SYNC_ATTEMPT_WINDOW = 5min`, i.e. **per-slot cycle ≤ 150s**.
+
+N=2 → 124s, trips. **N=3 → 186s: `record_failure` resets on every third call and `failure_count` never reaches `MAX_SYNC_ATTEMPTS`.** N=10 → 620s, nowhere close.
+
+So on the realistic configuration (a lock with several slots), the PR converts "one slot parked in SYNCING forever, silently" into "every slot churning forever, silently" — at `_LOGGER.info` (`sync.py:921`), with no breaker charge that sticks, no `SUSPENDED`, and no repair issue. That directly contradicts the fix's own stated contract at `_base.py:353-357` ("charge the slot breaker … and eventually suspend with the repair issue").
+
+This is the finding I'd want addressed before merge. Either the deadline has to cover the queue wait too (which the comment rejects for a defensible reason), or the breaker needs to stop being time-windowed for this failure class, or the mutex wait needs its own bound.
+
+---
+
+### 2. HIGH — `zwave_js_ui`: the new deadline is exactly equal to the provider's own, so it always wins and kills the reconnect path
+
+`providers/zwave_js_ui.py:60` sets `API_CALL_TIMEOUT = 60.0`, with a comment recording that this value was measured on live Kwikset FLiRS meshes and that "15 seconds was already too tight". It is used at `zwave_js_ui.py:1122-1124`.
+
+`OPERATION_TIMEOUT` is also `60.0` and starts strictly earlier — before `_async_resolve_api_base`, before the publish, and before `SUBSCRIBE_SETTLE_DELAY = 1.0` (`zwave_js_ui.py:84`). On a cold binding, `_async_scan_for_gateway` alone spends `GATEWAY_DISCOVERY_TIMEOUT = 3.0` plus `GATEWAY_LOCAL_TIMEOUT = 5.0` probes before the real call starts. The inner `wait_for` therefore **can never fire**.
+
+Consequences, in order of severity:
+
+- `zwave_js_ui.py:1126-1130` (`except TimeoutError` → `LockDisconnected`) becomes dead code, and with it the recovery at `zwave_js_ui.py:1184-1189`: dropping `_api_base`, probing the home id, invalidating the shared scan.
+- The exception class flips. `LockDisconnected` lands at `sync.py:887` → `note_connectivity_failure()` → the lock breaker → `unreachable` → auto-recovers on the next successful poll. `LockOperationFailed` lands at `sync.py:920` → slot breaker → `_suspend_slot`, which sets `_code_suspend_target` (`sync.py:573`). Per `request_sync_check` (`sync.py:652-666`), a slot suspended that way **only resumes when the user edits the PIN or toggles the slot**.
+
+So a slow-but-healthy FLiRS lock on this provider goes from "temporarily unreachable, self-healing" to "suspended with a repair saying *the lock may be rejecting the code silently*, requiring manual intervention". The diagnosis is wrong and the recovery is manual.
+
+`OPERATION_TIMEOUT` must be strictly greater than every provider's inner budget, or the inner budgets must be reduced.
+
+---
+
+### 3. HIGH — Healthy operations that already exceed 60s
+
+The comment argues a healthy write settles in a fraction of 60s. That holds for a single Z-Wave command. It does not hold for the loops:
+
+- **`zha.py`** — worst offender, and it isn't a loop. `cluster.get_pin_code` (`zha.py:370`) is a zigpy request. In `zigpy/device.py:634-637`, any end device (every battery deadbolt) is forced to `APS_REPLY_TIMEOUT_EXTENDED = 28` (`zigpy/const.py:24`), and the 28s wait sits *inside* the retry loop with `max_attempts = retries + 1 = 3` (`device.py:56`, `671`, `705-706`). **One ZCL command can take ~84s.** `async_get_users` (`zha.py:368`) then runs that sequentially per slot.
+- **`zigbee2mqtt.py:645`** — `asyncio.wait_for(future, timeout=10.0)` per slot, run sequentially by `_mqtt.py:288` (`{slot: await read_slot(slot) for slot in sorted(...)}`), all under one 60s budget. **7 non-answering slots = 70s.** Many Z2M converters never reply for empty slots, and `async_internal_get_occupied_indices` from allocation (`allocation.py:430`) asks about exactly those. This also makes the carefully-reasoned all-silent detection at `_mqtt.py:294-297` unreachable, and `_reads_have_succeeded` (`_mqtt.py:290`) never latches.
+- **`zwave_js.py:1132-1140`** — `async_hard_refresh_codes` calls the *uncached* `get_users()` + `get_all_credentials()`. `zwave_js_server/client.py:113-133` has no client-side timeout, and node-zwave-js does a per-slot mesh walk server-side: `#getAllCredentials_UC` is `for (let userId = 1; userId &lt;= maxUsers; userId++) await this.getCredential(...)` when the lock lacks bulk report support (`packages/zwave-js/src/lib/node/feature-apis/AccessControl.ts`). `maxUsers` is the lock's advertised capacity — commonly 30, often 250 — not the managed slot count. 60s is not a plausible bound. This is the read behind `async_confirm_pending_writes` (`coordinator.py:292`), i.e. it runs after **every** optimistic write.
+- **`matter.py`** — HA's `get_lock_users` is a per-user-index `GetUser` walk. A single `async_set_credential` pays it twice (`matter.py:812` and `matter.py:930-940`); a clear also pays it twice (`_base.py:1385` plus `matter.py:1082`).
+- **`schlage.py:469-481`** — `async_hard_refresh_codes` is `1 + 2N + 1` blocking cloud calls, N = untagged codes (`schlage.py:247`, `256`).
+
+Cancelling these does not cancel the work. `zwave_js_ui.py:56-58` says so explicitly for the gateway queue; the same is true of the zwave-js-server walk and of an already-delivered zigpy frame. So LCM abandons a full-capacity credential walk every ~60s while the server keeps running it, and retries stack behind it.
+
+---
+
+### 4. HIGH — Cancellation truncates delete-then-write sequences, removing a working PIN from the door
+
+`asyncio.timeout` cancels at whatever await the provider is sitting on. Two providers have a delete immediately followed by the write that replaces it, both inside `async_set_credential`, both inside the budget:
+
+- `providers/schlage.py:401-409` — `for code_name in names_to_delete: … await self._async_delete_code(code_name)` then `await self._async_add_code(tagged_name, pin)`. The `contextlib.suppress(LockDisconnected, LockOperationFailed)` does not suppress `CancelledError`. Cancelled between the two: **the old code is off the lock and the new one was never written**, and `_execute_rate_limited` reports `LockOperationFailed` — which nothing treats as "the slot is now empty". The user's PIN silently stops opening the door.
+- `providers/matter.py:1016-1021` → `matter.py:1038` — `clear_lock_credential` then `_send_set_credential` on the sync-duplicate retry. This is the tail of Matter's longest path (two user enumerations already spent), so it is precisely where a 60s deadline lands.
+
+Also `zwave_js.py:938-982` — `_async_uc_reconcile_value_db` is invoked from inside `except` clauses at `zwave_js.py:685` and `719`. Its `except Exception` correctly does not swallow `CancelledError`, but the repair is simply lost: per its own docstring the driver value database then keeps the pre-write state and every later cached read, including the post-restart initial load, serves the wrong value.
+
+---
+
+### 5. MEDIUM-HIGH — `_set_credential`'s user rollback is skipped, because `CancelledError` is not an `Exception`
+
+`providers/_base.py:1780-1792`:
+
+```python
+try:
+    return await self.async_set_credential(...)
+except Exception:
+    if rollback_user_id is not None:
+        try:
+            await self.async_delete_user(rollback_user_id)
+```
+
+`asyncio.CancelledError` is a `BaseException`, so the deadline firing during `async_set_credential` skips the rollback entirely. A first write to a new slot on Matter or Z-Wave that times out after `async_set_user` succeeded leaves a credential-less LCM-tagged user on the lock — the exact state `_base.py:1770-1773` says the rollback exists to prevent. And even if it were caught, the `await` would be running past an expired deadline.
+
+---
+
+### 6. MEDIUM — The set path's timeout bypasses the ambiguous-write machinery built for exactly this case
+
+In `async_internal_set_usercode` (`_base.py:1300-1327`), `result` is never bound on timeout, so `_record_optimistic_write` (line 1318) does not run. The slot never enters `PENDING_CONFIRMATION`, never gets the confirmation read, never gets the TTL grace — it goes straight to `OUT_OF_SYNC` plus a breaker charge.
+
+That is backwards. A timeout is the failure that most literally means "the write may have landed and we cannot tell", which is precisely what `WriteResult.OPTIMISTIC` was built to represent.
+
+The pre-write `_cleared_slots.discard` at `_base.py:1276` is correct and its comment already anticipates this hazard; the clear path at `_base.py:1443-1455` is also correct (neither `add` nor `discard` runs). One related note: `repairs.py:80-81` now asserts *"Left standing deliberately: the code is still on the lock"* — after a timeout that claim is unfounded. The behaviour (leave the repair up) is still the safe direction; only the text is wrong.
+
+---
+
+### 7. MEDIUM — Teardown is bounded, not unblocked, and two paths are still unbounded
+
+Answering the question directly: `SlotSyncManager.async_stop` (`sync.py:301-330`) deliberately awaits in-flight ticks rather than cancelling. Post-PR that is bounded, but by **N × 60s**, not 60s, for the reason in finding 1 — each queued tick's deadline only starts once it holds the mutex. A single `_perform_sync` can also spend two independent budgets (up to 60s for the set at `_base.py:1300`, then up to 60s for the confirmation read at `_base.py:1320`).
+
+Two provider paths the deadline does not reach at all:
+
+- **Capability probes.** `_get_cached_capabilities` → `async_get_capabilities` is real device I/O for zwave_js (`zwave_js.py:451-458`) and is called *outside* `_execute_rate_limited` at `_base.py:887` (setup), `_base.py:1285` (`_assert_slot_within_capacity`, in the set path, with the slot already marked `SYNCING`), and `allocation.py:158` (config flow). A hang there reproduces #1523 unchanged.
+- **`MatterLock.async_release_managed_slot`** (`matter.py:843-869`) overrides the base and calls `_find_user_index_for_slot` and `async_delete_user` directly, never through `_execute_rate_limited`. Matter's slot-release path can still hang the options-update listener forever.
+
+For the providers that *are* covered, the release loop at `__init__.py:1994-2003` is sequential, so removing N pairs costs up to N × 60s inside `_async_update_listener` — which `_async_write_and_settle` waits on with `_SETTLE_TIMEOUT = 30` (`domain/services.py:36`).
+
+---
+
+### Things I checked that are fine
+
+`sync.py:900` (`LockOperationUnsupported`) correctly precedes `sync.py:920`, and a timeout raises the parent so it takes the retryable arm — no ordering bug anywhere. `async_internal_get_occupied_indices` (`_base.py:2059-2071`) returns `None` on timeout and allocation honours "unknown, not free" (`allocation.py:259`). `async_confirm_pending_writes` correctly treats a failed read as non-fatal without applying backoff (`coordinator.py:295`). The sync path correctly does *not* charge the lock breaker for `LockOperationFailed`. `zigbee2mqtt`, `akuvox`, `virtual`, and `zha` have no partial-device-state hazard in the provider itself, and `_pending_api_calls` / `_pending_codes` cleanup is synchronous in `finally`, so cancellation cannot leak a future.
+
+### Suggested minimum before merge
+
+1. Make `OPERATION_TIMEOUT` strictly larger than every provider's inner budget, or scale it — `zwave_js_ui`'s 60s and `zha`'s effective 84s are both already at or over it.
+2. Decide what should happen when the deadline fires with N slots queued; as written the breaker cannot trip and nothing suspends.
+3. Change `_base.py:1782` to `except BaseException:` (re-raising) or restructure so the rollback is not lost, and give the schlage/matter delete-then-write sequences a shield so cancellation cannot land between the delete and the write.
+4. Consider treating an expired deadline on the set path as `WriteResult.OPTIMISTIC` rather than a bare failure — the pending-write machinery is already the right model for it.</result>
+<usage><subagent_tokens>175776</subagent_tokens><tool_uses>65</tool_uses><duration_ms>657073</duration_ms></usage>
+</task-notification>
+
+---
+
+yes 10 min is fine
+
+---
+
+yes take that direction
+
+---
+
+run code review
