@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "80f435947aa4",
+  "strategy": "manual-commit",
+  "branch": "fix/timeout-covers-every-device-call",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/80/f435947aa4/0/metadata.json",
+      "transcript": "/80/f435947aa4/0/full.jsonl",
+      "compact_transcript": "/80/f435947aa4/0/transcript.jsonl",
+      "content_hash": "/80/f435947aa4/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4821,
+    "cache_creation_tokens": 14101633,
+    "cache_read_tokens": 1240102656,
+    "output_tokens": 1796427,
+    "api_call_count": 2423
+  }
+}
