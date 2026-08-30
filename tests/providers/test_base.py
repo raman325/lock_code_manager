@@ -2731,6 +2731,68 @@ async def test_a_wedged_operation_is_cut_off_and_reported_as_a_disconnect(
     assert entered.is_set()
 
 
+async def test_a_wedged_availability_check_is_cut_off_too(hass: HomeAssistant):
+    """
+    The deadline covers the checks that run before the operation.
+
+    They are device I/O on some providers -- Schlage's availability check is a
+    `get_codes` cloud round trip -- so a wedge there parks the slot in SYNCING
+    exactly as issue #1523 describes, while a deadline placed around `func`
+    alone is never reached.
+    """
+    lock = _make_base_test_lock(hass, "wedged_availability")
+    lock._min_operation_delay = 0
+    never_ran = AsyncMock(return_value="unreachable")
+
+    async def _never_returns():
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        patch.object(lock, "async_is_device_available", _never_returns),
+        pytest.raises(LockDisconnected, match="no answer within"),
+    ):
+        await asyncio.wait_for(lock._execute_rate_limited("set", never_ran), timeout=5)
+
+    never_ran.assert_not_called()
+    assert not lock._aio_lock.locked()
+
+
+async def test_a_wedged_provider_setup_does_not_park_the_entry(hass: HomeAssistant):
+    """
+    `async_setup` is under the deadline as well as the capability probe.
+
+    It is device I/O on several providers -- akuvox and schlage run an
+    unmanaged-code tagging pass in it, zwave-js-ui subscribes -- and setup
+    runs while Home Assistant holds the entry's lock, so an unbounded call
+    here parks the entry in `setup_in_progress` and takes reload and remove
+    with it.
+    """
+    lock = _make_base_test_lock(hass, "wedged_provider_setup")
+    lock._min_operation_delay = 0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        patch.object(lock, "async_setup", _never_returns),
+        patch.object(lock, "async_get_usercodes", AsyncMock(return_value={})),
+    ):
+        await asyncio.wait_for(
+            lock.async_setup_internal(lock.lock_config_entry), timeout=5
+        )
+
+    # Degraded, not parked: setup returned and the retry path is armed.
+    assert lock._setup_succeeded is False
+    assert lock._setup_complete.is_set()
+    assert lock._setup_deferred is True
+
+
 async def test_a_wedged_operation_stops_blocking_every_other_slot(
     hass: HomeAssistant,
 ):
