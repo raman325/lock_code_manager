@@ -525,7 +525,7 @@
     },
     "lock_stalled": {
       "title": "{lock_entity_id} is not responding",
-      "description": "A {operation} operation on **{lock_entity_id}** has not returned after {seconds} seconds, and every other operation on that lock is waiting behind it. PIN changes for its users will not reach the lock until it clears.\n\nThis almost always means the lock's own integration is wedged rather than merely slow -- a Z-Wave controller that has stopped answering, for example. **Fix that integration first**: reloading or repairing it is what releases the stuck operation.\n\nReloading *Lock Code Manager* will not help while the operation is still stuck, and restarting Home Assistant is not needed either -- this clears itself as soon as the lock answers again."
+      "description": "A {operation} operation on **{lock_entity_id}** has not returned after {seconds} seconds, and every other operation on that lock is waiting behind it. PIN changes for its users will not reach the lock until it clears.\n\nThis almost always means the lock's own integration is wedged rather than merely slow -- a Z-Wave controller that has stopped answering, for example.\n\n1. **Fix that integration first.** Reloading or repairing it is what releases the stuck operation. Lock Code Manager cannot do it from here.\n2. **Then reload Lock Code Manager** if this notice is still showing. Reloading before the lock answers again will not help, but it is safe -- it will not hang.\n\nThis clears itself as soon as any operation on the lock completes."
     }
   },
   "exceptions": {

@@ -396,8 +396,9 @@ class BaseLock:
         LOGGER.warning(
             "%s: %s operation has not returned after %.0fs. The lock is not "
             "answering and every other operation on it is waiting behind this "
-            "one. Fix the lock's own integration -- reloading Lock Code Manager "
-            "will not release the stuck operation",
+            "one. Fix the lock's own integration first; reloading Lock Code "
+            "Manager will not release the stuck operation, though it is safe to "
+            "do afterwards",
             self.lock.entity_id,
             operation_type,
             budget,
