@@ -1451,6 +1451,54 @@ async def test_on_integration_loaded_logs_debug_on_transient_reconnect_failure(
     assert lock._setup_running is False
 
 
+async def test_a_reconnect_whose_probe_times_out_rearms_the_retry(
+    hass: HomeAssistant,
+) -> None:
+    """
+    A bounded probe that times out on reconnect is a connectivity failure.
+
+    The deferred flag is the only thing that arms another attempt, and
+    `_async_run_provider_setup` clears it on the way in -- so an escaping
+    TimeoutError would spend the retry and leave the lock un-set-up until
+    someone reloaded the integration by hand. It would also skip the
+    coordinator refresh and push subscription that run after the try, leaving
+    a push provider unsubscribed for the life of the entry.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "reconnect_probe_timeout", config_entry=config_entry
+    )
+    lock = MockNativeUserLock(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    lock._lcm_config_entry = config_entry
+    lock._min_operation_delay = 0
+
+    loaded_entry = MagicMock()
+    loaded_entry.state = ConfigEntryState.LOADED
+    lock.lock_config_entry = loaded_entry
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(type(lock), "stall_watchdog_seconds", property(lambda _s: 0.05)),
+        patch.object(lock, "async_get_capabilities", _never_returns),
+        patch.object(lock, "subscribe_push_updates") as subscribed,
+        patch.object(type(lock), "supports_push", property(lambda _s: True)),
+    ):
+        # Returns rather than raising out of the reconnect handler.
+        await asyncio.wait_for(lock._async_on_integration_loaded(), timeout=5)
+
+    assert lock._setup_deferred is True
+    assert lock._setup_running is False
+    assert lock._setup_succeeded is False
+    # The work after the try still ran.
+    subscribed.assert_called_once()
+
+
 class MockNativeUserLock(MockLCMLock):
     """Mock lock that opts into the native-user capability validation."""
 
@@ -2815,6 +2863,91 @@ async def test_unloading_reads_a_watchdog_that_already_failed(
         await lock.async_unload(False)
 
     task.cancel()
+
+
+async def test_an_abandoned_operation_does_not_clear_the_next_instances_report(
+    hass: HomeAssistant,
+):
+    """
+    An unloaded instance stops clearing reports; a reload keeps the entry id.
+
+    `async_stop`'s bounded wait abandons a wedged operation, and when it
+    finally returns its `finally` runs -- against an id built from an entry id
+    the REPLACEMENT instance is using too. Nothing re-raises what it deletes,
+    because the replacement's own watchdog has already fired. Cancelling the
+    watchdogs stops the raise half of this; the clear half needs its own stop.
+    """
+    lock = _make_base_test_lock(hass, "abandoned_clear")
+    lock._min_operation_delay = 0
+    running = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def _wedges_then_returns(*_args, **_kwargs):
+        running.set()
+        await finish.wait()
+
+    task = asyncio.create_task(lock._execute_rate_limited("set", _wedges_then_returns))
+    await running.wait()
+
+    # The entry unloads while the operation is still out there.
+    await lock.async_unload(False)
+
+    # Its replacement, on the same entry, raises its own report.
+    replacement_issue = lock._stall_issue_id
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        replacement_issue,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="lock_stalled",
+    )
+
+    # Now the abandoned operation lands.
+    finish.set()
+    await asyncio.wait_for(task, timeout=5)
+
+    assert ir.async_get(hass).async_get_issue(DOMAIN, replacement_issue) is not None
+
+
+async def test_a_completing_poll_does_not_clear_a_wedged_setups_report(
+    hass: HomeAssistant,
+):
+    """
+    The clear waits until nothing is still in flight.
+
+    Most operations serialize on `_aio_lock`, so "an operation finished" and
+    "nothing is stalled" are the same statement. `async_setup` is watched from
+    outside that mutex, so a poll can finish beside a wedged setup -- and the
+    setup's own watchdog has already fired, so nothing would raise the report
+    again.
+    """
+    lock = _make_base_test_lock(hass, "poll_beside_setup")
+    lock._min_operation_delay = 0
+    lock._lcm_config_entry = lock.lock_config_entry
+    setup_running = asyncio.Event()
+
+    async def _never_returns(*_args, **_kwargs):
+        setup_running.set()
+        await asyncio.Event().wait()
+
+    with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
+        # Stands in for `async_setup`: watched, but outside `_aio_lock`.
+        async def _wedged_setup():
+            async with lock._watching_for_a_stall("setup"):
+                await _never_returns()
+
+        wedged = asyncio.create_task(_wedged_setup())
+        await setup_running.wait()
+        await asyncio.sleep(0.05)
+        issue_id = lock._stall_issue_id
+        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+        # A poll completes normally while the setup is still stuck.
+        await lock._execute_rate_limited("get", AsyncMock(return_value={}))
+
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+    wedged.cancel()
 
 
 async def test_an_armed_watchdog_does_not_hold_up_block_till_done(

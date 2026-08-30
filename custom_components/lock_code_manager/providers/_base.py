@@ -274,6 +274,7 @@ class BaseLock:
     # `async_stop`'s bounded wait keeps running after its entry has gone, and
     # its watchdog would otherwise report a stall against the entry that
     # replaced it -- or clear that replacement's own live report.
+    _unloaded: bool = field(default=False, init=False, repr=False)
     _stall_watchdogs: set[asyncio.Task[None]] = field(
         default_factory=set, init=False, repr=False
     )
@@ -412,14 +413,18 @@ class BaseLock:
                 )
             stalled.cancel()
             # Cleared by ANY operation that finished, not only one that had
-            # tripped the watchdog. The report is identified by entry and lock,
-            # which outlive the operation object -- so after a reload the only
-            # instance that could clear a standing report is gone, and the
-            # fresh one would work perfectly while the notice stayed up for
-            # good. Deleting an id that is not there is a no-op, and within one
-            # instance nothing else can have completed anyway: whatever reaches
-            # here held `_aio_lock` throughout.
-            self._clear_stall_issue()
+            # tripped the watchdog: the report is identified by entry and lock,
+            # which outlive the operation object, so after a reload the only
+            # instance that could clear a standing report is gone and the fresh
+            # one would work perfectly while the notice stayed up for good.
+            #
+            # Only once NOTHING is still in flight, though. Most operations
+            # serialize on `_aio_lock`, but `async_setup` does not -- it is
+            # watched from `_async_run_provider_setup`, outside the mutex -- so
+            # a poll finishing beside a wedged setup would otherwise clear a
+            # report whose own watchdog can never fire again.
+            if not self._stall_watchdogs:
+                self._clear_stall_issue()
 
     async def _async_report_stall(self, operation_type: str) -> None:
         """Wait out the watchdog, then say the lock is not answering."""
@@ -480,7 +485,18 @@ class BaseLock:
     @final
     @callback
     def _clear_stall_issue(self) -> None:
-        """Dismiss the stall report once an operation completes."""
+        """
+        Dismiss the stall report once an operation completes.
+
+        Nothing once unloaded. A reload keeps the entry id, so the operation
+        this instance was abandoned mid-way through by `async_stop`'s bounded
+        wait would otherwise land later and delete the REPLACEMENT instance's
+        live report -- which nothing re-raises, because the replacement's own
+        watchdog already fired. Cancelling the watchdogs in `async_unload`
+        stops the raise half of that; this is the clear half.
+        """
+        if self._unloaded:
+            return
         async_delete_issue(self.hass, DOMAIN, self._stall_issue_id)
 
     @final
@@ -1141,7 +1157,12 @@ class BaseLock:
         self._setup_running = True
         try:
             await self._async_run_provider_setup(self._lcm_config_entry)
-        except LockDisconnected, LockOperationFailed:
+        except LockDisconnected, LockOperationFailed, TimeoutError:
+            # TimeoutError because the capability probe is bounded: a lock that
+            # answers nothing is a connectivity failure like any other, and it
+            # has to re-arm the deferred flag. Letting it escape instead would
+            # skip the coordinator refresh and push subscription below, leaving
+            # a push provider unsubscribed for the life of the entry.
             self._setup_deferred = True
             LOGGER.debug(
                 "Provider setup failed for %s, will retry on next reconnect",
@@ -1219,6 +1240,7 @@ class BaseLock:
                 watchdog.exception()
             watchdog.cancel()
         self._stall_watchdogs.clear()
+        self._unloaded = True
 
         if self._config_entry_state_unsub:
             self._config_entry_state_unsub()
