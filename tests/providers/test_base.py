@@ -60,6 +60,8 @@ from custom_components.lock_code_manager.domain.exceptions import (
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.util import per_lock_issue_id
+from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
@@ -2646,3 +2648,90 @@ async def test_clearing_a_managed_slot_still_adopts_an_untagged_owner(
 
     deleted.assert_called_once()
     assert deleted.call_args.args[0].user_id == 99
+
+
+async def test_a_stalled_operation_is_reported_without_being_cancelled(
+    hass: HomeAssistant,
+):
+    """
+    A wedged provider becomes visible, and is left running.
+
+    Issue #1523: a call that never returned held `_aio_lock` and pinned its
+    slot in SYNCING, which the tick short-circuits on -- so the slot stopped
+    reconciling entirely, with nothing in the log and no repair. Three PIN
+    changes sat unsynced for seven hours.
+
+    Reported rather than cancelled on purpose. Schlage and Matter both delete
+    a credential and then write its replacement, so cancelling mid-sequence
+    can take a working PIN off a door and put nothing back.
+    """
+    lock = _make_base_test_lock(hass, "stalled_op")
+    running = asyncio.Event()
+    cancelled = False
+
+    async def _never_returns(*_args, **_kwargs):
+        nonlocal_marker = None  # noqa: F841
+        running.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise
+
+    with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
+        task = hass.async_create_task(lock._execute_rate_limited("set", _never_returns))
+        await running.wait()
+        await asyncio.sleep(0.05)
+
+        issue = ir.async_get(hass).async_get_issue(
+            DOMAIN, per_lock_issue_id("lock_stalled", lock.lock.entity_id)
+        )
+        assert issue is not None
+        assert issue.translation_placeholders["operation"] == "set"
+
+        # Still running: the operation was watched, not interrupted.
+        assert not task.done()
+        task.cancel()
+
+    assert not cancelled
+
+
+async def test_the_stall_report_clears_once_an_operation_completes(
+    hass: HomeAssistant,
+):
+    """The notice is transient: it goes as soon as the lock answers again."""
+    lock = _make_base_test_lock(hass, "stall_clears")
+    lock._min_operation_delay = 0
+    slow = asyncio.Event()
+
+    async def _slow(*_args, **_kwargs):
+        await slow.wait()
+        return "ok"
+
+    with patch.object(base_module, "OPERATION_WATCHDOG", 0.01):
+        task = hass.async_create_task(lock._execute_rate_limited("get", _slow))
+        await asyncio.sleep(0.05)
+        registry = ir.async_get(hass)
+        issue_id = per_lock_issue_id("lock_stalled", lock.lock.entity_id)
+        assert registry.async_get_issue(DOMAIN, issue_id) is not None
+
+        slow.set()
+        assert await task == "ok"
+
+    assert registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_a_prompt_operation_raises_no_stall_report(hass: HomeAssistant):
+    """The watchdog is silent for work that finishes in time."""
+    lock = _make_base_test_lock(hass, "prompt_op")
+    lock._min_operation_delay = 0
+
+    async def _prompt(*_args, **_kwargs):
+        return "ok"
+
+    assert await lock._execute_rate_limited("get", _prompt) == "ok"
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, per_lock_issue_id("lock_stalled", lock.lock.entity_id)
+        )
+        is None
+    )

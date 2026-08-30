@@ -8,7 +8,7 @@ See ARCHITECTURE.md for the provider interface contract.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection
 import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -84,6 +84,27 @@ from .const import LOGGER
 _LOGGER = logging.getLogger(__name__)
 
 MIN_OPERATION_DELAY = 2.0
+
+# How long one device operation may run before it is reported as stalled.
+#
+# A WATCHDOG, not a deadline: it never cancels the operation. Several providers
+# mutate device state in more than one step -- Schlage and Matter both delete a
+# credential and then write its replacement -- so cancelling mid-sequence can
+# take a working PIN off a door and leave nothing in its place. A stalled write
+# is bad; a silently deleted credential is worse.
+#
+# It also must not preempt the providers' own recovery. `zwave_js_ui` gives an
+# API call 60s and turns its own expiry into `LockDisconnected`, which drops the
+# gateway binding and rebinds; ZHA can legitimately spend ~84s on a single ZCL
+# command to a battery lock (zigpy forces a 28s reply timeout for end devices,
+# inside three attempts). Anything at or below those preempts a real recovery
+# path and misreports a healthy-but-slow lock as broken.
+#
+# Ten minutes is therefore chosen to be longer than any legitimate operation,
+# not to be a tight bound. What it buys is that a wedged provider stops being
+# invisible: issue #1523 had three PIN changes sit unsynced for seven hours with
+# nothing in the log, no repair, and no signal of any kind.
+OPERATION_WATCHDOG = 600.0
 
 
 # How long an optimistic write waits for confirmation (push event or hard-refresh
@@ -320,9 +341,75 @@ class BaseLock:
                 self.lock.entity_id,
             )
 
-            result = await func(*args, **kwargs)
+            async with self._watching_for_a_stall(operation_type):
+                result = await func(*args, **kwargs)
             self._last_operation_time = time.monotonic()
             return result
+
+    @final
+    @contextlib.asynccontextmanager
+    async def _watching_for_a_stall(self, operation_type: str) -> AsyncIterator[None]:
+        """
+        Report an operation that runs past ``OPERATION_WATCHDOG``.
+
+        Watches; never intervenes. The operation keeps running and its result,
+        whenever it arrives, is used exactly as it would have been -- so a
+        provider that mutates device state in several steps cannot be torn in
+        half by this, and a provider's own timeout still fires first and still
+        drives its own recovery.
+
+        What it changes is that the stall becomes visible. Until now a call
+        that never returned held ``_aio_lock`` and pinned its slot in SYNCING,
+        which the tick short-circuits on, so the slot stopped reconciling for
+        the life of the config entry with nothing logged anywhere (#1523).
+        """
+        stalled = self.hass.async_create_task(
+            self._async_report_stall(operation_type),
+            f"lcm_watchdog_{self.lock.entity_id}",
+        )
+        try:
+            yield
+        finally:
+            # Cleared only by an operation that actually finished, so a stall
+            # the user has been told about stays on screen until it does.
+            if stalled.done() and not stalled.cancelled():
+                self._clear_stall_issue()
+            stalled.cancel()
+
+    async def _async_report_stall(self, operation_type: str) -> None:
+        """Wait out the watchdog, then say the lock is not answering."""
+        await asyncio.sleep(OPERATION_WATCHDOG)
+        LOGGER.warning(
+            "%s: %s operation has not returned after %.0fs. The lock is not "
+            "answering and every other operation on it is waiting behind this "
+            "one. Reloading the config entry clears it once the lock or its "
+            "integration is healthy again",
+            self.lock.entity_id,
+            operation_type,
+            OPERATION_WATCHDOG,
+        )
+        async_create_issue(
+            self.hass,
+            DOMAIN,
+            per_lock_issue_id("lock_stalled", self.lock.entity_id),
+            is_fixable=False,
+            is_persistent=False,
+            severity=IssueSeverity.WARNING,
+            translation_key="lock_stalled",
+            translation_placeholders={
+                "lock_entity_id": self.display_name,
+                "operation": operation_type,
+                "seconds": f"{OPERATION_WATCHDOG:.0f}",
+            },
+        )
+
+    @final
+    @callback
+    def _clear_stall_issue(self) -> None:
+        """Dismiss the stall report once an operation completes."""
+        async_delete_issue(
+            self.hass, DOMAIN, per_lock_issue_id("lock_stalled", self.lock.entity_id)
+        )
 
     @final
     def _serialize_sequence(self) -> contextlib.AbstractAsyncContextManager[None]:
