@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
@@ -1218,3 +1219,31 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
 
     asked = {call.args[0] for call in cluster.get_pin_code.call_args_list}
     assert asked == {2}
+
+
+async def test_the_stall_budget_scales_with_the_slot_walk(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """
+    ZHA reads every managed slot inside one operation, so its budget is per-slot.
+
+    zigpy forces a 28s reply timeout for battery end devices inside three
+    attempts, so one ZCL command can legitimately take ~84s -- and
+    `async_get_users` walks the slots in turn. The base's flat ten minutes
+    would call a slow-but-working lock dead somewhere around eight slots,
+    which is the misdiagnosis the watchdog exists to avoid.
+    """
+    flat = base_module.OPERATION_TIMEOUT
+
+    with patch.object(
+        type(zha_lock),
+        "managed_slots",
+        property(lambda _self: frozenset(range(1, 11))),
+    ):
+        assert zha_lock.operation_timeout_seconds > flat
+
+    with patch.object(
+        type(zha_lock), "managed_slots", property(lambda _self: frozenset())
+    ):
+        # No slots to walk, so no reason to be more patient than the default.
+        assert zha_lock.operation_timeout_seconds == flat

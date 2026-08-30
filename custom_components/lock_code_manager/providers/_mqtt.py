@@ -36,7 +36,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import NoReturn, final
+from typing import ClassVar, NoReturn, final
 
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
@@ -52,6 +52,20 @@ from .const import LOGGER
 @dataclass(repr=False, eq=False)
 class BaseMqttLock(BaseLock):
     """Base class for a lock addressed through an MQTT bridge."""
+
+    # What one slot's read costs on this transport. `_async_read_slots` walks
+    # the managed slots one at a time -- deliberately, so the bridge and the
+    # lock's firmware answer each read before the next goes out -- so the
+    # stall budget is this times the number of slots, not a flat figure.
+    _per_slot_read_budget: ClassVar[float] = 60.0
+
+    @property
+    def operation_timeout_seconds(self) -> float:
+        """Scale with the slot walk rather than reporting a slow lock as dead."""
+        return max(
+            super().operation_timeout_seconds,
+            self._per_slot_read_budget * max(len(self.managed_slots), 1),
+        )
 
     # Whether any slot read on this instance has ever come back with something
     # the lock said, rather than silence. Latched on, never cleared: what it

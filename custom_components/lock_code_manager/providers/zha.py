@@ -55,6 +55,13 @@ OPERATION_TO_LOCKED: dict[int, bool] = {
 }
 
 
+# zigpy forces `APS_REPLY_TIMEOUT_EXTENDED` (28s) for end devices -- which every
+# battery deadbolt is -- inside three attempts, so ONE ZCL command to a sleepy
+# lock can legitimately take ~84s, and `async_get_users` walks every managed
+# slot in turn.
+_WORST_CASE_ZCL_COMMAND = 90.0
+
+
 @dataclass(repr=False, eq=False)
 class ZHALock(BaseLock):
     """
@@ -73,6 +80,14 @@ class ZHALock(BaseLock):
     _supports_programming_events: bool | None = field(init=False, default=None)
 
     # -- Properties ----------------------------------------------------------
+
+    @property
+    def operation_timeout_seconds(self) -> float:
+        """Scale with the slot walk: one command per slot, each of them slow."""
+        return max(
+            super().operation_timeout_seconds,
+            _WORST_CASE_ZCL_COMMAND * max(len(self.managed_slots), 1),
+        )
 
     @property
     def domain(self) -> str:
