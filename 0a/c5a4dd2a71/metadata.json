@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "0ac5a4dd2a71",
+  "strategy": "manual-commit",
+  "branch": "fix/hung-write-parks-slot",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0a/c5a4dd2a71/0/metadata.json",
+      "transcript": "/0a/c5a4dd2a71/0/full.jsonl",
+      "compact_transcript": "/0a/c5a4dd2a71/0/transcript.jsonl",
+      "content_hash": "/0a/c5a4dd2a71/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4745,
+    "cache_creation_tokens": 14065876,
+    "cache_read_tokens": 1227814976,
+    "output_tokens": 1772178,
+    "api_call_count": 2385
+  }
+}
