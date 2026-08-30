@@ -347,6 +347,14 @@ export interface SlotCardData {
     pin: string | null;
     /** PIN length when masked */
     pin_length?: number;
+    /**
+     * Set on the final event of a subscription: this user no longer exists.
+     *
+     * The backend stops the subscription after sending it. Without it the last
+     * payload is all nulls, which is indistinguishable from a user whose
+     * entities have not been created yet.
+     */
+    removed?: boolean;
     slot_num: number;
 }
 

@@ -55,6 +55,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_LOCK_NAME,
     ATTR_MANAGED,
     ATTR_PIN_LENGTH,
+    ATTR_REMOVED,
     ATTR_SCHEDULE,
     ATTR_SCHEDULE_NEXT_EVENT,
     ATTR_SLOT,
@@ -73,6 +74,7 @@ from custom_components.lock_code_manager.const import (
     CONF_PIN,
     CONF_SLOTS,
     DOMAIN,
+    SERVICE_DELETE_USER,
     SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
@@ -476,6 +478,53 @@ async def test_subscribe_code_slot(
     # Config entry title is surfaced so the slot card header can render
     # the "Slot N · {title}" kicker without a separate WS round-trip.
     assert data[ATTR_CONFIG_ENTRY_TITLE] == lock_code_manager_config_entry.title
+
+
+async def test_subscribe_code_slot_says_so_when_the_user_is_deleted(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    A subscription ends when its user does, and says why.
+
+    The slot is only checked at subscribe time, so a user deleted afterwards
+    -- from another browser, the entry's own page, or an action -- left the
+    subscription open. Its payload is all nulls, which no card can tell apart
+    from "entities not created yet" during setup, so it went on rendering the
+    departed person: tinted active, chip reading Unknown, name "Unnamed".
+    """
+    entry = lock_code_manager_config_entry
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: entry.entry_id,
+            ATTR_SLOT: 1,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    assert (await ws_client.receive_json())["event"][CONF_NAME] == "test1"
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {ATTR_CONFIG_ENTRY_ID: entry.entry_id, CONF_NAME: "test1"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    assert event["event"] == {ATTR_SLOT_NUM: 1, ATTR_REMOVED: True}
+
+    # And it is the last one. A ping's reply arriving next proves nothing else
+    # was queued behind it -- a still-live subscription would have pushed
+    # another payload when the entry reloaded.
+    await ws_client.send_json({"id": 2, "type": "ping"})
+    assert (await ws_client.receive_json())["id"] == 2
 
 
 async def test_subscribe_code_slot_includes_sync_status_once_determined(
