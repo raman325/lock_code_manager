@@ -833,11 +833,20 @@ class BaseLock:
                 # "no", this means it did not answer at all. A lock that is
                 # merely still coming up raises LockDisconnected instead of
                 # going quiet, so silence here is a wedge, not a slow boot.
+                # Re-armed, or nothing ever retries. `_async_run_provider_setup`
+                # clears this on the way in, and it is the only thing
+                # `_handle_connection_transition` checks -- while the LOADED
+                # transition the state listener waits for never comes for an
+                # integration that was already loaded and then wedged. Without
+                # it the lock is permanently un-set-up: sync stays gated on
+                # `provider_setup_succeeded` and refuses to write anything
+                # until somebody reloads by hand.
+                self._setup_deferred = True
                 LOGGER.warning(
                     "Capability probe for %s got no answer within %.0fs; its "
                     "integration is likely wedged rather than slow. Entities "
                     "will be created but unavailable, and setup is retried "
-                    "when that integration reloads or reconnects.",
+                    "once that integration answers again.",
                     self.lock.entity_id,
                     self.operation_timeout_seconds,
                 )
