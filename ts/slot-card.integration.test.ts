@@ -270,6 +270,17 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(json).not.toContain('Slot ');
         });
 
+        it('says the user is gone rather than rendering a blank one', () => {
+            // The backend's final event before it closes the subscription.
+            // Without it the last payload is all nulls, which reads exactly
+            // like "entities not created yet" -- so the card kept the active
+            // tint, a chip saying Unknown, and the name "Unnamed".
+            card._data = makeSlotCardData({ removed: true });
+            const json = JSON.stringify(card.render());
+            expect(json).toContain('has been removed');
+            expect(json).not.toContain('Unnamed');
+        });
+
         it('shows a placeholder when the user has no name', () => {
             card._data = makeSlotCardData({ name: '' });
             expect(JSON.stringify(card.render())).toContain('Unnamed');

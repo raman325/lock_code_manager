@@ -309,6 +309,13 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     }
 
     private _renderFromData(data: SlotCardData): TemplateResult {
+        if (data.removed) {
+            // The subscription is already closed; there is nothing further to
+            // render and nothing to reconnect to.
+            return html`<ha-card>
+                <div class="message">This user has been removed.</div>
+            </ha-card>`;
+        }
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const { pin, enabled, active, conditions, locks } = data;
         const pinLength = data.pin_length;
