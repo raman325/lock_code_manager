@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "16bd7cf36ea2",
+  "strategy": "manual-commit",
+  "branch": "fix/probe-timeout-disables-lock",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/16/bd7cf36ea2/0/metadata.json",
+      "transcript": "/16/bd7cf36ea2/0/full.jsonl",
+      "compact_transcript": "/16/bd7cf36ea2/0/transcript.jsonl",
+      "content_hash": "/16/bd7cf36ea2/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4795,
+    "cache_creation_tokens": 14086030,
+    "cache_read_tokens": 1235740235,
+    "output_tokens": 1785023,
+    "api_call_count": 2410
+  }
+}
