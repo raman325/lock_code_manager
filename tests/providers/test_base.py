@@ -2824,6 +2824,11 @@ async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
     # Degraded, not dropped: setup finished and the retry path is armed.
     assert lock._setup_succeeded is False
     assert lock._setup_complete.is_set()
+    # The flag IS the retry path. `_handle_connection_transition` checks
+    # nothing else, and the LOADED transition the state listener waits for
+    # never arrives for an integration that was already loaded and then went
+    # quiet -- so without this the lock never gets set up again.
+    assert lock._setup_deferred is True
 
 
 @pytest.mark.parametrize(
