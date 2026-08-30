@@ -382,7 +382,10 @@ class BaseLock:
         which the tick short-circuits on, so the slot stopped reconciling for
         the life of the config entry with nothing logged anywhere (#1523).
         """
-        stalled = self.hass.async_create_task(
+        # Background, so it is excluded from `async_block_till_done`. As a
+        # foreground task this is a bare `sleep(600)` that Home Assistant's
+        # own shutdown would wait out.
+        stalled = self.hass.async_create_background_task(
             self._async_report_stall(operation_type),
             f"lcm_watchdog_{self.lock.entity_id}",
         )
@@ -398,7 +401,15 @@ class BaseLock:
                 and not stalled.cancelled()
                 and (failed := stalled.exception()) is not None
             ):
-                LOGGER.debug("Stall watchdog itself failed: %s", failed)
+                # Not debug: what just broke is the mechanism whose whole
+                # job is to stop a failure going unnoticed. The operation's
+                # own warning still fires, so the visible symptom is a log
+                # saying the lock is stalled with no repair to match it.
+                LOGGER.error(
+                    "Stall watchdog for %s failed and raised no report: %s",
+                    self.lock.entity_id,
+                    failed,
+                )
             stalled.cancel()
             # Cleared by ANY operation that finished, not only one that had
             # tripped the watchdog. The report is identified by entry and lock,
@@ -444,11 +455,15 @@ class BaseLock:
         """
         Identify this entry's stall report for this lock.
 
-        Scoped to the entry, not just the lock: two entries can manage the same
-        lock (see `_lock_managed_by_other_entry`), each with its own provider
-        instance and its own watchdog. Sharing one id let whichever finished
-        first delete the other's report, putting a still-stalled lock back into
-        exactly the silence this exists to break.
+        Scoped to the entry, not just the lock, so entry-removal cleanup drops
+        only the report it owns.
+
+        Note what this does NOT buy. `_find_shared_lock_instance` gives every
+        entry managing one lock the SAME provider instance, so there is one
+        `_aio_lock` and one watchdog between them, and `_lcm_config_entry`
+        keeps whichever entry set the instance up. Two entries therefore
+        cannot hold two concurrent reports for one lock; what they can do is
+        file a report under an entry that has since been removed.
         """
         # `id(self)` when there is no entry yet -- allocation builds throwaway
         # providers that read locks before setup. A constant there would put
@@ -919,6 +934,20 @@ class BaseLock:
                     await self._async_run_provider_setup(config_entry)
                     self._setup_succeeded = True
                     self._clear_setup_validation_issue()
+            except TimeoutError:
+                # Distinct from the transport failures below, and warned
+                # rather than logged at info: those mean the lock answered
+                # "no", this means it did not answer at all. A lock that is
+                # merely still coming up raises LockDisconnected instead of
+                # going quiet, so silence here is a wedge, not a slow boot.
+                LOGGER.warning(
+                    "Capability probe for %s got no answer within %.0fs; its "
+                    "integration is likely wedged rather than slow. Entities "
+                    "will be created but unavailable, and setup is retried "
+                    "when that integration reloads or reconnects.",
+                    self.lock.entity_id,
+                    self.stall_watchdog_seconds,
+                )
             except (LockDisconnected, LockOperationFailed) as err:
                 LOGGER.warning(
                     "Provider setup failed for %s: %s. Coordinator will be "
@@ -1018,7 +1047,14 @@ class BaseLock:
         """
         self._setup_deferred = False
         if self.supports_native_users:
-            caps = await self._get_cached_capabilities()
+            # Bounded like the initial read, and for the same reason: setup
+            # runs while Home Assistant holds the entry's lock, and this probe
+            # goes through neither `_execute_rate_limited` nor any budget of
+            # the provider's own -- `MatterLock.async_get_capabilities` awaits
+            # `get_lock_info` bare. A probe is a read, so cancelling it is
+            # safe.
+            async with asyncio.timeout(self.stall_watchdog_seconds):
+                caps = await self._get_cached_capabilities()
             if CredentialType.PIN not in caps.credential_types:
                 # A degenerate-but-successful probe was just cached;
                 # invalidate it so the reconnect-path revalidation
@@ -1027,7 +1063,13 @@ class BaseLock:
                 raise LockCodeManagerProviderError(
                     f"{self.lock.entity_id}: lock does not advertise PIN credential support"
                 )
-        await self.async_setup(config_entry)
+        # Watched but NOT bounded, unlike the probe above. `async_setup` is not
+        # a read on every provider: akuvox and schlage run an unmanaged-code
+        # tagging pass here, which writes to the lock. Cancelling that mid-pass
+        # is the failure this integration refuses to risk, so a wedged setup is
+        # reported and left alone -- the same trade the write path makes.
+        async with self._watching_for_a_stall("setup"):
+            await self.async_setup(config_entry)
 
     @final
     @callback
@@ -1162,8 +1204,19 @@ class BaseLock:
             # setup-failed repair would otherwise outlive it. Non-permanent
             # unloads (reload, restart) keep it — the condition does too.
             self._clear_setup_validation_issue()
+            # Same for a standing stall report. `async_remove_entry` covers
+            # the entry being deleted, but a lock can leave an entry that
+            # stays alive (`async_release_locks`, via the options flow), and
+            # nothing else can clear the report once this instance is gone.
+            self._clear_stall_issue()
 
         for watchdog in self._stall_watchdogs:
+            # Retrieved before the reference is dropped, for the same reason
+            # `_watching_for_a_stall` does it: an already-failed watchdog
+            # discarded unread surfaces as a stray "Task exception was never
+            # retrieved" at collection time.
+            if watchdog.done() and not watchdog.cancelled():
+                watchdog.exception()
             watchdog.cancel()
         self._stall_watchdogs.clear()
 

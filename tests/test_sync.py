@@ -1608,8 +1608,16 @@ class TestAsyncStopAwaitsInFlightTick:
             # Returns rather than blocking on the tick that will never finish.
             await asyncio.wait_for(manager.async_stop(), timeout=5)
 
-        # Left running deliberately, against a manager that has already stopped.
-        assert not tick_task.done()
+        # Left running deliberately, against a manager that has already
+        # stopped. `cancelling()` rather than `done()`: `Task.cancel()` does
+        # not mark a task done until the loop next cycles, so `not done()`
+        # would still hold one iteration after a cancel and would pass against
+        # the very change this guards -- a future refactor "tidying" the
+        # bounded wait into a cancel. Cancelling a wedged write is what tears a
+        # delete-then-write provider in half.
+        assert tick_task.cancelling() == 0
+        await asyncio.sleep(0)
+        assert not tick_task.cancelled()
         assert not manager._started
         tick_task.cancel()
 
@@ -1683,8 +1691,6 @@ class TestAsyncStopAwaitsInFlightTick:
         assert not manager._started
 
         manager._suspend_slot(snapshot, "should not be raised")
-        manager._clear_resolved_issues(snapshot)
-        await manager._disable_slot("should not be acted on")
 
         assert manager._state is not SyncState.SUSPENDED
         assert (
@@ -1695,6 +1701,131 @@ class TestAsyncStopAwaitsInFlightTick:
             )
             is None
         )
+
+    @pytest.mark.parametrize("straggler_fails", [True, False])
+    async def test_a_late_tick_does_not_drive_a_shared_coordinator(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        straggler_fails: bool,
+    ) -> None:
+        """
+        A tick abandoned by the bounded wait must not speak for the coordinator.
+
+        The coordinator is not this manager's to drive: one BaseLock is shared
+        by every entry managing the lock, so a straggler would charge a breaker
+        a LIVE entry still depends on -- and past the alert threshold that
+        raises a `lock_offline` repair marked persistent, which outlives both
+        the entry that is gone and the restart after it.
+
+        Both outcomes are covered because they leave by different doors: a
+        failure reaches `note_connectivity_failure`, a success reaches the
+        verifying `async_refresh`.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+
+        wedged = asyncio.Event()
+        release = asyncio.Event()
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+
+        async def _answers_late(code_slot, usercode, name=None, **kwargs):
+            wedged.set()
+            await release.wait()
+            if straggler_fails:
+                raise LockDisconnected("lock went away")
+
+        with (
+            patch.object(lock_provider, "async_set_usercode", _answers_late),
+            patch.object(
+                type(lock_provider), "supports_push", property(lambda _s: False)
+            ),
+            patch.object(sync_module, "STOP_TICK_WAIT", 0.05),
+            patch.object(manager._coordinator, "note_connectivity_failure") as charged,
+            patch.object(manager._coordinator, "async_refresh") as refreshed,
+        ):
+            tick_task = hass.async_create_task(manager._async_tick())
+            await asyncio.wait_for(wedged.wait(), timeout=5)
+            await asyncio.wait_for(manager.async_stop(), timeout=5)
+
+            # The straggler now lands the way it would in production -- by
+            # answering, late, against a manager that has already stopped.
+            release.set()
+            await asyncio.wait_for(tick_task, timeout=5)
+
+        charged.assert_not_called()
+        refreshed.assert_not_called()
+
+    async def test_a_late_tick_does_not_disable_a_stopped_slot(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A tick abandoned by the bounded wait cannot disable a slot."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        entry_id = lock_code_manager_config_entry.entry_id
+
+        await manager.async_stop()
+
+        with patch(
+            "custom_components.lock_code_manager.domain.sync.async_disable_slot"
+        ) as disable:
+            await manager._disable_slot("should not be acted on")
+
+        # The slot belongs to an entry that has unloaded -- or, after a reload,
+        # to the entry that replaced this one.
+        disable.assert_not_called()
+        assert (
+            ir.async_get(hass).async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_1")
+            is None
+        )
+
+    async def test_a_late_tick_does_not_clear_a_stopped_slots_issues(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        A tick abandoned by the bounded wait cannot delete repair issues.
+
+        Asserted by seeding the issues first: this guard's job is to PREVENT a
+        deletion, so asserting they are absent afterwards -- as the suspend and
+        disable cases can -- would hold whether or not the guard exists.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        snapshot = manager._resolve_credential_snapshot()
+        entry_id = lock_code_manager_config_entry.entry_id
+        seeded = [
+            f"slot_disabled_{entry_id}_1",
+            f"slot_suspended_{entry_id}_{LOCK_1_ENTITY_ID}_1",
+        ]
+        for issue_id in seeded:
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="slot_disabled",
+            )
+
+        await manager.async_stop()
+        # STATE_ON so the active-only `slot_disabled` deletion is in play too.
+        assert snapshot.active_state == STATE_ON
+        manager._clear_resolved_issues(snapshot)
+
+        registry = ir.async_get(hass)
+        for issue_id in seeded:
+            assert registry.async_get_issue(DOMAIN, issue_id) is not None
 
     async def test_async_stop_is_idempotent(
         self,

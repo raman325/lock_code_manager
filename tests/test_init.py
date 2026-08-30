@@ -75,6 +75,7 @@ from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 from custom_components.lock_code_manager.domain.user_migration import migrate_to_users
+from custom_components.lock_code_manager.domain.util import stall_issue_id
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
@@ -1341,6 +1342,23 @@ async def test_remove_entry_cleans_up_repair_issues(
             translation_key="lock_setup_failed",
             translation_placeholders={"lock_entity_id": lock_id, "error": "test"},
         )
+        # Entry-scoped rather than per-lock, so this one is deleted by the
+        # entry being removed and not by the "no other entry manages this
+        # lock" pass below.
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            stall_issue_id(entry_id, lock_id),
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="lock_stalled",
+            translation_placeholders={
+                "lock_entity_id": lock_id,
+                "operation": "set",
+                "seconds": "600",
+            },
+        )
 
     # Call the remove hook directly so the fixture teardown (which
     # async_unloads the entry) still sees a registered entry. HA calls
@@ -1362,6 +1380,9 @@ async def test_remove_entry_cleans_up_repair_issues(
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         assert issue_reg.async_get_issue(DOMAIN, f"lock_offline_{lock_id}") is None
         assert issue_reg.async_get_issue(DOMAIN, f"lock_setup_failed_{lock_id}") is None
+        assert (
+            issue_reg.async_get_issue(DOMAIN, stall_issue_id(entry_id, lock_id)) is None
+        )
 
 
 async def test_reload_resets_sync_state_cleanly(

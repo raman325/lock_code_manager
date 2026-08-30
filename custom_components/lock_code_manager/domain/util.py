@@ -78,9 +78,10 @@ def stall_issue_id(scope: str, lock_entity_id: str) -> str:
     Build the repair issue id for a lock's stall report.
 
     Separate from :func:`per_lock_issue_id` because this one is scoped to the
-    ENTRY as well as the lock: two entries can manage the same lock, each with
-    its own provider instance and its own watchdog, and a shared id let either
-    delete the other's report.
+    ENTRY as well as the lock, so that `async_remove_entry` deletes the report
+    belonging to the entry being removed and not a co-managing entry's. A
+    per-lock id would make that cleanup delete a report for a lock another
+    entry is still managing, and still stalled on.
 
     Here rather than inline at each site so the raiser and the entry-removal
     cleanup cannot drift into building different strings -- which nothing would

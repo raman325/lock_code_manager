@@ -27,6 +27,8 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.providers import _base as base_module
+from custom_components.lock_code_manager.providers._mqtt import BaseMqttLock
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -1218,3 +1220,31 @@ async def test_max_slot_is_the_integrations_limit(
     device definition later.
     """
     assert await zigbee2mqtt_lock_connected.async_get_max_slot() is None
+
+
+async def test_the_stall_budget_scales_with_the_slot_walk(
+    hass: HomeAssistant, z2m_lock: Zigbee2MQTTLock
+) -> None:
+    """
+    An MQTT read walks the slots in turn, so its budget is per-slot.
+
+    zigbee2mqtt answers a single slot fast, which is why its own per-slot
+    figure is small -- but the walk is still linear, and the base's flat ten
+    minutes would call a slow-but-working lock dead once the slot count got
+    high enough. That is the misdiagnosis the watchdog exists to avoid.
+    """
+    flat = base_module.OPERATION_WATCHDOG
+    assert Zigbee2MQTTLock._per_slot_read_budget < BaseMqttLock._per_slot_read_budget
+
+    with patch.object(
+        type(z2m_lock),
+        "managed_slots",
+        property(lambda _self: frozenset(range(1, 200))),
+    ):
+        assert z2m_lock.stall_watchdog_seconds > flat
+
+    with patch.object(
+        type(z2m_lock), "managed_slots", property(lambda _self: frozenset())
+    ):
+        # No slots to walk, so no reason to be more patient than the default.
+        assert z2m_lock.stall_watchdog_seconds == flat

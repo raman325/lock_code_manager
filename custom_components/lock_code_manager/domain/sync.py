@@ -946,7 +946,16 @@ class SlotSyncManager:
             # Connectivity failure: feed the lock breaker so repeated failures
             # converge to "unreachable" alongside poll failures (recovers via a
             # successful poll/push).
-            self._coordinator.note_connectivity_failure()
+            #
+            # Not once stopped. The coordinator is NOT this manager's to speak
+            # for: one BaseLock is shared by every entry managing the lock, so
+            # a tick abandoned by `async_stop`'s bounded wait would charge a
+            # breaker a live entry is still relying on -- and past the alert
+            # threshold `_apply_backoff` raises a PERSISTENT `lock_offline`
+            # repair, which outlives the entry that is gone and the restart
+            # after it.
+            if self._started:
+                self._coordinator.note_connectivity_failure()
             self._state = SyncState.OUT_OF_SYNC
             return
         except LockOperationUnsupported as err:
@@ -1005,7 +1014,11 @@ class SlotSyncManager:
             # Sync succeeded — refresh coordinator to verify.
             # Skip for push providers — they update coordinator optimistically
             # via push_update() and refreshing from cache could read stale data.
-            if not self._lock.supports_push:
+            # `self._started` for the same reason as the failure path above:
+            # the coordinator is shared, so a straggler must not drive a poll
+            # (and the backoff bookkeeping behind it) on another entry's
+            # behalf.
+            if not self._lock.supports_push and self._started:
                 try:
                     await self._coordinator.async_refresh()
                 except Exception:
