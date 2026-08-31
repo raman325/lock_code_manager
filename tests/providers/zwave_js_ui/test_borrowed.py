@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -17,7 +18,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.domain import allocation as allocation_module
 from custom_components.lock_code_manager.domain.allocation import (
+    SlotAllocationError,
+    async_allocate_for,
     async_check_slot_capacity,
     async_max_slot,
     async_read_occupancy,
@@ -115,6 +119,41 @@ async def test_a_lock_that_cannot_be_read_is_unknown_rather_than_free(
 
     assert not occupancy.is_known
     assert transport.disposed == [zui_lock_answering]
+
+
+async def test_allocation_gives_up_rather_than_freezing_the_dialog(
+    hass: HomeAssistant, zui_lock_answering: str
+) -> None:
+    """
+    A read that outlasts a person's patience reports, rather than hanging.
+
+    Every caller of `async_allocate_for` is interactive, so the trade runs the
+    other way from background sync: the per-slot budgets that stop a
+    slow-but-working lock being called dead are generous by design, and a wide
+    window multiplies them by the indices and then by the locks. Hours of a
+    frozen dialog with nothing on screen is worse than being told to check the
+    lock and try again -- and the refusal still never issues a number over a
+    credential it could not check for.
+    """
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+
+    async def _never_answers(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(allocation_module, "ALLOCATION_READ_TIMEOUT", 0.05),
+        patch.object(
+            ZWaveJSUILock, "async_internal_get_occupied_indices", _never_answers
+        ),
+        pytest.raises(SlotAllocationError) as raised,
+    ):
+        await asyncio.wait_for(
+            async_allocate_for(hass, entry, [zui_lock_answering], 2), timeout=5
+        )
+
+    assert raised.value.translation_key == "occupancy_unknown"
+    assert zui_lock_answering in raised.value.placeholders["locks"]
 
 
 async def test_the_capacity_check_returns_the_transport_it_borrowed(
