@@ -1222,6 +1222,28 @@ async def test_max_slot_is_the_integrations_limit(
     assert await zigbee2mqtt_lock_connected.async_get_max_slot() is None
 
 
+async def test_the_budget_follows_the_operation_not_the_entry(
+    hass: HomeAssistant, z2m_lock: Zigbee2MQTTLock
+) -> None:
+    """
+    A wide read on an entry that manages nothing still gets a wide budget.
+
+    Allocation builds a throwaway provider to read what a lock holds, and that
+    instance manages no slots at all -- so scaling by the entry hands a scan
+    of a hundred indices the flat floor and times it out. That failure is not
+    cosmetic: the read comes back unknown and allocation refuses to issue a
+    number, which is the config flow refusing to let the user add anybody.
+    """
+    with patch.object(
+        type(z2m_lock), "managed_slots", property(lambda _self: frozenset())
+    ):
+        entry_wide = z2m_lock.operation_timeout_seconds()
+        scan_wide = z2m_lock.operation_timeout_seconds(100)
+
+    assert entry_wide == base_module.OPERATION_TIMEOUT
+    assert scan_wide > entry_wide
+
+
 async def test_the_stall_budget_scales_with_the_slot_walk(
     hass: HomeAssistant, z2m_lock: Zigbee2MQTTLock
 ) -> None:
@@ -1241,10 +1263,10 @@ async def test_the_stall_budget_scales_with_the_slot_walk(
         "managed_slots",
         property(lambda _self: frozenset(range(1, 200))),
     ):
-        assert z2m_lock.operation_timeout_seconds > flat
+        assert z2m_lock.operation_timeout_seconds() > flat
 
     with patch.object(
         type(z2m_lock), "managed_slots", property(lambda _self: frozenset())
     ):
         # No slots to walk, so no reason to be more patient than the default.
-        assert z2m_lock.operation_timeout_seconds == flat
+        assert z2m_lock.operation_timeout_seconds() == flat

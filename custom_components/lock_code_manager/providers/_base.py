@@ -306,6 +306,7 @@ class BaseLock:
         func: Callable[..., Awaitable[Any]],
         *args: Any,
         pre_execute: Callable[[], None] | None = None,
+        slots: int | None = None,
         **kwargs: Any,
     ) -> Any:
         """
@@ -322,8 +323,9 @@ class BaseLock:
         # providers -- Schlage's availability check is a `get_codes` cloud
         # round trip -- and waiting on `_aio_lock` behind another caller is
         # the #1523 park itself. Bounding only `func` left both unbounded.
+        budget = self.operation_timeout_seconds(slots)
         try:
-            async with asyncio.timeout(self.operation_timeout_seconds):
+            async with asyncio.timeout(budget):
                 return await self._execute_bounded(
                     operation_type, func, *args, pre_execute=pre_execute, **kwargs
                 )
@@ -343,7 +345,7 @@ class BaseLock:
             raise LockDisconnected(
                 f"Cannot {_OPERATION_MESSAGES[operation_type]} "
                 f"{self.lock.entity_id} - no answer within "
-                f"{self.operation_timeout_seconds:.0f}s"
+                f"{budget:.0f}s"
             ) from err
 
     @final
@@ -477,16 +479,31 @@ class BaseLock:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
 
-    @property
-    def operation_timeout_seconds(self) -> float:
+    def operation_timeout_seconds(self, slots: int | None = None) -> float:
         """
-        How long an operation may run before the lock is treated as gone.
+        Say how long this operation may run before the lock is treated as gone.
 
         Overridden by providers whose single operation is a sequential walk of
-        every managed slot: their honest budget is per-slot, and the base's
-        flat one would report a slow-but-working lock as dead.
+        the slots: their honest budget is per-slot, and the base's flat one
+        would call a slow-but-working lock dead partway through the walk.
+
+        ``slots`` is what THIS call touches, not what the entry manages. The
+        two diverge in both directions and neither is harmless: a throwaway
+        provider built to read a lock's contents manages nothing, so scaling
+        by the entry would hand a wide occupancy scan the flat budget and fail
+        the read that gates adding users -- while a one-slot write on a
+        thirty-slot entry would get thirty slots' worth of patience for a
+        single round trip.
+
+        None means "whatever this entry manages", which is right for the reads
+        that walk exactly that.
         """
         return OPERATION_TIMEOUT
+
+    @final
+    def _slots_in_scope(self, slots: int | None) -> int:
+        """Resolve a budget's slot count, defaulting to what the entry manages."""
+        return len(self.managed_slots) if slots is None else slots
 
     @property
     def display_name(self) -> str:
@@ -865,7 +882,7 @@ class BaseLock:
                     "will be created but unavailable, and setup is retried "
                     "once that integration answers again.",
                     self.lock.entity_id,
-                    self.operation_timeout_seconds,
+                    self.operation_timeout_seconds(),
                 )
             except (LockDisconnected, LockOperationFailed) as err:
                 LOGGER.warning(
@@ -914,7 +931,7 @@ class BaseLock:
                 # question -- what is longer than any legitimate operation on
                 # this lock -- and a second, smaller number would give up on a
                 # slow-but-working one.
-                refresh_budget = self.operation_timeout_seconds
+                refresh_budget = self.operation_timeout_seconds()
                 try:
                     async with asyncio.timeout(refresh_budget):
                         if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
@@ -971,7 +988,7 @@ class BaseLock:
         # Assistant holds the entry's lock, so anything unbounded here parks
         # the entry in `setup_in_progress` and takes reload and remove with
         # it. A provider that does none of this just returns first.
-        async with asyncio.timeout(self.operation_timeout_seconds):
+        async with asyncio.timeout(self.operation_timeout_seconds()):
             await self._run_provider_setup_bounded(config_entry)
 
     @final
@@ -1407,6 +1424,7 @@ class BaseLock:
             self.async_set_usercode,
             code_slot,
             usercode,
+            slots=1,
             pre_execute=_pre_execute_checks,
             name=name,
             source=source,
@@ -1549,6 +1567,7 @@ class BaseLock:
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
+            slots=1,
         )
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
@@ -2162,7 +2181,13 @@ class BaseLock:
             return frozenset()
         try:
             codes = await self._execute_rate_limited(
-                "get", partial(self.async_get_usercodes, wanted)
+                "get",
+                partial(self.async_get_usercodes, wanted),
+                # The scan is what this budget has to cover. Allocation builds
+                # a throwaway provider that manages nothing, so scaling by the
+                # entry would hand a wide scan the flat floor -- and failing
+                # this read is what refuses to let the user add anybody.
+                slots=len(wanted),
             )
         except LockCodeManagerError as err:
             _LOGGER.debug(

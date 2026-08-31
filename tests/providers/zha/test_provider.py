@@ -1227,6 +1227,31 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
     assert asked == {2}
 
 
+async def test_a_one_slot_write_is_not_given_the_whole_entrys_patience(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """
+    The budget follows the operation, not the entry.
+
+    A write touches one slot and one round trip. Scaling it by everything the
+    entry manages is how the park this budget exists to bound ends up lasting
+    several times longer than intended -- on a thirty-slot entry, forty-five
+    minutes for a single command.
+    """
+    with patch.object(
+        type(zha_lock),
+        "managed_slots",
+        property(lambda _self: frozenset(range(1, 31))),
+    ):
+        one_slot = zha_lock.operation_timeout_seconds(1)
+        whole_entry = zha_lock.operation_timeout_seconds()
+
+    assert one_slot < whole_entry
+    # The floor still applies: a single command never gets less than the flat
+    # budget, which is what keeps a slow-but-working lock from being cut off.
+    assert one_slot == base_module.OPERATION_TIMEOUT
+
+
 async def test_the_stall_budget_scales_with_the_slot_walk(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
@@ -1246,10 +1271,10 @@ async def test_the_stall_budget_scales_with_the_slot_walk(
         "managed_slots",
         property(lambda _self: frozenset(range(1, 11))),
     ):
-        assert zha_lock.operation_timeout_seconds > flat
+        assert zha_lock.operation_timeout_seconds() > flat
 
     with patch.object(
         type(zha_lock), "managed_slots", property(lambda _self: frozenset())
     ):
         # No slots to walk, so no reason to be more patient than the default.
-        assert zha_lock.operation_timeout_seconds == flat
+        assert zha_lock.operation_timeout_seconds() == flat

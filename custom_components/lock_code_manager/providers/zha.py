@@ -89,12 +89,11 @@ class ZHALock(BaseLock):
 
     # -- Properties ----------------------------------------------------------
 
-    @property
-    def operation_timeout_seconds(self) -> float:
+    def operation_timeout_seconds(self, slots: int | None = None) -> float:
         """Scale with the slot walk: one command per slot, each of them slow."""
         return max(
-            super().operation_timeout_seconds,
-            _WORST_CASE_ZCL_COMMAND * max(len(self.managed_slots), 1),
+            super().operation_timeout_seconds(slots),
+            _WORST_CASE_ZCL_COMMAND * self._slots_in_scope(slots),
         )
 
     @property
