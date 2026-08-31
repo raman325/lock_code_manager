@@ -1227,32 +1227,29 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
     assert asked == {2}
 
 
-async def test_a_narrower_scope_does_not_shorten_the_budget(
+async def test_a_one_slot_write_is_not_given_the_whole_entrys_patience(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
     """
-    Asking about fewer slots widens the budget or leaves it alone. Never less.
+    A write touches one slot, so it is budgeted for one slot.
 
-    The deadline covers waiting on `_aio_lock`, not just the call, so a caller
-    can be sitting behind an operation that walks every managed slot. A
-    ten-slot ZHA poll runs to 900s by design; anything cancelled at the 600s
-    floor while queued behind it raises `LockDisconnected`, which charges the
-    consecutive lock breaker -- three of those call a working lock
-    unreachable. So the floor is the entry's own count, in the helper rather
-    than in each caller's good intentions.
+    Scaling it by everything the entry manages is how the park this budget
+    exists to bound ends up lasting several times longer than intended -- on a
+    thirty-slot entry, forty-five minutes for a single command. Narrowing is
+    safe because the deadline no longer covers queueing: it bounds the probes
+    and the call, and leaves the wait on `_aio_lock` between them alone.
     """
     with patch.object(
         type(zha_lock),
         "managed_slots",
-        property(lambda _self: frozenset(range(1, 11))),
+        property(lambda _self: frozenset(range(1, 31))),
     ):
-        entry_wide = zha_lock.operation_timeout_seconds()
-        asking_for_one = zha_lock.operation_timeout_seconds(1)
-        asking_for_many = zha_lock.operation_timeout_seconds(40)
+        one_slot = zha_lock.operation_timeout_seconds(1)
+        whole_entry = zha_lock.operation_timeout_seconds()
 
-    assert entry_wide > base_module.OPERATION_TIMEOUT
-    assert asking_for_one == entry_wide
-    assert asking_for_many > entry_wide
+    assert one_slot < whole_entry
+    # The flat floor still applies, so a single command is never cut short.
+    assert one_slot == base_module.OPERATION_TIMEOUT
 
 
 async def test_the_stall_budget_scales_with_the_slot_walk(

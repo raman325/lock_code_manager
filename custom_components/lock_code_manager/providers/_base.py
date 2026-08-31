@@ -314,22 +314,24 @@ class BaseLock:
 
         pre_execute runs inside the lock before the operation, for checks
         that must be atomic with the operation (e.g., duplicate detection).
+
+        TWO deadlines, not one around the whole thing, and the mutex wait
+        between them is deliberately uncovered. One deadline over everything
+        makes a single number answer two questions that pull opposite ways --
+        how long should MY call take, and how long will I queue behind
+        somebody else's -- so any budget scoped to this call is by definition
+        too small to wait out an operation that walks every slot. Cancelling a
+        caller that was only ever queueing raises `LockDisconnected`, which
+        charges the consecutive lock breaker, and three of those mark a
+        healthy lock unreachable. A delay is better than a fabricated fault.
+
+        The wait needs no deadline of its own: everything ahead of it now cuts
+        itself off, so the queue drains.
         """
-        # Evaluate both layers, feed the combined reachability to the
-        # transition handler, then raise the layer-specific message. The two
-        # checks are kept distinct for diagnostics; the transition only cares
-        # whether the lock is reachable end-to-end.
-        # Inside the deadline, not before it. These are device I/O on some
-        # providers -- Schlage's availability check is a `get_codes` cloud
-        # round trip -- and waiting on `_aio_lock` behind another caller is
-        # the #1523 park itself. Bounding only `func` left both unbounded.
         budget = self.operation_timeout_seconds(slot_scope)
-        try:
-            async with asyncio.timeout(budget):
-                return await self._execute_bounded(
-                    operation_type, func, *args, pre_execute=pre_execute, **kwargs
-                )
-        except TimeoutError as err:
+
+        def _went_quiet(err: TimeoutError) -> NoReturn:
+            """Raise the one message both deadlines share, so they cannot drift."""
             # A disconnection, not an operation failure, and the distinction
             # decides whether anything happens at all. A failure charges the
             # SLOT breaker, which is windowed -- three strikes inside five
@@ -348,18 +350,20 @@ class BaseLock:
                 f"{budget:.0f}s"
             ) from err
 
-    @final
-    async def _execute_bounded(
-        self,
-        operation_type: Literal["get", "set", "clear", "refresh"],
-        func: Callable[..., Any],
-        *args: Any,
-        pre_execute: Callable[[], None] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Run one operation, with the caller holding the deadline."""
-        integration_up = await self.async_is_integration_connected()
-        device_up = await self.async_is_device_available()
+        # Evaluate both layers, feed the combined reachability to the
+        # transition handler, then raise the layer-specific message. The two
+        # checks are kept distinct for diagnostics; the transition only cares
+        # whether the lock is reachable end-to-end.
+        #
+        # Bounded because these are device I/O on some providers -- Schlage's
+        # availability check is a `get_codes` cloud round trip -- so a wedge
+        # here parks the slot exactly as issue #1523 describes.
+        try:
+            async with asyncio.timeout(budget):
+                integration_up = await self.async_is_integration_connected()
+                device_up = await self.async_is_device_available()
+        except TimeoutError as err:
+            _went_quiet(err)
         self._note_reachability(integration_up and device_up)
         if not integration_up:
             raise LockDisconnected(
@@ -391,7 +395,11 @@ class BaseLock:
                 self.lock.entity_id,
             )
 
-            result = await func(*args, **kwargs)
+            try:
+                async with asyncio.timeout(budget):
+                    result = await func(*args, **kwargs)
+            except TimeoutError as err:
+                _went_quiet(err)
             self._last_operation_time = time.monotonic()
             return result
 
@@ -492,27 +500,20 @@ class BaseLock:
         scaling by the entry hands a wide occupancy scan the flat budget and
         fails the read that gates adding users.
 
-        Only widening: ``_slots_in_scope`` floors it at the entry's own count,
-        because this deadline covers waiting on ``_aio_lock`` too and a caller
-        can be sitting behind an operation that walks all of them.
+        Scoping is safe in both directions because this deadline never covers
+        queueing: ``_execute_rate_limited`` bounds the probes and the call, and
+        leaves the wait on ``_aio_lock`` between them uncovered. A narrower
+        scope therefore shortens only this call, never someone else's.
 
         None means "whatever this entry manages", which is right for the reads
-        that walk exactly that, and for anything queueing behind them.
+        that walk exactly that.
         """
         return OPERATION_TIMEOUT
 
     @final
     def _slots_in_scope(self, slot_scope: int | None) -> int:
-        """
-        Resolve a budget's slot count, never below what the entry manages.
-
-        The floor is the whole point. This deadline covers waiting on
-        ``_aio_lock`` as well as the call, so a caller can be sitting behind an
-        operation that walks every managed slot -- and a scope that narrowed
-        below that would cancel it before the operation ahead had used its own
-        budget. Callers therefore widen, never narrow.
-        """
-        return max(slot_scope or 0, len(self.managed_slots))
+        """Resolve a budget's slot count, defaulting to what the entry manages."""
+        return len(self.managed_slots) if slot_scope is None else slot_scope
 
     @property
     def display_name(self) -> str:
@@ -1433,6 +1434,7 @@ class BaseLock:
             self.async_set_usercode,
             code_slot,
             usercode,
+            slot_scope=1,
             pre_execute=_pre_execute_checks,
             name=name,
             source=source,
@@ -1575,6 +1577,7 @@ class BaseLock:
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
+            slot_scope=1,
         )
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is

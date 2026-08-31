@@ -2731,20 +2731,10 @@ async def test_the_occupancy_scan_declares_how_wide_it_is(hass: HomeAssistant):
     assert asked == [100]
 
 
-async def test_a_write_does_not_narrow_its_budget_below_the_entrys(
+async def test_a_write_is_budgeted_for_the_one_slot_it_touches(
     hass: HomeAssistant,
 ):
-    """
-    The mirror of the scan: writes widen with the entry, never narrow past it.
-
-    Passing 1 for a single-slot write looks obviously right and is wrong. The
-    deadline covers waiting on `_aio_lock` as well as the call, so a caller's
-    budget has to be at least as long as whatever can legitimately be ahead of
-    it -- and a write behind a ten-slot ZHA poll would be cancelled 300s
-    before that poll had used its own budget. The `LockDisconnected` that
-    raises charges the consecutive lock breaker, so three of them call a
-    working lock unreachable.
-    """
+    """A set and a clear each touch one slot, and say so."""
     lock = _make_base_test_lock(hass, "write_budget")
     lock._min_operation_delay = 0
     asked: list[int | None] = []
@@ -2763,9 +2753,51 @@ async def test_a_write_does_not_narrow_its_budget_below_the_entrys(
         await lock.async_internal_set_usercode(1, "1234")
         await lock.async_internal_clear_usercode(1)
 
-    # None, so both inherit whatever the entry manages -- and so both cover
-    # queueing behind an operation that walks all of it.
-    assert asked == [None, None]
+    assert asked == [1, 1]
+
+
+async def test_queueing_behind_a_slow_operation_is_not_a_disconnect(
+    hass: HomeAssistant,
+):
+    """
+    Waiting for the mutex is not on the clock. Only the probes and the call are.
+
+    One deadline over the whole method would make a single number answer two
+    questions that pull opposite ways -- how long should MY call take, and how
+    long will I queue behind somebody else's. Any budget scoped to this call
+    is then too small to wait out an operation that walks every slot, and
+    cancelling a caller that was only queueing raises `LockDisconnected`,
+    which charges the consecutive lock breaker: three of those mark a healthy
+    lock unreachable.
+    """
+    lock = _make_base_test_lock(hass, "queued_behind")
+    lock._min_operation_delay = 0
+    holding = asyncio.Event()
+
+    async def _slow_but_working(*_args, **_kwargs):
+        holding.set()
+        # Comfortably longer than the queued caller's own budget.
+        await asyncio.sleep(0.3)
+        return "ahead"
+
+    with patch.object(
+        type(lock), "operation_timeout_seconds", lambda _s, slot_scope=None: 0.1
+    ):
+        ahead = asyncio.create_task(
+            lock._execute_rate_limited("get", _slow_but_working)
+        )
+        await holding.wait()
+
+        # Queued the whole time the operation ahead is running, and still
+        # gets its own full budget once the mutex is free.
+        behind = await asyncio.wait_for(
+            lock._execute_rate_limited("set", AsyncMock(return_value="mine")),
+            timeout=5,
+        )
+
+    assert behind == "mine"
+    with contextlib.suppress(LockDisconnected):
+        await ahead
 
 
 async def test_a_wedged_operation_is_cut_off_and_reported_as_a_disconnect(
