@@ -275,6 +275,44 @@ class BaseLock:
         # transition handler, then raise the layer-specific message. The two
         # checks are kept distinct for diagnostics; the transition only cares
         # whether the lock is reachable end-to-end.
+        # Inside the deadline, not before it. These are device I/O on some
+        # providers -- Schlage's availability check is a `get_codes` cloud
+        # round trip -- and waiting on `_aio_lock` behind another caller is
+        # the #1523 park itself. Bounding only `func` left both unbounded.
+        try:
+            async with asyncio.timeout(self.operation_timeout_seconds):
+                return await self._execute_bounded(
+                    operation_type, func, *args, pre_execute=pre_execute, **kwargs
+                )
+        except TimeoutError as err:
+            # A disconnection, not an operation failure, and the distinction
+            # decides whether anything happens at all. A failure charges the
+            # SLOT breaker, which is windowed -- three strikes inside five
+            # minutes -- so at a budget longer than that window the count
+            # resets on every retry and it can never trip. A disconnection
+            # charges the LOCK breaker, which counts consecutively: three
+            # trips `unreachable`, the tick gates on it, and backoff stops the
+            # hammering. It self-heals on the next successful poll too, where
+            # a suspended slot would wait for someone to edit the PIN.
+            #
+            # It is the honest word besides: a lock that has answered nothing
+            # in this long is not reachable.
+            raise LockDisconnected(
+                f"Cannot {_OPERATION_MESSAGES[operation_type]} "
+                f"{self.lock.entity_id} - no answer within "
+                f"{self.operation_timeout_seconds:.0f}s"
+            ) from err
+
+    @final
+    async def _execute_bounded(
+        self,
+        operation_type: Literal["get", "set", "clear", "refresh"],
+        func: Callable[..., Any],
+        *args: Any,
+        pre_execute: Callable[[], None] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run one operation, with the caller holding the deadline."""
         integration_up = await self.async_is_integration_connected()
         device_up = await self.async_is_device_available()
         self._note_reachability(integration_up and device_up)
@@ -308,28 +346,7 @@ class BaseLock:
                 self.lock.entity_id,
             )
 
-            try:
-                async with asyncio.timeout(self.operation_timeout_seconds):
-                    result = await func(*args, **kwargs)
-            except TimeoutError as err:
-                # A disconnection, not an operation failure, and the
-                # distinction decides whether anything happens at all. A
-                # failure charges the SLOT breaker, which is windowed -- three
-                # strikes inside five minutes -- so at a budget longer than
-                # that window the count resets on every retry and it can never
-                # trip. A disconnection charges the LOCK breaker, which counts
-                # consecutively: three trips `unreachable`, the tick gates on
-                # it, and backoff stops the hammering. It self-heals on the
-                # next successful poll too, where a suspended slot would wait
-                # for someone to edit the PIN.
-                #
-                # It is the honest word besides: a lock that has answered
-                # nothing in this long is not reachable.
-                raise LockDisconnected(
-                    f"Cannot {_OPERATION_MESSAGES[operation_type]} "
-                    f"{self.lock.entity_id} - no answer within "
-                    f"{self.operation_timeout_seconds:.0f}s"
-                ) from err
+            result = await func(*args, **kwargs)
             self._last_operation_time = time.monotonic()
             return result
 
@@ -790,11 +807,20 @@ class BaseLock:
                 # "no", this means it did not answer at all. A lock that is
                 # merely still coming up raises LockDisconnected instead of
                 # going quiet, so silence here is a wedge, not a slow boot.
+                # Re-armed, or nothing ever retries. `_async_run_provider_setup`
+                # clears this on the way in, and it is the only thing
+                # `_handle_connection_transition` checks -- while the LOADED
+                # transition the state listener waits for never comes for an
+                # integration that was already loaded and then wedged. Without
+                # it the lock is permanently un-set-up: sync stays gated on
+                # `provider_setup_succeeded` and refuses to write anything
+                # until somebody reloads by hand.
+                self._setup_deferred = True
                 LOGGER.warning(
                     "Capability probe for %s got no answer within %.0fs; its "
                     "integration is likely wedged rather than slow. Entities "
                     "will be created but unavailable, and setup is retried "
-                    "when that integration reloads or reconnects.",
+                    "once that integration answers again.",
                     self.lock.entity_id,
                     self.operation_timeout_seconds,
                 )
@@ -896,6 +922,18 @@ class BaseLock:
         PIN-support validation once the integration comes up.
         """
         self._setup_deferred = False
+        # One deadline over the whole method: the probe AND `async_setup`,
+        # which is device I/O too -- akuvox and schlage run an unmanaged-code
+        # tagging pass in it, zwave-js-ui subscribes. Setup runs while Home
+        # Assistant holds the entry's lock, so anything unbounded here parks
+        # the entry in `setup_in_progress` and takes reload and remove with
+        # it. A provider that does none of this just returns first.
+        async with asyncio.timeout(self.operation_timeout_seconds):
+            await self._run_provider_setup_bounded(config_entry)
+
+    @final
+    async def _run_provider_setup_bounded(self, config_entry: ConfigEntry) -> None:
+        """Validate capabilities and run provider setup, under a deadline."""
         if self.supports_native_users:
             # Bounded like the initial read, and for the same reason: setup
             # runs while Home Assistant holds the entry's lock, and this probe
@@ -903,8 +941,7 @@ class BaseLock:
             # the provider's own -- `MatterLock.async_get_capabilities` awaits
             # `get_lock_info` bare. A probe is a read, so cancelling it is
             # safe.
-            async with asyncio.timeout(self.operation_timeout_seconds):
-                caps = await self._get_cached_capabilities()
+            caps = await self._get_cached_capabilities()
             if CredentialType.PIN not in caps.credential_types:
                 # A degenerate-but-successful probe was just cached;
                 # invalidate it so the reconnect-path revalidation
