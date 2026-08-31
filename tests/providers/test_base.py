@@ -2776,28 +2776,103 @@ async def test_queueing_behind_a_slow_operation_is_not_a_disconnect(
 
     async def _slow_but_working(*_args, **_kwargs):
         holding.set()
-        # Comfortably longer than the queued caller's own budget.
         await asyncio.sleep(0.3)
         return "ahead"
 
-    with patch.object(
-        type(lock), "operation_timeout_seconds", lambda _s, slot_scope=None: 0.1
-    ):
+    # The budgets have to DIFFER, or the operation ahead is cut off at the
+    # same moment as the one waiting and nothing is ever really queued: the
+    # wide read legitimately runs 0.3s, five times the narrow write's budget.
+    def _budget(_self, slot_scope=None):
+        return 0.06 if slot_scope == 1 else 0.5
+
+    with patch.object(type(lock), "operation_timeout_seconds", _budget):
         ahead = asyncio.create_task(
             lock._execute_rate_limited("get", _slow_but_working)
         )
         await holding.wait()
 
-        # Queued the whole time the operation ahead is running, and still
-        # gets its own full budget once the mutex is free.
+        # Queued far longer than its own budget, and still gets that budget
+        # in full once the mutex frees.
         behind = await asyncio.wait_for(
-            lock._execute_rate_limited("set", AsyncMock(return_value="mine")),
+            lock._execute_rate_limited(
+                "set", AsyncMock(return_value="mine"), slot_scope=1
+            ),
             timeout=5,
         )
 
     assert behind == "mine"
-    with contextlib.suppress(LockDisconnected):
-        await ahead
+    assert await ahead == "ahead"
+
+
+async def test_a_queue_behind_an_unreachable_lock_drains_at_once(
+    hass: HomeAssistant,
+):
+    """
+    Each holder is bounded; without this the QUEUE would not be.
+
+    Every slot on an entry ticks on its own interval and they all pile onto
+    one mutex, and a slot already in SYNCING short-circuits its next tick
+    instead of backing off. So ten wedged ZHA slots would drain in ten full
+    budgets -- the multi-hour park of issue #1523 over again, just finite.
+    Once the queue ahead has established the lock is unreachable, spending
+    another budget proving it teaches nobody anything.
+    """
+    lock = _make_base_test_lock(hass, "queue_drains")
+    lock._min_operation_delay = 0
+    holding = asyncio.Event()
+    attempted = AsyncMock(return_value="ran")
+
+    async def _holds_the_mutex(*_args, **_kwargs):
+        holding.set()
+        await asyncio.sleep(0.2)
+        return "ahead"
+
+    coordinator = MagicMock()
+    coordinator.unreachable = True
+
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", lambda _s, slot_scope=None: 5.0
+        ),
+        patch.object(lock, "coordinator", coordinator),
+    ):
+        ahead = asyncio.create_task(lock._execute_rate_limited("get", _holds_the_mutex))
+        await holding.wait()
+
+        with pytest.raises(LockDisconnected, match="queued behind"):
+            await asyncio.wait_for(
+                lock._execute_rate_limited("set", attempted), timeout=5
+            )
+        assert await ahead == "ahead"
+
+    # It gave up rather than spending its own budget on a lock the queue
+    # ahead had already proved unreachable.
+    attempted.assert_not_called()
+
+
+async def test_an_unqueued_call_still_tries_an_unreachable_lock(
+    hass: HomeAssistant,
+):
+    """
+    Nothing that did not wait is refused, however bad the lock looks.
+
+    `unreachable` clears only on a successful poll, so refusing every
+    operation on that flag would leave a push provider with no way back --
+    and a direct service call is often exactly what discovers the lock has
+    recovered.
+    """
+    lock = _make_base_test_lock(hass, "unqueued_tries")
+    lock._min_operation_delay = 0
+    coordinator = MagicMock()
+    coordinator.unreachable = True
+
+    with patch.object(lock, "coordinator", coordinator):
+        assert not lock._aio_lock.locked()
+        result = await lock._execute_rate_limited(
+            "set", AsyncMock(return_value="tried anyway")
+        )
+
+    assert result == "tried anyway"
 
 
 async def test_a_wedged_operation_is_cut_off_and_reported_as_a_disconnect(

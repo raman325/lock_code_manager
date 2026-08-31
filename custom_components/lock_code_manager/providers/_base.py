@@ -374,7 +374,34 @@ class BaseLock:
                 f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - device not available"
             )
 
+        # Whether anyone is ahead of us, asked BEFORE we join the queue.
+        queued = self._aio_lock.locked()
         async with self._aio_lock:
+            # Only for a caller that actually waited, and only once the
+            # breaker has already called the lock unreachable.
+            #
+            # The wait is the one part of this with no deadline over it. Each
+            # holder cuts itself off, but the QUEUE is not bounded by that:
+            # every slot on an entry ticks on its own interval, they all pile
+            # onto this mutex, and a slot already in SYNCING short-circuits
+            # its next tick rather than backing off -- so ten wedged ZHA slots
+            # would drain in ten budgets, which is the multi-hour park of
+            # issue #1523 over again. Once the queue ahead has established the
+            # lock is unreachable, there is nothing to learn from spending
+            # another full budget proving it.
+            #
+            # Narrow deliberately. A caller that did NOT queue always gets to
+            # try, because `unreachable` clears only on a successful poll and
+            # refusing every operation on that flag would leave a push
+            # provider with no way back: a direct service call may well be
+            # what finds the lock has recovered.
+            if queued and self.coordinator is not None and self.coordinator.unreachable:
+                raise LockDisconnected(
+                    f"Cannot {_OPERATION_MESSAGES[operation_type]} "
+                    f"{self.lock.entity_id} - lock is unreachable, and this "
+                    f"operation queued behind one that proved it"
+                )
+
             if pre_execute:
                 pre_execute()
 
