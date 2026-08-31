@@ -2715,8 +2715,8 @@ async def test_the_occupancy_scan_declares_how_wide_it_is(hass: HomeAssistant):
     lock._min_operation_delay = 0
     asked: list[int | None] = []
 
-    def _record(slots=None):
-        asked.append(slots)
+    def _record(slot_scope=None):
+        asked.append(slot_scope)
         return 30.0
 
     with (
@@ -2749,8 +2749,8 @@ async def test_a_write_does_not_narrow_its_budget_below_the_entrys(
     lock._min_operation_delay = 0
     asked: list[int | None] = []
 
-    def _record(slots=None):
-        asked.append(slots)
+    def _record(slot_scope=None):
+        asked.append(slot_scope)
         return 30.0
 
     with (

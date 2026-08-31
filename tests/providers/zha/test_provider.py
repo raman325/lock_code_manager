@@ -1227,19 +1227,19 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
     assert asked == {2}
 
 
-async def test_no_call_is_given_less_time_than_what_it_waits_behind(
+async def test_a_narrower_scope_does_not_shorten_the_budget(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
     """
-    Narrowing a budget below the entry's would cancel a queued caller early.
+    Asking about fewer slots widens the budget or leaves it alone. Never less.
 
-    The deadline covers waiting on `_aio_lock`, not just the call itself, so a
-    caller's budget has to be at least as long as whatever can legitimately be
-    ahead of it. A ten-slot ZHA poll runs to 900s by design; a write narrowed
-    to one slot would be cut off at 600s -- 300s before the poll it is queued
-    behind has even used its own budget -- and the `LockDisconnected` that
-    raises charges the consecutive lock breaker, so three of them would call a
-    working lock unreachable.
+    The deadline covers waiting on `_aio_lock`, not just the call, so a caller
+    can be sitting behind an operation that walks every managed slot. A
+    ten-slot ZHA poll runs to 900s by design; anything cancelled at the 600s
+    floor while queued behind it raises `LockDisconnected`, which charges the
+    consecutive lock breaker -- three of those call a working lock
+    unreachable. So the floor is the entry's own count, in the helper rather
+    than in each caller's good intentions.
     """
     with patch.object(
         type(zha_lock),
@@ -1247,11 +1247,12 @@ async def test_no_call_is_given_less_time_than_what_it_waits_behind(
         property(lambda _self: frozenset(range(1, 11))),
     ):
         entry_wide = zha_lock.operation_timeout_seconds()
-        single_slot = zha_lock.operation_timeout_seconds(1)
+        asking_for_one = zha_lock.operation_timeout_seconds(1)
+        asking_for_many = zha_lock.operation_timeout_seconds(40)
 
     assert entry_wide > base_module.OPERATION_TIMEOUT
-    # Narrower budgets exist, but nothing on the queueing path asks for one.
-    assert single_slot < entry_wide
+    assert asking_for_one == entry_wide
+    assert asking_for_many > entry_wide
 
 
 async def test_the_stall_budget_scales_with_the_slot_walk(

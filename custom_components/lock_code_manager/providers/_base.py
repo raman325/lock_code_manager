@@ -306,7 +306,7 @@ class BaseLock:
         func: Callable[..., Awaitable[Any]],
         *args: Any,
         pre_execute: Callable[[], None] | None = None,
-        slots: int | None = None,
+        slot_scope: int | None = None,
         **kwargs: Any,
     ) -> Any:
         """
@@ -323,7 +323,7 @@ class BaseLock:
         # providers -- Schlage's availability check is a `get_codes` cloud
         # round trip -- and waiting on `_aio_lock` behind another caller is
         # the #1523 park itself. Bounding only `func` left both unbounded.
-        budget = self.operation_timeout_seconds(slots)
+        budget = self.operation_timeout_seconds(slot_scope)
         try:
             async with asyncio.timeout(budget):
                 return await self._execute_bounded(
@@ -479,7 +479,7 @@ class BaseLock:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
 
-    def operation_timeout_seconds(self, slots: int | None = None) -> float:
+    def operation_timeout_seconds(self, slot_scope: int | None = None) -> float:
         """
         Say how long this operation may run before the lock is treated as gone.
 
@@ -487,18 +487,14 @@ class BaseLock:
         the slots: their honest budget is per-slot, and the base's flat one
         would call a slow-but-working lock dead partway through the walk.
 
-        ``slots`` is what THIS call touches, not what the entry manages. A
+        ``slot_scope`` is what THIS call touches, not what the entry manages. A
         throwaway provider built to read a lock's contents manages nothing, so
         scaling by the entry hands a wide occupancy scan the flat budget and
         fails the read that gates adding users.
 
-        Only widening, though. It is tempting to pass 1 for a single-slot
-        write, and it is wrong: this deadline also covers waiting on
-        ``_aio_lock``, so a caller's budget has to be at least as long as
-        whatever can legitimately be ahead of it. A write behind a ten-slot
-        ZHA poll would be cancelled 300s before that poll's own budget ran
-        out, and the `LockDisconnected` it raises charges the consecutive lock
-        breaker -- three of them call a working lock unreachable.
+        Only widening: ``_slots_in_scope`` floors it at the entry's own count,
+        because this deadline covers waiting on ``_aio_lock`` too and a caller
+        can be sitting behind an operation that walks all of them.
 
         None means "whatever this entry manages", which is right for the reads
         that walk exactly that, and for anything queueing behind them.
@@ -506,9 +502,17 @@ class BaseLock:
         return OPERATION_TIMEOUT
 
     @final
-    def _slots_in_scope(self, slots: int | None) -> int:
-        """Resolve a budget's slot count, defaulting to what the entry manages."""
-        return len(self.managed_slots) if slots is None else slots
+    def _slots_in_scope(self, slot_scope: int | None) -> int:
+        """
+        Resolve a budget's slot count, never below what the entry manages.
+
+        The floor is the whole point. This deadline covers waiting on
+        ``_aio_lock`` as well as the call, so a caller can be sitting behind an
+        operation that walks every managed slot -- and a scope that narrowed
+        below that would cancel it before the operation ahead had used its own
+        budget. Callers therefore widen, never narrow.
+        """
+        return max(slot_scope or 0, len(self.managed_slots))
 
     @property
     def display_name(self) -> str:
@@ -2190,7 +2194,7 @@ class BaseLock:
                 # a throwaway provider that manages nothing, so scaling by the
                 # entry would hand a wide scan the flat floor -- and failing
                 # this read is what refuses to let the user add anybody.
-                slots=len(wanted),
+                slot_scope=len(wanted),
             )
         except LockCodeManagerError as err:
             _LOGGER.debug(
