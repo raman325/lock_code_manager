@@ -1227,29 +1227,31 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
     assert asked == {2}
 
 
-async def test_a_one_slot_write_is_not_given_the_whole_entrys_patience(
+async def test_no_call_is_given_less_time_than_what_it_waits_behind(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
     """
-    The budget follows the operation, not the entry.
+    Narrowing a budget below the entry's would cancel a queued caller early.
 
-    A write touches one slot and one round trip. Scaling it by everything the
-    entry manages is how the park this budget exists to bound ends up lasting
-    several times longer than intended -- on a thirty-slot entry, forty-five
-    minutes for a single command.
+    The deadline covers waiting on `_aio_lock`, not just the call itself, so a
+    caller's budget has to be at least as long as whatever can legitimately be
+    ahead of it. A ten-slot ZHA poll runs to 900s by design; a write narrowed
+    to one slot would be cut off at 600s -- 300s before the poll it is queued
+    behind has even used its own budget -- and the `LockDisconnected` that
+    raises charges the consecutive lock breaker, so three of them would call a
+    working lock unreachable.
     """
     with patch.object(
         type(zha_lock),
         "managed_slots",
-        property(lambda _self: frozenset(range(1, 31))),
+        property(lambda _self: frozenset(range(1, 11))),
     ):
-        one_slot = zha_lock.operation_timeout_seconds(1)
-        whole_entry = zha_lock.operation_timeout_seconds()
+        entry_wide = zha_lock.operation_timeout_seconds()
+        single_slot = zha_lock.operation_timeout_seconds(1)
 
-    assert one_slot < whole_entry
-    # The floor still applies: a single command never gets less than the flat
-    # budget, which is what keeps a slow-but-working lock from being cut off.
-    assert one_slot == base_module.OPERATION_TIMEOUT
+    assert entry_wide > base_module.OPERATION_TIMEOUT
+    # Narrower budgets exist, but nothing on the queueing path asks for one.
+    assert single_slot < entry_wide
 
 
 async def test_the_stall_budget_scales_with_the_slot_walk(

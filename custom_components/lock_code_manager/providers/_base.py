@@ -487,16 +487,21 @@ class BaseLock:
         the slots: their honest budget is per-slot, and the base's flat one
         would call a slow-but-working lock dead partway through the walk.
 
-        ``slots`` is what THIS call touches, not what the entry manages. The
-        two diverge in both directions and neither is harmless: a throwaway
-        provider built to read a lock's contents manages nothing, so scaling
-        by the entry would hand a wide occupancy scan the flat budget and fail
-        the read that gates adding users -- while a one-slot write on a
-        thirty-slot entry would get thirty slots' worth of patience for a
-        single round trip.
+        ``slots`` is what THIS call touches, not what the entry manages. A
+        throwaway provider built to read a lock's contents manages nothing, so
+        scaling by the entry hands a wide occupancy scan the flat budget and
+        fails the read that gates adding users.
+
+        Only widening, though. It is tempting to pass 1 for a single-slot
+        write, and it is wrong: this deadline also covers waiting on
+        ``_aio_lock``, so a caller's budget has to be at least as long as
+        whatever can legitimately be ahead of it. A write behind a ten-slot
+        ZHA poll would be cancelled 300s before that poll's own budget ran
+        out, and the `LockDisconnected` it raises charges the consecutive lock
+        breaker -- three of them call a working lock unreachable.
 
         None means "whatever this entry manages", which is right for the reads
-        that walk exactly that.
+        that walk exactly that, and for anything queueing behind them.
         """
         return OPERATION_TIMEOUT
 
@@ -1424,7 +1429,6 @@ class BaseLock:
             self.async_set_usercode,
             code_slot,
             usercode,
-            slots=1,
             pre_execute=_pre_execute_checks,
             name=name,
             source=source,
@@ -1567,7 +1571,6 @@ class BaseLock:
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
-            slots=1,
         )
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is

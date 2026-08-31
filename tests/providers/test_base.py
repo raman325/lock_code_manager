@@ -50,6 +50,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
     User,
+    WriteResult,
     pin_address,
 )
 from custom_components.lock_code_manager.domain.events import CredentialOperation
@@ -2728,6 +2729,43 @@ async def test_the_occupancy_scan_declares_how_wide_it_is(hass: HomeAssistant):
     # it is for the throwaway provider allocation builds.
     assert not lock.managed_slots
     assert asked == [100]
+
+
+async def test_a_write_does_not_narrow_its_budget_below_the_entrys(
+    hass: HomeAssistant,
+):
+    """
+    The mirror of the scan: writes widen with the entry, never narrow past it.
+
+    Passing 1 for a single-slot write looks obviously right and is wrong. The
+    deadline covers waiting on `_aio_lock` as well as the call, so a caller's
+    budget has to be at least as long as whatever can legitimately be ahead of
+    it -- and a write behind a ten-slot ZHA poll would be cancelled 300s
+    before that poll had used its own budget. The `LockDisconnected` that
+    raises charges the consecutive lock breaker, so three of them call a
+    working lock unreachable.
+    """
+    lock = _make_base_test_lock(hass, "write_budget")
+    lock._min_operation_delay = 0
+    asked: list[int | None] = []
+
+    def _record(slots=None):
+        asked.append(slots)
+        return 30.0
+
+    with (
+        patch.object(lock, "operation_timeout_seconds", _record),
+        patch.object(
+            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
+        ),
+        patch.object(lock, "async_clear_usercode", AsyncMock(return_value=True)),
+    ):
+        await lock.async_internal_set_usercode(1, "1234")
+        await lock.async_internal_clear_usercode(1)
+
+    # None, so both inherit whatever the entry manages -- and so both cover
+    # queueing behind an operation that walks all of it.
+    assert asked == [None, None]
 
 
 async def test_a_wedged_operation_is_cut_off_and_reported_as_a_disconnect(
