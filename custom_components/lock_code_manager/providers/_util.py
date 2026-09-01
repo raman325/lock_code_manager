@@ -75,6 +75,19 @@ def make_compact_tagged_name(slot_num: int) -> str:
     return f"lcm{slot_num}"
 
 
+def is_canonical_tagged_name(name: str) -> bool:
+    """
+    Return whether ``name`` is in the canonical ``lcm:<slot>:`` format.
+
+    Narrower than :func:`parse_tag`, which answers "does this name carry a
+    slot binding" and says yes to every fallback format too. This answers
+    "is this the format a lock stores when it accepts the full prefix",
+    which is what makes it usable as evidence about the lock's charset
+    handling rather than about Lock Code Manager's ownership.
+    """
+    return _TAG_RE.match(name) is not None
+
+
 def parse_tag(name: str) -> tuple[int | None, str]:
     """
     Parse a Lock Code Manager slot tag, tolerant of all known formats.

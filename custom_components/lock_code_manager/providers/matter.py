@@ -56,7 +56,12 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import make_compact_tagged_name, parse_slot_num, parse_tag
+from ._util import (
+    is_canonical_tagged_name,
+    make_compact_tagged_name,
+    parse_slot_num,
+    parse_tag,
+)
 from .const import LOGGER
 
 # DoorLock cluster ID (0x0101 = 257)
@@ -115,6 +120,54 @@ def _transient_status_disconnect(
         f"Matter set_lock_credential returned a transient status "
         f"'{status}' for {entity_id} slot {slot}"
     )
+
+
+def _user_index_for_slot(
+    users: list[User], slot: int, *, adopt_untagged: bool
+) -> int | None:
+    """
+    Resolve the ``user_index`` LCM owns for ``slot`` in an already-read user list.
+
+    Pure counterpart to ``MatterLock._find_user_index_for_slot``, which owns
+    the round trip. Split out so a caller that needs the user list for more
+    than this one answer reads the lock once; see that method for the
+    tag-versus-adoption rules this implements.
+    """
+    try:
+        return next(
+            existing.user_id
+            for existing in users
+            if existing.name and parse_tag(existing.name)[0] == slot
+        )
+    except StopIteration:
+        if not adopt_untagged:
+            return None
+        return next(
+            (
+                existing.user_id
+                for existing in users
+                if parse_tag(existing.name or "")[0] is None
+                for cred in existing.pin_credentials
+                if cred.slot == slot
+            ),
+            None,
+        )
+
+
+def _lock_stores_a_canonical_name(users: list[User]) -> bool:
+    """
+    Return whether the lock is currently holding a canonical ``lcm:<slot>:`` name.
+
+    Positive proof, from the device, that this firmware accepts the colons --
+    which is the only thing the userName fallback cascade exists to work
+    around. A lock that is storing one right now cannot be rejecting another
+    for its charset, so a refusal has to be about the moment instead.
+
+    Only the canonical format counts. ``parse_tag`` also recognizes the
+    compact and slot-only fallbacks, and reading those as proof would take
+    the cascade's own output as evidence that the cascade was unnecessary.
+    """
+    return any(user.name and is_canonical_tagged_name(user.name) for user in users)
 
 
 def _lcm_slot_from_raw_users_by_user_index(
@@ -573,7 +626,11 @@ class MatterLock(BaseLock):
         slot = self._slot_from_seam_user(user)
         client, node = self._require_client_and_node()
 
-        existing_user_index = await self._find_user_index_for_slot(slot)
+        # One read, two answers: which user anchors this slot, and whether
+        # the lock is holding a canonical name for any of them.
+        users = await self.async_get_users()
+        existing_user_index = _user_index_for_slot(users, slot, adopt_untagged=True)
+        colons_proven = _lock_stores_a_canonical_name(users)
 
         if existing_user_index is not None:
             # UPDATE: rename via set_lock_user.
@@ -595,6 +652,7 @@ class MatterLock(BaseLock):
                     node,
                     user_index=existing_user_index,
                     candidate_names=candidates,
+                    colons_proven=colons_proven,
                 )
             except (LockDisconnected, LockOperationFailed, MatterError) as err:
                 # UPDATE tolerates any rename failure so the subsequent
@@ -651,6 +709,7 @@ class MatterLock(BaseLock):
                 node,
                 user_index=None,
                 candidate_names=candidates,
+                colons_proven=colons_proven,
             )
         except MatterError as err:
             raise LockOperationFailed(
@@ -701,6 +760,7 @@ class MatterLock(BaseLock):
         *,
         user_index: int | None,
         candidate_names: list[str],
+        colons_proven: bool,
     ) -> tuple[dict[str, Any], str, list[tuple[str, MatterError]]]:
         """
         Try each candidate userName in order; return on first success.
@@ -714,11 +774,26 @@ class MatterLock(BaseLock):
         charset-recoverable -- they signal "validation failed entirely"
         or "transport closed." Trying the next candidate would hit the
         same wall, so they raise immediately as ``LockOperationFailed``
-        / ``LockDisconnected``. Only ``MatterError`` (which carries the
-        lock firmware's specific rejection) triggers a fall-through to
-        the next candidate. If every candidate raises ``MatterError``,
-        the last error is re-raised so the caller can decide whether
-        to tolerate or escalate.
+        / ``LockDisconnected``. Only ``MatterError`` triggers a
+        fall-through to the next candidate. If every candidate raises
+        ``MatterError``, the last error is re-raised so the caller can
+        decide whether to tolerate or escalate.
+
+        ``colons_proven`` short-circuits all of that. Nothing in the
+        exception tells us WHY the lock refused: a firmware charset
+        constraint and a lock that was busy for a moment both arrive as
+        the same catch-all ``MatterError`` carrying an interaction-model
+        status in its message. But if the lock is holding a canonical
+        name for some other slot right now, it demonstrably accepts the
+        colons, so the refusal cannot be about them -- and descending
+        would trade a display name away for nothing. Retry instead.
+
+        That is what issue #1538 hit: on a lock storing ``lcm:1:User A``
+        and ``lcm:2:User B``, three more slots were written as ``lcm3``,
+        ``lcm4`` and ``lcm5`` during a spell of poll failures. The names
+        do still bind their slots, and the next successful write to any
+        of them restores the display -- but nothing writes to a slot that
+        is already in sync, so what a moment cost stayed on the lock.
         """
         failures: list[tuple[str, MatterError]] = []
         last_matter_error: MatterError | None = None
@@ -746,6 +821,13 @@ class MatterLock(BaseLock):
                     f"(user_name={name!r}): {err}"
                 ) from err
             except MatterError as err:
+                if colons_proven:
+                    raise LockDisconnected(
+                        f"Matter set_lock_user failed for {self.lock.entity_id} "
+                        f"(user_name={name!r}) on a lock that is storing a "
+                        f"canonical name for another slot, so this is not a "
+                        f"charset rejection: {err}"
+                    ) from err
                 failures.append((name, err))
                 last_matter_error = err
                 continue
@@ -806,27 +888,14 @@ class MatterLock(BaseLock):
         vendor's app as one of ours.
 
         Returns ``None`` when neither lookup matches.
+
+        Reads the lock. Callers that also need the user list for something
+        else should read once and call ``_user_index_for_slot`` on the
+        result, rather than paying a second round trip for the same answer.
         """
-        users = await self.async_get_users()
-        try:
-            return next(
-                existing.user_id
-                for existing in users
-                if existing.name and parse_tag(existing.name)[0] == slot
-            )
-        except StopIteration:
-            if not adopt_untagged:
-                return None
-            return next(
-                (
-                    existing.user_id
-                    for existing in users
-                    if parse_tag(existing.name or "")[0] is None
-                    for cred in existing.pin_credentials
-                    if cred.slot == slot
-                ),
-                None,
-            )
+        return _user_index_for_slot(
+            await self.async_get_users(), slot, adopt_untagged=adopt_untagged
+        )
 
     async def async_delete_user(self, user_id: int) -> None:
         """
