@@ -10,7 +10,6 @@ would be the more dangerous disagreement.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Collection, Iterable, Sequence
 import logging
 from typing import Any
@@ -19,7 +18,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from ..const import ALLOCATION_READ_TIMEOUT, MAX_SEARCHED_SLOT
+from ..const import MAX_SEARCHED_SLOT
 from ..providers import resolve_provider_class_for_entity
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
@@ -406,30 +405,6 @@ async def async_allocate_for(
     ``config_entry`` is the entry the numbers are being allocated for, on the
     terms ``build_lock_instance`` describes.
     """
-    # Bounded as a whole rather than per read: it is the AGGREGATE that runs
-    # away. Each lock's read is already bounded by that provider's budget, but
-    # a wide window multiplies it by the indices and then by the locks, and
-    # nothing downstream is waiting on a machine -- both callers have a person
-    # in front of them.
-    try:
-        async with asyncio.timeout(ALLOCATION_READ_TIMEOUT):
-            return await _async_allocate_for(hass, config_entry, locks, num_users)
-    except TimeoutError as err:
-        # Which lock ran the clock down is not knowable from here, so all of
-        # them are named. The message asks the user to check reachability and
-        # retry, which is the right advice either way.
-        raise SlotAllocationError(
-            "occupancy_unknown", {"locks": ", ".join(locks)}
-        ) from err
-
-
-async def _async_allocate_for(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry | None,
-    locks: Sequence[str],
-    num_users: int,
-) -> frozenset[int]:
-    """Do the reading, with the caller holding the deadline."""
     try:
         await async_check_slot_capacity(hass, config_entry, locks, [num_users])
     except SlotAllocationError as err:

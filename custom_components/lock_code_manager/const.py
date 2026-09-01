@@ -205,20 +205,6 @@ BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
 # Poll failure alerting
 POLL_FAILURE_ALERT_THRESHOLD: int = 12
 
-# How long allocation may spend reading locks before it gives up and says so.
-#
-# Sized for a PERSON, not for a lock. Every caller of `async_allocate_for` is
-# interactive -- the config flow and the add_users action -- so the trade runs
-# the other way from background sync: a user at a dialog can retry, but cannot
-# wait. The per-slot budgets that keep a slow-but-working lock from being
-# called dead are generous by design, and a wide read across several locks
-# multiplies them into hours of a frozen dialog with nothing on screen.
-#
-# Expiring reports `occupancy_unknown`, which already tells the user to check
-# the lock and try again -- and which refuses to issue a number rather than
-# issuing one over a credential it never checked for.
-ALLOCATION_READ_TIMEOUT = 120.0
-
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=2)
 MAX_SYNC_ATTEMPTS = 3
