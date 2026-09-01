@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,7 +26,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.providers import _base as base_module
+from custom_components.lock_code_manager.providers import zha as zha_module
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
@@ -1227,54 +1228,33 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
     assert asked == {2}
 
 
-async def test_a_one_slot_write_is_not_given_the_whole_entrys_patience(
+async def test_one_silent_command_ends_the_walk(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
     """
-    A write touches one slot, so it is budgeted for one slot.
+    A slot that never answers is caught on its own command, not after the walk.
 
-    Scaling it by everything the entry manages is how the park this budget
-    exists to bound ends up lasting several times longer than intended -- on a
-    thirty-slot entry, forty-five minutes for a single command. Narrowing is
-    safe because the deadline no longer covers queueing: it bounds the probes
-    and the call, and leaves the wait on `_aio_lock` between them alone.
+    The deadline belongs per exchange because that is what a lock going quiet
+    actually looks like. Around the walk instead, the budget would have to
+    cover every slot in it -- so it would scale with the slot count, be
+    unknowable from the call site, and take that multiple of the time to
+    notice something the very first command already showed.
     """
-    with patch.object(
-        type(zha_lock),
-        "managed_slots",
-        property(lambda _self: frozenset(range(1, 31))),
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    reached: list[int] = []
+
+    async def _never_answers(slot_num):
+        reached.append(slot_num)
+        await asyncio.Event().wait()
+
+    cluster.get_pin_code = AsyncMock(side_effect=_never_answers)
+
+    with (
+        patch.object(zha_module, "_WORST_CASE_ZCL_COMMAND", 0.05),
+        pytest.raises(LockDisconnected, match="did not answer"),
     ):
-        one_slot = zha_lock.operation_timeout_seconds(1)
-        whole_entry = zha_lock.operation_timeout_seconds()
+        await asyncio.wait_for(zha_lock.async_get_users([1, 2, 3]), timeout=5)
 
-    assert one_slot < whole_entry
-    # The flat floor still applies, so a single command is never cut short.
-    assert one_slot == base_module.OPERATION_TIMEOUT
-
-
-async def test_the_stall_budget_scales_with_the_slot_walk(
-    hass: HomeAssistant, zha_lock: ZHALock
-) -> None:
-    """
-    ZHA reads every managed slot inside one operation, so its budget is per-slot.
-
-    zigpy forces a 28s reply timeout for battery end devices inside three
-    attempts, so one ZCL command can legitimately take ~84s -- and
-    `async_get_users` walks the slots in turn. The base's flat ten minutes
-    would call a slow-but-working lock dead somewhere around eight slots,
-    which is the misdiagnosis the watchdog exists to avoid.
-    """
-    flat = base_module.OPERATION_TIMEOUT
-
-    with patch.object(
-        type(zha_lock),
-        "managed_slots",
-        property(lambda _self: frozenset(range(1, 11))),
-    ):
-        assert zha_lock.operation_timeout_seconds() > flat
-
-    with patch.object(
-        type(zha_lock), "managed_slots", property(lambda _self: frozenset())
-    ):
-        # No slots to walk, so no reason to be more patient than the default.
-        assert zha_lock.operation_timeout_seconds() == flat
+    # It gave up on the first silent command rather than walking the rest.
+    assert len(reached) == 1

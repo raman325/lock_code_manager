@@ -15,7 +15,7 @@ from datetime import timedelta
 from functools import partial
 import logging
 import time
-from typing import Any, Literal, NoReturn, final
+from typing import Any, Literal, NoReturn, TypeVar, final
 
 from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -84,6 +84,8 @@ from ..domain.util import (
 )
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
+
+_T = TypeVar("_T")
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -306,7 +308,6 @@ class BaseLock:
         func: Callable[..., Awaitable[Any]],
         *args: Any,
         pre_execute: Callable[[], None] | None = None,
-        slot_scope: int | None = None,
         **kwargs: Any,
     ) -> Any:
         """
@@ -328,7 +329,7 @@ class BaseLock:
         The wait needs no deadline of its own: everything ahead of it now cuts
         itself off, so the queue drains.
         """
-        budget = self.operation_timeout_seconds(slot_scope)
+        budget = self.operation_timeout_seconds
 
         def _went_quiet(err: TimeoutError) -> NoReturn:
             """Raise the one message both deadlines share, so they cannot drift."""
@@ -483,37 +484,45 @@ class BaseLock:
         return self.lock.entity_id == other.lock.entity_id
 
     @final
+    async def _round_trip(self, awaitable: Awaitable[_T], budget: float) -> _T:
+        """
+        Bound ONE exchange with the lock, and call silence a disconnection.
+
+        The deadline that matters belongs here rather than around the caller.
+        Several providers answer ``async_get_users`` by walking the slots one
+        command at a time, so a budget placed outside that loop has to cover
+        every trip in it -- which makes it scale with the slot count, makes it
+        unknowable from the call site, and makes it far too coarse to notice a
+        lock that has stopped answering. Per exchange it is none of those: one
+        silent trip is enough to know, whatever the walk was going to cost.
+
+        The caller keeps its own outer deadline as a backstop for whatever
+        this does not cover.
+        """
+        try:
+            async with asyncio.timeout(budget):
+                return await awaitable
+        except TimeoutError as err:
+            raise LockDisconnected(
+                f"{self.lock.entity_id} did not answer within {budget:.0f}s"
+            ) from err
+
+    @final
     def _raise_not_implemented(self, method_name: str, guidance: str = "") -> NoReturn:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
 
-    def operation_timeout_seconds(self, slot_scope: int | None = None) -> float:
+    @property
+    def operation_timeout_seconds(self) -> float:
         """
-        Say how long this operation may run before the lock is treated as gone.
+        How long a whole operation may run before the lock is treated as gone.
 
-        Overridden by providers whose single operation is a sequential walk of
-        the slots: their honest budget is per-slot, and the base's flat one
-        would call a slow-but-working lock dead partway through the walk.
-
-        ``slot_scope`` is what THIS call touches, not what the entry manages. A
-        throwaway provider built to read a lock's contents manages nothing, so
-        scaling by the entry hands a wide occupancy scan the flat budget and
-        fails the read that gates adding users.
-
-        Scoping is safe in both directions because this deadline never covers
-        queueing: ``_execute_rate_limited`` bounds the probes and the call, and
-        leaves the wait on ``_aio_lock`` between them uncovered. A narrower
-        scope therefore shortens only this call, never someone else's.
-
-        None means "whatever this entry manages", which is right for the reads
-        that walk exactly that.
+        A backstop, not the main event. What catches a lock going quiet is the
+        per-exchange deadline in ``_round_trip``; this only bounds whatever
+        sits outside those exchanges. So it is one flat number, and no
+        provider needs to scale it by anything.
         """
         return OPERATION_TIMEOUT
-
-    @final
-    def _slots_in_scope(self, slot_scope: int | None) -> int:
-        """Resolve a budget's slot count, defaulting to what the entry manages."""
-        return len(self.managed_slots) if slot_scope is None else slot_scope
 
     @property
     def display_name(self) -> str:
@@ -892,7 +901,7 @@ class BaseLock:
                     "will be created but unavailable, and setup is retried "
                     "once that integration answers again.",
                     self.lock.entity_id,
-                    self.operation_timeout_seconds(),
+                    self.operation_timeout_seconds,
                 )
             except (LockDisconnected, LockOperationFailed) as err:
                 LOGGER.warning(
@@ -941,7 +950,7 @@ class BaseLock:
                 # question -- what is longer than any legitimate operation on
                 # this lock -- and a second, smaller number would give up on a
                 # slow-but-working one.
-                refresh_budget = self.operation_timeout_seconds()
+                refresh_budget = self.operation_timeout_seconds
                 try:
                     async with asyncio.timeout(refresh_budget):
                         if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
@@ -998,7 +1007,7 @@ class BaseLock:
         # Assistant holds the entry's lock, so anything unbounded here parks
         # the entry in `setup_in_progress` and takes reload and remove with
         # it. A provider that does none of this just returns first.
-        async with asyncio.timeout(self.operation_timeout_seconds()):
+        async with asyncio.timeout(self.operation_timeout_seconds):
             await self._run_provider_setup_bounded(config_entry)
 
     @final
@@ -1434,7 +1443,6 @@ class BaseLock:
             self.async_set_usercode,
             code_slot,
             usercode,
-            slot_scope=1,
             pre_execute=_pre_execute_checks,
             name=name,
             source=source,
@@ -1577,7 +1585,6 @@ class BaseLock:
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
-            slot_scope=1,
         )
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
@@ -2197,7 +2204,6 @@ class BaseLock:
                 # a throwaway provider that manages nothing, so scaling by the
                 # entry would hand a wide scan the flat floor -- and failing
                 # this read is what refuses to let the user add anybody.
-                slot_scope=len(wanted),
             )
         except LockCodeManagerError as err:
             _LOGGER.debug(

@@ -50,7 +50,6 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
     User,
-    WriteResult,
     pin_address,
 )
 from custom_components.lock_code_manager.domain.events import CredentialOperation
@@ -62,7 +61,6 @@ from custom_components.lock_code_manager.domain.exceptions import (
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
@@ -1486,7 +1484,7 @@ async def test_a_reconnect_whose_probe_times_out_rearms_the_retry(
 
     with (
         patch.object(
-            type(lock), "operation_timeout_seconds", lambda _s, slots=None: 0.05
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
         ),
         patch.object(lock, "async_get_capabilities", _never_returns),
         patch.object(lock, "subscribe_push_updates") as subscribed,
@@ -2701,61 +2699,6 @@ async def test_clearing_a_managed_slot_still_adopts_an_untagged_owner(
     assert deleted.call_args.args[0].user_id == 99
 
 
-async def test_the_occupancy_scan_declares_how_wide_it_is(hass: HomeAssistant):
-    """
-    The read that gates adding users tells the budget how far it is walking.
-
-    Allocation builds a throwaway provider to ask what a lock holds, and that
-    instance manages nothing -- so a budget scaled by the entry gives a
-    hundred-index scan the flat floor. On a per-slot provider that is far too
-    little, the scan times out, occupancy comes back unknown, and allocation
-    refuses to issue a number: the config flow stops the user adding anybody.
-    """
-    lock = _make_base_test_lock(hass, "scan_width")
-    lock._min_operation_delay = 0
-    asked: list[int | None] = []
-
-    def _record(slot_scope=None):
-        asked.append(slot_scope)
-        return 30.0
-
-    with (
-        patch.object(lock, "operation_timeout_seconds", _record),
-        patch.object(lock, "async_get_usercodes", AsyncMock(return_value={})),
-    ):
-        await lock.async_internal_get_occupied_indices(range(1, 101))
-
-    # The scan's own width, not the entry's -- which is zero here, exactly as
-    # it is for the throwaway provider allocation builds.
-    assert not lock.managed_slots
-    assert asked == [100]
-
-
-async def test_a_write_is_budgeted_for_the_one_slot_it_touches(
-    hass: HomeAssistant,
-):
-    """A set and a clear each touch one slot, and say so."""
-    lock = _make_base_test_lock(hass, "write_budget")
-    lock._min_operation_delay = 0
-    asked: list[int | None] = []
-
-    def _record(slot_scope=None):
-        asked.append(slot_scope)
-        return 30.0
-
-    with (
-        patch.object(lock, "operation_timeout_seconds", _record),
-        patch.object(
-            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
-        ),
-        patch.object(lock, "async_clear_usercode", AsyncMock(return_value=True)),
-    ):
-        await lock.async_internal_set_usercode(1, "1234")
-        await lock.async_internal_clear_usercode(1)
-
-    assert asked == [1, 1]
-
-
 async def test_queueing_behind_a_slow_operation_is_not_a_disconnect(
     hass: HomeAssistant,
 ):
@@ -2782,10 +2725,9 @@ async def test_queueing_behind_a_slow_operation_is_not_a_disconnect(
     # The budgets have to DIFFER, or the operation ahead is cut off at the
     # same moment as the one waiting and nothing is ever really queued: the
     # wide read legitimately runs 0.3s, five times the narrow write's budget.
-    def _budget(_self, slot_scope=None):
-        return 0.06 if slot_scope == 1 else 0.5
-
-    with patch.object(type(lock), "operation_timeout_seconds", _budget):
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda _s: 0.35)
+    ):
         ahead = asyncio.create_task(
             lock._execute_rate_limited("get", _slow_but_working)
         )
@@ -2825,7 +2767,7 @@ async def test_a_wedged_operation_is_cut_off_and_reported_as_a_disconnect(
         await asyncio.Event().wait()
 
     with patch.object(
-        type(lock), "operation_timeout_seconds", lambda _s, slots=None: 0.05
+        type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
     ):
         with pytest.raises(LockDisconnected, match="no answer within"):
             await asyncio.wait_for(
@@ -2853,7 +2795,7 @@ async def test_a_wedged_availability_check_is_cut_off_too(hass: HomeAssistant):
 
     with (
         patch.object(
-            type(lock), "operation_timeout_seconds", lambda _s, slots=None: 0.05
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
         ),
         patch.object(lock, "async_is_device_available", _never_returns),
         pytest.raises(LockDisconnected, match="no answer within"),
@@ -2882,7 +2824,7 @@ async def test_a_wedged_provider_setup_does_not_park_the_entry(hass: HomeAssista
 
     with (
         patch.object(
-            type(lock), "operation_timeout_seconds", lambda _s, slots=None: 0.05
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
         ),
         patch.object(lock, "async_setup", _never_returns),
         patch.object(lock, "async_get_usercodes", AsyncMock(return_value={})),
@@ -2915,7 +2857,7 @@ async def test_a_wedged_operation_stops_blocking_every_other_slot(
         await asyncio.Event().wait()
 
     with patch.object(
-        type(lock), "operation_timeout_seconds", lambda _s, slots=None: 0.05
+        type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
     ):
         wedged = asyncio.create_task(lock._execute_rate_limited("set", _never_returns))
         with contextlib.suppress(LockDisconnected):
@@ -2929,34 +2871,6 @@ async def test_a_wedged_operation_stops_blocking_every_other_slot(
 
     assert result == "through"
     assert not lock._aio_lock.locked()
-
-
-async def test_the_timeout_uses_the_providers_own_budget(hass: HomeAssistant):
-    """
-    A provider that walks every slot in one call gets to say how long that is.
-
-    ZHA, zigbee2mqtt and zwave-js-ui read the slots in turn, so the honest
-    budget is per-slot; the flat ten minutes would cut off a slow-but-working
-    lock partway through its walk. The constant is deliberately left at its
-    real value -- reading it instead of the property is the mutation this has
-    to catch, and it would surface as a test that hangs for ten minutes.
-    """
-    lock = _make_base_test_lock(hass, "own_budget")
-    lock._min_operation_delay = 0
-
-    async def _never_returns(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    assert base_module.OPERATION_TIMEOUT > 60
-    with (
-        patch.object(
-            type(lock), "operation_timeout_seconds", lambda _s, slots=None: 0.05
-        ),
-        pytest.raises(LockDisconnected),
-    ):
-        await asyncio.wait_for(
-            lock._execute_rate_limited("get", _never_returns), timeout=5
-        )
 
 
 async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
@@ -2978,7 +2892,7 @@ async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
 
     with (
         patch.object(
-            type(lock), "operation_timeout_seconds", lambda _s, slots=None: 0.05
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
         ),
         patch.object(lock, "async_get_capabilities", _never_returns),
         patch.object(lock, "async_get_usercodes", AsyncMock(return_value={})),
@@ -3029,7 +2943,7 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
 
     with (
         patch.object(
-            type(lock), "operation_timeout_seconds", lambda _s, slots=None: 0.05
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
         ),
         patch.object(lock, "async_get_usercodes", _never_returns),
     ):

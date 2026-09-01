@@ -55,16 +55,9 @@ class BaseMqttLock(BaseLock):
 
     # What one slot's read costs on this transport. `_async_read_slots` walks
     # the managed slots one at a time -- deliberately, so the bridge and the
-    # lock's firmware answer each read before the next goes out -- so the
-    # stall budget is this times the number of slots, not a flat figure.
+    # lock's firmware answer each read before the next goes out, so this is
+    # the deadline on ONE of them -- see `_round_trip`.
     _per_slot_read_budget: ClassVar[float] = 60.0
-
-    def operation_timeout_seconds(self, slot_scope: int | None = None) -> float:
-        """Scale with the slot walk rather than calling a slow lock dead."""
-        return max(
-            super().operation_timeout_seconds(slot_scope),
-            self._per_slot_read_budget * self._slots_in_scope(slot_scope),
-        )
 
     # Whether any slot read on this instance has ever come back with something
     # the lock said, rather than silence. Latched on, never cleared: what it
@@ -298,7 +291,16 @@ class BaseMqttLock(BaseLock):
         if not code_slots:
             return []
 
-        reads = {slot_num: await read_slot(slot_num) for slot_num in sorted(code_slots)}
+        # Per slot, not per walk. The bridge and the lock's firmware answer
+        # one read before the next goes out, so the walk costs the slot count
+        # -- but a lock that has gone quiet is knowable from the first slot
+        # that says nothing, without waiting out the rest.
+        reads = {
+            slot_num: await self._round_trip(
+                read_slot(slot_num), self._per_slot_read_budget
+            )
+            for slot_num in sorted(code_slots)
+        }
         if any(state is not None for state in reads.values()):
             self._reads_have_succeeded = True
         elif len(reads) > 1 and self._reads_have_succeeded:

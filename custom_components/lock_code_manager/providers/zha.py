@@ -89,13 +89,6 @@ class ZHALock(BaseLock):
 
     # -- Properties ----------------------------------------------------------
 
-    def operation_timeout_seconds(self, slot_scope: int | None = None) -> float:
-        """Scale with the slot walk: one command per slot, each of them slow."""
-        return max(
-            super().operation_timeout_seconds(slot_scope),
-            _WORST_CASE_ZCL_COMMAND * self._slots_in_scope(slot_scope),
-        )
-
     @property
     def domain(self) -> str:
         """Return integration domain."""
@@ -381,7 +374,12 @@ class ZHALock(BaseLock):
         slot_states: dict[int, SlotCredential] = {}
         for slot_num in scope:
             try:
-                result = await cluster.get_pin_code(slot_num)
+                # Per command, not per walk: zigpy's own retry ladder can
+                # legitimately spend ~84s here, and one silent command is
+                # enough to know the lock has stopped answering.
+                result = await self._round_trip(
+                    cluster.get_pin_code(slot_num), _WORST_CASE_ZCL_COMMAND
+                )
                 _LOGGER.debug(
                     "Lock %s slot %s get_pin_code: %s",
                     self.lock.entity_id,
