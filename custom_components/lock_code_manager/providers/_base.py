@@ -44,6 +44,7 @@ from ..const import (
     ATTR_TO,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
+    PENDING_WRITE_TTL,
 )
 from ..domain.config import build_slot_unique_id
 from ..domain.coordinator import LockUsercodeUpdateCoordinator
@@ -116,11 +117,6 @@ MIN_OPERATION_DELAY = 2.0
 # this constant exists to avoid.
 OPERATION_TIMEOUT = 600.0
 
-
-# How long an optimistic write waits for confirmation (push event or hard-refresh
-# presence) before the sync layer gives up waiting and re-syncs. See the Phase 2
-# push-as-commit spec.
-PENDING_WRITE_TTL = 60.0
 _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
     "get": "get from",
     "set": "set on",

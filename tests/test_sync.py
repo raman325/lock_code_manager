@@ -21,6 +21,7 @@ from custom_components.lock_code_manager.const import (
     BACKOFF_FAILURE_THRESHOLD,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    PENDING_WRITE_TTL,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -48,7 +49,11 @@ from .common import (
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_IN_SYNC_ENTITY,
 )
-from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj
+from .conftest import (
+    async_initial_tick,
+    async_trigger_sync_tick,
+    get_in_sync_entity_obj,
+)
 
 
 def _slot(
@@ -76,10 +81,17 @@ def _manager(
     verified: bool = True,
     slot_num: int = 1,
     cleared_slot: bool = False,
+    write_is_fresh: bool = True,
 ) -> SlotSyncManager:
     """Build a mock SlotSyncManager with _last_set_pin and a verified coordinator."""
     mgr = MagicMock(spec=SlotSyncManager)
     mgr._last_set_pin = last_set_pin
+    # 0.0 is already in the past for any monotonic clock, so "the write is
+    # too old to still explain a lock that reports the slot empty" needs no
+    # time travel to express.
+    mgr._last_set_expires_at = (
+        time.monotonic() + PENDING_WRITE_TTL if write_is_fresh else 0.0
+    )
     mgr._lock = MagicMock()
     mgr._lock.last_write_was_clear.return_value = cleared_slot
     mgr._slot_num = slot_num
@@ -238,6 +250,57 @@ class TestCalculateInSync:
             _manager(last_set_pin=last_set_pin).calculate_in_sync(_slot(**slot_kwargs))
             is expected
         )
+
+    async def test_a_set_arms_the_window_it_will_be_trusted_in(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Writing a PIN starts the clock that lets it stand in for a read.
+
+        Asserted through the decision rather than the attribute: a set that
+        forgot to arm the window would leave an eventually-consistent lock
+        (the Schlage cloud API) reading out of sync for the whole of its
+        read lag, rewriting the code on every tick.
+        """
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+        snapshot = manager._resolve_credential_snapshot()
+        assert snapshot is not None
+        await manager._perform_sync(snapshot)
+
+        # The lock has not caught up yet and reports the slot empty.
+        assert (
+            manager.calculate_in_sync(
+                _slot(
+                    active=STATE_ON,
+                    pin=snapshot.credential_state,
+                    coordinator_credential=SlotCredential.empty(),
+                )
+            )
+            is True
+        )
+
+    def test_stale_write_does_not_override_a_lock_reporting_the_slot_empty(
+        self,
+    ) -> None:
+        """A credential deleted out of band is not in sync (issue #1538).
+
+        Every table case above writes and reads inside one TTL, where
+        trusting the write is right. This is the case a lock actually
+        reaches: LCM set the PIN, somebody removed it on the lock, and the
+        poll that says so arrives long after. Reporting that in sync leaves
+        a user who cannot open the door indistinguishable from one who can,
+        and stops the tick that would put the code back.
+        """
+        manager = _manager(last_set_pin="1234", write_is_fresh=False)
+        state = _slot(
+            active=STATE_ON, pin="1234", coordinator_credential=SlotCredential.empty()
+        )
+        assert manager.calculate_in_sync(state) is False
 
     def test_inactive_unknown_code_is_in_sync_once_cleared(self) -> None:
         """A lock that withholds its contents cannot confirm or deny a clear.

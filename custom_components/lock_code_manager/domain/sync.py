@@ -51,6 +51,7 @@ from ..const import (
     ATTR_CODE,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    PENDING_WRITE_TTL,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
@@ -229,6 +230,16 @@ class SlotSyncManager:
         # config changed while HA was down, at the cost of one extra set per
         # masked/write-only slot on every restart.
         self._last_set_pin: str | None = None
+
+        # When the write behind ``_last_set_pin`` stops standing in for a read
+        # that disagrees with it. Only the empty-credential branch of
+        # ``calculate_in_sync`` consults this: overriding a lock that reports
+        # the slot EMPTY is a claim the lock is lagging, and a lag that has
+        # outlived the pending-write TTL is not a lag. The unreadable branch
+        # deliberately does not expire, because a write-only lock never stops
+        # withholding its contents and there is nothing for the write to lose
+        # a race against.
+        self._last_set_expires_at: float = 0.0
 
         # Slot-level circuit breaker: trips when a code repeatedly fails to
         # converge within the window, suspending just this lock and slot.
@@ -469,12 +480,17 @@ class SlotSyncManager:
         if snapshot.active_state == STATE_ON:
             if credential is not None:
                 if credential.is_empty:
-                    # If we recently set a PIN on this slot and it matches the
-                    # configured PIN, trust the set — the provider may not
-                    # have caught up yet (eventual consistency, e.g. Schlage
-                    # cloud API).
+                    # The lock says the slot holds nothing. Overriding that is
+                    # only defensible while a write we just made could still be
+                    # ahead of the read (eventual consistency, e.g. the Schlage
+                    # cloud API); past the TTL the lock is not lagging, it is
+                    # answering, and the credential really is gone (issue
+                    # #1538). Reporting THAT as in sync leaves a user who
+                    # cannot open the door looking like one who can, and stops
+                    # the tick that would put the code back.
                     return (
                         self._last_set_pin is not None
+                        and time.monotonic() < self._last_set_expires_at
                         and snapshot.credential_state == self._last_set_pin
                     )
                 if not credential.is_readable:
@@ -519,6 +535,7 @@ class SlotSyncManager:
                 source="sync",
             )
             self._last_set_pin = snapshot.credential_state
+            self._last_set_expires_at = time.monotonic() + PENDING_WRITE_TTL
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
             return True
         await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
