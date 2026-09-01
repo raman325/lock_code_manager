@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "e51ddb68cec8",
+  "strategy": "manual-commit",
+  "branch": "fix/1538-matter-multilock",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e5/1ddb68cec8/0/metadata.json",
+      "transcript": "/e5/1ddb68cec8/0/full.jsonl",
+      "compact_transcript": "/e5/1ddb68cec8/0/transcript.jsonl",
+      "content_hash": "/e5/1ddb68cec8/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 23,
+    "cache_creation_tokens": 24938,
+    "cache_read_tokens": 4295861,
+    "output_tokens": 14653,
+    "api_call_count": 13
+  }
+}
