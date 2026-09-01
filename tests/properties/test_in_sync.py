@@ -43,7 +43,7 @@ def _manager(
     write_is_fresh: bool = True,
 ) -> SlotSyncManager:
     # __new__ skips the heavyweight __init__ (hass, registries, entities);
-    # calculate_in_sync only touches these five attributes.
+    # calculate_in_sync only touches these six attributes.
     manager = SlotSyncManager.__new__(SlotSyncManager)
     manager._slot_num = 1
     manager._address = pin_address(1)

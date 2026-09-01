@@ -540,6 +540,10 @@ class SlotSyncManager:
             return True
         await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
         self._last_set_pin = None
+        # Released with the value it qualifies. Inert while the ``is not None``
+        # check above it comes first, but a window outliving the write it was
+        # armed for is the kind of divergence that stops being inert quietly.
+        self._last_set_expires_at = 0.0
         _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
         return False
 
