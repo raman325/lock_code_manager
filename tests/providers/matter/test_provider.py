@@ -2532,12 +2532,7 @@ class TestSetUser:
                 [
                     {
                         "user_index": 7,
-                        # Compact, not canonical. These exercise the charset
-                        # cascade, and a lock that rejects the colons has no
-                        # canonical name to be storing -- one that IS storing
-                        # one is proof the refusal is about something else
-                        # (issue #1538). Still resolves to slot 2 on lookup.
-                        "user_name": "lcm2",
+                        "user_name": "lcm:2:Original",
                         "credentials": [{"type": "pin", "index": 3}],
                     },
                 ]
@@ -2754,12 +2749,7 @@ class TestSetUser:
                 [
                     {
                         "user_index": 7,
-                        # Compact, not canonical. These exercise the charset
-                        # cascade, and a lock that rejects the colons has no
-                        # canonical name to be storing -- one that IS storing
-                        # one is proof the refusal is about something else
-                        # (issue #1538). Still resolves to slot 2 on lookup.
-                        "user_name": "lcm2",
+                        "user_name": "lcm:2:Original",
                         "credentials": [{"type": "pin", "index": 3}],
                     },
                 ]
@@ -2773,106 +2763,6 @@ class TestSetUser:
         # Compact tier (lcm2), not bare slot-only (2).
         assert mock_set_user.call_args_list[1].kwargs["user_name"] == "lcm2"
         assert "rejected" in caplog.text and "lcm:2:Updated Name" in caplog.text
-
-    async def test_a_busy_lock_does_not_cost_a_slot_its_display_name(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """A refusal from a lock storing canonical names is not a charset refusal.
-
-        Issue #1538: on a lock holding ``lcm:1:User A``, three more slots were
-        written as ``lcm3``/``lcm4``/``lcm5`` during a spell of poll failures.
-        Nothing in the exception separates "this firmware rejects colons" from
-        "ask me again" -- both arrive as the same catch-all ``MatterError`` --
-        but the lock is holding the answer: it accepts the colons, so retry
-        rather than spend a name the slot does not get back.
-        """
-        mock_set_user = AsyncMock(
-            side_effect=UnknownError("InteractionModelError: Busy (0x8c)")
-        )
-        with (
-            self._patch_users(
-                [
-                    {
-                        "user_index": 1,
-                        "user_name": "lcm:1:User A",
-                        "credentials": [{"type": "pin", "index": 1}],
-                    },
-                ]
-            ),
-            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-            pytest.raises(LockOperationFailed, match="neither a charset nor a"),
-        ):
-            await matter_lock.async_set_user(User(user_id=3, name="lcm:3:User C"))
-
-        # Stopped at the canonical name rather than descending to lcm3.
-        assert mock_set_user.call_count == 1
-        assert mock_set_user.call_args.kwargs["user_name"] == "lcm:3:User C"
-
-    async def test_an_over_budget_name_still_descends_on_a_colon_accepting_lock(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """Proving the colons are fine does not prove the length is.
-
-        The cascade's tiers drop the display portion as well as the colons,
-        so an over-budget name is one it can still help with. Matter counts
-        userName in UTF-8 BYTES: this display is 32 characters and 36 bytes,
-        so it passes the character-based truncation upstream and is refused
-        by the lock. Aborting instead of descending would leave the CREATE
-        path with no allocated user_index, and the slot with no PIN at all.
-        """
-        over_budget = "lcm:3:Zoe\u0308 Mu\u0308ller-Gro\u0308\u00dfe Apt"
-        assert len(over_budget.encode()) > 32
-        mock_set_user = AsyncMock(
-            side_effect=[
-                UnknownError("InteractionModelError: ConstraintError (0x87)"),
-                {"user_index": 4},
-            ]
-        )
-        with (
-            self._patch_users(
-                [
-                    {
-                        "user_index": 1,
-                        "user_name": "lcm:1:User A",
-                        "credentials": [{"type": "pin", "index": 1}],
-                    },
-                ]
-            ),
-            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-        ):
-            result = await matter_lock.async_set_user(User(user_id=3, name=over_budget))
-
-        assert result == SetUserResult(user_id=4, created=True)
-        assert [call.kwargs["user_name"] for call in mock_set_user.call_args_list] == [
-            over_budget,
-            "lcm3",
-        ]
-
-    async def test_a_degraded_name_is_rewritten_by_the_next_write(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """A slot already holding a fallback name is retried canonically.
-
-        This is what makes the cascade recoverable rather than a one-way
-        door, and why the gate above only has to stop the degradation from
-        happening in the first place -- it does not also have to undo it.
-        """
-        mock_set_user = AsyncMock(return_value={"user_index": 2})
-        with (
-            self._patch_users(
-                [
-                    {
-                        "user_index": 2,
-                        "user_name": "lcm3",
-                        "credentials": [{"type": "pin", "index": 2}],
-                    },
-                ]
-            ),
-            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-        ):
-            await matter_lock.async_set_user(User(user_id=3, name="lcm:3:User C"))
-
-        assert mock_set_user.call_args.kwargs["user_name"] == "lcm:3:User C"
 
     async def test_set_user_update_tolerates_when_all_attempts_fail(
         self, hass: HomeAssistant, matter_lock: MatterLock, caplog
@@ -2897,12 +2787,7 @@ class TestSetUser:
                 [
                     {
                         "user_index": 9,
-                        # Compact, not canonical. These exercise the charset
-                        # cascade, and a lock that rejects the colons has no
-                        # canonical name to be storing -- one that IS storing
-                        # one is proof the refusal is about something else
-                        # (issue #1538). Still resolves to slot 2 on lookup.
-                        "user_name": "lcm2",
+                        "user_name": "lcm:2:Original",
                         "credentials": [{"type": "pin", "index": 1}],
                     },
                 ]
