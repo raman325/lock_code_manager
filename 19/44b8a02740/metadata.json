@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "1944b8a02740",
+  "strategy": "manual-commit",
+  "branch": "fix/timeout-budget-follows-operation-scope",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/19/44b8a02740/0/metadata.json",
+      "transcript": "/19/44b8a02740/0/full.jsonl",
+      "compact_transcript": "/19/44b8a02740/0/transcript.jsonl",
+      "content_hash": "/19/44b8a02740/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5147,
+    "cache_creation_tokens": 16275664,
+    "cache_read_tokens": 1309026385,
+    "output_tokens": 1928124,
+    "api_call_count": 2589
+  }
+}
