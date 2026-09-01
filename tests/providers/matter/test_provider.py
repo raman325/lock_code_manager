@@ -2800,13 +2800,53 @@ class TestSetUser:
                 ]
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-            pytest.raises(LockDisconnected, match="not a charset rejection"),
+            pytest.raises(LockOperationFailed, match="neither a charset nor a"),
         ):
             await matter_lock.async_set_user(User(user_id=3, name="lcm:3:User C"))
 
         # Stopped at the canonical name rather than descending to lcm3.
         assert mock_set_user.call_count == 1
         assert mock_set_user.call_args.kwargs["user_name"] == "lcm:3:User C"
+
+    async def test_an_over_budget_name_still_descends_on_a_colon_accepting_lock(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Proving the colons are fine does not prove the length is.
+
+        The cascade's tiers drop the display portion as well as the colons,
+        so an over-budget name is one it can still help with. Matter counts
+        userName in UTF-8 BYTES: this display is 32 characters and 36 bytes,
+        so it passes the character-based truncation upstream and is refused
+        by the lock. Aborting instead of descending would leave the CREATE
+        path with no allocated user_index, and the slot with no PIN at all.
+        """
+        over_budget = "lcm:3:Zoe\u0308 Mu\u0308ller-Gro\u0308\u00dfe Apt"
+        assert len(over_budget.encode()) > 32
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("InteractionModelError: ConstraintError (0x87)"),
+                {"user_index": 4},
+            ]
+        )
+        with (
+            self._patch_users(
+                [
+                    {
+                        "user_index": 1,
+                        "user_name": "lcm:1:User A",
+                        "credentials": [{"type": "pin", "index": 1}],
+                    },
+                ]
+            ),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+        ):
+            result = await matter_lock.async_set_user(User(user_id=3, name=over_budget))
+
+        assert result == SetUserResult(user_id=4, created=True)
+        assert [call.kwargs["user_name"] for call in mock_set_user.call_args_list] == [
+            over_budget,
+            "lcm3",
+        ]
 
     async def test_a_degraded_name_is_rewritten_by_the_next_write(
         self, hass: HomeAssistant, matter_lock: MatterLock
