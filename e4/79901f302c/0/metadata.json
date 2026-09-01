@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "e479901f302c",
+  "session_id": "2b303935-a964-4f53-8de1-3e2ef0a99d8f",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-01T16:31:10.214533Z",
+  "branch": "fix/1538-matter-multilock",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/properties/test_in_sync.py",
+    "tests/test_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "65b7f0f223ea",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 227,
+    "cache_creation_tokens": 421699,
+    "cache_read_tokens": 21601013,
+    "output_tokens": 81254,
+    "api_call_count": 121
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01EJjeCEBkdnQXyzHSdct6g9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:systematic-debugging"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "65b7f0f223ea",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 24,
+        "end": 25,
+        "entry_ids": [
+          "9984ddbf-a126-4dd9-a373-ed980ac1894c"
+        ],
+        "tool_use_id": "toolu_01EJjeCEBkdnQXyzHSdct6g9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01EJjeCEBkdnQXyzHSdct6g9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:systematic-debugging",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-09-01T16:31:10.162339Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 35,
+    "human_modified": 134,
+    "human_removed": 0,
+    "total_committed": 35,
+    "total_lines_changed": 169,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
