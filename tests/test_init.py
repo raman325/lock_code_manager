@@ -129,7 +129,9 @@ async def test_entry_setup_and_unload(
     ent_reg = er.async_get(hass)
 
     for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-        device = dev_reg.async_get_device({(LOCK_DEVICE_DOMAIN, entity_id)})
+        device = dev_reg.async_get_device_by_identifier(
+            (LOCK_DEVICE_DOMAIN, entity_id), mock_lock_entry_id
+        )
         assert device
         assert device.config_entries == {mock_lock_entry_id}
         # Nothing of ours sits on the lock's own device. A device belongs to
@@ -143,8 +145,9 @@ async def test_entry_setup_and_unload(
 
     # The per-lock entities live on the slot device beside the shared ones.
     for slot in range(1, 3):
-        slot_device = dev_reg.async_get_device(
-            {(DOMAIN, build_slot_device_identifier(lcm_entry_id, slot))}
+        slot_device = dev_reg.async_get_device_by_identifier(
+            (DOMAIN, build_slot_device_identifier(lcm_entry_id, slot)),
+            lcm_entry_id,
         )
         assert slot_device
         assert slot_device.config_entries == {lcm_entry_id}
@@ -269,7 +272,9 @@ async def test_entry_setup_and_unload(
 
     # LOCK_2 was removed from the LCM config entry; its device keeps its own
     # config entry and no longer has any LCM entities linked to it.
-    device = dev_reg.async_get_device({(LOCK_DEVICE_DOMAIN, LOCK_2_ENTITY_ID)})
+    device = dev_reg.async_get_device_by_identifier(
+        (LOCK_DEVICE_DOMAIN, LOCK_2_ENTITY_ID), mock_lock_entry_id
+    )
     assert device
     assert device.config_entries == {mock_lock_entry_id}
     assert not [
@@ -1754,8 +1759,10 @@ async def test_removing_slot_removes_its_device(
     """
     entry_id = lock_code_manager_config_entry.entry_id
     dev_reg = dr.async_get(hass)
-    slot_2_identifiers = {(DOMAIN, f"{entry_id}|2")}
-    assert dev_reg.async_get_device(slot_2_identifiers) is not None
+    slot_2_identifier = (DOMAIN, f"{entry_id}|2")
+    assert (
+        dev_reg.async_get_device_by_identifier(slot_2_identifier, entry_id) is not None
+    )
 
     # Removing a user is removing them from `users`; the slot they occupied is
     # freed with them.
@@ -1768,11 +1775,14 @@ async def test_removing_slot_removes_its_device(
     )
     await hass.async_block_till_done()
 
-    assert dev_reg.async_get_device(slot_2_identifiers) is None
+    assert dev_reg.async_get_device_by_identifier(slot_2_identifier, entry_id) is None
     # The surviving slot and the entry's own device are untouched.
-    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|1")}) is not None
+    assert (
+        dev_reg.async_get_device_by_identifier((DOMAIN, f"{entry_id}|1"), entry_id)
+        is not None
+    )
     # And there is no entry-level device left behind either.
-    assert dev_reg.async_get_device({(DOMAIN, entry_id)}) is None
+    assert dev_reg.async_get_device_by_identifier((DOMAIN, entry_id), entry_id) is None
 
 
 @pytest.mark.parametrize("stale_slot", [99, 0, -1])
@@ -1806,8 +1816,16 @@ async def test_setup_prunes_devices_for_unconfigured_slots(
     await hass.config_entries.async_reload(entry_id)
     await hass.async_block_till_done()
 
-    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|{stale_slot}")}) is None
-    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|1")}) is not None
+    assert (
+        dev_reg.async_get_device_by_identifier(
+            (DOMAIN, f"{entry_id}|{stale_slot}"), entry_id
+        )
+        is None
+    )
+    assert (
+        dev_reg.async_get_device_by_identifier((DOMAIN, f"{entry_id}|1"), entry_id)
+        is not None
+    )
 
 
 async def test_remove_config_entry_device_allows_only_unconfigured_slots(
@@ -1824,7 +1842,9 @@ async def test_remove_config_entry_device_allows_only_unconfigured_slots(
     entry_id = lock_code_manager_config_entry.entry_id
     dev_reg = dr.async_get(hass)
 
-    configured = dev_reg.async_get_device({(DOMAIN, f"{entry_id}|1")})
+    configured = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, f"{entry_id}|1"), entry_id
+    )
     assert configured is not None
     assert (
         await async_remove_config_entry_device(
@@ -2238,8 +2258,9 @@ async def test_setup_reclaims_entities_left_on_a_split_device(
     await hass.config_entries.async_setup(entry_id)
     await hass.async_block_till_done()
 
-    slot_device = dev_reg.async_get_device(
-        {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
+    slot_device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, build_slot_device_identifier(entry_id, 1)),
+        entry_id,
     )
     assert slot_device
     reclaimed = ent_reg.async_get_entity_id(stranded.domain, DOMAIN, stranded.unique_id)
@@ -2261,7 +2282,9 @@ async def test_setup_leaves_devices_of_other_integrations_alone(
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
 
-    lock_device = dev_reg.async_get_device({(LOCK_DEVICE_DOMAIN, LOCK_1_ENTITY_ID)})
+    lock_device = dev_reg.async_get_device_by_identifier(
+        (LOCK_DEVICE_DOMAIN, LOCK_1_ENTITY_ID), mock_lock_config_entry.entry_id
+    )
     assert lock_device
     before = {
         entry.entity_id
@@ -2383,7 +2406,10 @@ async def test_reclaim_leaves_our_own_empty_devices_alone(
     # away itself, which would prove nothing about this pass.
     _async_reclaim_entities_from_foreign_devices(hass, config_entry)
 
-    assert dev_reg.async_get_device({(DOMAIN, f"{entry_id}|404")}) is not None
+    assert (
+        dev_reg.async_get_device_by_identifier((DOMAIN, f"{entry_id}|404"), entry_id)
+        is not None
+    )
 
     await hass.config_entries.async_unload(entry_id)
 
@@ -2427,8 +2453,9 @@ async def test_reclaim_moves_a_disabled_entity_rather_than_deleting_it(
     )
     assert survivor is not None
     assert survivor.disabled_by is er.RegistryEntryDisabler.USER
-    slot_device = dev_reg.async_get_device(
-        {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
+    slot_device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, build_slot_device_identifier(entry_id, 1)),
+        entry_id,
     )
     assert slot_device and survivor.device_id == slot_device.id
     assert dev_reg.async_get(split.id) is None
@@ -2471,7 +2498,9 @@ async def test_reclaim_does_not_resurrect_a_device_for_an_unconfigured_slot(
 
     # Slot 9 is not configured, so neither device may survive.
     assert (
-        dev_reg.async_get_device({(DOMAIN, build_slot_device_identifier(entry_id, 9))})
+        dev_reg.async_get_device_by_identifier(
+            (DOMAIN, build_slot_device_identifier(entry_id, 9)), entry_id
+        )
         is None
     )
     assert dev_reg.async_get(split.id) is None
@@ -2492,7 +2521,9 @@ async def test_reclaim_moves_an_entity_off_the_lock_integrations_device(
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
 
-    lock_device = dev_reg.async_get_device({(LOCK_DEVICE_DOMAIN, LOCK_1_ENTITY_ID)})
+    lock_device = dev_reg.async_get_device_by_identifier(
+        (LOCK_DEVICE_DOMAIN, LOCK_1_ENTITY_ID), mock_lock_config_entry.entry_id
+    )
     assert lock_device
     assert lock_device.config_entries != {DOMAIN}
 
@@ -2515,8 +2546,9 @@ async def test_reclaim_moves_an_entity_off_the_lock_integrations_device(
     await hass.config_entries.async_setup(entry_id)
     await hass.async_block_till_done()
 
-    slot_device = dev_reg.async_get_device(
-        {(DOMAIN, build_slot_device_identifier(entry_id, 1))}
+    slot_device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, build_slot_device_identifier(entry_id, 1)),
+        entry_id,
     )
     assert slot_device
     reclaimed = ent_reg.async_get_entity_id(stranded.domain, DOMAIN, stranded.unique_id)
@@ -2608,8 +2640,9 @@ async def test_migration_of_a_real_world_entry_shape(
             # lingering under a name for a user who does not exist.
             assert moved is None
             assert (
-                dev_reg.async_get_device(
-                    {(DOMAIN, build_slot_device_identifier(entry.entry_id, slot))}
+                dev_reg.async_get_device_by_identifier(
+                    (DOMAIN, build_slot_device_identifier(entry.entry_id, slot)),
+                    entry.entry_id,
                 )
                 is None
             )
@@ -2631,7 +2664,9 @@ async def test_a_slot_device_is_named_for_the_user_who_holds_it(
     config = get_entry_config(lock_code_manager_config_entry)
 
     for slot_num in config.slot_numbers:
-        device = dev_reg.async_get_device({(DOMAIN, f"{entry_id}|{slot_num}")})
+        device = dev_reg.async_get_device_by_identifier(
+            (DOMAIN, f"{entry_id}|{slot_num}"), entry_id
+        )
         assert device is not None
         # Prefixed with the entry title, which is what makes the entity IDs
         # derived from it unique across entries.
@@ -2655,9 +2690,12 @@ async def test_renaming_a_user_renames_their_device(
     """
     entry_id = lock_code_manager_config_entry.entry_id
     dev_reg = dr.async_get(hass)
-    identifiers = {(DOMAIN, f"{entry_id}|1")}
+    identifier = (DOMAIN, f"{entry_id}|1")
     before = get_entry_config(lock_code_manager_config_entry).name_for(1)
-    assert dev_reg.async_get_device(identifiers).name == f"Mock Title {before}"
+    assert (
+        dev_reg.async_get_device_by_identifier(identifier, entry_id).name
+        == f"Mock Title {before}"
+    )
 
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -2669,7 +2707,10 @@ async def test_renaming_a_user_renames_their_device(
     await hass.async_block_till_done()
 
     assert get_entry_config(lock_code_manager_config_entry).name_for(1) == "Sherene"
-    assert dev_reg.async_get_device(identifiers).name == "Mock Title Sherene"
+    assert (
+        dev_reg.async_get_device_by_identifier(identifier, entry_id).name
+        == "Mock Title Sherene"
+    )
 
 
 async def test_migration_reslugs_entity_ids_onto_the_user_name(
@@ -2804,14 +2845,22 @@ async def test_migration_takes_away_the_config_entrys_own_device(
         manufacturer="Lock Code Manager",
         name="All Locks",
     )
-    assert dev_reg.async_get_device({(DOMAIN, entry.entry_id)}) is not None
+    assert (
+        dev_reg.async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id)
+        is not None
+    )
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert dev_reg.async_get_device({(DOMAIN, entry.entry_id)}) is None
+    assert (
+        dev_reg.async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id)
+        is None
+    )
 
-    user_device = dev_reg.async_get_device({(DOMAIN, f"{entry.entry_id}|1")})
+    user_device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, f"{entry.entry_id}|1"), entry.entry_id
+    )
     assert user_device is not None
     assert user_device.via_device_id is None
     assert user_device.id != hub.id

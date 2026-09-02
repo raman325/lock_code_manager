@@ -98,7 +98,7 @@ def test_diff_no_changes() -> None:
 
 def test_diff_str_keys_match_int_keys() -> None:
     """
-    Stored data has str slot keys; voluptuous output has int.
+    Stored data has str slot keys; probatio output has int.
 
     EntryConfig.from_mapping normalizes keys to int up front, so by the
     time the diff is computed both sides are int-keyed and ``"1"`` /
@@ -302,7 +302,7 @@ def test_entry_config_accessors_absorb_str_or_int_slot_num() -> None:
 
 
 def test_entry_config_from_mapping_preserves_int_slot_keys() -> None:
-    """Int keys (voluptuous output) pass through unchanged."""
+    """Int keys (probatio output) pass through unchanged."""
     config = EntryConfig.from_mapping(
         {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
     )
