@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -809,6 +809,51 @@ async def test_uc_shim_empty_code_follows_occupancy(
         await hass.async_block_till_done()
 
     mock_coordinator.observe_push.assert_called_once_with(pin_address(2), expected)
+
+    zwave_js_lock.unsubscribe_push_updates()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (CodeSlotStatus.ENABLED, SlotCredential.unreadable()),
+        (CodeSlotStatus.AVAILABLE, SlotCredential.empty()),
+    ],
+    ids=["occupied-withheld", "cleared"],
+)
+async def test_uc_shim_status_then_empty_code_reads_the_fresh_status(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    status: CodeSlotStatus,
+    expected: SlotCredential,
+) -> None:
+    """The driver reports status before code; the code handler reads that status.
+
+    A report of an occupied slot with the code withheld arrives as ENABLED
+    then an empty userCode, and resolves to unreadable. A real clear arrives
+    as AVAILABLE then an empty userCode, and resolves to empty both times.
+    """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
+    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
+    zwave_js_lock.coordinator = mock_coordinator
+
+    zwave_js_lock.subscribe_push_updates()
+
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(lock_schlage_be469.node_id, "userIdStatus", 2, status)
+    )
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
+    )
+    await hass.async_block_till_done()
+
+    assert mock_coordinator.observe_push.call_args_list[-1] == call(
+        pin_address(2), expected
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
 
