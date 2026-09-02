@@ -693,6 +693,17 @@ class ZWaveJSLock(BaseLock):
         # Pre-15.25.2 drivers never persist a supervised success to the
         # value database (see _async_uc_reconcile_value_db).
         await self._async_uc_reconcile_value_db(credential.slot)
+        # Push what the driver just confirmed, as every other push provider
+        # does before returning CONFIRMED. The seam records nothing pending
+        # for a push provider on the strength of exactly that: the value is
+        # on the coordinator when it returns. Without this push the
+        # coordinator kept whatever it held before the write -- an empty
+        # slot, verified -- and on a mesh lossy enough for the reconcile read
+        # above to time out, no driver event followed to correct it; the
+        # sync tick then read a verified empty slot as the lock's answer,
+        # charged the breaker and rewrote, three times over, a code the lock
+        # had held all along.
+        self._push_credential_update(credential.slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
@@ -907,6 +918,23 @@ class ZWaveJSLock(BaseLock):
     def _handle_uc_code_update(self, code_slot: int, new_value: Any) -> None:
         """Handle a userCode value update for a code slot."""
         if not new_value:
+            # Same guard as the userIdStatus=AVAILABLE twin above: some locks
+            # report a stale empty userCode after a code was set, and taking
+            # it as the lock's word puts a slot LCM expects a PIN on into a
+            # rewrite loop.
+            if (
+                self.coordinator is not None
+                and self.coordinator.desired_credential(
+                    pin_address(code_slot)
+                ).is_present
+            ):
+                _LOGGER.debug(
+                    "Lock %s: ignoring empty userCode for slot %s "
+                    "(LCM expects PIN on this slot)",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                return
             resolved = SlotCredential.empty()
         else:
             value = str(new_value)

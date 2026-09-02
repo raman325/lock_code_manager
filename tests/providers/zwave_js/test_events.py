@@ -776,9 +776,15 @@ async def test_uc_shim_empty_code_pushes_empty(
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """An empty userCode value update pushes SlotCredential.empty()."""
+    """An empty userCode value update pushes SlotCredential.empty().
+
+    When LCM expects nothing on the slot, that is: the same report is
+    ignored when a PIN is expected there (see the test below), because the
+    locks that send stale AVAILABLE after a set send stale empty codes too.
+    """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
+    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
@@ -816,6 +822,36 @@ async def test_uc_shim_status_available_pushes_empty(
     await hass.async_block_till_done()
 
     mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
+
+    zwave_js_lock.unsubscribe_push_updates()
+
+
+async def test_uc_shim_empty_code_ignored_when_pin_expected(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A stale empty userCode report is ignored when LCM expects a PIN on the slot.
+
+    The twin of the AVAILABLE guard: the same locks that send a stale
+    AVAILABLE after a set also send an empty userCode, and taking either as
+    the lock's word puts the slot into a rewrite loop.
+    """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
+    mock_coordinator.desired_credential.return_value = SlotCredential.known("1234")
+    zwave_js_lock.coordinator = mock_coordinator
+
+    zwave_js_lock.subscribe_push_updates()
+
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
+    )
+    await hass.async_block_till_done()
+
+    mock_coordinator.push_update.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
 
