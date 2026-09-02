@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "3846fcf9084c",
+  "strategy": "manual-commit",
+  "branch": "fix/1538-coordinator-owns-pending",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/38/46fcf9084c/0/metadata.json",
+      "transcript": "/38/46fcf9084c/0/full.jsonl",
+      "compact_transcript": "/38/46fcf9084c/0/transcript.jsonl",
+      "content_hash": "/38/46fcf9084c/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 285685,
+    "cache_read_tokens": 607674,
+    "output_tokens": 3587,
+    "api_call_count": 3
+  }
+}
