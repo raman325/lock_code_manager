@@ -38,6 +38,7 @@ from homeassistant.helpers import (
 )
 from homeassistant.util import slugify
 
+from custom_components import lock_code_manager
 from custom_components.lock_code_manager import (
     _async_reclaim_entities_from_foreign_devices,
     _async_setup_new_locks,
@@ -2057,6 +2058,53 @@ async def test_update_listener_slot_removal_handles_missing_and_failing_coordina
     assert 2 not in runtime_data.slot_coordinators
     assert not hass.states.async_entity_ids(Platform.TEXT)
     assert "slot 2 coordinator stop raised" in caplog.text
+
+
+async def test_settled_waits_for_the_last_overlapping_pass(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """``settled`` means no pass is still running, not that one finished.
+
+    One service call is several entry writes -- a subentry per user, then
+    the entry -- and Home Assistant schedules a listener task per write.
+    They overlap, and the ones with nothing to do finish FIRST: only the
+    earliest pass finds a diff, because it caches the new configuration
+    before its first await. Settling on the first pass out therefore hands
+    the waiter an entry whose entities are still being built.
+
+    Driven directly rather than through a service, because which pass wins
+    the race downstream is not something a test can pin: the assertion
+    would pass either way and prove nothing.
+    """
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    runtime_data.settled.clear()
+
+    slow_pass_may_finish = asyncio.Event()
+
+    async def _slow(hass_, config_entry_, old_config=None):
+        await slow_pass_may_finish.wait()
+
+    async def _fast(hass_, config_entry_, old_config=None):
+        return None
+
+    with patch.object(lock_code_manager, "_async_apply_entry_update", _slow):
+        slow = hass.async_create_task(
+            lock_code_manager.async_update_listener(hass, entry)
+        )
+        await asyncio.sleep(0)
+
+    with patch.object(lock_code_manager, "_async_apply_entry_update", _fast):
+        await lock_code_manager.async_update_listener(hass, entry)
+
+    # The no-op pass is done; the one doing the work is not.
+    assert not runtime_data.settled.is_set()
+
+    slow_pass_may_finish.set()
+    await slow
+    assert runtime_data.settled.is_set()
 
 
 async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(

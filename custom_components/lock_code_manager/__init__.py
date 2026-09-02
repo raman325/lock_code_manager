@@ -1827,11 +1827,25 @@ async def async_update_listener(
     including the early return and a failure. Anything waiting on it is
     waiting to learn that the entry has finished reacting, and a pass that
     raised has finished reacting as much as it is going to.
+
+    Set by the LAST pass out, not the first. One service call is several
+    entry writes, Home Assistant schedules a listener task per write, and
+    all but one of them find the configuration already cached and return
+    immediately -- so the first to finish is reliably one that did nothing.
     """
+    runtime_data = config_entry.runtime_data
+    runtime_data.passes_in_flight += 1
     try:
         await _async_apply_entry_update(hass, config_entry)
     finally:
-        config_entry.runtime_data.settled.set()
+        runtime_data.passes_in_flight -= 1
+        # Only the last pass out settles the entry. The others are the
+        # no-op tasks the same write batch scheduled, and they finish
+        # first precisely because they have nothing to do -- settling on
+        # one of those hands the waiter an entry whose entities are still
+        # being built.
+        if runtime_data.passes_in_flight == 0:
+            runtime_data.settled.set()
 
 
 @callback
