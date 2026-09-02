@@ -2398,6 +2398,32 @@ async def test_reauth_reports_a_lock_too_small_for_the_existing_slots(
     assert result["description_placeholders"]["out_of_range_slots"] == "2"
 
 
+async def test_options_flow_refuses_a_lock_too_small_for_the_existing_slots(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    Adding a lock that cannot hold the entry's numbers is refused here.
+
+    The users are not on this form, but the numbers they hold are what a
+    lock added here has to be able to hold. Reauth already checks this when
+    it swaps a lock; the options flow lost the check when the users moved
+    off it (#1514 review), so a too-small lock was accepted here and then
+    refused at write time, one slot at a time, as a connectivity warning.
+    """
+    entry = lock_code_manager_config_entry
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    with _capacity_probe(return_value=_capabilities_with_slots(1)):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "slot_out_of_range"}
+    assert result["description_placeholders"]["num_slots"] == "1"
+    assert result["description_placeholders"]["out_of_range_slots"] == "2"
+
+
 def _suggested_values(result) -> dict[str, object]:
     """Read back what a re-shown form offers the user for each field."""
     return {

@@ -702,6 +702,21 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             errors, description_placeholders = _check_unclaimed_mqtt_locks(
                 self.hass, user_input[CONF_LOCKS], config.locks
             )
+            if not errors and config.slot_numbers:
+                # The users are not on this form, but the numbers they hold
+                # are what a new lock has to be able to hold. Without this a
+                # lock too small for them is accepted here and refused at
+                # write time, slot by slot, as a connectivity warning.
+                try:
+                    await async_check_slot_capacity(
+                        self.hass,
+                        self.config_entry,
+                        user_input[CONF_LOCKS],
+                        config.slot_numbers,
+                    )
+                except SlotAllocationError as err:
+                    errors = {"base": err.translation_key}
+                    description_placeholders = err.placeholders
             if not errors:
                 # Only the entry's own half. The users are untouched in their
                 # subentries, and `extra` carries whatever else the entry
