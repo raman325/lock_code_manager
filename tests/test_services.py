@@ -36,21 +36,17 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.lock_code_manager.const import (
     ATTR_CLEAR_CREDENTIALS,
     ATTR_CODE,
-    ATTR_CODE_SLOT,
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
     ATTR_CREDENTIAL_TYPE,
     ATTR_ENABLE_IF_DISABLED,
     ATTR_LENGTH,
-    ATTR_LOCK_ENTITY_ID,
     ATTR_OPERATION,
     ATTR_REASON,
-    ATTR_SLOT,
     ATTR_SOURCE,
     ATTR_TARGET,
     ATTR_TEXT,
     ATTR_USER,
-    ATTR_USERCODE,
     ATTR_VALID,
     ATTR_VALUE,
     BUS_EVENT_CREDENTIAL_USED,
@@ -59,15 +55,12 @@ from custom_components.lock_code_manager.const import (
     CONF_USERS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
-    EVENT_LOCK_STATE_CHANGED,
     REASON_CONDITION_NOT_MET,
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
     SERVICE_ADD_USER,
     SERVICE_CLEAR_CONDITION,
     SERVICE_CLEAR_CREDENTIAL,
-    SERVICE_CLEAR_SLOT_CONDITION,
-    SERVICE_CLEAR_USERCODE,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_DISABLE_USER,
@@ -75,8 +68,6 @@ from custom_components.lock_code_manager.const import (
     SERVICE_GENERATE_PIN,
     SERVICE_SET_CONDITION,
     SERVICE_SET_CREDENTIAL,
-    SERVICE_SET_SLOT_CONDITION,
-    SERVICE_SET_USERCODE,
     SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.domain import services
@@ -96,268 +87,7 @@ from custom_components.lock_code_manager.providers.schlage import (
 )
 from tests.providers.helpers import register_mock_service
 
-from .common import LOCK_1_ENTITY_ID, reading_for
-
-
-async def test_set_usercode_service(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_usercode service sets a code on the lock."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_internal_set_usercode = AsyncMock()
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_SET_USERCODE,
-        {
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_CODE_SLOT: 3,
-            ATTR_USERCODE: "9999",
-        },
-        blocking=True,
-    )
-
-    lock.async_internal_set_usercode.assert_awaited_once_with(3, "9999")
-
-
-async def test_set_usercode_service_lock_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_usercode service raises when lock is not managed."""
-    with pytest.raises(ServiceValidationError, match="not managed"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_USERCODE,
-            {
-                ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
-                ATTR_CODE_SLOT: 3,
-                ATTR_USERCODE: "1234",
-            },
-            blocking=True,
-        )
-
-
-async def test_clear_usercode_service(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_usercode service clears a code on the lock."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_internal_clear_usercode = AsyncMock()
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_CLEAR_USERCODE,
-        {
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_CODE_SLOT: 3,
-        },
-        blocking=True,
-    )
-
-    lock.async_internal_clear_usercode.assert_awaited_once_with(3)
-
-
-async def test_clear_usercode_service_lock_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_usercode service raises when lock is not managed."""
-    with pytest.raises(ServiceValidationError, match="not managed"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_CLEAR_USERCODE,
-            {
-                ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
-                ATTR_CODE_SLOT: 3,
-            },
-            blocking=True,
-        )
-
-
-async def test_set_slot_condition_service(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_slot_condition service assigns a condition entity to a slot."""
-    entry = lock_code_manager_config_entry
-    condition_entity_id = "binary_sensor.test_condition"
-    hass.states.async_set(condition_entity_id, STATE_ON)
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_SET_SLOT_CONDITION,
-        {
-            "config_entry_id": entry.entry_id,
-            ATTR_SLOT: 1,
-            CONF_ENTITY_ID: condition_entity_id,
-        },
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    # Verify the config entry was updated with the condition entity
-    updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
-    # After update, data is written via options then moved to data
-    # Check both options and data for the condition entity
-    assert (
-        get_entry_config(updated_entry).slot(1)[CONF_CONDITION] == condition_entity_id
-    )
-
-
-async def test_set_slot_condition_service_entry_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_slot_condition service raises when config entry not found."""
-    hass.states.async_set("binary_sensor.test_condition", STATE_ON)
-
-    with pytest.raises(ServiceValidationError, match="No lock code manager"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
-            {
-                "config_entry_id": "nonexistent_entry",
-                ATTR_SLOT: 1,
-                CONF_ENTITY_ID: "binary_sensor.test_condition",
-            },
-            blocking=True,
-        )
-
-
-async def test_set_slot_condition_service_slot_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_slot_condition service raises when slot not found."""
-    entry = lock_code_manager_config_entry
-    hass.states.async_set("binary_sensor.test_condition", STATE_ON)
-
-    with pytest.raises(ServiceValidationError, match="Slot.*not found"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
-            {
-                "config_entry_id": entry.entry_id,
-                ATTR_SLOT: 999,
-                CONF_ENTITY_ID: "binary_sensor.test_condition",
-            },
-            blocking=True,
-        )
-
-
-async def test_set_slot_condition_service_entity_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_slot_condition service raises when condition entity not found."""
-    entry = lock_code_manager_config_entry
-
-    with pytest.raises(ServiceValidationError, match="not found"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
-            {
-                "config_entry_id": entry.entry_id,
-                ATTR_SLOT: 1,
-                CONF_ENTITY_ID: "binary_sensor.nonexistent",
-            },
-            blocking=True,
-        )
-
-
-async def test_clear_slot_condition_service(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_slot_condition service removes a condition entity from a slot."""
-    entry = lock_code_manager_config_entry
-
-    # Slot 2 has a condition entity (calendar.test_1) configured in BASE_CONFIG
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_CLEAR_SLOT_CONDITION,
-        {
-            "config_entry_id": entry.entry_id,
-            ATTR_SLOT: 2,
-        },
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
-    assert CONF_CONDITION not in get_entry_config(updated_entry).slot(2)
-
-
-async def test_clear_slot_condition_service_entry_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_slot_condition service raises when config entry not found."""
-    with pytest.raises(ServiceValidationError, match="No lock code manager"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_CLEAR_SLOT_CONDITION,
-            {
-                "config_entry_id": "nonexistent_entry",
-                ATTR_SLOT: 1,
-            },
-            blocking=True,
-        )
-
-
-async def test_clear_slot_condition_service_slot_not_found(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test clear_slot_condition service raises when slot not found."""
-    entry = lock_code_manager_config_entry
-
-    with pytest.raises(ServiceValidationError, match="Slot.*not found"):
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_CLEAR_SLOT_CONDITION,
-            {
-                "config_entry_id": entry.entry_id,
-                ATTR_SLOT: 999,
-            },
-            blocking=True,
-        )
-
-
-async def test_set_usercode_service_empty_usercode(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test set_usercode service raises when usercode is empty or whitespace."""
-    for usercode in ["", "   ", "\t\n"]:
-        with pytest.raises(
-            (ServiceValidationError, vol.MultipleInvalid),
-        ):
-            await hass.services.async_call(
-                DOMAIN,
-                SERVICE_SET_USERCODE,
-                {
-                    ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-                    ATTR_CODE_SLOT: 3,
-                    ATTR_USERCODE: usercode,
-                },
-                blocking=True,
-            )
+from .common import LOCK_1_ENTITY_ID, reading_for, unnumbered_user_subentry
 
 
 async def test_async_set_usercode_domain_function_rejects_empty_usercode(
@@ -387,10 +117,10 @@ async def test_get_loaded_config_entry_wrong_domain(
     with pytest.raises(ServiceValidationError, match="No lock code manager"):
         await hass.services.async_call(
             DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
+            SERVICE_SET_CONDITION,
             {
                 "config_entry_id": mock_lock_config_entry.entry_id,
-                ATTR_SLOT: 1,
+                CONF_NAME: "test1",
                 CONF_ENTITY_ID: "binary_sensor.test_condition",
             },
             blocking=True,
@@ -617,7 +347,6 @@ async def test_service_does_not_wait_when_the_write_changed_nothing(
     already wrote.
     """
     entry = lock_code_manager_config_entry
-    slot = get_entry_config(entry).assignment.slot("test1")
     hass.states.async_set("binary_sensor.settle_probe", STATE_ON)
 
     with patch.object(
@@ -625,10 +354,10 @@ async def test_service_does_not_wait_when_the_write_changed_nothing(
     ) as update:
         await hass.services.async_call(
             DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
+            SERVICE_SET_CONDITION,
             {
                 "config_entry_id": entry.entry_id,
-                ATTR_SLOT: slot,
+                CONF_NAME: "test1",
                 CONF_ENTITY_ID: "binary_sensor.settle_probe",
             },
             blocking=True,
@@ -651,7 +380,6 @@ async def test_service_reports_an_entry_that_never_settles(
     at all, and saying otherwise would report a working add as broken.
     """
     entry = lock_code_manager_config_entry
-    slot = get_entry_config(entry).assignment.slot("test1")
     hass.states.async_set("binary_sensor.settle_probe", STATE_ON)
 
     async def _never() -> None:
@@ -663,10 +391,10 @@ async def test_service_reports_an_entry_that_never_settles(
     ):
         await hass.services.async_call(
             DOMAIN,
-            SERVICE_SET_SLOT_CONDITION,
+            SERVICE_SET_CONDITION,
             {
                 "config_entry_id": entry.entry_id,
-                ATTR_SLOT: slot,
+                CONF_NAME: "test1",
                 CONF_ENTITY_ID: "binary_sensor.settle_probe",
             },
             blocking=True,
@@ -675,9 +403,9 @@ async def test_service_reports_an_entry_that_never_settles(
     assert "did not finish updating" in caplog.text
     # The write still landed; only the waiting gave up.
     assert (
-        get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).slot(
-            slot
-        )[CONF_CONDITION]
+        get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).users[
+            "test1"
+        ][CONF_CONDITION]
         == "binary_sensor.settle_probe"
     )
 
@@ -865,6 +593,43 @@ async def test_delete_user_service_can_hand_the_credential_over(
     for lock in entry.runtime_data.locks.values():
         lock.async_release_managed_slot.assert_not_called()
     # Drained, so the next occupant of that number still gets its cleanup.
+    assert not entry.runtime_data.retained_pairs
+
+
+async def test_delete_user_hands_over_every_credential_not_just_the_first(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A batch hand-off applies to everybody in it.
+
+    One `delete_user` call is several entry writes -- a subentry removal per
+    departing user -- and each one wakes the update listener. The listener
+    drained the whole hand-off set on its first pass, so from the second user
+    onward the credential the caller explicitly asked to leave programmed was
+    wiped off every lock instead.
+    """
+    entry = lock_code_manager_config_entry
+    for lock in entry.runtime_data.locks.values():
+        lock.async_release_managed_slot = AsyncMock()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            CONF_NAME: ["test1", "test2"],
+            ATTR_CLEAR_CREDENTIALS: False,
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    config = get_entry_config(hass.config_entries.async_get_entry(entry.entry_id))
+    assert not config.users
+    for lock in entry.runtime_data.locks.values():
+        lock.async_release_managed_slot.assert_not_called()
     assert not entry.runtime_data.retained_pairs
 
 
@@ -1109,46 +874,6 @@ async def test_services_require_one_identifier(
             {CONF_NAME: "Newcomer", CONF_PIN: "9876"},
             blocking=True,
         )
-
-
-async def test_slot_condition_services_accept_a_title(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """The pre-existing entry-taking services take a title too."""
-    entry = lock_code_manager_config_entry
-    condition_entity_id = "binary_sensor.by_title"
-    hass.states.async_set(condition_entity_id, STATE_ON)
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_SET_SLOT_CONDITION,
-        {
-            "config_entry_title": entry.title,
-            ATTR_SLOT: 1,
-            CONF_ENTITY_ID: condition_entity_id,
-        },
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-    assert (
-        get_entry_config(hass.config_entries.async_get_entry(entry.entry_id)).slot(1)[
-            CONF_CONDITION
-        ]
-        == condition_entity_id
-    )
-
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_CLEAR_SLOT_CONDITION,
-        {"config_entry_title": entry.title, ATTR_SLOT: 1},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-    assert CONF_CONDITION not in get_entry_config(
-        hass.config_entries.async_get_entry(entry.entry_id)
-    ).slot(1)
 
 
 VALIDATE_LOCK_ENTITY_ID = "lock.virtual_validate_service"
@@ -1541,13 +1266,11 @@ async def test_use_credential_records_against_an_in_entry_lock(
     """
     A lock in the entry gets the use recorded on the slot's event entity.
 
-    The recording is the event entity's own reading of the unified event,
-    not a lock-shaped detour: the action reports something no lock
-    observed, so the deprecated lock-state event -- which would have to
-    claim a from/to state transition that never happened -- stays silent.
+    The recording is the event entity's own reading of the unified event.
+    The action reports something no lock observed, so there is no lock-shaped
+    detour for it to take.
     """
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
 
     with caplog.at_level(logging.DEBUG):
         response = await _call_use_credential(
@@ -1569,7 +1292,6 @@ async def test_use_credential_records_against_an_in_entry_lock(
             ATTR_OPERATION: CredentialOperation.UNKNOWN,
         }
     ]
-    assert deprecated == []
 
     state = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert state
@@ -1686,12 +1408,9 @@ async def test_use_credential_with_a_target_outside_the_entry(
 
     A cover is not a lock, is not in the entry, and could never be named by
     anything the entry knows -- and it is still alice's credential being
-    used, so her entity is where that belongs. Only the unified event
-    fires: the deprecated lock-shaped one would have to claim a from/to
-    transition that never happened.
+    used, so her entity is where that belongs.
     """
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     before = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert before
     assert before.state == STATE_UNKNOWN
@@ -1709,7 +1428,6 @@ async def test_use_credential_with_a_target_outside_the_entry(
 
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
     assert [event.data[ATTR_TARGET] for event in unified] == ["cover.some_other_door"]
-    assert deprecated == []
     recorded = hass.states.get(VALIDATE_EVENT_ENTITY_ID)
     assert recorded.state != STATE_UNKNOWN
     assert recorded.attributes[ATTR_TARGET] == "cover.some_other_door"
@@ -1755,7 +1473,6 @@ async def test_use_credential_never_publishes_the_source_entity_state(
     """
     hass.states.async_set(VALIDATE_SOURCE_ENTITY_ID, "1234")
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-    deprecated = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
 
     await _call_use_credential(
         hass, {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "1234"}
@@ -1763,7 +1480,7 @@ async def test_use_credential_never_publishes_the_source_entity_state(
     await hass.async_block_till_done()
 
     assert unified
-    for event in [*unified, *deprecated]:
+    for event in unified:
         assert "1234" not in json.dumps(event.data, default=str)
 
 
@@ -1931,51 +1648,6 @@ async def test_set_credential_refuses_a_kind_it_cannot_store(
         )
 
 
-@pytest.mark.parametrize(
-    "service,data,replacement",
-    [
-        (
-            SERVICE_SET_USERCODE,
-            {ATTR_CODE_SLOT: 1, ATTR_USERCODE: "4321"},
-            "set_credential",
-        ),
-        (SERVICE_CLEAR_USERCODE, {ATTR_CODE_SLOT: 1}, "clear_credential"),
-    ],
-)
-async def test_the_device_level_actions_say_they_are_deprecated(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    caplog: pytest.LogCaptureFixture,
-    service: str,
-    data: dict,
-    replacement: str,
-) -> None:
-    """
-    They still work, and they say what to use instead.
-
-    A warning rather than a note, because the caller has something to do
-    about it: these write straight to a device, so the code they set is one
-    Lock Code Manager treats as unmanaged.
-    """
-    caplog.clear()
-    await hass.services.async_call(
-        DOMAIN,
-        service,
-        {ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID, **data},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    deprecations = [
-        record
-        for record in caplog.records
-        if record.levelname == "WARNING" and "deprecated" in record.getMessage()
-    ]
-    assert len(deprecations) == 1
-    assert replacement in deprecations[0].getMessage()
-
-
 async def test_credential_actions_refuse_a_user_holding_no_slot(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1983,17 +1655,20 @@ async def test_credential_actions_refuse_a_user_holding_no_slot(
     """
     A user the configuration never numbered has no credential to change.
 
-    Reachable from stored configuration: a users block with no slot
-    assignment beside it leaves everybody unnumbered, which is exactly the
-    shape ``EntryConfig`` skips when it builds its slot view.
+    Reachable from stored configuration: a user subentry with no number in
+    it is exactly the shape ``EntryConfig`` skips when it builds its slot
+    view.
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_LOCKS: [LOCK_1_ENTITY_ID],
-            CONF_USERS: {"Unplaced": {CONF_PIN: "1234", CONF_ENABLED: True}},
-        },
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_PIN: "1234", CONF_ENABLED: True}
+            )
+        ],
         unique_id="unplaced",
+        version=5,
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -2223,46 +1898,6 @@ async def test_set_condition_refuses_an_unknown_user(
             },
             blocking=True,
         )
-
-
-@pytest.mark.parametrize(
-    "service,data,replacement",
-    [
-        (
-            SERVICE_SET_SLOT_CONDITION,
-            {ATTR_SLOT: 1, CONF_ENTITY_ID: "binary_sensor.test_condition"},
-            "set_condition",
-        ),
-        (SERVICE_CLEAR_SLOT_CONDITION, {ATTR_SLOT: 1}, "clear_condition"),
-    ],
-)
-async def test_the_slot_keyed_condition_actions_say_they_are_deprecated(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    caplog: pytest.LogCaptureFixture,
-    service: str,
-    data: dict,
-    replacement: str,
-) -> None:
-    """They still work, and they name what replaces them."""
-    hass.states.async_set("binary_sensor.test_condition", STATE_ON)
-    caplog.clear()
-    await hass.services.async_call(
-        DOMAIN,
-        service,
-        {"config_entry_id": lock_code_manager_config_entry.entry_id, **data},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    deprecations = [
-        record
-        for record in caplog.records
-        if record.levelname == "WARNING" and "deprecated" in record.getMessage()
-    ]
-    assert len(deprecations) == 1
-    assert replacement in deprecations[0].getMessage()
 
 
 async def test_set_condition_refuses_an_entity_that_does_not_exist(

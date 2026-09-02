@@ -321,7 +321,7 @@ class TestCredentialUseRecording:
         lock = get_virtual_lock(hass, lcm_config_entry)
         assert lock.supports_code_slot_events is False
 
-        lock.async_fire_code_slot_event(1, False, "Keypad unlock")
+        lock.async_fire_code_slot_event(1, False)
         await hass.async_block_till_done()
 
         recorded = hass.states.get(SLOT_1_EVENT_ENTITY)

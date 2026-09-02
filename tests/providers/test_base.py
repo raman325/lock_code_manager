@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Collection
 import contextlib
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,8 +16,8 @@ from pytest_homeassistant_custom_component.common import (
 
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_NAME, CONF_NAME, STATE_UNKNOWN
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.const import ATTR_NAME, CONF_NAME, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
@@ -26,19 +26,14 @@ from homeassistant.helpers import (
 )
 
 from custom_components.lock_code_manager.const import (
-    ATTR_CODE_SLOT,
-    ATTR_CODE_SLOT_NAME,
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
     ATTR_CREDENTIAL_TYPE,
-    ATTR_EXTRA_DATA,
-    ATTR_NOTIFICATION_SOURCE,
     ATTR_OPERATION,
     ATTR_SOURCE,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
     DOMAIN,
-    EVENT_LOCK_STATE_CHANGED,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.coordinator import (
@@ -898,31 +893,25 @@ async def test_lock_equality_with_same_entity_id(hass: HomeAssistant):
     assert lock_a == lock_a  # noqa: PLR0124 - Intentionally testing reflexive __eq__
 
 
-async def test_fire_code_slot_event_fires_both_events(
+async def test_fire_code_slot_event_fires_the_unified_event(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """A provider-observed use fires the legacy and the unified event alike.
+    """A provider-observed use fires the unified event.
 
     Every provider funnels through this one method, so this is the whole
     proof that the unified event reaches all of them.
     """
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
-    legacy = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
     lock_provider.async_fire_code_slot_event(
         code_slot=1,
         to_locked=False,
-        action_text="Keypad unlock",
     )
     await hass.async_block_till_done()
-
-    assert len(legacy) == 1
-    assert legacy[0].data[ATTR_CODE_SLOT] == 1
-    assert legacy[0].data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
 
     assert len(unified) == 1
     # The whole payload, so a key added or dropped has to be deliberate. The
@@ -964,22 +953,16 @@ async def test_fire_code_slot_event_names_the_user_from_the_configuration(
     assert name_entity_id
     if wipe == "remove":
         hass.states.async_remove(name_entity_id)
-        expected_legacy_name = ""
     else:
         hass.states.async_set(name_entity_id, STATE_UNKNOWN)
-        expected_legacy_name = STATE_UNKNOWN
 
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    legacy = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
-    lock_provider.async_fire_code_slot_event(
-        code_slot=1, to_locked=False, action_text="Keypad unlock"
-    )
+    lock_provider.async_fire_code_slot_event(code_slot=1, to_locked=False)
     await hass.async_block_till_done()
 
     assert unified[0].data[ATTR_NAME] == "test1"
-    assert legacy[0].data[ATTR_CODE_SLOT_NAME] == expected_legacy_name
 
 
 async def test_fire_code_slot_event_takes_no_attribution_arguments(
@@ -1004,194 +987,30 @@ async def test_fire_code_slot_event_takes_no_attribution_arguments(
         )
 
 
-async def test_fire_code_slot_event_omits_the_unified_event_when_unattributed(
+async def test_fire_code_slot_event_announces_nothing_when_unattributed(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """A use on a slot no entry manages announces no user.
+    """A use on a slot no entry manages announces nothing.
 
     Providers fire for every slot the lock reports, managed or not. The
-    unified event says whose credential was used, so there is nothing for it
-    to say here; the deprecated lock-shaped event still carries it.
+    unified event says whose credential was used, and there is no user here
+    to name, so nothing is announced. The lock-shaped event that used to
+    carry these was removed in 6.0; the lock's own integration still
+    reports them.
     """
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
-    legacy = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
     lock_provider.async_fire_code_slot_event(
         code_slot=99,
         to_locked=False,
-        action_text="Keypad unlock",
     )
     await hass.async_block_till_done()
 
-    assert len(legacy) == 1
-    assert legacy[0].data[ATTR_CODE_SLOT] == 99
     assert unified == []
-
-
-async def test_fire_code_slot_event_with_state_source(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test async_fire_code_slot_event with State as source_data."""
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Capture events
-    events = []
-
-    @callback
-    def capture_events(event):
-        events.append(event)
-
-    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, capture_events)
-
-    # Create a State object as source_data
-    now = datetime.now()
-    state = State(
-        entity_id="lock.test_lock",
-        state="locked",
-        attributes={"battery_level": 80},
-        last_changed=now,
-        last_updated=now,
-    )
-
-    # Fire event with State source
-    lock_provider.async_fire_code_slot_event(
-        code_slot=1,
-        to_locked=True,
-        action_text="Keypad lock",
-        source_data=state,
-    )
-    await hass.async_block_till_done()
-
-    # Verify event was fired with State source info
-    assert len(events) == 1
-    assert events[0].data[ATTR_NOTIFICATION_SOURCE] == "state"
-    extra_data = events[0].data[ATTR_EXTRA_DATA]
-    assert extra_data["entity_id"] == "lock.test_lock"
-    assert extra_data["state"] == "locked"
-    assert extra_data["attributes"] == {"battery_level": 80}
-    assert "last_changed" in extra_data
-    assert "last_updated" in extra_data
-
-
-async def test_fire_code_slot_event_with_dict_source(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test async_fire_code_slot_event with dict as source_data."""
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Capture events
-    events = []
-
-    @callback
-    def capture_events(event):
-        events.append(event)
-
-    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, capture_events)
-
-    # Fire event with dict source
-    custom_data = {"custom_field": "custom_value", "another_field": 123}
-    lock_provider.async_fire_code_slot_event(
-        code_slot=1,
-        to_locked=False,
-        action_text="Manual unlock",
-        source_data=custom_data,
-    )
-    await hass.async_block_till_done()
-
-    # Verify event was fired with dict source
-    assert len(events) == 1
-    assert (
-        events[0].data[ATTR_NOTIFICATION_SOURCE] is None
-    )  # dict doesn't set source type
-    extra_data = events[0].data[ATTR_EXTRA_DATA]
-    assert extra_data == custom_data
-
-
-async def test_fire_code_slot_event_with_state_source_distinct_timestamps(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """A State whose last_updated differs from last_changed serializes both distinctly.
-
-    The common case (no attribute update since the state changed) collapses
-    last_updated to the same ISO string as last_changed. When a state has
-    been updated (e.g. an attribute-only refresh) without a state change,
-    the two timestamps diverge and must each serialize to their own value.
-    """
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    events = []
-
-    @callback
-    def capture_events(event):
-        events.append(event)
-
-    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, capture_events)
-
-    changed = datetime.now() - timedelta(minutes=5)
-    updated = datetime.now()
-    state = State(
-        entity_id="lock.test_lock",
-        state="locked",
-        last_changed=changed,
-        last_updated=updated,
-    )
-
-    lock_provider.async_fire_code_slot_event(
-        code_slot=1,
-        to_locked=True,
-        action_text="Keypad lock",
-        source_data=state,
-    )
-    await hass.async_block_till_done()
-
-    assert len(events) == 1
-    extra_data = events[0].data[ATTR_EXTRA_DATA]
-    assert extra_data["last_changed"] == changed.isoformat()
-    assert extra_data["last_updated"] == updated.isoformat()
-    assert extra_data["last_changed"] != extra_data["last_updated"]
-
-
-async def test_fire_code_slot_event_with_no_source_data(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """An event fired without source_data serializes to no source / no extra data.
-
-    Not every caller has an Event, State, or dict to attach (e.g. a purely
-    synthetic notification); source_data defaults to None and must resolve
-    to (None, None) rather than raising or mislabeling the source type.
-    """
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    events = []
-
-    @callback
-    def capture_events(event):
-        events.append(event)
-
-    hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, capture_events)
-
-    lock_provider.async_fire_code_slot_event(
-        code_slot=1,
-        to_locked=True,
-        action_text="Keypad lock",
-    )
-    await hass.async_block_till_done()
-
-    assert len(events) == 1
-    assert events[0].data[ATTR_NOTIFICATION_SOURCE] is None
-    assert events[0].data[ATTR_EXTRA_DATA] is None
 
 
 async def test_setup_defers_push_subscription_when_entry_not_loaded(

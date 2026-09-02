@@ -15,10 +15,6 @@ STRATEGY_FILENAME = "generated/lock-code-manager.js"
 STRATEGY_PATH = f"{FILES_URL_BASE}/{STRATEGY_FILENAME}"
 
 SERVICE_HARD_REFRESH_USERCODES = "hard_refresh_usercodes"
-SERVICE_SET_USERCODE = "set_usercode"
-SERVICE_CLEAR_USERCODE = "clear_usercode"
-SERVICE_SET_SLOT_CONDITION = "set_slot_condition"
-SERVICE_CLEAR_SLOT_CONDITION = "clear_slot_condition"
 SERVICE_ADD_USER = "add_user"
 SERVICE_DELETE_USER = "delete_user"
 SERVICE_GENERATE_PIN = "generate_pin"
@@ -50,11 +46,6 @@ ATTR_VALUE = "value"
 # already is costs nothing, so there is no guard behind the name: the write is
 # a no-op when the value has not changed.
 ATTR_ENABLE_IF_DISABLED = "enable_if_disabled"
-ATTR_FROM = "from"
-ATTR_TO = "to"
-ATTR_LCM_CONFIG_ENTRY_ID = "lock_code_manager_config_entry_id"
-ATTR_LOCK_CONFIG_ENTRY_ID = "lock_config_entry_id"
-ATTR_EXTRA_DATA = "extra_data"
 ATTR_MANAGED = "managed"
 # Any entity of the user being addressed. Distinct from ``entity_id``,
 # which on the condition commands means the condition entity itself.
@@ -124,11 +115,6 @@ ATTR_OPERATION = "operation"
 # nothing.
 BUS_EVENT_CREDENTIAL_USED = f"{DOMAIN}_credential_used"
 
-# The older, lock-shaped event. Retained for backward compatibility while
-# consumers migrate to the unified event above: both fire, no removal version
-# is set, and nothing warns at runtime. See the fire site in
-# providers/_base.py.
-EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
 
 # Credential validation response keys
 ATTR_REASON = "reason"
@@ -150,9 +136,6 @@ REASON_PRECEDENCE = (
 )
 
 # Event data constants
-ATTR_ACTION_TEXT = "action_text"
-ATTR_CODE_SLOT_NAME = "code_slot_name"
-ATTR_NOTIFICATION_SOURCE = "notification_source"
 
 # Event entity event type
 # The entity key, and so the last part of its unique ID. Renamed from
@@ -167,6 +150,11 @@ CONF_CONDITIONS = "conditions"
 CONF_ENTITIES = "entities"
 CONF_LOCKS = "locks"
 CONF_SLOTS = "slots"
+# A user is a config subentry of this type. The person, not the credential
+# store they are written to -- a "member" is the lock side of the entry.
+SUBENTRY_TYPE_USER = "user"
+# Where a user's credential position is kept inside their subentry's data.
+CONF_SLOT = "slot"
 CONF_USERS = "users"
 CONF_NUM_USERS = "num_users"
 

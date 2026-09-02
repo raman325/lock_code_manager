@@ -18,7 +18,7 @@ from .const import (
 )
 from .domain.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from .domain.models import LockCodeManagerConfigEntry
-from .domain.queries import get_entry_config
+from .domain.queries import get_entry_config, subentry_id_for_slot
 from .entity import BaseLockCodeManagerEntity
 
 
@@ -39,6 +39,7 @@ async def async_setup_entry(
                 )
             ],
             True,
+            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 
     config_entry.async_on_unload(

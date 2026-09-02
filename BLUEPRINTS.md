@@ -252,7 +252,7 @@ use was against.
 ### Condition Linker
 
 A one-shot automation that assigns a condition entity to a user via
-the `lock_code_manager.set_slot_condition` service. Run it once from
+the `lock_code_manager.set_condition` service. Run it once from
 the Automations page, then delete or keep for reference.
 
 - Uses a synthetic event trigger that never fires automatically
@@ -263,7 +263,7 @@ the Automations page, then delete or keep for reference.
 | Input | Description | Default |
 | ----- | ----------- | ------- |
 | Lock Code Manager config entry | Config entry holding the user | Required |
-| Slot number | The user to assign the condition to (see [Finding a slot number](#finding-a-slot-number)) | Required |
+| Name | The person to assign the condition to, exactly as they are named in the config entry | Required |
 | Condition entity | Entity to use as the condition | Required |
 
 ---
@@ -318,5 +318,9 @@ every other.
 > `event_type` as a lock must read `target` instead, and
 > `lock_code_manager_config_entry_id`, `code_slot_name`, `action_text`,
 > `notification_source`, `from`, `to`, `state`, `entity_id`, `device_id`,
-> `extra_data` and `lock_config_entry_id` are gone from the entity. They all still travel on the deprecated
-> `lock_code_manager_lock_state_changed` bus event, which keeps firing.
+> `extra_data` and `lock_config_entry_id` are gone from the entity, and gone
+> entirely: the `lock_code_manager_lock_state_changed` bus event that used to
+> carry them was removed in 6.0. What survives of them is on
+> `lock_code_manager_credential_used` — `target` for the lock, `name` for the
+> person, `operation` for what the lock did — and the target entity's own state
+> for the rest.

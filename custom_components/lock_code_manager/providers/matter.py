@@ -1362,12 +1362,6 @@ class MatterLock(BaseLock):
         self.async_fire_code_slot_event(
             code_slot=code_slot,
             to_locked=to_locked,
-            action_text="locked"
-            if to_locked
-            else "unlocked"
-            if to_locked is False
-            else "operated",
-            source_data=data,
         )
 
     @callback

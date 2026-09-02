@@ -38,10 +38,12 @@ from homeassistant.helpers import (
 )
 from homeassistant.util import slugify
 
+from custom_components import lock_code_manager
 from custom_components.lock_code_manager import (
     _async_reclaim_entities_from_foreign_devices,
     _async_setup_new_locks,
     _setup_entry_after_start,
+    async_migrate_entry,
     async_remove_config_entry_device,
     async_remove_entry,
     async_unload_lock,
@@ -53,6 +55,7 @@ from custom_components.lock_code_manager.const import (
     BACKOFF_FAILURE_THRESHOLD,
     CONF_CALENDAR,
     CONF_LOCKS,
+    CONF_SLOT,
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
@@ -63,7 +66,6 @@ from custom_components.lock_code_manager.const import (
     STRATEGY_PATH,
 )
 from custom_components.lock_code_manager.domain.config import (
-    EntryConfig,
     build_slot_device_identifier,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
@@ -73,8 +75,10 @@ from custom_components.lock_code_manager.domain.models import SlotCredential, Sy
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
+    identity,
 )
 from custom_components.lock_code_manager.domain.user_migration import migrate_to_users
+from custom_components.lock_code_manager.entity import build_slot_device_info
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
@@ -90,7 +94,9 @@ from .common import (
     SLOT_1_NAME_ENTITY,
     MockLCMLock,
     async_discover_unclaimed_mqtt_lock,
+    entry_users,
     in_sync_entity_id,
+    write_entry_config,
 )
 from .conftest import (
     async_initial_tick,
@@ -227,9 +233,7 @@ async def test_entry_setup_and_unload(
         CONF_ENABLED: True,
     }
 
-    assert hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=new_config
-    )
+    assert write_entry_config(hass, lock_code_manager_config_entry, new_config)
     await hass.async_block_till_done()
 
     unique_ids = set()
@@ -262,9 +266,7 @@ async def test_entry_setup_and_unload(
     new_config[CONF_SLOTS].pop(3)
     new_config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
 
-    assert hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=new_config
-    )
+    assert write_entry_config(hass, lock_code_manager_config_entry, new_config)
     await hass.async_block_till_done()
 
     # LOCK_2 was removed from the LCM config entry; its device keeps its own
@@ -628,7 +630,7 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     await hass.async_block_till_done()
 
     # Verify migration happened (v1 -> v2 calendar, then v2 -> v3 number_of_uses)
-    assert config_entry.version == 4
+    assert config_entry.version == 5
 
     # Read through the typed view: the entry is keyed by user now, and this
     # migration runs before that reshape in the same version bump.
@@ -965,9 +967,7 @@ async def test_lovelace_updated_on_structural_change(
         CONF_PIN: "4321",
         CONF_ENABLED: True,
     }
-    hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=new_config
-    )
+    write_entry_config(hass, lock_code_manager_config_entry, new_config)
     await hass.async_block_till_done()
 
     assert len(events) == 1
@@ -988,9 +988,7 @@ async def test_lovelace_not_updated_on_non_structural_change(
     # Change a PIN (non-structural change — same slots and locks)
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][1][CONF_PIN] = "9999"
-    hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=new_config
-    )
+    write_entry_config(hass, lock_code_manager_config_entry, new_config)
     await hass.async_block_till_done()
 
     assert len(events) == 0
@@ -1757,14 +1755,16 @@ async def test_removing_slot_removes_its_device(
     slot_2_identifiers = {(DOMAIN, f"{entry_id}|2")}
     assert dev_reg.async_get_device(slot_2_identifiers) is not None
 
-    # Removing a user is removing them from `users`; the slot they occupied is
+    # Removing a user is removing their subentry; the slot they occupied is
     # freed with them.
-    new_config = copy.deepcopy(dict(lock_code_manager_config_entry.data))
     removed = get_entry_config(lock_code_manager_config_entry).name_for(2)
-    new_config[CONF_USERS].pop(removed)
-    new_config[CONF_SLOT_ASSIGNMENT].pop(removed.casefold(), None)
-    assert hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=new_config
+    subentry = next(
+        subentry
+        for subentry in lock_code_manager_config_entry.subentries.values()
+        if subentry.title == removed
+    )
+    assert hass.config_entries.async_remove_subentry(
+        lock_code_manager_config_entry, subentry.subentry_id
     )
     await hass.async_block_till_done()
 
@@ -2050,9 +2050,7 @@ async def test_update_listener_slot_removal_handles_missing_and_failing_coordina
     with patch.object(slot_2_coordinator, "async_stop", side_effect=boom):
         new_config = copy.deepcopy(BASE_CONFIG)
         new_config[CONF_SLOTS] = {}
-        hass.config_entries.async_update_entry(
-            lock_code_manager_config_entry, options=new_config
-        )
+        write_entry_config(hass, lock_code_manager_config_entry, new_config)
         await hass.async_block_till_done()
 
     # Both slots were removed from the registry despite the failure.
@@ -2060,6 +2058,53 @@ async def test_update_listener_slot_removal_handles_missing_and_failing_coordina
     assert 2 not in runtime_data.slot_coordinators
     assert not hass.states.async_entity_ids(Platform.TEXT)
     assert "slot 2 coordinator stop raised" in caplog.text
+
+
+async def test_settled_waits_for_the_last_overlapping_pass(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """``settled`` means no pass is still running, not that one finished.
+
+    One service call is several entry writes -- a subentry per user, then
+    the entry -- and Home Assistant schedules a listener task per write.
+    They overlap, and the ones with nothing to do finish FIRST: only the
+    earliest pass finds a diff, because it caches the new configuration
+    before its first await. Settling on the first pass out therefore hands
+    the waiter an entry whose entities are still being built.
+
+    Driven directly rather than through a service, because which pass wins
+    the race downstream is not something a test can pin: the assertion
+    would pass either way and prove nothing.
+    """
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    runtime_data.settled.clear()
+
+    slow_pass_may_finish = asyncio.Event()
+
+    async def _slow(hass_, config_entry_, old_config=None):
+        await slow_pass_may_finish.wait()
+
+    async def _fast(hass_, config_entry_, old_config=None):
+        return None
+
+    with patch.object(lock_code_manager, "_async_apply_entry_update", _slow):
+        slow = hass.async_create_task(
+            lock_code_manager.async_update_listener(hass, entry)
+        )
+        await asyncio.sleep(0)
+
+    with patch.object(lock_code_manager, "_async_apply_entry_update", _fast):
+        await lock_code_manager.async_update_listener(hass, entry)
+
+    # The no-op pass is done; the one doing the work is not.
+    assert not runtime_data.settled.is_set()
+
+    slow_pass_may_finish.set()
+    await slow
+    assert runtime_data.settled.is_set()
 
 
 async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
@@ -2106,13 +2151,119 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
         new_config = copy.deepcopy(config)
         new_config[CONF_SLOTS].pop(1)
         caplog.set_level(logging.WARNING)
-        hass.config_entries.async_update_entry(entry, options=new_config)
+        write_entry_config(hass, entry, new_config)
         await hass.async_block_till_done()
 
     assert "could not release slot 1" in caplog.text
     assert LOCK_1_ENTITY_ID in caplog.text
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_options_submission_that_changes_nothing_still_settles(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    `options` is a staging area, and it is emptied even when nothing changed.
+
+    The update listener returns early when the submission produces no diff,
+    and that was the one path out of it that skipped settling. What was left
+    behind read fine -- `options` holds what `data` holds -- right up until
+    the next write cleared it, which would take anything that lived only
+    there with it.
+    """
+    entry = lock_code_manager_config_entry
+    locks = list(get_entry_config(entry).locks)
+    assert entry.options == {}
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={CONF_LOCKS: locks}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert entry.options == {}
+    assert entry.data[CONF_LOCKS] == locks
+
+
+async def test_migration_v5_moves_an_existing_slot_device_to_its_user(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A device the entry already owns is moved into its user's subentry.
+
+    Every upgrading instance is in exactly this position: the devices were
+    created before subentries existed, so they belong to the entry and to no
+    subentry. Adding the user's entities would drag the device across
+    implicitly, which Home Assistant deprecated -- a device belongs to one
+    subentry and is meant to be moved deliberately.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"Housekeeper": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            CONF_SLOT_ASSIGNMENT: {"housekeeper": 1},
+        },
+        unique_id="Existing Device Migration",
+        version=4,
+    )
+    config_entry.add_to_hass(hass)
+    dev_reg = dr.async_get(hass)
+    # Registered through the same DeviceInfo the entities themselves carry, so
+    # the identifier is the one production writes. Spelling it out here let an
+    # earlier version of this test agree with a migration that looked the
+    # device up by a malformed identifier: both were wrong in the same way, so
+    # the test passed and the migration did nothing on a real instance.
+    before = dev_reg.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        **build_slot_device_info(config_entry, 1),
+    )
+    assert before.config_entries_subentries == {config_entry.entry_id: {None}}
+
+    # The migration alone, not a full setup. Setting the entry up would add
+    # this user's entities, and that drags the device across by itself -- so
+    # the end state is the same whether the migration moved it or not, and a
+    # test that only looked at the end state could not tell the difference.
+    assert await async_migrate_entry(hass, config_entry)
+
+    subentry_id = next(iter(config_entry.subentries))
+    after = dev_reg.async_get(before.id)
+    assert after.config_entries_subentries == {config_entry.entry_id: {subentry_id}}
+
+
+async def test_migration_v5_drops_a_user_with_no_number(
+    hass: HomeAssistant, caplog
+) -> None:
+    """
+    A user version 4 never numbered has no subentry to move into.
+
+    Inventing a number would put their code on a position somebody else may
+    hold, so they are dropped -- but by name, in the log, rather than
+    vanishing silently.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {
+                "Placed": {CONF_ENABLED: True, CONF_PIN: "1234"},
+                "Unplaced": {CONF_ENABLED: True, CONF_PIN: "5678"},
+            },
+            CONF_SLOT_ASSIGNMENT: {"placed": 1},
+        },
+        unique_id="Unplaced Migration",
+        version=4,
+    )
+    config_entry.add_to_hass(hass)
+    caplog.set_level(logging.WARNING)
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert set(entry_users(config_entry)) == {"Placed"}
+    assert "Unplaced" in caplog.text
 
 
 async def test_migration_v3_to_v4_reshapes_to_users(hass: HomeAssistant) -> None:
@@ -2146,7 +2297,7 @@ async def test_migration_v3_to_v4_reshapes_to_users(hass: HomeAssistant) -> None
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert config_entry.version == 4
+    assert config_entry.version == 5
     config = get_entry_config(config_entry)
 
     # Names: repaired where they had to be, untouched where they did not.
@@ -2156,20 +2307,20 @@ async def test_migration_v3_to_v4_reshapes_to_users(hass: HomeAssistant) -> None
     assert by_slot[3] == "Raman 2"  # collided with slot 2
     assert by_slot[4] == "Ra|man"  # "|" is ordinary text now
 
-    # Shape: keyed by user, with the slot number demoted to bookkeeping.
+    # Shape: one subentry per user, each carrying their own number.
     stored = {**config_entry.data, **config_entry.options}
     assert CONF_SLOTS not in stored
-    assert set(stored[CONF_USERS]) == {"User 1", "Raman", "Raman 2", "Ra|man"}
-    # Nobody was renumbered, and the name is no longer a field of the user.
-    assert stored[CONF_SLOT_ASSIGNMENT] == {
-        "user 1": 1,
-        "raman": 2,
-        "raman 2": 3,
-        "ra|man": 4,
-    }
-    assert CONF_NAME not in stored[CONF_USERS]["Raman"]
+    assert CONF_USERS not in stored
+    users = entry_users(config_entry)
+    assert set(users) == {"User 1", "Raman", "Raman 2", "Ra|man"}
+    # Nobody was renumbered, and the name is the subentry's title, not a field.
+    assert {
+        identity(subentry.title): subentry.data[CONF_SLOT]
+        for subentry in config_entry.subentries.values()
+    } == {"user 1": 1, "raman": 2, "raman 2": 3, "ra|man": 4}
+    assert CONF_NAME not in users["Raman"]
     # Every other field survives.
-    assert stored[CONF_USERS]["User 1"][CONF_PIN] == "1234"
+    assert users["User 1"][CONF_PIN] == "1234"
 
 
 async def test_the_user_shape_survives_a_full_setup_cycle(
@@ -2177,28 +2328,28 @@ async def test_the_user_shape_survives_a_full_setup_cycle(
 ) -> None:
     """The migrated shape is still on disk after setup has written the entry back.
 
-    Setup does not leave the entry alone: it moves data into options, the
-    update listener rebuilds the configuration, and the listener's terminal
-    write persists whatever ``EntryConfig.to_dict()`` emits. A to_dict that
-    dropped the bookkeeping would silently rewrite the entry back to the
-    slot-keyed shape on every single load.
+    Setup does not leave the entry alone: the update listener rebuilds the
+    configuration and writes it back. A write path that put the users back on
+    the entry -- or dropped their numbers -- would silently undo the migration
+    on every single load.
 
     Nothing else catches that. Behaviour is IDENTICAL either way, because the
-    integration still works in slot numbers internally -- so every behavioural
-    test passes while the migration quietly undoes itself. Verified by
-    mutation: removing the passthrough from to_dict leaves the whole suite
-    green without this test.
+    integration still works in slot numbers internally, so every behavioural
+    test passes while the migration quietly undoes itself.
     """
-    stored = {
-        **lock_code_manager_config_entry.data,
-        **lock_code_manager_config_entry.options,
-    }
+    entry = lock_code_manager_config_entry
+    stored = {**entry.data, **entry.options}
 
     assert CONF_SLOTS not in stored
-    assert set(stored[CONF_USERS]) == {"test1", "test2"}
-    assert stored[CONF_SLOT_ASSIGNMENT] == {"test1": 1, "test2": 2}
+    assert CONF_USERS not in stored
+    assert CONF_SLOT_ASSIGNMENT not in stored
+    assert set(entry_users(entry)) == {"test1", "test2"}
+    assert {
+        identity(subentry.title): subentry.data[CONF_SLOT]
+        for subentry in entry.subentries.values()
+    } == {"test1": 1, "test2": 2}
     # And the reconstructed view still sees them, so nothing downstream broke.
-    assert set(get_entry_config(lock_code_manager_config_entry).slots) == {1, 2}
+    assert set(get_entry_config(entry).slots) == {1, 2}
 
 
 async def test_setup_reclaims_entities_left_on_a_split_device(
@@ -2588,7 +2739,7 @@ async def test_migration_of_a_real_world_entry_shape(
     await hass.async_block_till_done()
 
     config = get_entry_config(entry)
-    assert entry.version == 4
+    assert entry.version == 5
     # Nobody lost, and nobody renumbered: the number is the entities' key.
     # Only the two people. Everything else held nothing and named nobody.
     assert sorted(config.assignment.slots.values()) == [1, 2]
@@ -2639,6 +2790,49 @@ async def test_a_slot_device_is_named_for_the_user_who_holds_it(
             device.name
             == f"{lock_code_manager_config_entry.title} {config.name_for(slot_num)}"
         )
+
+
+async def test_renaming_a_user_keeps_the_subentry_they_live_in(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A rename retitles the subentry somebody already has.
+
+    Matching users to subentries by name would make this a departure and an
+    arrival, and removing a subentry takes the entities bound to it -- so the
+    renamed user would lose their settings and their history, and get a fresh
+    set of entities with `_2` on the end.
+    """
+    entry = lock_code_manager_config_entry
+    ent_reg = er.async_get(hass)
+    before = next(
+        subentry
+        for subentry in entry.subentries.values()
+        if subentry.data[CONF_SLOT] == 1
+    )
+    entity_ids = {
+        registry_entry.entity_id
+        for registry_entry in er.async_entries_for_config_entry(ent_reg, entry.entry_id)
+        if registry_entry.config_subentry_id == before.subentry_id
+    }
+    assert entity_ids
+
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "Sherene"},
+        target={ATTR_ENTITY_ID: SLOT_1_NAME_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    after = entry.subentries[before.subentry_id]
+    assert after.title == "Sherene"
+    assert after.data[CONF_SLOT] == 1
+    # Every entity that was theirs is still theirs, under the same id.
+    assert entity_ids <= set(ent_reg.entities)
 
 
 async def test_renaming_a_user_renames_their_device(
@@ -3078,22 +3272,15 @@ async def test_removing_a_slot_clears_its_code_off_the_lock(
     for lock in locks:
         assert (await lock.async_get_usercodes())[2].pin
 
-    # Written the way the editor writes it, name-keyed: the user goes and
-    # takes their slot number with them.
-    config = get_entry_config(entry)
-    departing = config.name_for(2)
-    remaining = {
-        name: dict(user) for name, user in config.users.items() if name != departing
-    }
-    hass.config_entries.async_update_entry(
-        entry,
-        options=EntryConfig(
-            locks=config.locks,
-            users=remaining,
-            assignment=config.assignment.reconcile(remaining, start=1),
-            extra=config.extra,
-        ).to_dict(),
+    # Written the way the editor writes it: the user's subentry goes, and
+    # their slot number goes with them.
+    departing = get_entry_config(entry).name_for(2)
+    subentry = next(
+        subentry
+        for subentry in entry.subentries.values()
+        if subentry.title == departing
     )
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
     await hass.async_block_till_done()
 
     assert not get_entry_config(entry).has_slot(2)
@@ -3199,7 +3386,7 @@ async def test_a_per_lock_entity_survives_its_lock_leaving_the_registry(
     # ahead of it, so the rename still has to do something sensible.
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 4
+    assert entry.version == 5
 
     assert (
         ent_reg.async_get_entity_id(
@@ -3385,9 +3572,10 @@ async def test_removing_a_dropped_lock_clears_its_repair(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    hass.config_entries.async_update_entry(
+    write_entry_config(
+        hass,
         entry,
-        options={
+        {
             CONF_LOCKS: [LOCK_1_ENTITY_ID],
             CONF_SLOTS: {
                 **BASE_CONFIG[CONF_SLOTS],

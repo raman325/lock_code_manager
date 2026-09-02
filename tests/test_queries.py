@@ -1,6 +1,7 @@
 """Test the helpers module."""
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
@@ -8,8 +9,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry as ar, entity_registry as er
 
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_PIN,
+    CONF_USERS,
+    DOMAIN,
+)
 from custom_components.lock_code_manager.domain.locks import get_locks_from_targets
-from custom_components.lock_code_manager.domain.queries import get_loaded_config_entry
+from custom_components.lock_code_manager.domain.queries import (
+    get_loaded_config_entry,
+    get_managed_slots,
+)
+from custom_components.lock_code_manager.domain.slot_assignment import (
+    CONF_SLOT_ASSIGNMENT,
+)
 
 from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 
@@ -165,3 +178,31 @@ async def test_get_loaded_config_entry_requires_an_identifier(
     """
     with pytest.raises(ServiceValidationError, match="Neither"):
         get_loaded_config_entry(hass)
+
+
+async def test_managed_slots_include_an_entry_that_was_never_migrated(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    A pre-subentry entry still counts the numbers it holds on a lock.
+
+    Migration runs only on setup, so an entry that is disabled -- or here,
+    simply never loaded -- keeps its old shape while every other entry on the
+    lock goes on asking it which numbers are taken. Reading it as empty is how
+    a new entry gets issued numbers this one already holds (#1514 review).
+    """
+    stale = MockConfigEntry(
+        domain=DOMAIN,
+        version=4,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: {"Ada": {CONF_PIN: "1357", "enabled": True}},
+            CONF_SLOT_ASSIGNMENT: {"ada": 7},
+        },
+        unique_id="never migrated",
+    )
+    stale.add_to_hass(hass)
+
+    assert 7 in get_managed_slots(hass, LOCK_1_ENTITY_ID)
+    # The loaded entry's own numbers are still there beside it.
+    assert {1, 2} <= get_managed_slots(hass, LOCK_1_ENTITY_ID)

@@ -237,8 +237,6 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 self.async_fire_code_slot_event(
                     code_slot=code_slot,
                     to_locked=to_locked,
-                    action_text=action,
-                    source_data=payload,
                 )
             return
 

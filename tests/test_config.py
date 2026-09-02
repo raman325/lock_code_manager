@@ -6,8 +6,12 @@ from types import SimpleNamespace
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigSubentryData
+from homeassistant.const import CONF_NAME, CONF_PIN
+
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
+    CONF_SLOT,
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
@@ -24,6 +28,8 @@ from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
+
+from .common import user_subentries
 
 
 def _slot(pin: str = "1234", name: str | None = None) -> dict:
@@ -309,12 +315,45 @@ def test_entry_config_from_mapping_preserves_int_slot_keys() -> None:
     assert set(config.slots.keys()) == {1}
 
 
-def test_entry_config_from_entry_options_preferred() -> None:
-    """from_entry prefers options over data (the options-flow precedence)."""
+def test_entry_config_from_entry_reads_a_pre_subentry_entry_from_its_data() -> None:
+    """
+    An entry that predates user subentries is read the way it was written.
+
+    Migration runs only when an entry is set up, so a disabled entry keeps
+    its old shape for as long as it stays disabled -- and is still asked
+    which numbers it holds on a lock. Reading it as empty lets another entry
+    be issued the same numbers on the same lock (#1514 review).
+    """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_LOCKS: ["lock.old"], CONF_SLOTS: {"1": _slot("old")}},
-        options={CONF_LOCKS: ["lock.new"], CONF_SLOTS: {"2": _slot("new")}},
+        version=4,
+        data={
+            CONF_LOCKS: ["lock.front"],
+            CONF_USERS: {"Ada": {CONF_PIN: "1357", "enabled": True}},
+            CONF_SLOT_ASSIGNMENT: {"ada": 7},
+        },
+    )
+
+    config = EntryConfig.from_entry(entry)
+
+    assert config.locks == ("lock.front",)
+    assert config.slot_numbers == {7}
+    assert config.name_for(7) == "Ada"
+
+
+def test_entry_config_from_entry_options_preferred() -> None:
+    """
+    from_entry prefers options over data for the entry's own half.
+
+    Users are not in either any more -- they come from subentries -- so the
+    precedence that remains is the locks', which is what the options flow
+    still writes.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.old"]},
+        options={CONF_LOCKS: ["lock.new"]},
+        subentries_data=user_subentries({2: {CONF_NAME: "new", CONF_PIN: "5678"}}),
     )
     config = EntryConfig.from_entry(entry)
     # Options wins entirely (not merged)
@@ -323,14 +362,41 @@ def test_entry_config_from_entry_options_preferred() -> None:
 
 
 def test_entry_config_from_entry_falls_back_to_data() -> None:
-    """When options is empty, from_entry reads from data."""
+    """When options is empty, from_entry reads the entry's locks from data."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_LOCKS: ["lock.a"], CONF_SLOTS: {"1": _slot()}},
+        data={CONF_LOCKS: ["lock.a"]},
+        subentries_data=user_subentries({1: {CONF_NAME: "User 1", CONF_PIN: "1234"}}),
     )
     config = EntryConfig.from_entry(entry)
     assert config.locks == ("lock.a",)
     assert set(config.slots.keys()) == {1}
+
+
+def test_entry_config_from_entry_ignores_a_subentry_that_is_not_a_user() -> None:
+    """
+    Only user subentries are users.
+
+    An entry may grow subentries of other types later, and reading one as a
+    user would put a stranger in the configuration -- with whatever integer
+    happened to be under a `slot` key as their credential position.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.a"]},
+        subentries_data=[
+            *user_subentries({1: {CONF_NAME: "User 1", CONF_PIN: "1234"}}),
+            ConfigSubentryData(
+                data={CONF_SLOT: 2},
+                subentry_type="something_else",
+                title="Not A User",
+                unique_id=None,
+            ),
+        ],
+    )
+    config = EntryConfig.from_entry(entry)
+    assert set(config.users) == {"User 1"}
+    assert set(config.slots) == {1}
 
 
 def test_entry_config_is_deeply_immutable() -> None:
@@ -385,7 +451,8 @@ def test_get_entry_config_falls_back_when_no_runtime_data() -> None:
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={CONF_LOCKS: ["lock.fresh"], CONF_SLOTS: {"1": _slot()}},
+        data={CONF_LOCKS: ["lock.fresh"]},
+        subentries_data=user_subentries({1: {CONF_NAME: "User 1", CONF_PIN: "1234"}}),
     )
     # MockConfigEntry has no runtime_data attribute by default
 
@@ -454,12 +521,13 @@ def test_setting_the_name_re_keys_the_user() -> None:
     )
 
     renamed = config.with_slot_field_set(1, "name", "Bob")
-    reloaded = EntryConfig.from_mapping(renamed.to_dict())
 
-    assert set(reloaded.users) == {"Bob"}
-    assert "name" not in reloaded.users["Bob"]
-    assert reloaded.assignment.slot("Bob") == 1
-    assert "Alice" not in reloaded.users
+    assert set(renamed.users) == {"Bob"}
+    assert "name" not in renamed.users["Bob"]
+    assert renamed.assignment.slot("Bob") == 1
+    assert "Alice" not in renamed.users
+    # And it survives the round trip a subentry write makes.
+    assert renamed.subentry_data("Bob")[CONF_SLOT] == 1
 
 
 def test_with_slot_field_set_updates_existing_field() -> None:
@@ -525,12 +593,11 @@ def test_with_slot_field_removed_is_noop_when_absent() -> None:
 
 def test_to_dict_round_trips_through_from_mapping() -> None:
     """
-    to_dict → from_mapping reconstructs an equivalent EntryConfig.
+    to_dict carries the entry's own half and nothing else.
 
-    Guards the write path used by SlotEntityCoordinator and the helpers
-    write functions: they build a new EntryConfig, call to_dict(), hand
-    it to async_update_entry, and expect the eventual listener re-read
-    to produce the same logical config.
+    Users live in subentries, so a caller cannot put one into entry data by
+    accident and leave the entry with two answers about who holds a slot.
+    ``subentry_data`` is what carries a user, number included.
     """
     original = EntryConfig.from_mapping(
         {
@@ -539,10 +606,11 @@ def test_to_dict_round_trips_through_from_mapping() -> None:
         }
     )
 
-    round_tripped = EntryConfig.from_mapping(original.to_dict())
+    entry_half = original.to_dict()
 
-    assert round_tripped.locks == original.locks
-    assert dict(round_tripped.slots) == dict(original.slots)
+    assert entry_half[CONF_LOCKS] == ["lock.a", "lock.b"]
+    assert CONF_USERS not in entry_half
+    assert original.subentry_data("User 1")[CONF_SLOT] == 1
 
 
 def test_to_dict_produces_plain_mutable_dicts() -> None:
@@ -559,10 +627,10 @@ def test_to_dict_produces_plain_mutable_dicts() -> None:
     result = config.to_dict()
 
     assert isinstance(result, dict)
-    assert isinstance(result[CONF_USERS], dict)
-    assert isinstance(result[CONF_USERS]["User 1"], dict)
+    assert isinstance(result[CONF_LOCKS], list)
+    assert isinstance(config.subentry_data("User 1"), dict)
     # Mutability — the returned dicts are the caller's to modify
-    result[CONF_USERS]["User 1"]["pin"] = "9999"
+    result[CONF_LOCKS].append("lock.b")
     result[CONF_LOCKS].append("lock.b")
     # Original EntryConfig is untouched by that mutation
     assert config.slots[1]["pin"] == "1234"
