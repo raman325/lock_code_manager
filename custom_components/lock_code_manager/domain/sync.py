@@ -17,7 +17,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import logging
-import time
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -291,6 +290,9 @@ class SlotSyncManager:
         if self._started:
             return
         self._started = True
+        # A write that failed before this manager existed -- a direct write to
+        # a slot nobody managed yet -- is not this manager's strike.
+        self._coordinator.take_failed_write(self._address)
         self._setup_state_tracking()
         self._setup_coordinator_listener()
         self._tick_unsub = async_track_time_interval(
@@ -456,12 +458,11 @@ class SlotSyncManager:
         unreadable, and that taking over a slot with an existing masked code
         triggers a set.
 
-        An unverified slot (an optimistic write still awaiting confirmation,
-        or one whose confirmation never arrived) is never in sync: the
-        coordinator holds the believed value but the lock has not confirmed it,
-        so the tick must keep watching (PENDING_CONFIRMATION) or re-sync rather
-        than declare success. Slots with no recorded flag read as verified, so
-        this is a no-op for providers that never write optimistically.
+        An unverified slot -- one with a write pending against it that no
+        read or push has yet shown -- is never in sync: the coordinator may
+        hold the believed value, but the lock has not said so, and the tick
+        must keep watching (PENDING_CONFIRMATION) rather than declare success.
+        A slot with nothing pending is verified, whatever it holds.
         """
         if not self._coordinator.is_verified(self._address):
             return False
@@ -469,15 +470,15 @@ class SlotSyncManager:
         if snapshot.active_state == STATE_ON:
             if credential is not None:
                 if credential.is_empty:
-                    # If we recently set a PIN on this slot and it matches the
-                    # configured PIN, trust the set — the provider may not
-                    # have caught up yet (eventual consistency, e.g. Schlage
-                    # cloud API).
-                    return (
-                        self._last_set_pin is not None
-                        and snapshot.credential_state == self._last_set_pin
-                    )
+                    # The lock's answer, not a lagging read: while a write of
+                    # ours could still be ahead of the read, the address is
+                    # unverified and the guard above refuses it. An active slot
+                    # the lock says is empty is out of sync.
+                    return False
                 if not credential.is_readable:
+                    # No read will ever say what a write-only lock holds, so
+                    # the last PIN written is the only thing to compare the
+                    # configured one against.
                     return snapshot.credential_state == self._last_set_pin
                 return credential.matches(snapshot.credential_state)
             # No coordinator data — fall back to the code sensor entity state.
@@ -647,6 +648,12 @@ class SlotSyncManager:
                 self._state = SyncState.OUT_OF_SYNC
                 self._breaker_reset_requested = True
                 self._write_state()
+            elif snapshot is not None:
+                # A write that failed but left the slot in sync -- a direct
+                # write of some other PIN the lock did not keep -- is not this
+                # sync's strike. Discard it here, or the next sync to run
+                # would be charged and warned for a write it never made.
+                self._coordinator.take_failed_write(self._address)
         elif self._state is SyncState.SUSPENDED:
             if self._code_suspend_target is not None:
                 # Suspended for a non-converging code or an unexpected error.
@@ -776,56 +783,59 @@ class SlotSyncManager:
             self._write_state()
             return
 
-        # -- PENDING_CONFIRMATION: an optimistic write is awaiting confirmation.
-        # Don't re-write while waiting; a push event / hard refresh resolves it
-        # (clearing the pending entry). On timeout, count a breaker failure and
-        # fall through to re-sync -- so a write the lock never committed ends in
-        # a visible suspend, never a silent in-sync.
-        pending = self._lock._pending_writes.get(self._address)
-        if pending is not None:
-            believed_pin, deadline = pending
-            # A pending write only gates reconciliation while it still reflects
-            # the desired state. If the user changed the PIN or disabled the slot
-            # while the write was outstanding, the entry is stale: drop it and
-            # reconcile the new target instead of holding PENDING_CONFIRMATION
-            # (and re-syncing the old value) until the deadline.
-            still_wanted = (
-                snapshot.active_state == STATE_ON
-                and snapshot.credential_state == believed_pin
-            )
-            if still_wanted and time.monotonic() < deadline:
-                if self._state is not SyncState.PENDING_CONFIRMATION:
-                    self._state = SyncState.PENDING_CONFIRMATION
-                    self._write_state()
-                return
-            # Drop the entry and re-sync on the NEXT tick. Returning here (rather
-            # than falling through to _perform_sync this tick) lets a confirming
-            # push that lands between ticks resolve the slot first, and avoids
-            # double-charging the breaker when the re-sync itself also fails.
-            del self._lock._pending_writes[self._address]
-            if still_wanted:
-                # Genuine timeout: the write we still want never confirmed.
-                self._slot_breaker.record_failure()
-                _LOGGER.warning(
-                    "%s: optimistic write not confirmed within the timeout; "
-                    "re-syncing (attempt %s)",
-                    self._log_prefix,
-                    self._slot_breaker.failure_count,
-                )
-            # A stale entry (desired state changed) is not a sync failure, so it
-            # does not charge the breaker.
-            self._state = SyncState.OUT_OF_SYNC
-            self._write_state()
-            return
-
-        # -- OUT_OF_SYNC: check lock readiness, then attempt sync --
+        # -- Lock readiness, before anything about pending writes --
         # An unvalidated provider setup (deferred or structurally failed)
         # suspends alongside unreachability: any write would only fail on
         # the capability probe, landing in the generic error handler with a
         # misleading "report this bug" suspension — and, for Z-Wave, re-fire
-        # the slot-count recovery device query on every attempt.
+        # the slot-count recovery device query on every attempt. Ahead of the
+        # pending check so an outage right after an accepted write suspends
+        # as the outage it is while it lasts. If the lock is still unreadable
+        # at that write's deadline the coordinator gives the write up all the
+        # same, and the re-sync after recovery costs the one strike that
+        # trade accepts: a landed write re-syncs as no change.
         if self._coordinator.unreachable or not self._lock.provider_setup_succeeded:
             self._state = SyncState.SUSPENDED
+            self._write_state()
+            return
+
+        # -- PENDING_CONFIRMATION: a write is awaiting the lock's word --
+        # The coordinator owns the write from here: it reads the lock back on
+        # its own schedule, confirms the write when a read or push shows the
+        # slot present, and gives it up when a read past the deadline still
+        # does not. This tick only watches. Don't re-write while waiting.
+        pending = self._coordinator.pending_write(self._address)
+        if pending is not None:
+            # A pending write only gates reconciliation while it still reflects
+            # the desired state. If the user changed the PIN or disabled the slot
+            # while the write was outstanding, it is stale: forget it and
+            # reconcile the new target instead of waiting on the old one.
+            if (
+                snapshot.active_state == STATE_ON
+                and snapshot.credential_state == pending.pin
+            ):
+                if self._state is not SyncState.PENDING_CONFIRMATION:
+                    self._state = SyncState.PENDING_CONFIRMATION
+                    self._write_state()
+                return
+            self._coordinator.drop_pending(self._address)
+            self._state = SyncState.OUT_OF_SYNC
+            self._write_state()
+            return
+
+        # A write the lock did not keep -- never seen, or displaced by another
+        # code: charged once, then re-synced on the NEXT tick, so a confirming
+        # push that lands between ticks can still settle the slot first and the
+        # re-sync's own outcome is judged apart.
+        if self._coordinator.take_failed_write(self._address):
+            self._slot_breaker.record_failure()
+            _LOGGER.warning(
+                "%s: the lock did not keep the write (not seen by the deadline, "
+                "or holding a different code); re-syncing (attempt %s)",
+                self._log_prefix,
+                self._slot_breaker.failure_count,
+            )
+            self._state = SyncState.OUT_OF_SYNC
             self._write_state()
             return
 
@@ -950,6 +960,13 @@ class SlotSyncManager:
             )
             return
         else:
+            # A write the coordinator recorded pending is its to confirm: it
+            # has already gone to read the lock back, and this tick's own read
+            # would only find the same answer two seconds later.
+            if self._coordinator.has_pending_write(self._address):
+                self._state = SyncState.PENDING_CONFIRMATION
+                self._write_state()
+                return
             # Sync succeeded — refresh coordinator to verify.
             # Skip for push providers — they update coordinator optimistically
             # via push_update() and refreshing from cache could read stale data.
@@ -971,16 +988,6 @@ class SlotSyncManager:
                         self._slot_breaker.record_failure()
                     self._state = SyncState.OUT_OF_SYNC
                     return
-
-        # An optimistic (ambiguous) set records a pending write: don't judge it
-        # now -- wait for the lock to confirm it (a push event or hard refresh)
-        # in PENDING_CONFIRMATION. The breaker is only charged when that wait
-        # times out (handled at the top of the tick), so a masked-but-accepted
-        # write is not penalised before its confirming event arrives.
-        if self._address in self._lock._pending_writes:
-            self._state = SyncState.PENDING_CONFIRMATION
-            self._write_state()
-            return
 
         # Check if sync actually worked.
         snapshot = self._resolve_credential_snapshot()

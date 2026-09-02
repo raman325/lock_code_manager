@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -488,8 +487,8 @@ async def test_credential_added_pin_pushes_unreadable(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with(
-        {2: SlotCredential.unreadable()}
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.unreadable()
     )
 
     zwave_js_lock.unsubscribe_push_updates()
@@ -516,8 +515,8 @@ async def test_credential_added_pin_with_data_pushes_known(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with(
-        {2: SlotCredential.known("1234")}
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.known("1234")
     )
 
     zwave_js_lock.unsubscribe_push_updates()
@@ -542,8 +541,8 @@ async def test_credential_modified_pin_pushes_unreadable(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with(
-        {3: SlotCredential.unreadable()}
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(3), SlotCredential.unreadable()
     )
 
     zwave_js_lock.unsubscribe_push_updates()
@@ -568,7 +567,9 @@ async def test_credential_deleted_pin_pushes_empty(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with({5: SlotCredential.empty()})
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(5), SlotCredential.empty()
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -596,7 +597,7 @@ async def test_credential_added_non_pin_ignored(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_not_called()
+    mock_coordinator.observe_push.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -624,7 +625,7 @@ async def test_credential_deleted_non_pin_ignored(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_not_called()
+    mock_coordinator.observe_push.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -673,8 +674,8 @@ async def test_uc_shim_plain_code_pushes_known(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with(
-        {2: SlotCredential.known("8642")}
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.known("8642")
     )
 
     zwave_js_lock.unsubscribe_push_updates()
@@ -700,8 +701,8 @@ async def test_uc_shim_masked_code_pushes_unreadable(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with(
-        {2: SlotCredential.unreadable()}
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.unreadable()
     )
 
     zwave_js_lock.unsubscribe_push_updates()
@@ -727,7 +728,9 @@ async def test_uc_shim_zeros_on_available_slot_pushes_empty(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with({3: SlotCredential.empty()})
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(3), SlotCredential.empty()
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -762,33 +765,95 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with(
-        {99: SlotCredential.known("0000")}
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(99), SlotCredential.known("0000")
     )
 
     zwave_js_lock.unsubscribe_push_updates()
 
 
-async def test_uc_shim_empty_code_pushes_empty(
+@pytest.mark.parametrize(
+    ("in_use", "expected"),
+    [
+        (False, SlotCredential.empty()),
+        (None, SlotCredential.empty()),
+        (True, SlotCredential.unreadable()),
+    ],
+    ids=["free", "unknown", "occupied"],
+)
+async def test_uc_shim_empty_code_follows_occupancy(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
+    in_use: bool | None,
+    expected: SlotCredential,
 ) -> None:
-    """An empty userCode value update pushes SlotCredential.empty()."""
+    """An empty userCode value is a cleared slot -- unless the status says occupied.
+
+    A lock withholding the code reports the slot in use with no value; that
+    is the same occupied-but-masked case the read path's overlay resolves to
+    unreadable, and taking it as empty would fail a write the lock kept.
+    """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
 
+    with patch.object(zwave_js_lock, "_uc_slot_in_use", return_value=in_use):
+        lock_schlage_be469.receive_event(
+            _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
+        )
+        await hass.async_block_till_done()
+
+    mock_coordinator.observe_push.assert_called_once_with(pin_address(2), expected)
+
+    zwave_js_lock.unsubscribe_push_updates()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (CodeSlotStatus.ENABLED, SlotCredential.unreadable()),
+        (CodeSlotStatus.AVAILABLE, SlotCredential.empty()),
+    ],
+    ids=["occupied-withheld", "cleared"],
+)
+async def test_uc_shim_status_then_empty_code_reads_the_fresh_status(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    status: CodeSlotStatus,
+    expected: SlotCredential,
+) -> None:
+    """The driver reports status before code; the code handler reads that status.
+
+    A report of an occupied slot with the code withheld arrives as ENABLED
+    then an empty userCode, and resolves to unreadable. A real clear arrives
+    as AVAILABLE then an empty userCode, and resolves to empty both times.
+    """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
+    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
+    zwave_js_lock.coordinator = mock_coordinator
+
+    zwave_js_lock.subscribe_push_updates()
+
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(lock_schlage_be469.node_id, "userIdStatus", 2, status)
+    )
     lock_schlage_be469.receive_event(
         _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
+    assert mock_coordinator.observe_push.call_args_list[-1] == call(
+        pin_address(2), expected
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -815,7 +880,9 @@ async def test_uc_shim_status_available_pushes_empty(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.empty()
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -846,7 +913,7 @@ async def test_uc_shim_status_available_ignored_when_pin_expected(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_not_called()
+    mock_coordinator.observe_push.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -872,7 +939,7 @@ async def test_uc_shim_status_occupied_ignored(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_not_called()
+    mock_coordinator.observe_push.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -918,7 +985,7 @@ async def test_uc_shim_ignores_unrelated_value_events(
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_not_called()
+    mock_coordinator.observe_push.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -930,28 +997,26 @@ async def test_uc_shim_confirms_pending_optimistic_write(
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """A masked verification report confirms a pending optimistic write.
+    """A masked verification report reaches the coordinator as an observation.
 
     The driver's post-write verification GET produces a report (and thus a
     value event) but no unified credential event on released drivers; the
-    shim must route it through _confirm_slot so the believed value is kept
-    and marked verified.
+    shim must route it through _confirm_slot so the coordinator can settle
+    the pending write against it.
     """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
-    zwave_js_lock._pending_writes[pin_address(2)] = ("8642", time.monotonic() + 60)
 
     lock_schlage_be469.receive_event(
         _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
     )
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with(
-        {2: SlotCredential.known("8642")}
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.unreadable()
     )
-    assert pin_address(2) not in zwave_js_lock._pending_writes
 
     zwave_js_lock.unsubscribe_push_updates()

@@ -1047,141 +1047,25 @@ async def test_set_usercode_logs_warning_when_rollback_user_delete_fails(
 
 
 def _slot_only_lock_with_coordinator(hass: HomeAssistant):
-    """Build a _DegenerateStubLock with a mock coordinator that records pushes."""
+    """Build a _DegenerateStubLock with a mock coordinator that records pushes.
+
+    The coordinator owns pending writes, so what the seam is tested for here
+    is what it tells the coordinator: ``record_write``, ``drop_pending`` and
+    ``observe_push`` are plain mocks the assertions read.
+    """
     lock = _make_lock(hass, _DegenerateStubLock, "seam_optimistic")
     coord = MagicMock()
     coord.data = {}
-    pushed: list[tuple[dict, bool]] = []
+    pushed: list[dict] = []
 
-    def _push(updates, *, optimistic=False):
+    def _push(updates):
         coord.data = {**coord.data, **updates}
-        pushed.append((dict(updates), optimistic))
+        pushed.append(dict(updates))
 
     coord.push_update.side_effect = _push
-    coord.async_confirm_pending_writes = AsyncMock()
     coord.async_request_refresh = AsyncMock()
     lock.coordinator = coord
     return lock, pushed
-
-
-async def test_record_optimistic_write_pushes_unverified_and_tracks_pending(
-    hass: HomeAssistant,
-) -> None:
-    """An optimistic write pushes the believed value unverified and records pending."""
-    lock, pushed = _slot_only_lock_with_coordinator(hass)
-    lock._record_optimistic_write(4, "1234")
-
-    assert pushed == [({4: SlotCredential.known("1234")}, True)]
-    assert pin_address(4) in lock._pending_writes
-    assert lock._pending_writes[pin_address(4)][0] == "1234"
-
-
-async def test_clear_usercode_drops_stale_pending_write(
-    hass: HomeAssistant,
-) -> None:
-    """Clearing a slot supersedes and drops any outstanding optimistic set."""
-    lock, _pushed = _slot_only_lock_with_coordinator(hass)
-    lock._min_operation_delay = 0.0
-    lock._record_optimistic_write(4, "1234")
-    assert pin_address(4) in lock._pending_writes
-
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        await lock.async_internal_clear_usercode(4)
-
-    assert pin_address(4) not in lock._pending_writes
-
-
-async def test_optimistic_set_actively_confirms_instead_of_waiting(
-    hass: HomeAssistant,
-) -> None:
-    """An OPTIMISTIC write records pending AND drives an on-demand confirm read.
-
-    The confirm read is the durable, order-independent backstop: some stacks
-    send no push for an ambiguous write, so the seam must read the slot back
-    rather than wait passively (which would let the breaker suspend a slot whose
-    code actually landed).
-    """
-    lock, _pushed = _slot_only_lock_with_coordinator(hass)
-    lock._min_operation_delay = 0.0
-    with (
-        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
-        patch.object(
-            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.OPTIMISTIC)
-        ),
-    ):
-        await lock.async_internal_set_usercode(4, "1234", "carol")
-
-    assert pin_address(4) in lock._pending_writes
-    lock.coordinator.async_confirm_pending_writes.assert_awaited_once()
-
-
-async def test_confirm_slot_keeps_believed_value_on_present_observation(
-    hass: HomeAssistant,
-) -> None:
-    """A present (even masked) observation confirms a pending write as verified."""
-    lock, pushed = _slot_only_lock_with_coordinator(hass)
-    lock._record_optimistic_write(4, "1234")
-    pushed.clear()
-
-    # The lock reports the slot present but unreadable (masked) -- still confirms.
-    lock._confirm_slot(4, SlotCredential.unreadable())
-
-    assert pushed == [({4: SlotCredential.known("1234")}, False)]
-    assert pin_address(4) not in lock._pending_writes
-
-
-async def test_confirm_slot_takes_observation_when_no_pending(
-    hass: HomeAssistant,
-) -> None:
-    """With no pending write, the observation is taken verbatim as verified."""
-    lock, pushed = _slot_only_lock_with_coordinator(hass)
-    lock._confirm_slot(2, SlotCredential.unreadable())
-
-    assert pushed == [({2: SlotCredential.unreadable()}, False)]
-
-
-async def test_confirm_slot_empty_observation_clears_pending(
-    hass: HomeAssistant,
-) -> None:
-    """An empty observation (slot cleared) overrides a pending write."""
-    lock, pushed = _slot_only_lock_with_coordinator(hass)
-    lock._record_optimistic_write(4, "1234")
-    pushed.clear()
-
-    lock._confirm_slot(4, SlotCredential.empty())
-
-    assert pushed == [({4: SlotCredential.empty()}, False)]
-    assert pin_address(4) not in lock._pending_writes
-
-
-async def test_confirm_slot_takes_differing_readable_external_change(
-    hass: HomeAssistant,
-) -> None:
-    """A readable observation of a *different* code is an external change: take it."""
-    lock, pushed = _slot_only_lock_with_coordinator(hass)
-    lock._record_optimistic_write(4, "1234")
-    pushed.clear()
-
-    # The lock reports a readable code that differs from what we wrote -- someone
-    # changed it out from under us; surface the observation, not our belief.
-    lock._confirm_slot(4, SlotCredential.known("9999"))
-
-    assert pushed == [({4: SlotCredential.known("9999")}, False)]
-    assert pin_address(4) not in lock._pending_writes
-
-
-async def test_confirm_slot_keeps_belief_when_readable_matches(
-    hass: HomeAssistant,
-) -> None:
-    """A readable observation matching the believed PIN confirms it verbatim."""
-    lock, pushed = _slot_only_lock_with_coordinator(hass)
-    lock._record_optimistic_write(4, "1234")
-    pushed.clear()
-
-    lock._confirm_slot(4, SlotCredential.known("1234"))
-
-    assert pushed == [({4: SlotCredential.known("1234")}, False)]
-    assert pin_address(4) not in lock._pending_writes
 
 
 # Slot capacity pre-flight (issue #1398)
@@ -1273,3 +1157,120 @@ async def test_set_usercode_skips_capacity_check_when_capabilities_unavailable(
     with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
         await lock.async_internal_set_usercode(50, "4321", "guest")
     assert ("set_credential", 50, 50) in lock.calls
+
+
+# =============================================================================
+# The seam hands writes and observations to the coordinator
+# =============================================================================
+
+
+async def _set_through_seam(lock, result: WriteResult, *, push: bool = False) -> None:
+    """Drive one set through the seam with the provider answering ``result``."""
+    lock._min_operation_delay = 0.0
+    with (
+        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
+        patch.object(type(lock), "supports_push", property(lambda _self: push)),
+        patch.object(lock, "async_set_usercode", AsyncMock(return_value=result)),
+    ):
+        await lock.async_internal_set_usercode(4, "1234", "carol")
+
+
+async def test_optimistic_set_is_recorded_pending_with_the_value_believed(
+    hass: HomeAssistant,
+) -> None:
+    """An ambiguous write is recorded believed; the coordinator reads it back."""
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    await _set_through_seam(lock, WriteResult.OPTIMISTIC)
+    lock.coordinator.record_write.assert_called_once_with(
+        pin_address(4), "1234", believed=True
+    )
+
+
+async def test_confirmed_set_on_a_poller_is_recorded_pending_without_a_value(
+    hass: HomeAssistant,
+) -> None:
+    """The cloud accepting a write is not the lock reporting it: pending, not believed.
+
+    For any slot -- the coordinator's read names every pending address, so a
+    slot nothing manages is asked about too.
+    """
+    lock, pushed = _slot_only_lock_with_coordinator(hass)
+    await _set_through_seam(lock, WriteResult.CONFIRMED)
+    lock.coordinator.record_write.assert_called_once_with(
+        pin_address(4), "1234", believed=False
+    )
+    lock.coordinator.async_request_refresh.assert_not_awaited()
+    assert pushed == []
+
+
+async def test_confirmed_set_on_a_push_provider_records_nothing_pending(
+    hass: HomeAssistant,
+) -> None:
+    """The provider's own push is the lock's word; any older pending write is superseded."""
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    await _set_through_seam(lock, WriteResult.CONFIRMED, push=True)
+    lock.coordinator.record_write.assert_not_called()
+    lock.coordinator.drop_pending.assert_called_once_with(pin_address(4))
+
+
+async def test_no_change_records_nothing(hass: HomeAssistant) -> None:
+    """Nothing was written, so there is nothing to confirm."""
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    await _set_through_seam(lock, WriteResult.NO_CHANGE)
+    lock.coordinator.record_write.assert_not_called()
+    lock.coordinator.drop_pending.assert_not_called()
+
+
+async def test_clear_drops_any_pending_write_once_it_has_run(
+    hass: HomeAssistant,
+) -> None:
+    """A clear that ran supersedes whatever write was pending on the slot."""
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        await lock.async_internal_clear_usercode(4)
+    lock.coordinator.drop_pending.assert_called_once_with(pin_address(4))
+
+
+async def test_clear_that_raises_leaves_the_pending_write_standing(
+    hass: HomeAssistant,
+) -> None:
+    """A clear that never reached the lock supersedes nothing.
+
+    Otherwise a believed optimistic write would lose its pending record here,
+    read as verified, and put the slot falsely in sync on a value the lock
+    was never seen holding.
+    """
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    with (
+        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
+        patch.object(
+            lock,
+            "async_clear_usercode",
+            AsyncMock(side_effect=LockDisconnected("offline")),
+        ),
+        pytest.raises(LockDisconnected),
+    ):
+        await lock.async_internal_clear_usercode(4)
+    lock.coordinator.drop_pending.assert_not_called()
+
+
+async def test_confirm_slot_hands_the_observation_to_the_coordinator(
+    hass: HomeAssistant,
+) -> None:
+    """The provider-facing name for ``observe_push``; resolution lives on the coordinator."""
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._confirm_slot(2, SlotCredential.unreadable())
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.unreadable()
+    )
+
+
+async def test_confirm_slot_without_a_coordinator_is_a_no_op(
+    hass: HomeAssistant,
+) -> None:
+    """Before setup attaches a coordinator there is nothing to resolve against."""
+    lock = _make_lock(hass, _DegenerateStubLock, "seam_no_coord")
+    lock.coordinator = None
+    lock._confirm_slot(2, SlotCredential.empty())  # must not raise

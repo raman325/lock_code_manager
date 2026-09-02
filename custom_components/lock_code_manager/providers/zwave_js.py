@@ -693,6 +693,12 @@ class ZWaveJSLock(BaseLock):
         # Pre-15.25.2 drivers never persist a supervised success to the
         # value database (see _async_uc_reconcile_value_db).
         await self._async_uc_reconcile_value_db(credential.slot)
+        # Push what the driver just confirmed, as every push provider does
+        # before returning CONFIRMED: the seam records nothing pending for a
+        # push provider on the strength of the value being on the coordinator
+        # when this returns. A driver event may follow and refine it; none is
+        # guaranteed to, so this cannot wait for one.
+        self._push_credential_update(credential.slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
@@ -907,7 +913,15 @@ class ZWaveJSLock(BaseLock):
     def _handle_uc_code_update(self, code_slot: int, new_value: Any) -> None:
         """Handle a userCode value update for a code slot."""
         if not new_value:
-            resolved = SlotCredential.empty()
+            # No value from a slot the status says is occupied is the lock
+            # withholding the code, not a cleared slot -- the same rule the
+            # read path's occupancy overlay applies. Taken as empty, it
+            # would fail a pending write the lock in fact kept.
+            resolved = (
+                SlotCredential.unreadable()
+                if self._uc_slot_in_use(code_slot) is True
+                else SlotCredential.empty()
+            )
         else:
             value = str(new_value)
             slot_in_use = self._uc_slot_in_use(code_slot)

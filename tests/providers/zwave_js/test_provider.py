@@ -1386,6 +1386,37 @@ async def test_async_set_credential_raises_duplicate_code_error(
     assert exc_info.value.lock_entity_id == zwave_js_lock.lock.entity_id
 
 
+async def test_set_credential_confirmed_pushes_the_value_like_every_push_provider(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A confirmed set leaves the value on the coordinator before it returns.
+
+    Every push provider pushes what it just wrote before returning CONFIRMED,
+    and the seam records nothing pending for a push provider on exactly that
+    strength; a driver event may follow, but none is guaranteed to.
+    """
+    mock_coordinator = MagicMock()
+    zwave_js_lock.coordinator = mock_coordinator
+    mock_lock_helpers["async_set_credential"].return_value = {
+        "credential_slot": 2,
+        "user_id": 1,
+    }
+    credential = Credential(
+        type=CredentialType.PIN, slot=2, state=SlotCredential.known("5678")
+    )
+
+    result = await zwave_js_lock.async_set_credential(
+        user_id=1, credential=credential, pin="5678", name="alice", source="sync"
+    )
+
+    assert result is WriteResult.CONFIRMED
+    mock_coordinator.push_update.assert_called_once_with(
+        {2: SlotCredential.known("5678")}
+    )
+
+
 async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
