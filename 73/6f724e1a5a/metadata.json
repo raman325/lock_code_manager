@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "736f724e1a5a",
+  "strategy": "manual-commit",
+  "branch": "fix/1538-coordinator-owns-pending",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/zwave_js/test_events.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/73/6f724e1a5a/0/metadata.json",
+      "transcript": "/73/6f724e1a5a/0/full.jsonl",
+      "compact_transcript": "/73/6f724e1a5a/0/transcript.jsonl",
+      "content_hash": "/73/6f724e1a5a/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 143,
+    "cache_creation_tokens": 5049,
+    "cache_read_tokens": 667249,
+    "output_tokens": 3495,
+    "api_call_count": 2
+  }
+}
