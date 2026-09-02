@@ -1,5 +1,6 @@
 """Test the coordinator module."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
@@ -107,12 +108,14 @@ async def poll_coordinator(
 
 
 @pytest.fixture
-def push_coordinator(
+async def push_coordinator(
     hass: HomeAssistant, push_lock: MockLCMPushLock, lcm_config_entry: MockConfigEntry
-) -> LockUsercodeUpdateCoordinator:
+) -> AsyncGenerator[LockUsercodeUpdateCoordinator]:
     """Return a coordinator with a push-based lock (with hard refresh enabled)."""
     push_lock._hard_refresh_interval = timedelta(hours=1)
-    return _make_coordinator(hass, push_lock, lcm_config_entry)
+    coordinator = _make_coordinator(hass, push_lock, lcm_config_entry)
+    yield coordinator
+    await coordinator.async_shutdown()
 
 
 async def test_drift_timer_not_created_without_hard_refresh_interval(
@@ -1595,12 +1598,228 @@ async def test_confirmation_timer_fires_reads_and_rearms_while_pending(
     assert poll_coordinator._confirm_unsub is None
 
 
-async def test_shutdown_cancels_the_confirmation_timer(
+async def test_shutdown_cancels_the_armed_timer_and_forgets_pending(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
     poll_coordinator: LockUsercodeUpdateCoordinator,
 ) -> None:
-    """No read fires after the coordinator is gone."""
+    """No read fires after the coordinator is gone, and nothing stays pending."""
+    poll_lock.codes.pop(1, None)
+    reads = poll_lock.service_calls["get_usercodes"]
     poll_coordinator.record_write(pin_address(1), "9999", believed=False)
-    assert poll_coordinator._confirm_task is not None
+    await hass.async_block_till_done()  # first look ran, found it absent, armed
+    assert poll_coordinator._confirm_unsub is not None
+    before = len(reads)
+
     await poll_coordinator.async_shutdown()
-    assert poll_coordinator._confirm_task is None
     assert poll_coordinator._confirm_unsub is None
+    assert poll_coordinator.has_pending_write(pin_address(1)) is False
+
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=CONFIRM_READ_INTERVAL + 1)
+    )
+    await hass.async_block_till_done()
+    assert len(reads) == before
+
+
+async def test_shutdown_cancels_a_timer_fired_read_in_flight(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A read the timer started is the tracked look: shutdown cancels it mid-flight."""
+    poll_lock.codes.pop(1, None)
+    poll_coordinator.record_write(pin_address(1), "9999", believed=False)
+    await hass.async_block_till_done()  # timer armed
+
+    gate = asyncio.Event()
+    completed: list[int] = []
+
+    async def slow_read(*_args, **_kwargs):
+        await gate.wait()
+        completed.append(1)
+        return {1: SlotCredential.empty()}
+
+    with patch.object(poll_lock, "async_get_usercodes", slow_read):
+        async_fire_time_changed(
+            hass, dt_util.utcnow() + timedelta(seconds=CONFIRM_READ_INTERVAL + 1)
+        )
+        for _ in range(3):
+            await asyncio.sleep(0)  # let the timer start the look and enter the read
+        assert poll_coordinator._confirm_task is not None
+
+        await poll_coordinator.async_shutdown()
+        gate.set()
+        await hass.async_block_till_done()
+
+    assert completed == []
+    assert poll_coordinator._confirm_unsub is None
+
+
+async def test_record_write_while_the_timer_is_armed_starts_no_second_look(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """One look per lock holds across the timer too, not only before the first look."""
+    poll_lock.codes.pop(1, None)
+    poll_coordinator.record_write(pin_address(1), "1111", believed=False)
+    await hass.async_block_till_done()
+    armed = poll_coordinator._confirm_unsub
+    assert armed is not None
+
+    poll_coordinator.record_write(pin_address(2), "2222", believed=False)
+    assert poll_coordinator._confirm_task is None
+    assert poll_coordinator._confirm_unsub is armed
+
+
+async def test_a_read_with_an_unusable_key_does_not_strand_the_look(
+    hass: HomeAssistant,
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Whatever the read returns, the look either settles the write or re-arms."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={"bogus": SlotCredential.empty()}),
+    ):
+        await hass.async_block_till_done()
+    assert push_coordinator.has_pending_write(pin_address(1)) is True
+    assert push_coordinator._confirm_task is None
+    assert push_coordinator._confirm_unsub is not None
+
+
+async def test_observe_push_with_nothing_pending_is_the_locks_word(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """An external change or deletion pushed with nothing pending lands as read.
+
+    Every push provider's event path ends here, so this is the path by which a
+    code changed or deleted at the keypad reaches the data at all.
+    """
+    push_coordinator.push_update({1: SlotCredential.known("1234")})
+    push_coordinator.observe_push(pin_address(1), SlotCredential.known("4321"))
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("4321")
+    assert push_coordinator.is_verified(pin_address(1)) is True
+
+    push_coordinator.observe_push(pin_address(1), SlotCredential.empty())
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.empty()
+    assert push_coordinator.is_verified(pin_address(1)) is True
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_newer_record_write_replaces_the_pending_pin(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Two quick PIN changes: the read is judged against the PIN sent last."""
+    push_coordinator.record_write(pin_address(1), "1111", believed=True)
+    push_coordinator.record_write(pin_address(1), "2222", believed=True)
+    assert push_coordinator.pending_write(pin_address(1)).pin == "2222"
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("2222")
+
+    out = push_coordinator._apply_read({pin_address(1): SlotCredential.known("2222")})
+    assert out[pin_address(1)] == SlotCredential.known("2222")
+    assert push_coordinator.is_verified(pin_address(1)) is True
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_record_write_forgets_an_earlier_failed_write(
+    poll_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """A new write to the address supersedes an uncharged failure of the old one.
+
+    Otherwise a direct set landing between the failure and the tick would be
+    charged for a write the lock then kept.
+    """
+    poll_coordinator.record_write(pin_address(1), "1111", believed=False)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    poll_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+
+    poll_coordinator.record_write(pin_address(1), "2222", believed=False)
+    poll_coordinator._apply_read({pin_address(1): SlotCredential.known("2222")})
+    assert poll_coordinator.is_verified(pin_address(1)) is True
+    assert poll_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_push_provider_confirmed_set_is_present_and_settled_through_the_seam(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """The push-provider contract, end to end on a real coordinator.
+
+    A push provider pushes the value it wrote before returning CONFIRMED, so
+    after the seam returns the value is on the coordinator, nothing is
+    pending, and no confirmation look was started for it.
+    """
+    push_lock.coordinator = push_coordinator
+    push_lock._min_operation_delay = 0.0
+    await push_lock.async_internal_set_usercode(2, "8642", "dana")
+
+    assert push_coordinator.data[pin_address(2)] == SlotCredential.known("8642")
+    assert push_coordinator.is_verified(pin_address(2)) is True
+    assert push_coordinator._confirm_task is None
+    assert push_coordinator._confirm_unsub is None
+
+
+async def test_record_write_during_a_timer_fired_read_joins_that_look(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A write landing while the timer's read is in flight starts no second chain.
+
+    The timer's read is the tracked look, so the write waits for it and the
+    re-arm after it covers both slots.
+    """
+    poll_lock.codes.pop(1, None)
+    poll_coordinator.record_write(pin_address(1), "1111", believed=False)
+    await hass.async_block_till_done()  # timer armed
+
+    gate = asyncio.Event()
+
+    async def slow_read(*_args, **_kwargs):
+        await gate.wait()
+        return {1: SlotCredential.empty(), 2: SlotCredential.empty()}
+
+    with patch.object(poll_lock, "async_get_usercodes", slow_read):
+        async_fire_time_changed(
+            hass, dt_util.utcnow() + timedelta(seconds=CONFIRM_READ_INTERVAL + 1)
+        )
+        for _ in range(3):
+            await asyncio.sleep(0)
+        in_flight = poll_coordinator._confirm_task
+        assert in_flight is not None
+
+        poll_coordinator.record_write(pin_address(2), "2222", believed=False)
+        assert poll_coordinator._confirm_task is in_flight
+        assert poll_coordinator._confirm_unsub is None
+
+        gate.set()
+        await hass.async_block_till_done()
+
+    assert poll_coordinator._confirm_task is None
+    assert poll_coordinator._confirm_unsub is not None  # one chain, re-armed once
+
+
+async def test_confirmation_read_drops_a_slot_the_lock_no_longer_reports(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """An unmanaged code deleted out of band disappears with the confirmation read.
+
+    The scoped read has the same shape as a poll -- every managed and pending
+    slot plus whatever else the lock holds -- so it replaces the data as a
+    poll would, rather than keeping a slot the lock has stopped reporting.
+    """
+    poll_lock.codes[9] = "4321"
+    await poll_coordinator.async_refresh()
+    assert poll_coordinator.data[pin_address(9)] == SlotCredential.known("4321")
+
+    del poll_lock.codes[9]
+    poll_coordinator.record_write(pin_address(1), "1234", believed=False)
+    await hass.async_block_till_done()
+
+    assert pin_address(9) not in poll_coordinator.data
+    assert poll_coordinator.is_verified(pin_address(1)) is True

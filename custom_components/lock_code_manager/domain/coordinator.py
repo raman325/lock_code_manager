@@ -287,15 +287,7 @@ class LockUsercodeUpdateCoordinator(
             new_data = {**self.data, checked: SlotCredential.known(pin)}
             if new_data != self.data:
                 self.async_set_updated_data(new_data)
-        if self._confirm_task is None and self._confirm_unsub is None:
-            # Not eager: this is called from inside the provider's own write
-            # path, and an eagerly started read would reenter the provider
-            # before that write has returned.
-            self._confirm_task = self.hass.async_create_task(
-                self._async_confirmation_look(),
-                f"{DOMAIN} confirmation read for {self._lock.lock.entity_id}",
-                eager_start=False,
-            )
+        self._start_look()
 
     @callback
     def drop_pending(self, address: CredentialAddress) -> None:
@@ -351,10 +343,28 @@ class LockUsercodeUpdateCoordinator(
         else:
             self._failed_writes.add(checked)
             value = observed
+        before = self.data
         self.push_update({checked.user_ref: value})
+        if self.data is before and checked in self._failed_writes:
+            # Same data, failed write: let the sync layer judge it now.
+            self.async_update_listeners()
+
+    @callback
+    def _start_look(self) -> None:
+        """Start the one confirmation look for this lock, unless one is under way."""
+        if self._confirm_task is not None or self._confirm_unsub is not None:
+            return
+        # Not eager: record_write is called from inside the provider's own
+        # write path, and an eagerly started read would reenter the provider
+        # before that write has returned.
+        self._confirm_task = self.hass.async_create_task(
+            self._async_confirmation_look(),
+            f"{DOMAIN} confirmation read for {self._lock.lock.entity_id}",
+            eager_start=False,
+        )
 
     async def _async_confirmation_look(self) -> None:
-        """Look once right after a write; hand off to the timer while anything is pending."""
+        """Look once; hand off to the timer while anything is still pending."""
         try:
             await self.async_confirm_pending_writes()
         finally:
@@ -364,14 +374,11 @@ class LockUsercodeUpdateCoordinator(
                 self.hass, CONFIRM_READ_INTERVAL, self._async_confirmation_timer
             )
 
-    async def _async_confirmation_timer(self, _now: datetime) -> None:
-        """Timer callback: read the lock back, and re-arm while anything is pending."""
+    @callback
+    def _async_confirmation_timer(self, _now: datetime) -> None:
+        """Run the next look as the tracked task, so shutdown can cancel it too."""
         self._confirm_unsub = None
-        await self.async_confirm_pending_writes()
-        if self._pending:
-            self._confirm_unsub = async_call_later(
-                self.hass, CONFIRM_READ_INTERVAL, self._async_confirmation_timer
-            )
+        self._start_look()
 
     def credential(self, address: CredentialAddress) -> SlotCredential | None:
         """
@@ -419,10 +426,11 @@ class LockUsercodeUpdateCoordinator(
         provider is hard-refreshed, since its ordinary path is the cache the
         write may not have reached.
 
-        A failed read is non-fatal and does not touch the lock breaker --
-        connectivity is the scheduled poll's to judge. A read that fails once a
-        pending write is past its deadline gives that write up all the same:
-        the lock has had the time to live to be seen holding it, and was not.
+        A failed read is not the lock's word: it is non-fatal, touches no
+        breaker, and the write stays pending for the next look. A read that
+        fails once a pending write is past its deadline gives that write up
+        all the same: the lock has had the time to live to be seen holding it,
+        and was not.
         """
         if not self._pending:
             return
@@ -434,33 +442,61 @@ class LockUsercodeUpdateCoordinator(
                     self._lock.managed_slots
                     | {address.user_ref for address in self._pending}
                 )
+            # Replace, as the poll and drift paths do: the read names every
+            # managed and pending slot plus whatever else the lock holds, so a
+            # slot it no longer reports is one the lock no longer has.
+            new_data = self._apply_read(self._normalize_keys(raw))
         except LockCodeManagerError as err:
-            _LOGGER.debug(
-                "Confirmation read failed for %s: %s",
-                self._lock.lock.entity_id,
-                err,
-            )
-            self._expire_overdue()
+            self._give_up_overdue(err)
             return
-        except Exception:
+        except Exception as err:
             _LOGGER.exception(
                 "Unexpected error during confirmation read for %s",
                 self._lock.lock.entity_id,
             )
-            self._expire_overdue()
+            self._give_up_overdue(err)
             return
-        new_data = {**self.data, **self._apply_read(self._normalize_keys(raw))}
         if new_data != self.data:
             self.async_set_updated_data(new_data)
+        elif self._failed_writes:
+            # The data did not move, but a write failed against it: a slot
+            # left in sync must judge that now, not be charged for it by some
+            # later, unrelated sync.
+            self.async_update_listeners()
 
     @callback
-    def _expire_overdue(self) -> None:
-        """Give up every pending write whose deadline has passed unread."""
+    def _give_up_overdue(self, err: BaseException) -> None:
+        """
+        After a failed read, give up every pending write past its deadline.
+
+        Said at info with the cause when anything is given up, so the sync
+        tick's later warning about an unconfirmed write has a reason on
+        record; a failure that leaves everything still waiting is routine.
+        """
         now = time.monotonic()
-        for address, pending in list(self._pending.items()):
-            if now >= pending.deadline:
-                del self._pending[address]
-                self._failed_writes.add(address)
+        overdue = [
+            address
+            for address, pending in self._pending.items()
+            if now >= pending.deadline
+        ]
+        for address in overdue:
+            del self._pending[address]
+            self._failed_writes.add(address)
+        if overdue:
+            self.async_update_listeners()
+            _LOGGER.info(
+                "%s could not be read back before the deadline (%s); giving up "
+                "on the writes to slots %s",
+                self._lock.lock.entity_id,
+                err,
+                [address.user_ref for address in overdue],
+            )
+        else:
+            _LOGGER.debug(
+                "Confirmation read failed for %s, will retry: %s",
+                self._lock.lock.entity_id,
+                err,
+            )
 
     @callback
     def push_update(self, updates: dict[int, SlotCredential]) -> None:
@@ -695,6 +731,10 @@ class LockUsercodeUpdateCoordinator(
 
     async def async_shutdown(self) -> None:
         """Shut down the coordinator and clean up resources."""
+        # Nothing may be looked at again: a look already in flight is
+        # cancelled, and an empty pending set arms no timer after it.
+        self._pending.clear()
+        self._failed_writes.clear()
         if self._confirm_task is not None:
             self._confirm_task.cancel()
             self._confirm_task = None

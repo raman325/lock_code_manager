@@ -1482,14 +1482,17 @@ class BaseLock:
             code_slot,
             source,
         )
-        # A clear supersedes any write pending on this slot.
-        if self.coordinator is not None:
-            self.coordinator.drop_pending(pin_address(code_slot))
         changed = await self._execute_rate_limited(
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
         )
+        # A clear that ran supersedes any write pending on this slot. One that
+        # raised superseded nothing: the write stays pending, so a believed
+        # value it pushed is not taken as verified on the strength of a clear
+        # that never reached the lock.
+        if self.coordinator is not None:
+            self.coordinator.drop_pending(pin_address(code_slot))
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
         # there.

@@ -2114,3 +2114,74 @@ class TestPendingWritesOwnedByCoordinator:
         assert manager._coordinator.is_verified(pin_address(1)) is True
         await manager._async_tick_impl()
         assert manager._state is SyncState.IN_SYNC
+
+    async def test_external_deletion_pushed_with_nothing_pending_goes_out_of_sync(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A code deleted at the lock and pushed as empty is out of sync (#1538).
+
+        Nothing is pending, so the observation is the lock's word, and an
+        active slot the lock says is empty must not stay in sync.
+        """
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.IN_SYNC
+
+        # Deleted at the lock, and the lock says so.
+        manager._lock.codes.pop(1)
+        manager._lock._confirm_slot(1, SlotCredential.empty())
+        await hass.async_block_till_done()
+        assert manager._coordinator.data[pin_address(1)] == SlotCredential.empty()
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+        # The tick re-programs it and waits for the read to see it.
+        await manager._async_tick()
+        assert manager._lock.codes[1] == "1234"
+        assert manager._state is SyncState.PENDING_CONFIRMATION
+
+    async def test_failed_direct_write_on_an_in_sync_slot_is_not_charged_later(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A direct write of another PIN that the lock did not keep is nobody's strike.
+
+        The slot stays in sync on the configured PIN, so the failed write is
+        judged and discarded now, rather than lingering to be charged to the
+        next sync that happens to run.
+        """
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.IN_SYNC
+        assert manager._lock.codes[1] == "1234"
+
+        # A direct service write of "0000" the lock did not keep; the
+        # coordinator's read shows the slot still holding the configured PIN.
+        manager._coordinator.record_write(pin_address(1), "0000", believed=False)
+        await manager._coordinator.async_confirm_pending_writes()
+        await hass.async_block_till_done()
+
+        assert manager._state is SyncState.IN_SYNC
+        assert manager._coordinator.take_failed_write(pin_address(1)) is False
+
+    async def test_failed_direct_write_seen_by_a_push_on_an_in_sync_slot_is_discarded(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """The push-path twin: a push showing the configured PIN fails the stray write."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.IN_SYNC
+
+        manager._coordinator.record_write(pin_address(1), "0000", believed=False)
+        manager._lock._confirm_slot(1, SlotCredential.known("1234"))
+        await hass.async_block_till_done()
+
+        assert manager._state is SyncState.IN_SYNC
+        assert manager._coordinator.take_failed_write(pin_address(1)) is False

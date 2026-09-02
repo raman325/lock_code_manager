@@ -645,6 +645,12 @@ class SlotSyncManager:
                 self._state = SyncState.OUT_OF_SYNC
                 self._breaker_reset_requested = True
                 self._write_state()
+            elif snapshot is not None:
+                # A write that failed but left the slot in sync -- a direct
+                # write of some other PIN the lock did not keep -- is not this
+                # sync's strike. Discard it here, or the next sync to run
+                # would be charged and warned for a write it never made.
+                self._coordinator.take_failed_write(self._address)
         elif self._state is SyncState.SUSPENDED:
             if self._code_suspend_target is not None:
                 # Suspended for a non-converging code or an unexpected error.
