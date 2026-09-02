@@ -290,6 +290,9 @@ class SlotSyncManager:
         if self._started:
             return
         self._started = True
+        # A write that failed before this manager existed -- a direct write to
+        # a slot nobody managed yet -- is not this manager's strike.
+        self._coordinator.take_failed_write(self._address)
         self._setup_state_tracking()
         self._setup_coordinator_listener()
         self._tick_unsub = async_track_time_interval(
@@ -786,8 +789,11 @@ class SlotSyncManager:
         # the capability probe, landing in the generic error handler with a
         # misleading "report this bug" suspension — and, for Z-Wave, re-fire
         # the slot-count recovery device query on every attempt. Ahead of the
-        # pending check so an outage right after an accepted write reads as
-        # the outage it is, not as a write the lock declined.
+        # pending check so an outage right after an accepted write suspends
+        # as the outage it is while it lasts. If the lock is still unreadable
+        # at that write's deadline the coordinator gives the write up all the
+        # same, and the re-sync after recovery costs the one strike that
+        # trade accepts: a landed write re-syncs as no change.
         if self._coordinator.unreachable or not self._lock.provider_setup_succeeded:
             self._state = SyncState.SUSPENDED
             self._write_state()

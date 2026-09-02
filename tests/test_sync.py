@@ -2185,3 +2185,21 @@ class TestPendingWritesOwnedByCoordinator:
 
         assert manager._state is SyncState.IN_SYNC
         assert manager._coordinator.take_failed_write(pin_address(1)) is False
+
+    async def test_manager_start_discards_a_failed_write_that_predates_it(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """A direct write that failed before the slot was managed is nobody's strike."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await manager.async_stop()
+
+        manager._coordinator.record_write(pin_address(1), "0000", believed=False)
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+        manager._coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+
+        await manager.async_start()
+        assert manager._coordinator.take_failed_write(pin_address(1)) is False

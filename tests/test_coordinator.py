@@ -1656,21 +1656,53 @@ async def test_shutdown_cancels_a_timer_fired_read_in_flight(
     assert poll_coordinator._confirm_unsub is None
 
 
-async def test_record_write_while_the_timer_is_armed_starts_no_second_look(
+async def test_record_write_while_the_timer_is_armed_pulls_the_look_forward(
     hass: HomeAssistant,
     poll_lock: MockLCMLock,
     poll_coordinator: LockUsercodeUpdateCoordinator,
 ) -> None:
-    """One look per lock holds across the timer too, not only before the first look."""
+    """A write landing while the timer waits gets its look now, on the one chain."""
     poll_lock.codes.pop(1, None)
     poll_coordinator.record_write(pin_address(1), "1111", believed=False)
     await hass.async_block_till_done()
-    armed = poll_coordinator._confirm_unsub
-    assert armed is not None
+    assert poll_coordinator._confirm_unsub is not None
+    reads = poll_lock.service_calls["get_usercodes"]
+    before = len(reads)
 
     poll_coordinator.record_write(pin_address(2), "2222", believed=False)
+    assert poll_coordinator._confirm_task is not None
+    assert poll_coordinator._confirm_unsub is None  # the waiting timer was cancelled
+
+    await hass.async_block_till_done()
+    assert len(reads) == before + 1
     assert poll_coordinator._confirm_task is None
-    assert poll_coordinator._confirm_unsub is armed
+    assert poll_coordinator._confirm_unsub is not None  # one chain, re-armed once
+
+
+async def test_pending_slot_a_completed_read_never_names_is_given_up_at_the_deadline(
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    freezer,
+) -> None:
+    """A whole-device read that omits a pending slot is the lock not holding it.
+
+    Waited for until the deadline like an absent slot, then failed -- never
+    left pending to hard-refresh the device every interval for good.
+    """
+    push_coordinator.record_write(pin_address(9), "4321", believed=True)
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.known("1234")}),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+        assert push_coordinator.has_pending_write(pin_address(9)) is True
+        assert push_coordinator.take_failed_write(pin_address(9)) is False
+
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+        await push_coordinator.async_confirm_pending_writes()
+    assert push_coordinator.has_pending_write(pin_address(9)) is False
+    assert push_coordinator.take_failed_write(pin_address(9)) is True
 
 
 async def test_a_read_with_an_unusable_key_does_not_strand_the_look(

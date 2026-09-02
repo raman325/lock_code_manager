@@ -205,11 +205,13 @@ BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
 # Poll failure alerting
 POLL_FAILURE_ALERT_THRESHOLD: int = 12
 
-# How long a write waits to be seen on the lock before it is given up on: the
-# coordinator drops the pending record on the first read past this that still
-# does not show the write, and the sync tick charges the slot breaker once for
-# it. Three of these must fit inside SYNC_ATTEMPT_WINDOW, or a write the lock
-# never keeps could never trip the breaker.
+# How long a write waits to be seen on the lock before it is given up and
+# re-synced. The coordinator reads the lock back on its own schedule while it
+# waits, so this does not have to span a polled lock's scan interval -- and
+# must not be long: a write the lock never keeps is given up by the first
+# look at or after the deadline, so one failed cycle is this plus up to
+# CONFIRM_READ_INTERVAL plus the read and the re-set, and the breaker only
+# trips when three such failures land inside SYNC_ATTEMPT_WINDOW.
 PENDING_WRITE_TTL: float = 60.0
 # How often the coordinator reads the lock back while a write is pending: four
 # looks inside one time to live, so a write that landed late is seen well

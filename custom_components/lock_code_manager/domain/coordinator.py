@@ -7,7 +7,7 @@ Stores ALL slots (managed and unmanaged). See ARCHITECTURE.md for the full data 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
 import logging
 import time
@@ -357,9 +357,17 @@ class LockUsercodeUpdateCoordinator(
 
     @callback
     def _start_look(self) -> None:
-        """Start the one confirmation look for this lock, unless one is under way."""
-        if self._confirm_task is not None or self._confirm_unsub is not None:
+        """
+        Start the confirmation look now, unless one is already in flight.
+
+        A timer waiting for the next look is pulled forward instead: the write
+        that just returned gets its immediate look, and the chain stays one.
+        """
+        if self._confirm_task is not None:
             return
+        if self._confirm_unsub is not None:
+            self._confirm_unsub()
+            self._confirm_unsub = None
         # Not eager: record_write is called from inside the provider's own
         # write path, and an eagerly started read would reenter the provider
         # before that write has returned.
@@ -453,6 +461,14 @@ class LockUsercodeUpdateCoordinator(
             # slot it no longer reports is one the lock no longer has.
             failed_before = len(self._failed_writes)
             new_data = self._apply_read(self._normalize_keys(raw))
+            # A completed read that does not name a pending address is the
+            # lock not holding it -- a poller's read is scoped to name every
+            # pending slot, and a push provider's refresh reads the whole
+            # device -- so it is judged like an absent slot: waited for
+            # until the deadline, then given up.
+            self._fail_overdue(
+                [address for address in self._pending if address not in new_data]
+            )
         except LockCodeManagerError as err:
             self._give_up_overdue(err)
             return
@@ -472,6 +488,20 @@ class LockUsercodeUpdateCoordinator(
             self.async_update_listeners()
 
     @callback
+    def _fail_overdue(
+        self, addresses: Iterable[CredentialAddress]
+    ) -> list[CredentialAddress]:
+        """Fail every given pending write that is past its deadline; return them."""
+        now = time.monotonic()
+        overdue = [
+            address for address in addresses if now >= self._pending[address].deadline
+        ]
+        for address in overdue:
+            del self._pending[address]
+            self._failed_writes.add(address)
+        return overdue
+
+    @callback
     def _give_up_overdue(self, err: BaseException) -> None:
         """
         After a failed read, give up every pending write past its deadline.
@@ -480,15 +510,7 @@ class LockUsercodeUpdateCoordinator(
         tick's later warning about an unconfirmed write has a reason on
         record; a failure that leaves everything still waiting is routine.
         """
-        now = time.monotonic()
-        overdue = [
-            address
-            for address, pending in self._pending.items()
-            if now >= pending.deadline
-        ]
-        for address in overdue:
-            del self._pending[address]
-            self._failed_writes.add(address)
+        overdue = self._fail_overdue(list(self._pending))
         if overdue:
             self.async_update_listeners()
             _LOGGER.info(
