@@ -1794,10 +1794,14 @@ async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
     lock_code_manager_config_entry,
 ):
     """
-    If coordinator refresh fails after a successful sync, retry on next tick.
+    If the refresh after a successful sync fails, the read that follows settles it.
 
     This exercises the try/except around coordinator.async_refresh() in
-    _async_tick_impl. The sync succeeded but we cannot verify it.
+    _async_tick_impl. The sync succeeded but we cannot verify it, so the
+    slot is out of sync and the write stays pending: on a polled lock a
+    confirmed write is trusted only once a read has seen it. The next
+    successful read confirms it, and the tick after that is in sync --
+    without writing the code a second time.
     """
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
 
@@ -1840,11 +1844,20 @@ async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
 
     # State should be OUT_OF_SYNC because we could not verify
     assert mgr._state is SyncState.OUT_OF_SYNC
+    assert pin_address(1) in lock_provider._pending_writes
 
-    # Fire another tick -- refresh succeeds this time, state resolves
-    await mgr._async_tick()
-    await hass.async_block_till_done()
+    # The scheduled read succeeds this time and sees the code present, which
+    # is what confirms the pending write; the tick then finds nothing left to
+    # do. No second set is issued along the way.
+    with patch.object(
+        lock_provider, "async_set_usercode", wraps=lock_provider.async_set_usercode
+    ) as second_set:
+        await coordinator.async_refresh()
+        await mgr._async_tick()
+        await hass.async_block_till_done()
+    second_set.assert_not_called()
 
+    assert pin_address(1) not in lock_provider._pending_writes
     assert mgr._state is SyncState.IN_SYNC
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 

@@ -205,12 +205,11 @@ BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
 # Poll failure alerting
 POLL_FAILURE_ALERT_THRESHOLD: int = 12
 
-# How long a write stands in for a read of the same credential. Two callers
-# ask that one question: the seam, waiting for an optimistic write to be
-# confirmed, and the sync layer, deciding whether a lock reporting the slot
-# empty is lagging or telling the truth. One answer, so the two cannot drift
-# into disagreeing about the same write.
-PENDING_WRITE_TTL = 60.0
+# How long a write waits to be seen on the lock before the sync tick
+# stops waiting, charges the breaker and re-syncs. On a polled lock the
+# seam adds one scan interval, since the read that would confirm it may
+# be that far away.
+PENDING_WRITE_TTL: float = 60.0
 
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=2)

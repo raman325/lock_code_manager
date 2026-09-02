@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import replace
+import time
 from typing import Literal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -13,7 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import DOMAIN, PENDING_WRITE_TTL
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
@@ -1113,6 +1114,71 @@ async def test_optimistic_set_actively_confirms_instead_of_waiting(
 
     assert pin_address(4) in lock._pending_writes
     lock.coordinator.async_confirm_pending_writes.assert_awaited_once()
+
+
+async def test_confirmed_set_on_a_poller_is_pending_until_a_read_sees_it(
+    hass: HomeAssistant,
+) -> None:
+    """A polled lock's CONFIRMED write is recorded pending, for one scan interval.
+
+    "Confirmed" on a poller is the API accepting the write, not the lock
+    reporting it -- the Schlage cloud says yes and its read catches up later.
+    Recording it pending is what keeps an absent read in that gap unverified
+    instead of becoming the truth our own write then argues with (#1538),
+    and the deadline spans the read that would settle it.
+    """
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    assert lock.supports_push is False
+    before = time.monotonic()
+    with (
+        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
+        patch.object(
+            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
+        ),
+    ):
+        await lock.async_internal_set_usercode(4, "1234", "carol")
+
+    pin, deadline = lock._pending_writes[pin_address(4)]
+    assert pin == "1234"
+    # The TTL plus one scan interval, not either alone: on this stub the two
+    # are both 60 s, so anything less than their sum would pass with the
+    # interval left out entirely.
+    assert (
+        deadline - before
+        >= PENDING_WRITE_TTL + lock.usercode_scan_interval.total_seconds()
+    )
+    # No believed value is pushed: the read the seam requests is what will
+    # say whether the write landed.
+    assert _pushed == []
+    lock.coordinator.async_request_refresh.assert_awaited_once()
+
+
+async def test_confirmed_set_on_a_push_provider_records_nothing_pending(
+    hass: HomeAssistant,
+) -> None:
+    """A push provider's CONFIRMED write is confirmed by its own push, not a read.
+
+    Every push provider either pushes the value itself before returning
+    CONFIRMED or has the driver's event do it, so a pending entry here would
+    have nothing to pop it and would time out into a breaker charge for a
+    write that landed.
+    """
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    with (
+        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
+        patch.object(
+            type(lock), "supports_push", new_callable=PropertyMock(return_value=True)
+        ),
+        patch.object(
+            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
+        ),
+    ):
+        await lock.async_internal_set_usercode(4, "1234", "carol")
+
+    assert pin_address(4) not in lock._pending_writes
+    lock.coordinator.mark_verified.assert_called_once_with(pin_address(4))
 
 
 async def test_confirm_slot_keeps_believed_value_on_present_observation(

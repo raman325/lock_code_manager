@@ -51,7 +51,6 @@ from ..const import (
     ATTR_CODE,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
-    PENDING_WRITE_TTL,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
@@ -230,16 +229,6 @@ class SlotSyncManager:
         # config changed while HA was down, at the cost of one extra set per
         # masked/write-only slot on every restart.
         self._last_set_pin: str | None = None
-
-        # When the write behind ``_last_set_pin`` stops standing in for a read
-        # that disagrees with it. Only the empty-credential branch of
-        # ``calculate_in_sync`` consults this: overriding a lock that reports
-        # the slot EMPTY is a claim the lock is lagging, and a lag that has
-        # outlived the pending-write TTL is not a lag. The unreadable branch
-        # deliberately does not expire, because a write-only lock never stops
-        # withholding its contents and there is nothing for the write to lose
-        # a race against.
-        self._last_set_expires_at: float = 0.0
 
         # Slot-level circuit breaker: trips when a code repeatedly fails to
         # converge within the window, suspending just this lock and slot.
@@ -480,20 +469,17 @@ class SlotSyncManager:
         if snapshot.active_state == STATE_ON:
             if credential is not None:
                 if credential.is_empty:
-                    # The lock says the slot holds nothing. Overriding that is
-                    # only defensible while a write we just made could still be
-                    # ahead of the read (eventual consistency, e.g. the Schlage
-                    # cloud API); past the TTL the lock is not lagging, it is
-                    # answering, and the credential really is gone (issue
-                    # #1538). Reporting THAT as in sync leaves a user who
-                    # cannot open the door looking like one who can, and stops
-                    # the tick that would put the code back.
-                    return (
-                        self._last_set_pin is not None
-                        and time.monotonic() < self._last_set_expires_at
-                        and snapshot.credential_state == self._last_set_pin
-                    )
+                    # The lock's answer, not a lagging read: a read that could
+                    # still be trailing one of our writes leaves the address
+                    # unverified, and the guard above already refused it. So
+                    # there is no write of ours to weigh against this, and an
+                    # active slot the lock says is empty is out of sync --
+                    # whatever we last wrote there (issue #1538).
+                    return False
                 if not credential.is_readable:
+                    # No read will ever say what a write-only lock holds, so
+                    # the last PIN we wrote is the only thing to compare the
+                    # configured one against -- and it does not go stale.
                     return snapshot.credential_state == self._last_set_pin
                 return credential.matches(snapshot.credential_state)
             # No coordinator data — fall back to the code sensor entity state.
@@ -535,15 +521,10 @@ class SlotSyncManager:
                 source="sync",
             )
             self._last_set_pin = snapshot.credential_state
-            self._last_set_expires_at = time.monotonic() + PENDING_WRITE_TTL
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
             return True
         await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
         self._last_set_pin = None
-        # Released with the value it qualifies. Inert while the ``is not None``
-        # check above it comes first, but a window outliving the write it was
-        # armed for is the kind of divergence that stops being inert quietly.
-        self._last_set_expires_at = 0.0
         _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
         return False
 
@@ -797,7 +778,7 @@ class SlotSyncManager:
             self._write_state()
             return
 
-        # -- PENDING_CONFIRMATION: an optimistic write is awaiting confirmation.
+        # -- PENDING_CONFIRMATION: a write is awaiting confirmation.
         # Don't re-write while waiting; a push event / hard refresh resolves it
         # (clearing the pending entry). On timeout, count a breaker failure and
         # fall through to re-sync -- so a write the lock never committed ends in
@@ -828,7 +809,7 @@ class SlotSyncManager:
                 # Genuine timeout: the write we still want never confirmed.
                 self._slot_breaker.record_failure()
                 _LOGGER.warning(
-                    "%s: optimistic write not confirmed within the timeout; "
+                    "%s: write not confirmed within the timeout; "
                     "re-syncing (attempt %s)",
                     self._log_prefix,
                     self._slot_breaker.failure_count,
@@ -993,11 +974,13 @@ class SlotSyncManager:
                     self._state = SyncState.OUT_OF_SYNC
                     return
 
-        # An optimistic (ambiguous) set records a pending write: don't judge it
-        # now -- wait for the lock to confirm it (a push event or hard refresh)
-        # in PENDING_CONFIRMATION. The breaker is only charged when that wait
-        # times out (handled at the top of the tick), so a masked-but-accepted
-        # write is not penalised before its confirming event arrives.
+        # A set the lock has not yet been seen to hold is pending: don't judge
+        # it now -- wait for the lock to confirm it (a push event, a poll, or a
+        # hard refresh) in PENDING_CONFIRMATION. The breaker is only charged
+        # when that wait times out (handled at the top of the tick), so a
+        # lagging or masked-but-accepted write is not penalised before the
+        # read that would confirm it arrives -- and a write the lock never
+        # kept is not declared in sync and then rewritten on a loop.
         if self._address in self._lock._pending_writes:
             self._state = SyncState.PENDING_CONFIRMATION
             self._write_state()

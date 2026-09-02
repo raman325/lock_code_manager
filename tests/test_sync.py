@@ -21,7 +21,6 @@ from custom_components.lock_code_manager.const import (
     BACKOFF_FAILURE_THRESHOLD,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
-    PENDING_WRITE_TTL,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -50,7 +49,6 @@ from .common import (
     SLOT_2_IN_SYNC_ENTITY,
 )
 from .conftest import (
-    async_initial_tick,
     async_trigger_sync_tick,
     get_in_sync_entity_obj,
 )
@@ -81,17 +79,10 @@ def _manager(
     verified: bool = True,
     slot_num: int = 1,
     cleared_slot: bool = False,
-    write_is_fresh: bool = True,
 ) -> SlotSyncManager:
     """Build a mock SlotSyncManager with _last_set_pin and a verified coordinator."""
     mgr = MagicMock(spec=SlotSyncManager)
     mgr._last_set_pin = last_set_pin
-    # 0.0 is already in the past for any monotonic clock, so "the write is
-    # too old to still explain a lock that reports the slot empty" needs no
-    # time travel to express.
-    mgr._last_set_expires_at = (
-        time.monotonic() + PENDING_WRITE_TTL if write_is_fresh else 0.0
-    )
     mgr._lock = MagicMock()
     mgr._lock.last_write_was_clear.return_value = cleared_slot
     mgr._slot_num = slot_num
@@ -168,7 +159,7 @@ class TestCalculateInSync:
                     "pin": "1234",
                     "coordinator_credential": SlotCredential.empty(),
                 },
-                True,
+                False,
                 id="active-empty-code-matching-last-set",
             ),
             pytest.param(
@@ -250,57 +241,6 @@ class TestCalculateInSync:
             _manager(last_set_pin=last_set_pin).calculate_in_sync(_slot(**slot_kwargs))
             is expected
         )
-
-    async def test_a_set_arms_the_window_it_will_be_trusted_in(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-    ) -> None:
-        """Writing a PIN starts the clock that lets it stand in for a read.
-
-        Asserted through the decision rather than the attribute: a set that
-        forgot to arm the window would leave an eventually-consistent lock
-        (the Schlage cloud API) reading out of sync for the whole of its
-        read lag, rewriting the code on every tick.
-        """
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
-        await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-
-        snapshot = manager._resolve_credential_snapshot()
-        assert snapshot is not None
-        await manager._perform_sync(snapshot)
-
-        # The lock has not caught up yet and reports the slot empty.
-        assert (
-            manager.calculate_in_sync(
-                _slot(
-                    active=STATE_ON,
-                    pin=snapshot.credential_state,
-                    coordinator_credential=SlotCredential.empty(),
-                )
-            )
-            is True
-        )
-
-    def test_stale_write_does_not_override_a_lock_reporting_the_slot_empty(
-        self,
-    ) -> None:
-        """A credential deleted out of band is not in sync (issue #1538).
-
-        Every table case above writes and reads inside one TTL, where
-        trusting the write is right. This is the case a lock actually
-        reaches: LCM set the PIN, somebody removed it on the lock, and the
-        poll that says so arrives long after. Reporting that in sync leaves
-        a user who cannot open the door indistinguishable from one who can,
-        and stops the tick that would put the code back.
-        """
-        manager = _manager(last_set_pin="1234", write_is_fresh=False)
-        state = _slot(
-            active=STATE_ON, pin="1234", coordinator_credential=SlotCredential.empty()
-        )
-        assert manager.calculate_in_sync(state) is False
 
     def test_inactive_unknown_code_is_in_sync_once_cleared(self) -> None:
         """A lock that withholds its contents cannot confirm or deny a clear.
@@ -1989,21 +1929,29 @@ class TestBreakerTickSoleMutatorInvariant:
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """A set that completes but whose readback still shows out-of-sync increments the breaker."""
+        """A set that completes but whose readback shows a different code increments the breaker."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
+        coordinator = manager._coordinator
 
-        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
         starting_count = manager._slot_breaker.failure_count
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID
         ]
 
-        # async_set_usercode succeeds (was_set=True) but we no-op the
-        # refresh so coordinator.data[pin_address(1)] still reports the stale value and
-        # calculate_in_sync returns False -- the post-verification miss
-        # branch must then record a failure.
+        # async_set_usercode succeeds (was_set=True) and the readback shows
+        # the slot holding a DIFFERENT code. Fed through the coordinator, not
+        # written into its data: on a polled lock the write is pending until a
+        # read sees the slot, and a readable different code is that read taking
+        # the lock's word over ours. calculate_in_sync then returns False and
+        # the post-verification miss branch must record a failure.
+        def _readback(*_args, **_kwargs):
+            coordinator.async_set_updated_data(
+                coordinator._apply_read({pin_address(1): SlotCredential.known("9999")})
+            )
+
         with (
             patch.object(
                 lock_provider,
@@ -2011,13 +1959,78 @@ class TestBreakerTickSoleMutatorInvariant:
                 AsyncMock(return_value=WriteResult.CONFIRMED),
             ),
             patch.object(
-                manager._coordinator, "async_refresh", AsyncMock(return_value=None)
+                coordinator, "async_refresh", AsyncMock(side_effect=_readback)
             ),
         ):
             await manager._async_tick_impl()
 
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._slot_breaker.failure_count == starting_count + 1
+
+    async def test_tick_holds_a_confirmed_set_no_read_has_seen_then_charges(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A polled lock's confirmed set with an empty readback waits, then charges.
+
+        "Confirmed" on a poller is the API accepting the write; the lock's own
+        word is the read that follows. An empty readback is not that word yet
+        -- the write is still pending -- so the tick parks the slot in
+        PENDING_CONFIRMATION with the breaker untouched, instead of declaring
+        it in sync on the strength of its own write and resetting the breaker.
+        That reset is what let a write the lock never kept rewrite forever with
+        no repair, and a deleted credential read as synchronized (issue #1538).
+        Past the deadline the breaker is charged and the slot re-syncs, so the
+        wait is bounded rather than silent.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        coordinator = manager._coordinator
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        assert lock_provider.supports_push is False
+
+        coordinator.data[pin_address(1)] = SlotCredential.empty()
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._slot_breaker.record_failure()
+        seeded = manager._slot_breaker.failure_count
+
+        def _empty_readback(*_args, **_kwargs):
+            coordinator.async_set_updated_data(
+                coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+            )
+
+        set_confirmed = patch.object(
+            lock_provider,
+            "async_set_usercode",
+            AsyncMock(return_value=WriteResult.CONFIRMED),
+        )
+        empty_readback = patch.object(
+            coordinator, "async_refresh", AsyncMock(side_effect=_empty_readback)
+        )
+
+        with set_confirmed, empty_readback:
+            await manager._async_tick_impl()
+
+        assert manager._state is SyncState.PENDING_CONFIRMATION
+        # Neither reset on a trusted answer nor charged for lag.
+        assert manager._slot_breaker.failure_count == seeded
+        assert not coordinator.is_verified(pin_address(1))
+        pin, deadline = lock_provider._pending_writes[pin_address(1)]
+        assert pin == "1234"
+        assert deadline > time.monotonic()
+
+        # The deadline passes with no read having seen the write.
+        lock_provider._pending_writes[pin_address(1)] = (pin, time.monotonic() - 1.0)
+        with set_confirmed, empty_readback:
+            await manager._async_tick_impl()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._slot_breaker.failure_count == seeded + 1
+        assert pin_address(1) not in lock_provider._pending_writes
 
     async def test_tick_does_not_record_failure_on_clear_verification_miss(
         self,

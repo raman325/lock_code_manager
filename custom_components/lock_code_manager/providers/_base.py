@@ -273,6 +273,11 @@ class BaseLock:
     # A confirmation -- a push event or a hard-refresh read observing the slot
     # present -- clears the entry and re-pushes the believed value as verified;
     # if none arrives before the deadline, the sync layer re-syncs. See the
+    # Writes the lock has not yet been seen to hold: every optimistic write,
+    # and on a polled lock every confirmed one too, since there the only
+    # thing that can vouch for a write is a later read. While an address is
+    # here, an absent read stays unverified rather than becoming the truth,
+    # and the sync tick waits for the deadline instead of rewriting. See the
     # Phase 2 push-as-commit spec.
     # Keyed by CredentialAddress, NOT by device slot. One slot can hold a
     # credential of each type, so a slot-keyed map would let two addresses
@@ -519,6 +524,31 @@ class BaseLock:
             self.coordinator.push_update({code_slot: credential})
 
     @callback
+    def _record_pending_write(self, code_slot: int, pin: str) -> None:
+        """
+        Record a write the lock has not yet been seen to hold.
+
+        Until a read or push shows the slot present, an absent read is not
+        the lock's answer about this write, and the sync tick holds the slot
+        in PENDING_CONFIRMATION rather than rewriting. Past the deadline the
+        tick charges the breaker and re-syncs, so a write the lock never
+        kept ends in a visible suspend rather than a silent in-sync or an
+        unbounded rewrite loop.
+
+        The deadline is the TTL plus, on a polled lock, one scan interval:
+        a poller's next read may be a whole interval away, and a deadline
+        shorter than that would charge the breaker for lag the lock was
+        never given a chance to close.
+        """
+        window = PENDING_WRITE_TTL
+        if not self.supports_push:
+            window += self.usercode_scan_interval.total_seconds()
+        self._pending_writes[pin_address(code_slot)] = (
+            pin,
+            time.monotonic() + window,
+        )
+
+    @callback
     def _record_optimistic_write(self, code_slot: int, pin: str) -> None:
         """
         Record an outstanding optimistic write and push its believed value.
@@ -528,10 +558,7 @@ class BaseLock:
         a confirmation (push event or hard-refresh presence) via
         ``_confirm_slot``, or re-syncs once the deadline passes.
         """
-        self._pending_writes[pin_address(code_slot)] = (
-            pin,
-            time.monotonic() + PENDING_WRITE_TTL,
-        )
+        self._record_pending_write(code_slot, pin)
         self._push_credential_update(
             code_slot, SlotCredential.known(pin), optimistic=True
         )
@@ -541,8 +568,8 @@ class BaseLock:
         """
         Resolve an observation (push event or hard-refresh read) for a slot.
 
-        When an optimistic write for the slot is outstanding and the observed
-        state shows a code present, the observation confirms our write: keep
+        When a write for the slot is still pending and the observed state
+        shows a code present, the observation confirms our write: keep
         the believed value (even if the observation itself is masked/unreadable)
         and mark it verified. The one exception is a *readable* observation of a
         different code -- that is an external change racing our write, so we take
@@ -1419,13 +1446,23 @@ class BaseLock:
             self._record_optimistic_write(code_slot, str(usercode))
             if self.coordinator is not None:
                 await self.coordinator.async_confirm_pending_writes()
-        elif result is WriteResult.CONFIRMED:
-            # The lock acknowledged the write: supersede any pending optimistic
-            # state and drop the slot from the unverified set left by a prior
-            # optimistic write, so it can converge instead of churning to a suspend.
+        elif result is WriteResult.CONFIRMED and self.supports_push:
+            # The provider's own push (or the driver's event) is what confirms
+            # a write here, and it has already happened or is on its way.
+            # Supersede any pending optimistic state and drop the slot from
+            # the unverified set left by a prior optimistic write, so it can
+            # converge instead of churning to a suspend.
             self._pending_writes.pop(pin_address(code_slot), None)
             if self.coordinator is not None:
                 self.coordinator.mark_verified(pin_address(code_slot))
+        elif result is WriteResult.CONFIRMED:
+            # A polled lock has nothing to vouch for the write but a later
+            # read. "Confirmed" here is the API accepting it -- the Schlage
+            # cloud, say -- not the lock reporting it. Record it pending so
+            # the refresh below confirms it on presence, and an absent read
+            # stays unverified instead of becoming the truth that our own
+            # write then has to argue with (issue #1538).
+            self._record_pending_write(code_slot, str(usercode))
         # Skip coordinator refresh for push providers — they update optimistically
         # via push_update(), and refreshing from cache could overwrite with stale
         # data when the driver defers cache updates until device confirmation.
