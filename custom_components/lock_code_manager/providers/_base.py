@@ -49,7 +49,6 @@ from ..domain.config import build_slot_unique_id
 from ..domain.coordinator import LockUsercodeUpdateCoordinator
 from ..domain.credentials import (
     Credential,
-    CredentialAddress,
     CredentialRef,
     CredentialType,
     LockCapabilities,
@@ -116,11 +115,6 @@ MIN_OPERATION_DELAY = 2.0
 # this constant exists to avoid.
 OPERATION_TIMEOUT = 600.0
 
-
-# How long an optimistic write waits for confirmation (push event or hard-refresh
-# presence) before the sync layer gives up waiting and re-syncs. See the Phase 2
-# push-as-commit spec.
-PENDING_WRITE_TTL = 60.0
 _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
     "get": "get from",
     "set": "set on",
@@ -277,15 +271,6 @@ class BaseLock:
     # A confirmation -- a push event or a hard-refresh read observing the slot
     # present -- clears the entry and re-pushes the believed value as verified;
     # if none arrives before the deadline, the sync layer re-syncs. See the
-    # Phase 2 push-as-commit spec.
-    # Keyed by CredentialAddress, NOT by device slot. One slot can hold a
-    # credential of each type, so a slot-keyed map would let two addresses
-    # sharing a slot collide: the first read processed would consume the
-    # other's pending entry, apply its believed value to the wrong
-    # credential, and leave the second silently marked verified.
-    _pending_writes: dict[CredentialAddress, tuple[str, float]] = field(
-        default_factory=dict, init=False
-    )
     # Reconnect task spawned by the config-entry state listener when the lock
     # integration transitions to LOADED. Tracked so async_unload can cancel it
     # before teardown -- otherwise a late reconnect can call
@@ -504,66 +489,25 @@ class BaseLock:
     @final
     @callback
     def _push_credential_update(
-        self, code_slot: int, credential: SlotCredential, *, optimistic: bool = False
+        self, code_slot: int, credential: SlotCredential
     ) -> None:
-        """
-        Push a coordinator credential update; no-op when no coordinator is attached.
-
-        ``optimistic=True`` marks the slot unverified (an ambiguous write we are
-        treating as completed but have not confirmed). The default keeps the
-        slot verified.
-        """
+        """Push a coordinator credential update; no-op when no coordinator is attached."""
         if self.coordinator is None:
             return
-        # Only pass the kwarg when optimistic, so the common verified push keeps
-        # its plain call shape (and existing call-shape assertions hold).
-        if optimistic:
-            self.coordinator.push_update({code_slot: credential}, optimistic=True)
-        else:
-            self.coordinator.push_update({code_slot: credential})
-
-    @callback
-    def _record_optimistic_write(self, code_slot: int, pin: str) -> None:
-        """
-        Record an outstanding optimistic write and push its believed value.
-
-        Called by the seam when ``async_set_credential`` returns OPTIMISTIC.
-        The slot is pushed as ``known(pin)`` but marked unverified; it awaits
-        a confirmation (push event or hard-refresh presence) via
-        ``_confirm_slot``, or re-syncs once the deadline passes.
-        """
-        self._pending_writes[pin_address(code_slot)] = (
-            pin,
-            time.monotonic() + PENDING_WRITE_TTL,
-        )
-        self._push_credential_update(
-            code_slot, SlotCredential.known(pin), optimistic=True
-        )
+        self.coordinator.push_update({code_slot: credential})
 
     @callback
     def _confirm_slot(self, code_slot: int, observed: SlotCredential) -> None:
         """
-        Resolve an observation (push event or hard-refresh read) for a slot.
+        Resolve a push event for a slot against any write pending on it.
 
-        When an optimistic write for the slot is outstanding and the observed
-        state shows a code present, the observation confirms our write: keep
-        the believed value (even if the observation itself is masked/unreadable)
-        and mark it verified. The one exception is a *readable* observation of a
-        different code -- that is an external change racing our write, so we take
-        the observation rather than masking it with our believed value.
-        Otherwise -- no pending write, or the slot is now empty -- take the
-        observation as the verified state. Either way the pending entry is
-        cleared.
+        The coordinator owns pending writes and their resolution; this is the
+        provider-facing name for handing it an observation. No-op without a
+        coordinator, when there is nothing to resolve against or update.
         """
-        pending = self._pending_writes.pop(pin_address(code_slot), None)
-        if pending is not None and observed.is_present:
-            pin, _deadline = pending
-            if observed.is_readable and observed.readable_pin != pin:
-                self._push_credential_update(code_slot, observed)
-            else:
-                self._push_credential_update(code_slot, SlotCredential.known(pin))
+        if self.coordinator is None:
             return
-        self._push_credential_update(code_slot, observed)
+        self.coordinator.observe_push(pin_address(code_slot), observed)
 
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
@@ -1411,30 +1355,27 @@ class BaseLock:
             name=name,
             source=source,
         )
+        if self.coordinator is None or not result.changed:
+            return
+        address = pin_address(code_slot)
         if result is WriteResult.OPTIMISTIC:
-            # Ambiguous write: record it pending and push the believed value as
-            # unverified, then actively read the lock back to confirm it. Some
-            # stacks send no confirming push for an ambiguous write (node-zwave-js
-            # emits no credential event when its post-write verify fails on a
-            # masked lock), so waiting passively would let the breaker suspend a
-            # slot whose code actually landed. The active read confirms a
-            # present-but-masked slot; a genuinely-absent slot stays pending and
-            # the sync tick re-syncs after the TTL.
-            self._record_optimistic_write(code_slot, str(usercode))
-            if self.coordinator is not None:
-                await self.coordinator.async_confirm_pending_writes()
-        elif result is WriteResult.CONFIRMED:
-            # The lock acknowledged the write: supersede any pending optimistic
-            # state and drop the slot from the unverified set left by a prior
-            # optimistic write, so it can converge instead of churning to a suspend.
-            self._pending_writes.pop(pin_address(code_slot), None)
-            if self.coordinator is not None:
-                self.coordinator.mark_verified(pin_address(code_slot))
-        # Skip coordinator refresh for push providers — they update optimistically
-        # via push_update(), and refreshing from cache could overwrite with stale
-        # data when the driver defers cache updates until device confirmation.
-        if result.changed and self.coordinator and not self.supports_push:
-            await self.coordinator.async_request_refresh()
+            # Ambiguous: the driver most likely stored it but could not say.
+            # Record it pending with the value believed, and let the
+            # coordinator read the lock back -- some stacks send no confirming
+            # push for an ambiguous write, so waiting passively would let the
+            # breaker suspend a slot whose code actually landed.
+            self.coordinator.record_write(address, str(usercode), believed=True)
+        elif self.supports_push:
+            # The provider's own push (or the driver's event) is the lock's
+            # word for the write. Any older pending write to the slot is
+            # superseded by it.
+            self.coordinator.drop_pending(address)
+        else:
+            # A polled lock has nothing to vouch for the write but a later
+            # read: "confirmed" here is the cloud service accepting it, not
+            # the lock reporting it. Record it pending; the coordinator reads
+            # the lock back and settles it -- for any slot, managed or not.
+            self.coordinator.record_write(address, str(usercode), believed=False)
 
     async def async_clear_usercode(
         self, code_slot: int, *, adopt_untagged: bool = True
@@ -1541,10 +1482,9 @@ class BaseLock:
             code_slot,
             source,
         )
-        # A clear supersedes any outstanding optimistic set on this slot, so the
-        # stale pending entry must not keep gating reconciliation (the sync tick
-        # keys PENDING_CONFIRMATION on this dict).
-        self._pending_writes.pop(pin_address(code_slot), None)
+        # A clear supersedes any write pending on this slot.
+        if self.coordinator is not None:
+            self.coordinator.drop_pending(pin_address(code_slot))
         changed = await self._execute_rate_limited(
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
@@ -2119,9 +2059,20 @@ class BaseLock:
         )
 
     @final
-    async def async_internal_get_usercodes(self) -> dict[int, SlotCredential]:
-        """Rate-limited wrapper around async_get_usercodes()."""
-        return await self._execute_rate_limited("get", self.async_get_usercodes)
+    async def async_internal_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """
+        Rate-limited wrapper around async_get_usercodes().
+
+        ``slots`` widens or narrows the read's scope; left unset, the provider
+        reads its managed slots. The coordinator's confirmation read names the
+        pending addresses too, so a write to a slot nothing manages is still
+        asked about.
+        """
+        if slots is None:
+            return await self._execute_rate_limited("get", self.async_get_usercodes)
+        return await self._execute_rate_limited("get", self.async_get_usercodes, slots)
 
     @final
     async def async_internal_get_occupied_indices(

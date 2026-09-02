@@ -785,32 +785,37 @@ async def test_async_call_service_wraps_os_error_as_lock_disconnected(
     hass.services.async_remove("test_domain", "timeout_service")
 
 
-async def test_set_usercode_refreshes_coordinator_on_change(
+async def test_set_usercode_records_a_pending_write_on_change(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_internal_set_usercode refreshes coordinator when value changes."""
+    """A changed set on a polled lock is pending until the coordinator's read sees it.
+
+    The seam does not ask for a refresh; the coordinator owns the follow-up
+    read. Setting the same value again changes nothing and records nothing.
+    """
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
-    # Track coordinator refreshes
-    refresh_count = [0]
-    original_refresh = coordinator.async_request_refresh
-
-    async def track_refresh():
-        refresh_count[0] += 1
-        return await original_refresh()
-
-    with patch.object(coordinator, "async_request_refresh", track_refresh):
-        # Setting a new usercode should trigger a coordinator refresh
+    with (
+        patch.object(coordinator, "async_request_refresh", AsyncMock()) as refresh,
+        patch.object(
+            coordinator, "record_write", wraps=coordinator.record_write
+        ) as record,
+    ):
         await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        assert refresh_count[0] == 1
+        record.assert_called_once_with(pin_address(3), "3333", believed=False)
+        assert coordinator.has_pending_write(pin_address(3))
+        refresh.assert_not_awaited()
 
-        # Setting the same usercode should NOT trigger refresh (no change)
+        # The coordinator's own read confirms it; the same value again is no change.
+        await hass.async_block_till_done()
+        assert coordinator.is_verified(pin_address(3))
         await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        assert refresh_count[0] == 1  # Still 1, no new refresh
+        record.assert_called_once()
+        assert coordinator.is_verified(pin_address(3))
 
 
 async def test_clear_usercode_refreshes_coordinator_on_change(

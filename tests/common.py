@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import patch
 
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
@@ -306,19 +306,29 @@ class MockLCMLock(BaseLock):
         self.service_calls["get_usercodes"].append(snapshot)
         codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
         codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
-        if slots is None:
-            return codes
         # Mirrors the base projection, including the part that matters: a slot
-        # in the scope that holds nothing is empty, and a slot the lock holds
-        # OUTSIDE the scope is still reported. Answering with exactly the
-        # scope would model the one shape where a caller's own bounds check
-        # is a no-op.
-        return {**dict.fromkeys(slots, SlotCredential.empty()), **codes}
+        # in the scope -- the managed slots, when the caller names none -- that
+        # holds nothing is empty, and a slot the lock holds OUTSIDE the scope
+        # is still reported. Answering with exactly the scope would model the
+        # one shape where a caller's own bounds check is a no-op; omitting an
+        # empty managed slot would hide the read the pending-write machinery
+        # waits on.
+        scope = self.managed_slots if slots is None else slots
+        return {**dict.fromkeys(scope, SlotCredential.empty()), **codes}
 
 
 @dataclass(repr=False, eq=False)
 class MockLCMPushLock(MockLCMLock):
     """Mock lock that supports push-based updates."""
+
+    async def async_set_usercode(
+        self, code_slot: int, usercode: str, *args: Any, **kwargs: Any
+    ) -> WriteResult:
+        """Set a code and push it, as every push provider does before CONFIRMED."""
+        result = await super().async_set_usercode(code_slot, usercode, *args, **kwargs)
+        if result is WriteResult.CONFIRMED:
+            self._push_credential_update(code_slot, SlotCredential.known(usercode))
+        return result
 
     def __init__(self, *args, **kwargs):
         """Initialize mock push lock."""

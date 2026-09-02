@@ -10,6 +10,7 @@ from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
 from homeassistant.core import HomeAssistant
 
+from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
@@ -30,8 +31,8 @@ def test_users_enabled_without_pin_key_pushes_unreadable() -> None:
     lock = _minimal_lock()
     lock.coordinator = MagicMock()
     lock._process_z2m_device_payload({"users": {"5": {"status": "enabled"}}})
-    lock.coordinator.push_update.assert_called_once_with(
-        {5: SlotCredential.unreadable()}
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(5), SlotCredential.unreadable()
     )
 
 
@@ -40,8 +41,8 @@ def test_users_not_supported_status_pushes_unreadable() -> None:
     lock = _minimal_lock()
     lock.coordinator = MagicMock()
     lock._process_z2m_device_payload({"users": {"3": {"status": "not_supported_5"}}})
-    lock.coordinator.push_update.assert_called_once_with(
-        {3: SlotCredential.unreadable()}
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(3), SlotCredential.unreadable()
     )
 
 
@@ -57,17 +58,19 @@ def test_users_republication_of_unchanged_state_not_repushed() -> None:
     payload = {"users": {"2": {"status": "enabled", "pin_code": "1234"}}}
 
     lock._process_z2m_device_payload(payload)
-    lock.coordinator.push_update.assert_called_once_with(
-        {2: SlotCredential.known("1234")}
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.known("1234")
     )
 
-    lock.coordinator.push_update.reset_mock()
+    lock.coordinator.observe_push.reset_mock()
     lock._process_z2m_device_payload(payload)
-    lock.coordinator.push_update.assert_not_called()
+    lock.coordinator.observe_push.assert_not_called()
 
     # A genuine change still gets through.
     lock._process_z2m_device_payload({"users": {"2": {"status": "available"}}})
-    lock.coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.empty()
+    )
 
 
 async def test_users_payload_resolves_pending_read() -> None:
@@ -107,7 +110,9 @@ def test_users_enabled_with_numeric_zero_pin_updates() -> None:
     lock._process_z2m_device_payload(
         {"users": {"2": {"status": "enabled", "pin_code": 0}}}
     )
-    lock.coordinator.push_update.assert_called_once_with({2: SlotCredential.known("0")})
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.known("0")
+    )
 
 
 def test_users_enabled_pin_null_clears_slot() -> None:
@@ -117,7 +122,9 @@ def test_users_enabled_pin_null_clears_slot() -> None:
     lock._process_z2m_device_payload(
         {"users": {"5": {"status": "enabled", "pin_code": None}}}
     )
-    lock.coordinator.push_update.assert_called_once_with({5: SlotCredential.empty()})
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(5), SlotCredential.empty()
+    )
 
 
 @pytest.mark.parametrize(
@@ -145,7 +152,7 @@ def test_users_masked_code_is_unreadable_not_known(
     lock._process_z2m_device_payload(
         {"users": {"6": {"status": "enabled", "pin_code": pin_code}}}
     )
-    lock.coordinator.push_update.assert_called_once_with({6: expected})
+    lock.coordinator.observe_push.assert_called_once_with(pin_address(6), expected)
 
 
 def test_users_non_numeric_slot_key_skipped() -> None:
@@ -155,7 +162,7 @@ def test_users_non_numeric_slot_key_skipped() -> None:
     lock._process_z2m_device_payload(
         {"users": {"bad": {"status": "enabled", "pin_code": "1"}}}
     )
-    lock.coordinator.push_update.assert_not_called()
+    lock.coordinator.observe_push.assert_not_called()
 
 
 async def test_pin_code_get_disabled_or_empty_pin_sets_future_empty() -> None:
@@ -230,7 +237,7 @@ async def test_mqtt_payload_invalid_json_ignored(
     async_fire_mqtt_message(hass, Z2M_FULL_TOPIC, "not json {{{")
     await hass.async_block_till_done()
 
-    lock.coordinator.push_update.assert_not_called()
+    lock.coordinator.observe_push.assert_not_called()
 
 
 def test_keypad_unlock_action_fires_code_slot_event() -> None:
@@ -376,8 +383,8 @@ def test_users_payload_before_coordinator_does_not_poison_delta_gate() -> None:
 
     lock.coordinator = MagicMock()
     lock._process_z2m_device_payload(payload)
-    lock.coordinator.push_update.assert_called_once_with(
-        {2: SlotCredential.known("1234")}
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.known("1234")
     )
 
 
@@ -397,8 +404,8 @@ def test_users_non_dict_user_info_skipped() -> None:
             }
         }
     )
-    lock.coordinator.push_update.assert_called_once_with(
-        {3: SlotCredential.known("1234")}
+    lock.coordinator.observe_push.assert_called_once_with(
+        pin_address(3), SlotCredential.known("1234")
     )
 
 

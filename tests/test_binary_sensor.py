@@ -7,7 +7,10 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
@@ -30,7 +33,6 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
@@ -40,6 +42,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_USERCODE,
     CONF_LOCKS,
     CONF_SLOTS,
+    CONFIRM_READ_INTERVAL,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     SERVICE_SET_USERCODE,
@@ -53,6 +56,7 @@ from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
+    LockDisconnected,
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
@@ -615,54 +619,6 @@ async def test_handles_disconnected_lock_on_clear(
     assert lock_provider.codes.get(1) is None
 
 
-async def test_coordinator_refresh_failure_schedules_retry(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test that coordinator refresh failure after sync sets dirty flag."""
-    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-
-    # Verify initial state - slot should be active and in sync
-    synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
-    assert synced_state.state == STATE_ON
-
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_provider.coordinator
-    assert coordinator is not None
-
-    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-
-    # Ensure manager is in a tickable state
-    in_sync_entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
-
-    # Patch coordinator refresh to fail BEFORE changing PIN
-    # This way the failure happens during the sync triggered by the PIN change
-    with patch.object(
-        coordinator,
-        "async_refresh",
-        new=AsyncMock(side_effect=UpdateFailed("Connection failed")),
-    ):
-        # Change PIN to trigger sync - coordinator refresh will fail
-        await hass.services.async_call(
-            TEXT_DOMAIN,
-            TEXT_SERVICE_SET_VALUE,
-            service_data={ATTR_VALUE: "9999"},
-            target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
-            blocking=True,
-        )
-        await hass.async_block_till_done()
-
-        # Trigger tick to attempt sync - coordinator refresh will fail
-        await in_sync_entity_obj._sync_manager._async_tick()
-        await hass.async_block_till_done()
-
-    # State should be OUT_OF_SYNC due to coordinator refresh failure
-    assert in_sync_entity_obj._sync_manager._state is SyncState.OUT_OF_SYNC, (
-        "State should be OUT_OF_SYNC when coordinator refresh fails after sync"
-    )
-
-
 async def test_coordinator_update_triggers_sync_on_external_change(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1026,13 +982,15 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     # _request_sync_check transitions IN_SYNC -> OUT_OF_SYNC
     assert sync_mgr._state is SyncState.OUT_OF_SYNC
 
-    # Tick fires — expired window causes record_failure to reset the
-    # counter, so the breaker does not fire. Sync succeeds and resets the
-    # breaker.
+    # Tick fires -- the stale count is outside the window, so the breaker does
+    # not fire and the write goes out. On a polled lock it is pending until
+    # the coordinator's own read sees it; the tick after that settles it.
     await sync_mgr._async_tick()
+    assert sync_mgr._state is SyncState.PENDING_CONFIRMATION
     await hass.async_block_till_done()
+    await sync_mgr._async_tick()
 
-    # Sync succeeded — lock should be IN_SYNC, not SUSPENDED
+    # Sync succeeded -- lock should be IN_SYNC, not SUSPENDED
     assert sync_mgr._state is SyncState.IN_SYNC
     # Breaker reset after successful sync
     assert sync_mgr._slot_breaker.failure_count == 0
@@ -1626,8 +1584,12 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
         await tick_task
         await hass.async_block_till_done()
 
-    # After sync completes, the manager should be in a valid state
-    assert mgr._state in (SyncState.IN_SYNC, SyncState.OUT_OF_SYNC)
+    # The set went out, so on a polled lock it is pending until the
+    # coordinator's own read sees it; block_till_done ran that read, and the
+    # next tick finds the slot settled. The mid-sync push corrupted nothing.
+    assert mgr._state is SyncState.PENDING_CONFIRMATION
+    await mgr._async_tick()
+    assert mgr._state is SyncState.IN_SYNC
 
 
 async def test_sync_manager_stop_during_active_sync_does_not_raise(
@@ -1786,67 +1748,6 @@ async def test_pin_change_during_sync_uses_snapshot(
     set_calls = lock_provider.service_calls.get("set_usercode", [])
     assert len(set_calls) == 1
     assert set_calls[0][1] == "4321"
-
-
-async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """
-    If coordinator refresh fails after a successful sync, retry on next tick.
-
-    This exercises the try/except around coordinator.async_refresh() in
-    _async_tick_impl. The sync succeeded but we cannot verify it.
-    """
-    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_provider.coordinator
-    assert coordinator is not None
-    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    mgr = in_sync_entity_obj._sync_manager
-
-    # Change PIN to create a mismatch
-    await hass.services.async_call(
-        TEXT_DOMAIN,
-        TEXT_SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: "9999"},
-        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    # Force out of sync
-    mgr._state = SyncState.OUT_OF_SYNC
-
-    # Patch coordinator.async_refresh to raise on first call
-    refresh_call_count = {"count": 0}
-    original_refresh = coordinator.async_refresh
-
-    async def failing_refresh(*args, **kwargs):
-        refresh_call_count["count"] += 1
-        if refresh_call_count["count"] == 1:
-            raise UpdateFailed("Connection lost")
-        return await original_refresh(*args, **kwargs)
-
-    with patch.object(coordinator, "async_refresh", failing_refresh):
-        # Fire tick -- sync succeeds but refresh fails
-        await mgr._async_tick()
-        await hass.async_block_till_done()
-
-    # The code was set on the lock even though refresh failed
-    assert lock_provider.codes[1] == "9999"
-
-    # State should be OUT_OF_SYNC because we could not verify
-    assert mgr._state is SyncState.OUT_OF_SYNC
-
-    # Fire another tick -- refresh succeeds this time, state resolves
-    await mgr._async_tick()
-    await hass.async_block_till_done()
-
-    assert mgr._state is SyncState.IN_SYNC
-    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
 # Full LCM setup briefly holds the coordinator's debounced refresh lock while
@@ -2438,3 +2339,98 @@ async def test_a_code_written_by_service_invalidates_the_clear(
     await hass.async_block_till_done()
 
     assert lock_provider.last_write_was_clear(1) is False
+
+
+async def test_confirmation_read_failure_leaves_the_write_pending_and_uncharged(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    A read that fails after a confirmed write leaves the write pending, not settled.
+
+    On a polled lock a confirmed write is trusted only once a read has seen
+    it. The coordinator's read straight after the write fails here, so
+    nothing has vouched for it: the slot waits, pending, the breaker is not
+    charged for a connection problem, and the coordinator will ask again.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    mgr = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "9999"},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    mgr._state = SyncState.OUT_OF_SYNC
+    failures_before = mgr._slot_breaker.failure_count
+
+    with patch.object(
+        lock_provider,
+        "async_get_usercodes",
+        AsyncMock(side_effect=LockDisconnected("Connection lost")),
+    ):
+        await mgr._async_tick()
+        await hass.async_block_till_done()  # the coordinator's immediate look fails
+
+    assert lock_provider.codes[1] == "9999"
+    assert mgr._state is SyncState.PENDING_CONFIRMATION
+    assert coordinator.has_pending_write(pin_address(1))
+    assert mgr._slot_breaker.failure_count == failures_before
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_OFF
+
+
+async def test_the_next_confirmation_read_settles_a_pending_write_without_a_second_set(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    After a failed read, the coordinator's next look confirms the write.
+
+    No second set is issued along the way, and the tick after the confirming
+    read finds the slot in sync.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    mgr = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "9999"},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    mgr._state = SyncState.OUT_OF_SYNC
+
+    with patch.object(
+        lock_provider,
+        "async_get_usercodes",
+        AsyncMock(side_effect=LockDisconnected("Connection lost")),
+    ):
+        await mgr._async_tick()
+        await hass.async_block_till_done()
+    assert mgr._state is SyncState.PENDING_CONFIRMATION
+
+    with patch.object(
+        lock_provider, "async_set_usercode", wraps=lock_provider.async_set_usercode
+    ) as second_set:
+        async_fire_time_changed(
+            hass, dt_util.utcnow() + timedelta(seconds=CONFIRM_READ_INTERVAL + 1)
+        )
+        await hass.async_block_till_done()
+        assert coordinator.is_verified(pin_address(1)) is True
+        await mgr._async_tick()
+        await hass.async_block_till_done()
+    second_set.assert_not_called()
+
+    assert mgr._state is SyncState.IN_SYNC
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON

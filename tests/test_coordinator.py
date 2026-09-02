@@ -1,11 +1,14 @@
 """Test the coordinator module."""
 
+from collections.abc import AsyncGenerator
 from datetime import timedelta
-import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
@@ -20,7 +23,9 @@ from custom_components.lock_code_manager.const import (
     BACKOFF_MAX_SECONDS,
     CONF_LOCKS,
     CONF_SLOTS,
+    CONFIRM_READ_INTERVAL,
     DOMAIN,
+    PENDING_WRITE_TTL,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
 from custom_components.lock_code_manager.domain.coordinator import (
@@ -92,11 +97,13 @@ def push_lock(
 
 
 @pytest.fixture
-def poll_coordinator(
+async def poll_coordinator(
     hass: HomeAssistant, poll_lock: MockLCMLock, lcm_config_entry: MockConfigEntry
-) -> LockUsercodeUpdateCoordinator:
+) -> AsyncGenerator[LockUsercodeUpdateCoordinator]:
     """Return a coordinator with a poll-based lock."""
-    return _make_coordinator(hass, poll_lock, lcm_config_entry)
+    coordinator = _make_coordinator(hass, poll_lock, lcm_config_entry)
+    yield coordinator
+    await coordinator.async_shutdown()
 
 
 @pytest.fixture
@@ -225,46 +232,6 @@ async def test_push_update_default_marks_verified(
     """The default (optimistic=False) push marks the slot verified."""
     push_coordinator.push_update({1: SlotCredential.known("9999")})
     assert push_coordinator.is_verified(pin_address(1)) is True
-
-
-async def test_push_update_optimistic_marks_unverified(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-):
-    """An optimistic push marks the slot unverified."""
-    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
-    assert push_coordinator.is_verified(pin_address(1)) is False
-
-
-async def test_push_update_verified_push_clears_unverified(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-):
-    """A later verified push of a new value re-verifies the slot."""
-    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-    assert push_coordinator.is_verified(pin_address(1)) is False
-
-    push_coordinator.push_update({1: SlotCredential.unreadable()})
-    assert push_coordinator.is_verified(pin_address(1)) is True
-
-
-async def test_push_update_optimistic_same_value_flips_flag_without_notifying(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-):
-    """An optimistic re-push of the same value flips the flag but doesn't notify."""
-    push_coordinator.data = {pin_address(1): SlotCredential.known("9999")}
-    with patch.object(push_coordinator, "async_set_updated_data") as mock_set_updated:
-        push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-        mock_set_updated.assert_not_called()
-    assert push_coordinator.is_verified(pin_address(1)) is False
-
-
-async def test_verified_map_pruned_with_data(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-):
-    """The verified map drops slots no longer present in data."""
-    push_coordinator.push_update({1: SlotCredential.known("1111")}, optimistic=True)
-    # The internal map should only track slots still in data.
-    assert set(push_coordinator._unverified) <= set(push_coordinator.data)
 
 
 async def test_push_update_ignores_empty_updates(
@@ -1255,102 +1222,6 @@ async def test_unreachable_clears_on_recovery(
     )
 
 
-async def test_confirm_pending_writes_confirms_present_masked(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-    push_lock: MockLCMPushLock,
-) -> None:
-    """An on-demand confirm read of a present-but-masked slot verifies it.
-
-    This is the order-independent confirmation that replaces waiting for a push
-    node-zwave-js never sends for a masked write: the slot reads back present
-    (unreadable), so the believed PIN is confirmed and pending is cleared.
-    """
-    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
-    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-    assert push_coordinator.is_verified(pin_address(1)) is False
-
-    with patch.object(
-        push_lock,
-        "async_hard_refresh_codes",
-        AsyncMock(return_value={1: SlotCredential.unreadable()}),
-    ):
-        await push_coordinator.async_confirm_pending_writes()
-
-    assert pin_address(1) not in push_lock._pending_writes
-    assert push_coordinator.is_verified(pin_address(1)) is True
-    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
-
-
-async def test_confirm_pending_writes_keeps_absent_slot_pending(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-    push_lock: MockLCMPushLock,
-) -> None:
-    """A confirm read that finds the slot absent leaves it pending to re-sync."""
-    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
-    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-
-    with patch.object(
-        push_lock,
-        "async_hard_refresh_codes",
-        AsyncMock(return_value={1: SlotCredential.empty()}),
-    ):
-        await push_coordinator.async_confirm_pending_writes()
-
-    assert pin_address(1) in push_lock._pending_writes
-    assert push_coordinator.is_verified(pin_address(1)) is False
-
-
-async def test_confirm_pending_writes_tolerates_read_failure(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-    push_lock: MockLCMPushLock,
-) -> None:
-    """A failed confirm read is non-fatal and leaves pending state untouched."""
-    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
-    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-
-    with patch.object(
-        push_lock,
-        "async_hard_refresh_codes",
-        AsyncMock(side_effect=LockDisconnected("offline")),
-    ):
-        await push_coordinator.async_confirm_pending_writes()
-
-    assert pin_address(1) in push_lock._pending_writes
-    assert push_coordinator.is_verified(pin_address(1)) is False
-
-
-async def test_confirm_pending_writes_noop_without_pending(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-    push_lock: MockLCMPushLock,
-) -> None:
-    """With no pending writes the confirm path never touches the lock."""
-    mock_refresh = AsyncMock()
-    with patch.object(push_lock, "async_hard_refresh_codes", mock_refresh):
-        await push_coordinator.async_confirm_pending_writes()
-
-    mock_refresh.assert_not_called()
-
-
-async def test_confirm_pending_writes_swallows_unexpected_error(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-    push_lock: MockLCMPushLock,
-) -> None:
-    """A non-LCM error from the confirm read must not escape (it would suspend the slot)."""
-    push_lock._pending_writes[pin_address(1)] = ("9999", time.monotonic() + 60.0)
-    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
-
-    with patch.object(
-        push_lock,
-        "async_hard_refresh_codes",
-        AsyncMock(side_effect=RuntimeError("boom")),
-    ):
-        # Must not raise: the seam awaits this and a raise would suspend the slot.
-        await push_coordinator.async_confirm_pending_writes()
-
-    assert pin_address(1) in push_lock._pending_writes
-    assert push_coordinator.is_verified(pin_address(1)) is False
-
-
 async def test_desired_credential_disabled_slot_is_empty(
     hass: HomeAssistant,
     poll_coordinator: LockUsercodeUpdateCoordinator,
@@ -1415,36 +1286,9 @@ async def test_connection_check_swallows_lock_code_manager_error(
     mock_check.assert_called_once()
 
 
-async def test_apply_read_takes_differing_readable_external_change(
-    push_coordinator: LockUsercodeUpdateCoordinator,
-    push_lock: MockLCMPushLock,
-) -> None:
-    """A read observing a readable code different from a pending write takes the observation.
-
-    Mirrors BaseLock._confirm_slot: a drift/poll read of an externally-changed
-    readable code must not be masked by the believed value.
-    """
-    push_lock._pending_writes[pin_address(1)] = ("1234", time.monotonic() + 60.0)
-    push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
-
-    out = push_coordinator._apply_read({pin_address(1): SlotCredential.known("9999")})
-
-    assert out[pin_address(1)] == SlotCredential.known("9999")
-    assert pin_address(1) not in push_lock._pending_writes
-    assert push_coordinator.is_verified(pin_address(1)) is True
-
-
-async def test_accessors_are_addressed_not_slot_numbered(push_coordinator) -> None:
-    """The credential accessors round-trip through a CredentialAddress."""
-    address = pin_address(1)
-    push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
-    assert push_coordinator.is_verified(address) is False
-    push_coordinator.mark_verified(address)
-    assert push_coordinator.is_verified(address) is True
-
-
 @pytest.mark.parametrize(
-    "accessor", ["is_verified", "mark_verified", "desired_credential"]
+    "accessor",
+    ["is_verified", "has_pending_write", "pending_write", "desired_credential"],
 )
 async def test_non_pin_address_is_rejected(push_coordinator, accessor) -> None:
     """A non-PIN address is a programming error, not a missing entry.
@@ -1465,9 +1309,9 @@ async def test_string_slot_number_still_resolves(push_coordinator) -> None:
     is_verified would miss every int key and report True for a slot whose
     optimistic write is still unconfirmed.
     """
-    push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
     assert push_coordinator.is_verified(pin_address("1")) is False
-    push_coordinator.mark_verified(pin_address("1"))
+    push_coordinator.drop_pending(pin_address("1"))
     assert push_coordinator.is_verified(pin_address(1)) is True
 
 
@@ -1499,3 +1343,264 @@ async def test_credential_distinguishes_absent_from_empty(push_coordinator) -> N
     assert push_coordinator.credential(pin_address(9)) is None
     assert push_coordinator.has_credential(pin_address(1)) is True
     assert push_coordinator.has_credential(pin_address(9)) is False
+
+
+# =============================================================================
+# Pending writes: the coordinator owns them from "sent" to "seen"
+# =============================================================================
+
+
+async def test_record_write_believed_pushes_the_value_and_is_unverified(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """An optimistic write shows its PIN at once, and is not verified until seen."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
+    assert push_coordinator.is_verified(pin_address(1)) is False
+    assert push_coordinator.pending_write(pin_address(1)).pin == "9999"
+
+
+async def test_record_write_not_believed_leaves_data_alone(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A polled lock's confirmed write is recorded without a value: the read will say."""
+    poll_coordinator.push_update({1: SlotCredential.empty()})
+    poll_coordinator.record_write(pin_address(1), "9999", believed=False)
+    assert poll_coordinator.data[pin_address(1)] == SlotCredential.empty()
+    assert poll_coordinator.is_verified(pin_address(1)) is False
+
+
+async def test_is_verified_is_exactly_not_pending(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Verified derives from the pending record; nothing is mirrored to drift."""
+    address = pin_address(1)
+    assert poll_coordinator.is_verified(address) is True
+    poll_coordinator.record_write(address, "1234", believed=False)
+    assert poll_coordinator.is_verified(address) is False
+    poll_coordinator.drop_pending(address)
+    assert poll_coordinator.is_verified(address) is True
+
+
+async def test_record_write_arms_one_timer_for_the_whole_lock(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """N pending slots on one lock are one read apart, not N."""
+    assert poll_coordinator._confirm_task is None
+    poll_coordinator.record_write(pin_address(1), "1111", believed=False)
+    first = poll_coordinator._confirm_task
+    assert first is not None
+    poll_coordinator.record_write(pin_address(2), "2222", believed=False)
+    assert poll_coordinator._confirm_task is first
+
+
+async def test_apply_read_confirms_a_present_slot_with_the_written_value(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Present -- even masked -- confirms the write; the written PIN is kept."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    out = push_coordinator._apply_read({pin_address(1): SlotCredential.unreadable()})
+    assert out[pin_address(1)] == SlotCredential.known("9999")
+    assert push_coordinator.is_verified(pin_address(1)) is True
+
+
+async def test_apply_read_takes_differing_readable_external_change(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A readable read of a DIFFERENT code is an external change, and wins."""
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
+    out = push_coordinator._apply_read({pin_address(1): SlotCredential.known("9999")})
+    assert out[pin_address(1)] == SlotCredential.known("9999")
+    assert push_coordinator.is_verified(pin_address(1)) is True
+    # The slot holds something else: our write did not take.
+    assert push_coordinator.take_failed_write(pin_address(1)) is True
+
+
+async def test_apply_read_keeps_an_absent_slot_pending_before_the_deadline(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Absent before the deadline: the write may not have landed yet. Keep waiting."""
+    poll_coordinator.record_write(pin_address(1), "9999", believed=False)
+    out = poll_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+    assert out[pin_address(1)] == SlotCredential.empty()
+    assert poll_coordinator.is_verified(pin_address(1)) is False
+    assert poll_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_apply_read_fails_an_absent_slot_past_the_deadline_once(
+    poll_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """Absent at the deadline: give the write up, take the observation, charge once.
+
+    Expiry happens only inside a completed read, so nothing outside a read
+    ever has to guess whether the lock was asked. ``take_failed_write`` hands the
+    sync tick exactly one charge.
+    """
+    poll_coordinator.record_write(pin_address(1), "9999", believed=False)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    out = poll_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+    assert out[pin_address(1)] == SlotCredential.empty()
+    assert poll_coordinator.is_verified(pin_address(1)) is True
+    assert poll_coordinator.take_failed_write(pin_address(1)) is True
+    assert poll_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_drop_pending_leaves_nothing_to_charge(
+    poll_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """A write no longer wanted is forgotten, not judged."""
+    poll_coordinator.record_write(pin_address(1), "9999", believed=False)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    poll_coordinator.drop_pending(pin_address(1))
+    assert poll_coordinator.is_verified(pin_address(1)) is True
+    assert poll_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_observe_push_present_confirms_absent_ends(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A push is the lock speaking now: present confirms, absent is taken as its word."""
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
+    push_coordinator.observe_push(pin_address(1), SlotCredential.unreadable())
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("1234")
+    assert push_coordinator.is_verified(pin_address(1)) is True
+
+    push_coordinator.record_write(pin_address(2), "5678", believed=True)
+    push_coordinator.observe_push(pin_address(2), SlotCredential.empty())
+    assert push_coordinator.data[pin_address(2)] == SlotCredential.empty()
+    assert push_coordinator.is_verified(pin_address(2)) is True
+
+    push_coordinator.record_write(pin_address(3), "1111", believed=True)
+    push_coordinator.observe_push(pin_address(3), SlotCredential.known("2222"))
+    assert push_coordinator.data[pin_address(3)] == SlotCredential.known("2222")
+    assert push_coordinator.take_failed_write(pin_address(3)) is True
+    # ...and an absent push after a write counts it failed as well.
+    assert push_coordinator.take_failed_write(pin_address(2)) is True
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_confirmation_read_on_a_poller_uses_the_ordinary_read_with_pending_scope(
+    poll_lock: MockLCMLock, poll_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """A polled lock is read through its poll path, asked about every pending slot.
+
+    Slot 9 is managed by nobody; a direct write there is still pending, so the
+    read names it and the write is confirmed or given up like any other.
+    """
+    poll_lock.codes[9] = "4321"
+    poll_coordinator.record_write(pin_address(9), "4321", believed=False)
+    hard = poll_lock.service_calls["hard_refresh_codes"]
+    reads = poll_lock.service_calls["get_usercodes"]
+    before = (len(hard), len(reads))
+
+    await poll_coordinator.async_confirm_pending_writes()
+
+    assert len(hard) == before[0]
+    assert len(reads) == before[1] + 1
+    assert poll_coordinator.is_verified(pin_address(9)) is True
+    assert poll_coordinator.data[pin_address(9)] == SlotCredential.known("4321")
+
+
+async def test_confirmation_read_on_a_push_provider_hard_refreshes(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """A push provider's ordinary read is a cache; confirmation goes to the device."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.unreadable()}),
+    ) as hard:
+        await push_coordinator.async_confirm_pending_writes()
+    hard.assert_awaited_once()
+    assert push_coordinator.is_verified(pin_address(1)) is True
+    assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
+
+
+async def test_confirmation_read_noop_without_pending(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """Nothing pending, nothing read."""
+    with patch.object(push_lock, "async_hard_refresh_codes", AsyncMock()) as hard:
+        await push_coordinator.async_confirm_pending_writes()
+    hard.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [LockDisconnected("offline"), RuntimeError("boom")])
+async def test_confirmation_read_failure_is_non_fatal_and_keeps_waiting(
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    failure: Exception,
+) -> None:
+    """A failed read is not the lock's word: stay pending, touch no breaker."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    with patch.object(
+        push_lock, "async_hard_refresh_codes", AsyncMock(side_effect=failure)
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+    assert push_coordinator.is_verified(pin_address(1)) is False
+    assert push_coordinator.unreachable is False
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_confirmation_read_failure_past_the_deadline_gives_the_write_up(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """Reads that keep failing do not keep a write alive forever.
+
+    The lock has had the time to live to be seen holding the write and has not
+    been; a lock whose writes land but whose reads never return still ends in
+    a charged re-sync and a visible suspend, not a silent pending state.
+    """
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=LockDisconnected("offline")),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+    assert push_coordinator.is_verified(pin_address(1)) is True
+    assert push_coordinator.take_failed_write(pin_address(1)) is True
+
+
+async def test_confirmation_timer_fires_reads_and_rearms_while_pending(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """The coordinator schedules its own looks: now, then every interval, until settled."""
+    poll_lock.codes.pop(1, None)  # every read comes back absent
+    reads = poll_lock.service_calls["get_usercodes"]
+    before = len(reads)
+
+    poll_coordinator.record_write(pin_address(1), "9999", believed=False)
+    await hass.async_block_till_done()  # the immediate first look
+    assert len(reads) == before + 1
+    assert poll_coordinator._confirm_unsub is not None  # re-armed: still pending
+
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=CONFIRM_READ_INTERVAL + 1)
+    )
+    await hass.async_block_till_done()
+    assert len(reads) == before + 2
+
+    # The lock now holds it: the next look confirms and the timer stands down.
+    poll_lock.codes[1] = "9999"
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=2 * CONFIRM_READ_INTERVAL + 2)
+    )
+    await hass.async_block_till_done()
+    assert poll_coordinator.is_verified(pin_address(1)) is True
+    assert poll_coordinator._confirm_unsub is None
+
+
+async def test_shutdown_cancels_the_confirmation_timer(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """No read fires after the coordinator is gone."""
+    poll_coordinator.record_write(pin_address(1), "9999", believed=False)
+    assert poll_coordinator._confirm_task is not None
+    await poll_coordinator.async_shutdown()
+    assert poll_coordinator._confirm_task is None
+    assert poll_coordinator._confirm_unsub is None

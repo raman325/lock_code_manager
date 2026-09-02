@@ -6,14 +6,16 @@ Stores ALL slots (managed and unmanaged). See ARCHITECTURE.md for the full data 
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
-from typing import TYPE_CHECKING, Any
+import time
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from homeassistant.const import CONF_ENABLED, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
     async_create_issue,
@@ -25,7 +27,9 @@ from ..const import (
     BACKOFF_FAILURE_THRESHOLD,
     BACKOFF_INITIAL_SECONDS,
     BACKOFF_MAX_SECONDS,
+    CONFIRM_READ_INTERVAL,
     DOMAIN,
+    PENDING_WRITE_TTL,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
 from .credentials import CredentialAddress, CredentialType, pin_address
@@ -39,6 +43,26 @@ if TYPE_CHECKING:
     from ..providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class PendingWrite(NamedTuple):
+    """
+    A write the lock has not yet been seen to hold.
+
+    ``believed`` says whether ``data`` carries the written PIN on the strength
+    of the write alone (an optimistic write pushes its value before anything
+    confirms it). Either way the address is unverified until a read or push
+    shows the slot present, and given up on at ``deadline``.
+    """
+
+    pin: str
+    written_at: float
+    believed: bool
+
+    @property
+    def deadline(self) -> float:
+        """Monotonic time after which an absent read means the write did not land."""
+        return self.written_at + PENDING_WRITE_TTL
 
 
 def _checked(address: CredentialAddress) -> CredentialAddress:
@@ -91,17 +115,26 @@ class LockUsercodeUpdateCoordinator(
             config_entry=config_entry,
         )
         self.data: dict[CredentialAddress, SlotCredential] = {}
-        # Slots awaiting confirmation, kept in lockstep with ``data``. A slot is
-        # unverified only while an optimistic (ambiguous-but-treated-as-completed)
-        # write awaits confirmation; every other source -- genuine push events,
-        # polls, hard refreshes, and authoritative writes -- is verified.
-        #
-        # A set rather than a per-slot flag, because "verified" has no
-        # representation of its own: membership is the whole state. Storing it as
-        # ``dict[int, bool]`` admitted a third, redundant value -- an explicit
-        # ``True`` that read identically to absence -- and every writer had to
-        # remember which of the two to use. See the Phase 2 push-as-commit spec.
-        self._unverified: set[CredentialAddress] = set()
+        # Writes the lock has not yet been seen to hold, by address. This is the
+        # whole of "unverified": an address is verified exactly when nothing is
+        # pending against it. Confirmed by a read or push showing the slot
+        # present; given up on by the first read past the deadline that still
+        # does not -- which is also the only way a pending write ends without
+        # confirmation, so nothing outside a completed read ever has to guess.
+        # Keyed by CredentialAddress, NOT by device slot: one slot can hold a
+        # credential of each type, and a slot-keyed map would let two addresses
+        # sharing a slot consume each other's entry.
+        self._pending: dict[CredentialAddress, PendingWrite] = {}
+        # Addresses whose pending write failed -- not seen by the deadline, or
+        # displaced by a different code -- awaiting the sync tick's one charge
+        # to the slot breaker. Consumed by ``take_failed_write``.
+        self._failed_writes: set[CredentialAddress] = set()
+        # The single confirmation look for this lock: a task for the immediate
+        # first look, then a timer while anything stays pending. One per
+        # coordinator, not per write: N pending slots on one lock are one read
+        # apart, not N.
+        self._confirm_task: asyncio.Task[None] | None = None
+        self._confirm_unsub: Callable[[], None] | None = None
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -174,59 +207,171 @@ class LockUsercodeUpdateCoordinator(
         """
         Resolve a genuine read (poll or hard refresh) against pending writes.
 
-        A read is the dropped-push backstop for the verified-credential
-        lifecycle: for a slot with an outstanding optimistic write, observing
-        the slot present confirms our write -- keep the believed value and mark
-        it verified. The one exception (mirroring ``BaseLock._confirm_slot``) is
-        a *readable* observation of a different code: that is an external change
-        racing our write, so take the observation rather than masking it with
-        the believed value -- otherwise a drift refresh, whose whole purpose is
-        to surface out-of-band changes, would silently overwrite one. Observing
-        the slot still absent means the write has not landed yet, so keep waiting
-        (stay unverified, pending intact). Slots with no pending write are
-        genuine observations and are marked verified. See the Phase 2
-        push-as-commit spec.
+        For an address with a write pending, observing the slot present
+        confirms the write: keep the written value, verified. The one
+        exception (mirroring ``observe_push``) is a *readable* observation of
+        a different code: the slot holds something else, so the write did not
+        take -- take the observation, otherwise a drift refresh, whose whole
+        purpose is to surface out-of-band changes, would silently overwrite
+        one, and count the write as failed. Observing the slot still absent
+        before the deadline means the write has not landed yet: keep waiting.
+        Absent at or past the deadline means it is not going to: give the
+        write up, take the observation, and count it failed. Either failure
+        leaves the address for the sync tick to charge once. Addresses with
+        nothing pending are the lock's word as read.
         """
+        now = time.monotonic()
         out: dict[CredentialAddress, SlotCredential] = {}
         for address, cred in observed.items():
-            pending = self._lock._pending_writes.get(address)
-            if pending is not None and cred.is_present:
-                pin, _deadline = pending
-                del self._lock._pending_writes[address]
-                if cred.is_readable and cred.readable_pin != pin:
+            pending = self._pending.get(address)
+            if pending is None:
+                out[address] = cred
+            elif cred.is_present:
+                del self._pending[address]
+                if cred.is_readable and cred.readable_pin != pending.pin:
+                    self._failed_writes.add(address)
                     out[address] = cred
                 else:
-                    out[address] = SlotCredential.known(pin)
-                self._unverified.discard(address)
-            elif pending is not None:
+                    out[address] = SlotCredential.known(pending.pin)
+            elif now >= pending.deadline:
+                del self._pending[address]
+                self._failed_writes.add(address)
                 out[address] = cred
-                self._unverified.add(address)
             else:
                 out[address] = cred
-                self._unverified.discard(address)
-        # Keep the unverified set in lockstep with the read.
-        self._unverified &= out.keys()
         return out
 
     def is_verified(self, address: CredentialAddress) -> bool:
         """
-        Return whether the address's credential is a confirmed observation.
+        Return whether the address's credential is the lock's word.
 
-        Unlisted addresses are verified: an address is only unverified while
-        an optimistic write awaits confirmation (push event or hard refresh).
+        False exactly while a write is pending against the address: an
+        optimistic write anywhere, or a confirmed write on a polled lock,
+        until a read or push shows the slot present -- or the deadline passes
+        and the write is given up on.
         """
-        return _checked(address) not in self._unverified
+        return _checked(address) not in self._pending
+
+    def pending_write(self, address: CredentialAddress) -> PendingWrite | None:
+        """Return the write pending against ``address``, if any."""
+        return self._pending.get(_checked(address))
+
+    def has_pending_write(self, address: CredentialAddress) -> bool:
+        """Return whether a write is pending against ``address``."""
+        return _checked(address) in self._pending
 
     @callback
-    def mark_verified(self, address: CredentialAddress) -> None:
+    def record_write(
+        self, address: CredentialAddress, pin: str, *, believed: bool
+    ) -> None:
         """
-        Drop an address from the unverified set.
+        Record a write the lock has not yet been seen to hold, and go look.
 
-        Called when a write is confirmed by the lock (an authoritative
-        ``WriteResult.CONFIRMED``), so an address left unverified by a prior
-        optimistic write on the same address cannot strand it.
+        ``believed`` pushes the written value into ``data`` on the strength of
+        the write alone -- what an optimistic write does, so the code sensor
+        shows the PIN the driver most likely stored. A polled lock's confirmed
+        write is recorded without it: the cloud accepting the write is not
+        the lock reporting it, and the read that follows is what will say.
+
+        Starts the confirmation look if one is not already under way. The
+        first look is an immediate task, so a lock that already reports the
+        write settles on the next sync tick; later looks are a timer,
+        CONFIRM_READ_INTERVAL apart, until nothing is pending. A newer write
+        to the same address replaces the record, so the read confirms the PIN
+        actually sent last.
         """
-        self._unverified.discard(_checked(address))
+        checked = _checked(address)
+        self._pending[checked] = PendingWrite(pin, time.monotonic(), believed)
+        self._failed_writes.discard(checked)
+        if believed:
+            new_data = {**self.data, checked: SlotCredential.known(pin)}
+            if new_data != self.data:
+                self.async_set_updated_data(new_data)
+        if self._confirm_task is None and self._confirm_unsub is None:
+            # Not eager: this is called from inside the provider's own write
+            # path, and an eagerly started read would reenter the provider
+            # before that write has returned.
+            self._confirm_task = self.hass.async_create_task(
+                self._async_confirmation_look(),
+                f"{DOMAIN} confirmation read for {self._lock.lock.entity_id}",
+                eager_start=False,
+            )
+
+    @callback
+    def drop_pending(self, address: CredentialAddress) -> None:
+        """
+        Forget a pending write without judging it.
+
+        For a write that is no longer wanted -- the slot was cleared, or the
+        desired PIN changed while it was outstanding. Not a failure, so it
+        leaves nothing for the tick to charge.
+        """
+        checked = _checked(address)
+        self._pending.pop(checked, None)
+        self._failed_writes.discard(checked)
+
+    @callback
+    def take_failed_write(self, address: CredentialAddress) -> bool:
+        """
+        Return, once, whether a pending write to ``address`` failed.
+
+        Set when a read past the deadline still did not show the write, or
+        when a read showed the slot holding a different code instead; cleared
+        by this call. The sync tick charges the slot breaker exactly once per
+        write the lock did not keep.
+        """
+        checked = _checked(address)
+        if checked in self._failed_writes:
+            self._failed_writes.discard(checked)
+            return True
+        return False
+
+    @callback
+    def observe_push(
+        self, address: CredentialAddress, observed: SlotCredential
+    ) -> None:
+        """
+        Resolve a push event for one address against any pending write.
+
+        The push-side twin of ``_apply_read``, with one deliberate difference:
+        a push is the lock speaking now, so an absent push ends the pending
+        write and is taken as the lock's word rather than waited out -- and
+        counts the write failed. A present push confirms the write (keeping
+        the written value), unless a readable different code shows the slot
+        holds something else, which counts it failed as well.
+        """
+        checked = _checked(address)
+        pending = self._pending.pop(checked, None)
+        if pending is None:
+            value = observed
+        elif observed.is_present and not (
+            observed.is_readable and observed.readable_pin != pending.pin
+        ):
+            value = SlotCredential.known(pending.pin)
+        else:
+            self._failed_writes.add(checked)
+            value = observed
+        self.push_update({checked.user_ref: value})
+
+    async def _async_confirmation_look(self) -> None:
+        """Look once right after a write; hand off to the timer while anything is pending."""
+        try:
+            await self.async_confirm_pending_writes()
+        finally:
+            self._confirm_task = None
+        if self._pending:
+            self._confirm_unsub = async_call_later(
+                self.hass, CONFIRM_READ_INTERVAL, self._async_confirmation_timer
+            )
+
+    async def _async_confirmation_timer(self, _now: datetime) -> None:
+        """Timer callback: read the lock back, and re-arm while anything is pending."""
+        self._confirm_unsub = None
+        await self.async_confirm_pending_writes()
+        if self._pending:
+            self._confirm_unsub = async_call_later(
+                self.hass, CONFIRM_READ_INTERVAL, self._async_confirmation_timer
+            )
 
     def credential(self, address: CredentialAddress) -> SlotCredential | None:
         """
@@ -264,90 +409,73 @@ class LockUsercodeUpdateCoordinator(
 
     async def async_confirm_pending_writes(self) -> None:
         """
-        Actively read the lock back to confirm outstanding optimistic writes.
+        Read the lock back to settle the writes pending against it.
 
-        An ambiguous write (``WriteResult.OPTIMISTIC``) gets no confirming push
-        on some stacks: node-zwave-js, for one, emits no ``credential
-        added/modified`` event when its own post-write verification fails on a
-        lock that reports codes back masked -- the event and the ``ERROR_UNKNOWN``
-        result are mutually exclusive. Waiting for the hourly drift refresh would
-        let the breaker suspend a slot whose code actually landed (~3 attempts in
-        the 5-minute window, long before the hourly backstop). So the seam calls
-        this immediately after recording an optimistic write.
+        The order-independent confirmation path: it does not depend on a push
+        arriving, which some stacks never send for an ambiguous write and a
+        polled lock never sends at all. A polled lock is read through its
+        ordinary read, scoped to the managed slots plus every pending address,
+        so a write to a slot nothing manages is still asked about; a push
+        provider is hard-refreshed, since its ordinary path is the cache the
+        write may not have reached.
 
-        This is the order-independent confirmation path: it does not depend on
-        receiving any event. A hard read observes the slot present-but-masked
-        (LCM projects masked codes to ``unreadable`` rather than repeating the
-        driver's ``userCode == codeData`` check) and ``_apply_read`` confirms it;
-        a genuinely-absent slot stays pending and re-syncs on the next tick.
-
-        A failed read is non-fatal and does not apply backoff: the slot stays
-        pending and the sync tick reconciles it within the TTL.
+        A failed read is non-fatal and does not touch the lock breaker --
+        connectivity is the scheduled poll's to judge. A read that fails once a
+        pending write is past its deadline gives that write up all the same:
+        the lock has had the time to live to be seen holding it, and was not.
         """
-        if not self._lock._pending_writes:
+        if not self._pending:
             return
         try:
-            new_data = self._apply_read(
-                self._normalize_keys(
-                    await self._lock.async_internal_hard_refresh_codes()
+            if self._is_push:
+                raw = await self._lock.async_internal_hard_refresh_codes()
+            else:
+                raw = await self._lock.async_internal_get_usercodes(
+                    self._lock.managed_slots
+                    | {address.user_ref for address in self._pending}
                 )
-            )
         except LockCodeManagerError as err:
             _LOGGER.debug(
-                "On-demand confirmation read failed for %s: %s; leaving pending "
-                "writes for the sync tick to reconcile",
+                "Confirmation read failed for %s: %s",
                 self._lock.lock.entity_id,
                 err,
             )
+            self._expire_overdue()
             return
         except Exception:
-            # The confirmation read is a best-effort backstop, never fatal: it
-            # must not escape into the set seam and suspend the slot. The pending
-            # write stays recorded and the sync tick reconciles it via the TTL.
             _LOGGER.exception(
-                "Unexpected error during on-demand confirmation read for %s; "
-                "leaving pending writes for the sync tick to reconcile",
+                "Unexpected error during confirmation read for %s",
                 self._lock.lock.entity_id,
             )
+            self._expire_overdue()
             return
-        # _apply_read already cleared pending + updated the unverified set in
-        # place, so the confirmation takes effect even when the data is
-        # unchanged; only the listener notification is gated on a real delta.
+        new_data = {**self.data, **self._apply_read(self._normalize_keys(raw))}
         if new_data != self.data:
             self.async_set_updated_data(new_data)
 
     @callback
-    def push_update(
-        self, updates: dict[int, SlotCredential], *, optimistic: bool = False
-    ) -> None:
-        """
-        Push one or more slot updates and notify listening entities.
+    def _expire_overdue(self) -> None:
+        """Give up every pending write whose deadline has passed unread."""
+        now = time.monotonic()
+        for address, pending in list(self._pending.items()):
+            if now >= pending.deadline:
+                del self._pending[address]
+                self._failed_writes.add(address)
 
-        ``optimistic=True`` marks the pushed slots unverified (an ambiguous
-        write we are treating as completed but have not yet confirmed). The
-        default, ``False``, marks them verified -- every existing caller keeps
-        today's behavior.
+    @callback
+    def push_update(self, updates: dict[int, SlotCredential]) -> None:
+        """
+        Push one or more slot updates, as the lock's word, and notify entities.
+
+        Whether an address is verified is not a property of the value pushed
+        but of whether a write is pending against it; see ``record_write`` and
+        ``observe_push`` for the paths that touch that.
         """
         if not updates:
             return
 
-        normalized = self._normalize_keys(updates)
-        new_data = {**self.data, **normalized}
-
-        # Record the pushed slots regardless of whether the value changed: an
-        # optimistic re-push of the same value still flips the slot to
-        # unverified.
-        if optimistic:
-            self._unverified |= normalized.keys()
-        else:
-            self._unverified -= normalized.keys()
-        # Keep the unverified set in lockstep with data.
-        self._unverified &= new_data.keys()
-
+        new_data = {**self.data, **self._normalize_keys(updates)}
         if new_data == self.data:
-            # Verification-only change: the sync layer reads ``is_verified``
-            # directly on its next tick, and entities don't render the flag, so
-            # there's nothing to notify and no reachability proof (no new data).
             return
 
         # A successful push update proves the lock is reachable, so reset
@@ -567,6 +695,12 @@ class LockUsercodeUpdateCoordinator(
 
     async def async_shutdown(self) -> None:
         """Shut down the coordinator and clean up resources."""
+        if self._confirm_task is not None:
+            self._confirm_task.cancel()
+            self._confirm_task = None
+        if self._confirm_unsub:
+            self._confirm_unsub()
+            self._confirm_unsub = None
         if self._drift_unsub:
             self._drift_unsub()
             self._drift_unsub = None

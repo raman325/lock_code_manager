@@ -693,6 +693,12 @@ class ZWaveJSLock(BaseLock):
         # Pre-15.25.2 drivers never persist a supervised success to the
         # value database (see _async_uc_reconcile_value_db).
         await self._async_uc_reconcile_value_db(credential.slot)
+        # Push what the driver just confirmed, as every push provider does
+        # before returning CONFIRMED: the seam records nothing pending for a
+        # push provider on the strength of the value being on the coordinator
+        # when this returns. A driver event may follow and refine it; none is
+        # guaranteed to, so this cannot wait for one.
+        self._push_credential_update(credential.slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:

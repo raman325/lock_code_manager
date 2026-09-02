@@ -205,6 +205,17 @@ BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
 # Poll failure alerting
 POLL_FAILURE_ALERT_THRESHOLD: int = 12
 
+# How long a write waits to be seen on the lock before it is given up on: the
+# coordinator drops the pending record on the first read past this that still
+# does not show the write, and the sync tick charges the slot breaker once for
+# it. Three of these must fit inside SYNC_ATTEMPT_WINDOW, or a write the lock
+# never keeps could never trip the breaker.
+PENDING_WRITE_TTL: float = 60.0
+# How often the coordinator reads the lock back while a write is pending: four
+# looks inside one time to live, so a write that landed late is seen well
+# before the deadline and a lock that never keeps it is asked, not hammered.
+CONFIRM_READ_INTERVAL: float = PENDING_WRITE_TTL / 4
+
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=2)
 MAX_SYNC_ATTEMPTS = 3
