@@ -126,12 +126,37 @@ class EntryConfig:
         The entry side is still read options-first, because an options-flow
         update leaves the new configuration in ``options`` while ``data``
         still holds the old one.
+
+        An entry from before users had subentries is read the way it was
+        written. Migration only runs when an entry is set up, so a disabled
+        entry keeps its old shape for as long as it stays disabled -- and it
+        is still consulted: ``get_managed_slots`` asks every entry which
+        numbers it holds on a lock, and an answer of "none" from an entry
+        that holds five lets a new entry be issued the same five, and the
+        unmanaged-code sweep raise a repair to delete each one.
+
+        Told apart by shape, not by ``entry.version``. Shape is what this
+        reads; the version is a proxy for it, and one the test fixtures do
+        not keep -- they build subentries onto entries left at version 1.
+        The shape is unambiguous because migration strips the legacy keys
+        as it moves users out, so an entry with none of them has nothing
+        to fall back to and an entry with them has not been migrated.
         """
+        user_subentries = [
+            subentry
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_USER
+        ]
+        if not user_subentries and any(
+            key in side
+            for side in (entry.options, entry.data)
+            for key in (CONF_USERS, CONF_SLOTS)
+        ):
+            return cls.from_mapping({**entry.data, **entry.options})
+
         users: dict[str, dict[str, Any]] = {}
         numbers: dict[str, int] = {}
-        for subentry in entry.subentries.values():
-            if subentry.subentry_type != SUBENTRY_TYPE_USER:
-                continue
+        for subentry in user_subentries:
             name = normalize_name(subentry.title)
             fields = {
                 key: value for key, value in subentry.data.items() if key != CONF_SLOT

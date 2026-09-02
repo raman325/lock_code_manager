@@ -315,6 +315,32 @@ def test_entry_config_from_mapping_preserves_int_slot_keys() -> None:
     assert set(config.slots.keys()) == {1}
 
 
+def test_entry_config_from_entry_reads_a_pre_subentry_entry_from_its_data() -> None:
+    """
+    An entry that predates user subentries is read the way it was written.
+
+    Migration runs only when an entry is set up, so a disabled entry keeps
+    its old shape for as long as it stays disabled -- and is still asked
+    which numbers it holds on a lock. Reading it as empty lets another entry
+    be issued the same numbers on the same lock (#1514 review).
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=4,
+        data={
+            CONF_LOCKS: ["lock.front"],
+            CONF_USERS: {"Ada": {CONF_PIN: "1357", "enabled": True}},
+            CONF_SLOT_ASSIGNMENT: {"ada": 7},
+        },
+    )
+
+    config = EntryConfig.from_entry(entry)
+
+    assert config.locks == ("lock.front",)
+    assert config.slot_numbers == {7}
+    assert config.name_for(7) == "Ada"
+
+
 def test_entry_config_from_entry_options_preferred() -> None:
     """
     from_entry prefers options over data for the entry's own half.
