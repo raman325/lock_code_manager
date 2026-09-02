@@ -20,7 +20,6 @@ from pytest_homeassistant_custom_component.common import (
     mock_integration,
     mock_platform,
 )
-import voluptuous_serialize
 
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
@@ -29,7 +28,10 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowHandler
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import (
+    config_validation as cv,
+    data_entry_flow as hass_data_entry_flow,
+)
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
@@ -96,6 +98,32 @@ def _flow_classes() -> list[type[FlowHandler]]:
     ]
 
 
+def _serialize_flow_schema(schema: Any) -> Any:
+    """
+    Serialize a form schema the way Home Assistant serializes it.
+
+    Resolved off Home Assistant's own module rather than imported from a
+    validation library, because which library that is has changed under
+    this test. Both versions call it from the same place --
+    ``_BaseFlowManagerView._prepare_result_json`` -- with the same
+    ``custom_serializer``; 2026.9 swapped ``voluptuous_serialize.convert``
+    for probatio's ``to_field_list`` and dropped the old package, which is
+    also why importing it by name stopped working at all.
+
+    Naming either library here would let this guard go on passing against
+    a serializer Home Assistant had stopped using, and a form that renders
+    in the test but not in a browser is the exact failure it exists to
+    catch (issue #1495).
+    """
+    if (
+        to_field_list := getattr(hass_data_entry_flow, "to_field_list", None)
+    ) is not None:
+        return to_field_list(schema, custom_serializer=cv.custom_serializer)
+    return hass_data_entry_flow.voluptuous_serialize.convert(
+        schema, custom_serializer=cv.custom_serializer
+    )
+
+
 @pytest.fixture(autouse=True)
 def assert_flow_forms_serialize() -> Generator[None]:
     """
@@ -120,9 +148,7 @@ def assert_flow_forms_serialize() -> Generator[None]:
         def _converted(self, **kwargs: Any):
             result = original(self, **kwargs)
             if schema := result.get("data_schema"):
-                voluptuous_serialize.convert(
-                    schema, custom_serializer=cv.custom_serializer
-                )
+                _serialize_flow_schema(schema)
             return result
 
         return patch.object(cls, "async_show_form", _converted)
