@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "17afeaffea5f",
+  "strategy": "manual-commit",
+  "branch": "fix/flow-schema-serializer-follows-ha",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/conftest.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/afeaffea5f/0/metadata.json",
+      "transcript": "/17/afeaffea5f/0/full.jsonl",
+      "compact_transcript": "/17/afeaffea5f/0/transcript.jsonl",
+      "content_hash": "/17/afeaffea5f/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 35,
+    "cache_creation_tokens": 378849,
+    "cache_read_tokens": 6951491,
+    "output_tokens": 15692,
+    "api_call_count": 19
+  }
+}
