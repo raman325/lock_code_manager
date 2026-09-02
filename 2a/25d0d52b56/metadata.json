@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "2a25d0d52b56",
+  "strategy": "manual-commit",
+  "branch": "v6",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/config.py",
+    "tests/test_config.py",
+    "tests/test_queries.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2a/25d0d52b56/0/metadata.json",
+      "transcript": "/2a/25d0d52b56/0/full.jsonl",
+      "compact_transcript": "/2a/25d0d52b56/0/transcript.jsonl",
+      "content_hash": "/2a/25d0d52b56/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 478,
+    "cache_creation_tokens": 34749,
+    "cache_read_tokens": 3781638,
+    "output_tokens": 23938,
+    "api_call_count": 8
+  }
+}
