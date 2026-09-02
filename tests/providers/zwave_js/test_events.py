@@ -772,28 +772,43 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
     zwave_js_lock.unsubscribe_push_updates()
 
 
-async def test_uc_shim_empty_code_pushes_empty(
+@pytest.mark.parametrize(
+    ("in_use", "expected"),
+    [
+        (False, SlotCredential.empty()),
+        (None, SlotCredential.empty()),
+        (True, SlotCredential.unreadable()),
+    ],
+    ids=["free", "unknown", "occupied"],
+)
+async def test_uc_shim_empty_code_follows_occupancy(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
+    in_use: bool | None,
+    expected: SlotCredential,
 ) -> None:
-    """An empty userCode value update pushes SlotCredential.empty()."""
+    """An empty userCode value is a cleared slot -- unless the status says occupied.
+
+    A lock withholding the code reports the slot in use with no value; that
+    is the same occupied-but-masked case the read path's overlay resolves to
+    unreadable, and taking it as empty would fail a write the lock kept.
+    """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
 
-    lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
-    )
-    await hass.async_block_till_done()
+    with patch.object(zwave_js_lock, "_uc_slot_in_use", return_value=in_use):
+        lock_schlage_be469.receive_event(
+            _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
+        )
+        await hass.async_block_till_done()
 
-    mock_coordinator.observe_push.assert_called_once_with(
-        pin_address(2), SlotCredential.empty()
-    )
+    mock_coordinator.observe_push.assert_called_once_with(pin_address(2), expected)
 
     zwave_js_lock.unsubscribe_push_updates()
 

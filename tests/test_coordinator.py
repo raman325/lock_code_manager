@@ -1909,3 +1909,17 @@ async def test_unchanged_push_on_a_slot_with_an_old_failed_write_does_not_wake_l
 
     push_coordinator.observe_push(pin_address(9), SlotCredential.empty())  # restated
     assert len(wakes) == woken
+
+
+async def test_apply_read_keeps_showing_a_believed_write_while_waiting(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A believed write absent before the deadline stays shown, still pending.
+
+    Flipping to the read and back on confirmation would be flicker for the
+    code sensor; the address is unverified either way.
+    """
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    out = push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+    assert out[pin_address(1)] == SlotCredential.known("9999")
+    assert push_coordinator.is_verified(pin_address(1)) is False

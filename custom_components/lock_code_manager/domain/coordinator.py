@@ -237,6 +237,10 @@ class LockUsercodeUpdateCoordinator(
                 del self._pending[address]
                 self._failed_writes.add(address)
                 out[address] = cred
+            elif pending.believed:
+                # Still waiting, and the write was believed: keep showing it
+                # rather than flickering to the read and back on confirmation.
+                out[address] = SlotCredential.known(pending.pin)
             else:
                 out[address] = cred
         return out

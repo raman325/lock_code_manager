@@ -913,7 +913,15 @@ class ZWaveJSLock(BaseLock):
     def _handle_uc_code_update(self, code_slot: int, new_value: Any) -> None:
         """Handle a userCode value update for a code slot."""
         if not new_value:
-            resolved = SlotCredential.empty()
+            # No value from a slot the status says is occupied is the lock
+            # withholding the code, not a cleared slot -- the same rule the
+            # read path's occupancy overlay applies. Taken as empty, it
+            # would fail a pending write the lock in fact kept.
+            resolved = (
+                SlotCredential.unreadable()
+                if self._uc_slot_in_use(code_slot) is True
+                else SlotCredential.empty()
+            )
         else:
             value = str(new_value)
             slot_in_use = self._uc_slot_in_use(code_slot)
