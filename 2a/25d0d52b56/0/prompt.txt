@@ -1,0 +1,47 @@
+Investigate **issue #1538** in `lock_code_manager` — a released 5.5.3 bug against two Aqara U200 Matter-over-Thread locks, with four symptoms and real security impact. Read the issue first; it's detailed and includes sanitized `matter.get_lock_users` output.
+
+**Research already done — don't redo it:**
+
+*Confirmed in code.* The degenerate `lcm3`/`lcm4`/`lcm5` user names come from `providers/matter.py:697` (`_try_set_lock_user_with_fallbacks`). It tries `[lcm:{slot}:{name}, lcm{slot}, {slot}]` in order (candidates built at `matter.py:691`), falling through on `MatterError`. That's meant for firmware that rejects colons — but a *busy or timing-out device* also reports `MatterError`, and the reporter's logs show repeated poll failures. So a transient failure while writing the canonical name permanently stores a display-less one. That's why slots 1–2 got `lcm:N:Name` and 3–5 didn't, on a lock that demonstrably accepts colons. Note `_base.py:1768` (`_build_tagged_user_name`) never emits the compact form — only matter.py does.
+
+*Strong evidence, unconfirmed.* The Matter table shows a systematic index shift: LCM slot 1→user_index 5, 2→1, 3→2, 4→3, 5→4, with `credentialIndex == userIndex` throughout. The event resolver at `matter.py:1300` (`_dispatch_lock_operation`) looks correct in principle — `userIndex` → `user.name` → `parse_tag` → slot, with a credential-index walk as fallback. So for User D's PIN to report as slot 3, either the lock omits `userIndex` and the fallback lands wrong, or `SetUser` and `SetCredential` disagreed on the index at creation. Chase the reporter's hypothesis #7 first.
+
+*Not investigated.* Cross-lock credential deletion and false in-sync — the two worst.
+
+**Suggested order** (worst blast radius first):
+1. **Cross-lock deletion** — removing lock B wiped lock A's credentials. Near code recently changed by #1522 (release-path adopt) and `async_release_locks`; a regression is plausible.
+2. **False in-sync** — sync likely trusts coordinator state instead of verifying the credential exists. Reporter's read is probably right.
+3. **Attribution** — trace `SetUser` vs `SetCredential` index agreement.
+4. **Name fallback** — narrow it to genuine charset rejection, and refuse the write rather than storing an identifier that can't be decoded (there's a `feedback_fail_loud_on_unencodable_identifier` memory note on exactly this).
+
+**Repo context:** venv at `/Users/raman/projects/lock_code_manager/.venv/bin/python`. Run `pytest tests/` (full suite, ~95s, 100% coverage enforced). Use `prek`, not `pre-commit`, and run it *only* on changed files — `prek run --all-files` triggers yarn hooks that sweep unrelated `package.json`/`yarn.lock` churn into commits (happened twice this session). Work in a worktree with absolute paths. `.worktrees/` has five stale ones (`budget-scope`, `probe-retry`, `sync-timeout`, `timeout-edges` are all merged or closed and can be removed; `v6-merge` is live). Coverage is at 100% and line coverage has repeatedly hidden bugs — mutation-test every fix.
+
+**Recent history that matters:** 5.5.2 and 5.5.3 shipped the #1523 timeout work (#1525, #1526, #1527). PR #1529 was closed unmerged after six review rounds — read the close comment and #1528, which now carries a design brief with three constraints for per-round-trip deadlines. #1535 and #1536 are related open gaps. None of that should block #1538.
+
+---
+
+yes and stop classifying
+
+---
+
+run code review on all open PRs. If you can't make it past 2 or 3 code reviews without at least one clean review then there's a code smell problem
+
+---
+
+address both. For voluptuous-serialize, see what HA is using (I think probatio) and see if that is what we should use instead
+
+---
+
+continue, but note that we can fix this by also setting the minimum version to 2026.9 with this PR. Once it's released tomorrow we can release and then we don't have to worry about backwards compatibility
+
+---
+
+continue, but note that we can fix this by also setting the minimum version to 2026.9 with this PR. Once it's released tomorrow we can release and then we don't have to worry about backwards compatibility
+
+---
+
+continue, but note that we can fix this by also setting the minimum version to 2026.9 with this PR. Once it's released tomorrow we can release and then we don't have to worry about backwards compatibility
+
+---
+
+continue, but note that we can fix this by also setting the minimum version to 2026.9 with this PR. Once it's released tomorrow we can release and then we don't have to worry about backwards compatibility
