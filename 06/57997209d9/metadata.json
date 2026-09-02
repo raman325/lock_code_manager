@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "0657997209d9",
+  "strategy": "manual-commit",
+  "branch": "fix/1538-coordinator-owns-pending",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/06/57997209d9/0/metadata.json",
+      "transcript": "/06/57997209d9/0/full.jsonl",
+      "compact_transcript": "/06/57997209d9/0/transcript.jsonl",
+      "content_hash": "/06/57997209d9/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 29160,
+    "cache_creation_tokens": 4389932,
+    "cache_read_tokens": 139926257,
+    "output_tokens": 700609,
+    "api_call_count": 402
+  }
+}
