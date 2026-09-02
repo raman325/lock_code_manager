@@ -1,7 +1,7 @@
 hypothesis>=6.167.0
 pylint-strict-informational>=0.1
 pytest>=9.0.3
-pytest-homeassistant-custom-component==0.13.357
+pytest-homeassistant-custom-component==0.13.361
 # Declared directly rather than leaned on transitively: `timeout` in
 # pyproject.toml degrades to a warning if this goes missing, so the
 # protection would vanish silently.
