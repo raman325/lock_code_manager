@@ -446,44 +446,55 @@ with a comment citing the contract. Never silence one by rerunning.
 
 If `supports_push` returns `True`, implement:
 
-- `subscribe_push_updates()`: Subscribe to real-time updates, call `coordinator.push_update({slot: value})`
+- `subscribe_push_updates()`: Subscribe to real-time updates and hand each slot
+  observation to `self._confirm_slot(slot, SlotCredential)`. That routes it
+  through `coordinator.observe_push`, which resolves any write still pending on
+  the slot before updating the data. Do not call `coordinator.push_update`
+  from an event handler: it bypasses that resolution.
 - `unsubscribe_push_updates()`: Clean up subscriptions
 
-### Optimistic Updates
+### Writes, and how they are confirmed
 
-For providers where the underlying integration's value cache updates asynchronously (e.g., Z-Wave JS
-push notifications), implement optimistic updates to prevent sync loops:
+The coordinator owns a write from the moment it is sent until a read or a push
+shows it on the lock (`record_write` / `observe_push` / `take_failed_write` in
+`domain/coordinator.py`). A provider never tracks pending writes itself; it
+only chooses what to return from `async_set_credential`:
 
 ```python
 async def async_set_credential(self, ref: CredentialRef, value: str, ...) -> WriteResult:
     # ... perform the set operation ...
     await self._call_service_to_set_code(ref.slot, value)
 
-    # Optimistic update: the command succeeded, so tell the coordinator now
-    # rather than waiting for a cache that updates later.
-    self._push_credential_update(
-        ref.slot, SlotCredential.known(value), optimistic=True
-    )
-    return WriteResult(changed=True)
-
-async def async_delete_credential(self, ref: CredentialRef) -> bool:
-    # ... perform the clear operation ...
-    await self._call_service_to_clear_code(ref.slot)
-
-    self._push_credential_update(ref.slot, SlotCredential.empty(), optimistic=True)
-    return True
+    # A push provider pushes the value it wrote before returning CONFIRMED:
+    # its own push is the lock's word, and the seam records nothing pending.
+    self._push_credential_update(ref.slot, SlotCredential.known(value))
+    return WriteResult.CONFIRMED
 ```
+
+- `CONFIRMED` from a **push** provider: the lock accepted the write and the
+  provider (or the driver's event) has pushed the value. Nothing is pending.
+- `CONFIRMED` from a **polled** provider: the service accepted the write, but
+  only a later read can vouch for it. The seam records it pending, unbelieved;
+  the coordinator reads the lock back on its own schedule and the slot is in
+  sync once the read shows it.
+- `OPTIMISTIC`: the write most likely landed but the provider cannot say (for
+  example an ambiguous driver result). The seam records it pending with the
+  value believed, so the entity shows it at once, and the coordinator reads it
+  back. A write the lock never shows is given up after `PENDING_WRITE_TTL` and
+  charged to the slot breaker once.
+- `NO_CHANGE`: nothing was written; nothing is recorded.
 
 Push `SlotCredential` values, never raw strings — every consumer calls
 `.is_present` / `.matches` on them. `_push_credential_update` is the helper that
 wraps `coordinator.push_update` correctly.
 
-**When needed:** The Z-Wave command is acknowledged by the lock (via Supervision CC), but the JS value
-cache updates later via push notification. Without optimistic updates, the coordinator refresh reads
-stale cache data, sees a mismatch, and triggers repeated sync attempts.
+**Why the push before CONFIRMED matters:** for Z-Wave the command is acknowledged
+by the lock (via Supervision CC) but the JS value cache updates later. Without
+the push, the coordinator would hold the stale pre-write value, the write would
+be judged against it, and the slot would re-sync for nothing.
 
-**When NOT needed:** Providers with synchronous caches (like Virtual) don't need this - their next
-read returns the updated value immediately after set/clear.
+**Polled providers with synchronous caches** (like Virtual) need nothing special:
+the coordinator's read straight after the write finds the new value.
 
 ## Important Constraints
 
