@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import CONF_ENABLED, CONF_PIN
@@ -26,6 +27,7 @@ from ..const import (
     BACKOFF_INITIAL_SECONDS,
     BACKOFF_MAX_SECONDS,
     DOMAIN,
+    PENDING_WRITE_TTL,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
 from .credentials import CredentialAddress, CredentialType, pin_address
@@ -39,6 +41,11 @@ if TYPE_CHECKING:
     from ..providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
+
+# Minimum spacing between confirmation reads: four looks inside one
+# pending-write time to live, so a write that landed late is seen well before
+# the deadline and a lock that never keeps it is asked, not hammered.
+_CONFIRM_READ_MIN_INTERVAL = PENDING_WRITE_TTL / 4
 
 
 def _checked(address: CredentialAddress) -> CredentialAddress:
@@ -92,9 +99,11 @@ class LockUsercodeUpdateCoordinator(
         )
         self.data: dict[CredentialAddress, SlotCredential] = {}
         # Slots awaiting confirmation, kept in lockstep with ``data``. A slot is
-        # unverified only while an optimistic (ambiguous-but-treated-as-completed)
-        # write awaits confirmation; every other source -- genuine push events,
-        # polls, hard refreshes, and authoritative writes -- is verified.
+        # unverified only while a write the lock has not yet been seen to hold
+        # is pending -- an optimistic write anywhere, or a confirmed sync write
+        # on a polled lock; every other source -- genuine push events, polls,
+        # hard refreshes, and a push provider's own confirmed write -- is
+        # verified.
         #
         # A set rather than a per-slot flag, because "verified" has no
         # representation of its own: membership is the whole state. Storing it as
@@ -102,6 +111,9 @@ class LockUsercodeUpdateCoordinator(
         # ``True`` that read identically to absence -- and every writer had to
         # remember which of the two to use. See the Phase 2 push-as-commit spec.
         self._unverified: set[CredentialAddress] = set()
+        # Monotonic time of the last confirmation read; see
+        # ``async_confirm_pending_writes``. Zero so the first call always runs.
+        self._last_confirm_read: float = 0.0
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -175,8 +187,9 @@ class LockUsercodeUpdateCoordinator(
         Resolve a genuine read (poll or hard refresh) against pending writes.
 
         A read is the dropped-push backstop for the verified-credential
-        lifecycle: for a slot with an outstanding optimistic write, observing
-        the slot present confirms our write -- keep the believed value and mark
+        lifecycle: for a slot with an outstanding write -- optimistic, or
+        confirmed on a polled lock -- observing the slot present confirms
+        our write -- keep the believed value and mark
         it verified. The one exception (mirroring ``BaseLock._confirm_slot``) is
         a *readable* observation of a different code: that is an external change
         racing our write, so take the observation rather than masking it with
@@ -216,6 +229,20 @@ class LockUsercodeUpdateCoordinator(
         an optimistic write awaits confirmation (push event or hard refresh).
         """
         return _checked(address) not in self._unverified
+
+    @callback
+    def mark_unverified(self, address: CredentialAddress) -> None:
+        """
+        Add an address to the unverified set.
+
+        Called when the seam records a write the lock has not yet been seen
+        to hold, so ``is_verified`` says so from that moment -- not from the
+        first read that happens to miss it. Without this the coordinator
+        would report a slot verified while the lock's own pending record
+        said otherwise, and the sync layer would be reading the private dict
+        to tell the difference.
+        """
+        self._unverified.add(_checked(address))
 
     @callback
     def mark_verified(self, address: CredentialAddress) -> None:
@@ -264,7 +291,7 @@ class LockUsercodeUpdateCoordinator(
 
     async def async_confirm_pending_writes(self) -> None:
         """
-        Actively read the lock back to confirm outstanding optimistic writes.
+        Actively read the lock back to confirm outstanding writes.
 
         An ambiguous write (``WriteResult.OPTIMISTIC``) gets no confirming push
         on some stacks: node-zwave-js, for one, emits no ``credential
@@ -281,11 +308,24 @@ class LockUsercodeUpdateCoordinator(
         driver's ``userCode == codeData`` check) and ``_apply_read`` confirms it;
         a genuinely-absent slot stays pending and re-syncs on the next tick.
 
+        The sync tick also calls this on every pass while a polled lock's
+        confirmed write is pending, because that lock's next scheduled read
+        may be a whole scan interval away and the write's deadline is not.
+        Throttled here rather than there: a read costs a round trip (a cloud
+        call, on Schlage), so at most one is made per quarter of the
+        pending-write time to live, whoever asks. The first call is never
+        throttled, so the seam's read straight after an optimistic write
+        goes out as it always did.
+
         A failed read is non-fatal and does not apply backoff: the slot stays
-        pending and the sync tick reconciles it within the TTL.
+        pending and the sync tick reconciles it within the time to live.
         """
         if not self._lock._pending_writes:
             return
+        now = time.monotonic()
+        if now - self._last_confirm_read < _CONFIRM_READ_MIN_INTERVAL:
+            return
+        self._last_confirm_read = now
         try:
             new_data = self._apply_read(
                 self._normalize_keys(

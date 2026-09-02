@@ -275,11 +275,6 @@ class BaseLock:
     # the ones a service call makes directly, and a memory the sync manager
     # kept could not see those and would go stale.
     _last_set_pins: dict[int, str] = field(default_factory=dict, init=False)
-    # Slots with an outstanding optimistic (ambiguous-but-treated-as-completed)
-    # write awaiting confirmation, mapped to (believed_pin, monotonic_deadline).
-    # A confirmation -- a push event or a hard-refresh read observing the slot
-    # present -- clears the entry and re-pushes the believed value as verified;
-    # if none arrives before the deadline, the sync layer re-syncs. See the
     # Writes the lock has not yet been seen to hold: every optimistic write,
     # and on a polled lock every confirmed one too, since there the only
     # thing that can vouch for a write is a later read. While an address is
@@ -542,18 +537,25 @@ class BaseLock:
         kept ends in a visible suspend rather than a silent in-sync or an
         unbounded rewrite loop.
 
-        The deadline is the TTL plus, on a polled lock, one scan interval:
-        a poller's next read may be a whole interval away, and a deadline
-        shorter than that would charge the breaker for lag the lock was
-        never given a chance to close.
+        The deadline is the pending-write time to live, and only that. A
+        polled lock's next scheduled read may be a whole scan interval away,
+        but the answer is not to wait for it: the sync tick asks the
+        coordinator for a confirming read while the write is pending. A
+        deadline stretched by the interval would put consecutive timeouts
+        further apart than the slot breaker's window, and a write the lock
+        never keeps would retry forever without ever tripping it.
+
+        The address is marked unverified on the coordinator at the same time,
+        so ``is_verified`` and this dict agree about the write from the
+        moment it is recorded rather than from the first read that happens
+        to miss it.
         """
-        window = PENDING_WRITE_TTL
-        if not self.supports_push:
-            window += self.usercode_scan_interval.total_seconds()
         self._pending_writes[pin_address(code_slot)] = (
             pin,
-            time.monotonic() + window,
+            time.monotonic() + PENDING_WRITE_TTL,
         )
+        if self.coordinator is not None:
+            self.coordinator.mark_unverified(pin_address(code_slot))
 
     @callback
     def _record_optimistic_write(self, code_slot: int, pin: str) -> None:
@@ -1409,6 +1411,10 @@ class BaseLock:
         # remembered as cleared would be reported cleared while it holds a
         # working code.
         self._cleared_slots.discard(code_slot)
+        # Forgotten before the write for the same reason: a set that raises
+        # may still have landed, and the PIN remembered would then be the
+        # previous one -- which a write-only lock could never contradict.
+        self._last_set_pins.pop(code_slot, None)
         LOGGER.debug(
             "Setting usercode on %s slot %s (pin=%s, source=%s)",
             self.lock.entity_id,
@@ -1456,23 +1462,30 @@ class BaseLock:
             self._record_optimistic_write(code_slot, str(usercode))
             if self.coordinator is not None:
                 await self.coordinator.async_confirm_pending_writes()
-        elif result is WriteResult.CONFIRMED and self.supports_push:
-            # The provider's own push (or the driver's event) is what confirms
-            # a write here, and it has already happened or is on its way.
-            # Supersede any pending optimistic state and drop the slot from
-            # the unverified set left by a prior optimistic write, so it can
-            # converge instead of churning to a suspend.
-            self._pending_writes.pop(pin_address(code_slot), None)
-            if self.coordinator is not None:
-                self.coordinator.mark_verified(pin_address(code_slot))
         elif result is WriteResult.CONFIRMED:
-            # A polled lock has nothing to vouch for the write but a later
-            # read. "Confirmed" here is the API accepting it -- the Schlage
-            # cloud, say -- not the lock reporting it. Record it pending so
-            # the refresh below confirms it on presence, and an absent read
-            # stays unverified instead of becoming the truth that our own
-            # write then has to argue with (issue #1538).
-            self._record_pending_write(code_slot, str(usercode))
+            if self.supports_push:
+                # The provider's own push (or the driver's event) is what
+                # confirms a write here, and it has already happened or is
+                # on its way. Supersede any pending optimistic state and
+                # drop the slot from the unverified set left by a prior
+                # optimistic write, so it can converge instead of churning
+                # to a suspend.
+                self._pending_writes.pop(pin_address(code_slot), None)
+                if self.coordinator is not None:
+                    self.coordinator.mark_verified(pin_address(code_slot))
+            elif source == "sync":
+                # A polled lock has nothing to vouch for the write but a
+                # later read. "Confirmed" here is the API accepting it -- the
+                # Schlage cloud, say -- not the lock reporting it. Record it
+                # pending so the refresh below confirms it on presence, and
+                # an absent read stays unverified instead of becoming the
+                # truth that our own write then has to argue with (issue
+                # #1538). Only for a sync write: pending means a tick is
+                # waiting to confirm or time it out, and a direct service
+                # write to a slot nothing manages has no tick -- its entry
+                # would outlive the process and be charged to whichever
+                # manager inherited the slot.
+                self._record_pending_write(code_slot, str(usercode))
         # Skip coordinator refresh for push providers — they update optimistically
         # via push_update(), and refreshing from cache could overwrite with stale
         # data when the driver defers cache updates until device confirmation.
@@ -2276,7 +2289,6 @@ class BaseLock:
             ) from err
 
     @final
-    @final
     def last_set_pin(self, code_slot: int) -> str | None:
         """
         Return the PIN last written to ``code_slot``, or None if none is remembered.
@@ -2288,6 +2300,12 @@ class BaseLock:
         have landed -- and by a restart, which is deliberate: an unknown slot is
         re-set once rather than assumed, so the lock ends up holding the
         configured PIN even if that changed while Home Assistant was down.
+
+        Kept for this instance's lifetime, which is not always one entry's: a
+        lock two entries manage shares one instance, so reloading one entry
+        does not forget what the other's writes -- or its own earlier ones --
+        put here. That is the memory doing its job; a write-only lock cannot
+        be asked, so what was last written is the best there is.
         """
         return self._last_set_pins.get(code_slot)
 

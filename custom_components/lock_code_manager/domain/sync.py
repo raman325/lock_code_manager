@@ -769,6 +769,20 @@ class SlotSyncManager:
             self._write_state()
             return
 
+        # -- Lock readiness first, before anything about pending writes --
+        # An unvalidated provider setup (deferred or structurally failed)
+        # suspends alongside unreachability: any write would only fail on
+        # the capability probe, landing in the generic error handler with a
+        # misleading "report this bug" suspension — and, for Z-Wave, re-fire
+        # the slot-count recovery device query on every attempt. Ahead of the
+        # pending check so an outage right after an accepted write reads as
+        # the outage it is, not as a write the lock declined -- and so the
+        # timeout below only ever charges once a read has had its say.
+        if self._coordinator.unreachable or not self._lock.provider_setup_succeeded:
+            self._state = SyncState.SUSPENDED
+            self._write_state()
+            return
+
         # -- PENDING_CONFIRMATION: a write is awaiting confirmation.
         # Don't re-write while waiting; a push event / hard refresh resolves it
         # (clearing the pending entry). On timeout, count a breaker failure and
@@ -790,6 +804,13 @@ class SlotSyncManager:
                 if self._state is not SyncState.PENDING_CONFIRMATION:
                     self._state = SyncState.PENDING_CONFIRMATION
                     self._write_state()
+                if not self._lock.supports_push:
+                    # A polled lock's next scheduled read may be a whole scan
+                    # interval away; the deadline is not. Ask for the read
+                    # that would confirm the write instead of waiting for it.
+                    # The coordinator throttles, so asking every tick is
+                    # asking at most a few times per pending write.
+                    await self._coordinator.async_confirm_pending_writes()
                 return
             # Drop the entry and re-sync on the NEXT tick. Returning here (rather
             # than falling through to _perform_sync this tick) lets a confirming
@@ -808,17 +829,6 @@ class SlotSyncManager:
             # A stale entry (desired state changed) is not a sync failure, so it
             # does not charge the breaker.
             self._state = SyncState.OUT_OF_SYNC
-            self._write_state()
-            return
-
-        # -- OUT_OF_SYNC: check lock readiness, then attempt sync --
-        # An unvalidated provider setup (deferred or structurally failed)
-        # suspends alongside unreachability: any write would only fail on
-        # the capability probe, landing in the generic error handler with a
-        # misleading "report this bug" suspension — and, for Z-Wave, re-fire
-        # the slot-count recovery device query on every attempt.
-        if self._coordinator.unreachable or not self._lock.provider_setup_succeeded:
-            self._state = SyncState.SUSPENDED
             self._write_state()
             return
 
@@ -959,8 +969,11 @@ class SlotSyncManager:
                     # Treat an unverified set the same as a verification
                     # miss: repeated unverified sets must eventually trip
                     # the slot breaker, otherwise a persistently failing
-                    # refresh path leaves the slot retrying forever.
-                    if was_set:
+                    # refresh path leaves the slot retrying forever. Unless
+                    # the write is pending, in which case its deadline owns
+                    # the charge -- charging here too would count one write
+                    # twice and suspend after two attempts instead of three.
+                    if was_set and self._address not in self._lock._pending_writes:
                         self._slot_breaker.record_failure()
                     self._state = SyncState.OUT_OF_SYNC
                     return
@@ -968,10 +981,12 @@ class SlotSyncManager:
         # A set the lock has not yet been seen to hold is pending: don't judge
         # it now -- wait for the lock to confirm it (a push event, a poll, or a
         # hard refresh) in PENDING_CONFIRMATION. The breaker is only charged
-        # when that wait times out (handled at the top of the tick), so a
-        # lagging or masked-but-accepted write is not penalised before the
-        # read that would confirm it arrives -- and a write the lock never
-        # kept is not declared in sync and then rewritten on a loop.
+        # when that wait times out (handled at the top of the tick), so an
+        # absent or masked readback does not penalise a write before the read
+        # that would confirm it arrives -- and a write the lock never kept is
+        # not declared in sync and then rewritten on a loop. A readable
+        # readback of a DIFFERENT code is not lag: _apply_read takes it as
+        # the lock's word, as it always has.
         if self._address in self._lock._pending_writes:
             self._state = SyncState.PENDING_CONFIRMATION
             self._write_state()

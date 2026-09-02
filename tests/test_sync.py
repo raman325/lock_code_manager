@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,6 +22,7 @@ from custom_components.lock_code_manager.const import (
     BACKOFF_FAILURE_THRESHOLD,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    PENDING_WRITE_TTL,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -48,10 +50,7 @@ from .common import (
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_IN_SYNC_ENTITY,
 )
-from .conftest import (
-    async_trigger_sync_tick,
-    get_in_sync_entity_obj,
-)
+from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj
 
 
 def _slot(
@@ -895,6 +894,43 @@ class TestSyncStateMachine:
             await manager._async_tick()
 
         assert manager._state is SyncState.PENDING_CONFIRMATION
+        mock_sync.assert_not_called()
+
+    async def test_unreachable_lock_suspends_even_with_a_write_pending(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """An outage right after an accepted write reads as the outage it is.
+
+        Reachability is judged before the pending write: a lock that cannot
+        be reached is SUSPENDED, as a polled lock always was, rather than held
+        in PENDING_CONFIRMATION and then charged a slot failure at the deadline
+        for a read that could never have happened.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        manager._lock._pending_writes[pin_address(1)] = (
+            "1234",
+            time.monotonic() + 100.0,
+        )
+        manager._coordinator.mark_unverified(pin_address(1))
+        for _ in range(BACKOFF_FAILURE_THRESHOLD):
+            manager._coordinator.note_connectivity_failure()
+        assert manager._coordinator.unreachable
+        manager._state = SyncState.OUT_OF_SYNC
+        seeded = manager._slot_breaker.failure_count
+
+        with patch.object(
+            manager, "_perform_sync", new_callable=AsyncMock
+        ) as mock_sync:
+            await manager._async_tick_impl()
+
+        assert manager._state is SyncState.SUSPENDED
+        assert manager._slot_breaker.failure_count == seeded
         mock_sync.assert_not_called()
 
     async def test_pending_optimistic_write_confirmed_reaches_in_sync(
@@ -1934,36 +1970,27 @@ class TestBreakerTickSoleMutatorInvariant:
         manager = entity_obj._sync_manager
         coordinator = manager._coordinator
 
-        coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
         starting_count = manager._slot_breaker.failure_count
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID
         ]
-
-        # async_set_usercode succeeds (was_set=True) and the readback shows
-        # the slot holding a DIFFERENT code. Fed through the coordinator, not
-        # written into its data: on a polled lock the write is pending until a
-        # read sees the slot, and a readable different code is that read taking
-        # the lock's word over ours. calculate_in_sync then returns False and
-        # the post-verification miss branch must record a failure.
-        def _readback(*_args, **_kwargs):
-            coordinator.async_set_updated_data(
-                coordinator._apply_read({pin_address(1): SlotCredential.known("9999")})
-            )
-
-        with (
-            patch.object(
-                lock_provider,
-                "async_set_usercode",
-                AsyncMock(return_value=WriteResult.CONFIRMED),
-            ),
-            patch.object(
-                coordinator, "async_refresh", AsyncMock(side_effect=_readback)
-            ),
+        # The lock holds a DIFFERENT code, and the accepted set leaves it that
+        # way. The tick's own refresh reads it back through the real
+        # coordinator: on a polled lock the write is pending until a read sees
+        # the slot, and a readable different code is that read taking the
+        # lock's word over ours. calculate_in_sync returns False and the
+        # post-verification miss branch must record a failure.
+        lock_provider.codes[1] = "9999"
+        coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        with patch.object(
+            lock_provider,
+            "async_set_usercode",
+            AsyncMock(return_value=WriteResult.CONFIRMED),
         ):
             await manager._async_tick_impl()
 
+        assert coordinator.is_verified(pin_address(1))
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._slot_breaker.failure_count == starting_count + 1
 
@@ -1972,18 +1999,23 @@ class TestBreakerTickSoleMutatorInvariant:
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
+        freezer,
     ) -> None:
-        """A polled lock's confirmed set with an empty readback waits, then charges.
+        """A polled lock's confirmed set with an absent readback waits, asks, then charges.
 
         "Confirmed" on a poller is the API accepting the write; the lock's own
-        word is the read that follows. An empty readback is not that word yet
+        word is the read that follows. An absent readback is not that word yet
         -- the write is still pending -- so the tick parks the slot in
         PENDING_CONFIRMATION with the breaker untouched, instead of declaring
         it in sync on the strength of its own write and resetting the breaker.
         That reset is what let a write the lock never kept rewrite forever with
         no repair, and a deleted credential read as synchronized (issue #1538).
-        Past the deadline the breaker is charged and the slot re-syncs, so the
-        wait is bounded rather than silent.
+
+        While it waits it asks the coordinator for a confirming read rather
+        than waiting a scan interval for the scheduled one; that is what lets
+        the deadline stay at the time to live, short enough that three
+        timeouts fit inside the breaker window. Past the deadline the breaker
+        is charged and the slot re-syncs, so the wait is bounded, not silent.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
@@ -1993,26 +2025,20 @@ class TestBreakerTickSoleMutatorInvariant:
         ]
         assert lock_provider.supports_push is False
 
+        # The lock holds nothing in the slot, and the accepted set leaves it
+        # that way: every read the real coordinator makes comes back absent.
+        lock_provider.codes.pop(1, None)
         coordinator.data[pin_address(1)] = SlotCredential.empty()
         manager._state = SyncState.OUT_OF_SYNC
         manager._slot_breaker.record_failure()
         seeded = manager._slot_breaker.failure_count
-
-        def _empty_readback(*_args, **_kwargs):
-            coordinator.async_set_updated_data(
-                coordinator._apply_read({pin_address(1): SlotCredential.empty()})
-            )
-
         set_confirmed = patch.object(
             lock_provider,
             "async_set_usercode",
             AsyncMock(return_value=WriteResult.CONFIRMED),
         )
-        empty_readback = patch.object(
-            coordinator, "async_refresh", AsyncMock(side_effect=_empty_readback)
-        )
 
-        with set_confirmed, empty_readback:
+        with set_confirmed:
             await manager._async_tick_impl()
 
         assert manager._state is SyncState.PENDING_CONFIRMATION
@@ -2021,11 +2047,21 @@ class TestBreakerTickSoleMutatorInvariant:
         assert not coordinator.is_verified(pin_address(1))
         pin, deadline = lock_provider._pending_writes[pin_address(1)]
         assert pin == "1234"
-        assert deadline > time.monotonic()
+        assert time.monotonic() < deadline <= time.monotonic() + PENDING_WRITE_TTL
 
-        # The deadline passes with no read having seen the write.
-        lock_provider._pending_writes[pin_address(1)] = (pin, time.monotonic() - 1.0)
-        with set_confirmed, empty_readback:
+        # Still inside the deadline: the tick asks for the read that would
+        # confirm the write instead of waiting for the scheduled poll.
+        reads_before = len(lock_provider.service_calls["hard_refresh_codes"])
+        with set_confirmed:
+            await manager._async_tick_impl()
+        assert len(lock_provider.service_calls["hard_refresh_codes"]) > reads_before
+        assert manager._state is SyncState.PENDING_CONFIRMATION
+        assert manager._slot_breaker.failure_count == seeded
+
+        # The real deadline passes -- the clock moves, the entry is not
+        # rewritten -- with no read having seen the write.
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+        with set_confirmed:
             await manager._async_tick_impl()
 
         assert manager._state is SyncState.OUT_OF_SYNC

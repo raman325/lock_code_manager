@@ -21,6 +21,7 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    PENDING_WRITE_TTL,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
 from custom_components.lock_code_manager.domain.coordinator import (
@@ -1441,10 +1442,58 @@ async def test_accessors_are_addressed_not_slot_numbered(push_coordinator) -> No
     assert push_coordinator.is_verified(address) is False
     push_coordinator.mark_verified(address)
     assert push_coordinator.is_verified(address) is True
+    # And back: recording a write the lock has not been seen to hold.
+    push_coordinator.mark_unverified(address)
+    assert push_coordinator.is_verified(address) is False
+
+
+async def test_recording_a_pending_write_marks_it_unverified_at_once(
+    poll_lock, poll_coordinator
+) -> None:
+    """``is_verified`` and the pending record agree from the moment of the write.
+
+    Not from the first read that happens to miss it: until then the
+    coordinator would report a slot verified while the lock's own pending
+    record said otherwise, and the sync layer would have to read the private
+    dict to tell the difference.
+    """
+    poll_lock.coordinator = poll_coordinator
+    poll_coordinator.push_update({1: SlotCredential.known("0000")})
+    assert poll_coordinator.is_verified(pin_address(1)) is True
+
+    poll_lock._record_pending_write(1, "1234")
+
+    assert poll_coordinator.is_verified(pin_address(1)) is False
+
+
+async def test_confirm_pending_writes_is_throttled_across_callers(
+    poll_lock, poll_coordinator, freezer
+) -> None:
+    """At most one confirmation read per quarter of the time to live.
+
+    The sync tick asks on every pass while a polled lock's write is pending,
+    so the throttle lives here, next to the read it protects: a read is a
+    round trip -- on Schlage a cloud call -- and asking is not hammering.
+    The first call always goes out, so the seam's read straight after an
+    optimistic write is unaffected.
+    """
+    poll_lock._pending_writes[pin_address(1)] = ("1234", time.monotonic() + 60.0)
+    poll_lock.codes.pop(1, None)  # every read comes back absent; stays pending
+    reads = poll_lock.service_calls["hard_refresh_codes"]
+
+    await poll_coordinator.async_confirm_pending_writes()
+    await poll_coordinator.async_confirm_pending_writes()
+    assert len(reads) == 1
+
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL / 4 + 1))
+    await poll_coordinator.async_confirm_pending_writes()
+    assert len(reads) == 2
+    assert pin_address(1) in poll_lock._pending_writes
 
 
 @pytest.mark.parametrize(
-    "accessor", ["is_verified", "mark_verified", "desired_credential"]
+    "accessor",
+    ["is_verified", "mark_unverified", "mark_verified", "desired_credential"],
 )
 async def test_non_pin_address_is_rejected(push_coordinator, accessor) -> None:
     """A non-PIN address is a programming error, not a missing entry.

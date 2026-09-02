@@ -236,8 +236,11 @@ class WriteResult(StrEnum):
 
     - ``NO_CHANGE`` -- the value was already set; nothing was written. The
       coordinator is not refreshed.
-    - ``CONFIRMED`` -- the lock acknowledged the write. The slot is marked
-      verified; non-push providers refresh to read it back.
+    - ``CONFIRMED`` -- the write was accepted. On a push provider that is the
+      lock's word: the provider pushes the value (or the driver's event does)
+      and the slot is marked verified. On a polled lock it is the API's word
+      only, so a sync write is recorded pending -- unverified until a read
+      sees the slot hold it, and timed out into a re-sync if none does.
     - ``OPTIMISTIC`` -- the write returned an ambiguous result we treat as
       completed but have NOT confirmed (e.g. a Z-Wave driver
       ``ERROR_UNKNOWN`` from a masked read-back). The slot is marked

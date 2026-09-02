@@ -1823,6 +1823,7 @@ async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
 
     # Force out of sync
     mgr._state = SyncState.OUT_OF_SYNC
+    failures_before = mgr._slot_breaker.failure_count
 
     # Patch coordinator.async_refresh to raise on first call
     refresh_call_count = {"count": 0}
@@ -1842,17 +1843,22 @@ async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
     # The code was set on the lock even though refresh failed
     assert lock_provider.codes[1] == "9999"
 
-    # State should be OUT_OF_SYNC because we could not verify
+    # State should be OUT_OF_SYNC because we could not verify. The write is
+    # pending, and its deadline owns any charge -- the failed refresh must not
+    # count the same write against the breaker as well.
     assert mgr._state is SyncState.OUT_OF_SYNC
     assert pin_address(1) in lock_provider._pending_writes
+    assert mgr._slot_breaker.failure_count == failures_before
 
-    # The scheduled read succeeds this time and sees the code present, which
-    # is what confirms the pending write; the tick then finds nothing left to
-    # do. No second set is issued along the way.
+    # The tick alone settles it. While the write is pending on a polled lock
+    # the tick asks the coordinator for a confirming read rather than waiting
+    # for the scheduled poll; that read succeeds this time and sees the code
+    # present, which confirms the pending write, and the tick after that
+    # finds nothing left to do. No second set is issued along the way.
     with patch.object(
         lock_provider, "async_set_usercode", wraps=lock_provider.async_set_usercode
     ) as second_set:
-        await coordinator.async_refresh()
+        await mgr._async_tick()
         await mgr._async_tick()
         await hass.async_block_till_done()
     second_set.assert_not_called()

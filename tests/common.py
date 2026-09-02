@@ -306,13 +306,17 @@ class MockLCMLock(BaseLock):
         self.service_calls["get_usercodes"].append(snapshot)
         codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
         codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
-        if slots is None:
-            return codes
         # Mirrors the base projection, including the part that matters: a slot
         # in the scope that holds nothing is empty, and a slot the lock holds
         # OUTSIDE the scope is still reported. Answering with exactly the
         # scope would model the one shape where a caller's own bounds check
-        # is a no-op.
+        # is a no-op. Unscoped, the scope is the managed slots, as in
+        # ``_project_users_to_slots`` -- the coordinator's poll reads that
+        # way, and the pending-write machinery leans on an absent managed
+        # slot being REPORTED empty rather than left out: a read that omits
+        # the slot cannot keep its pending write unverified.
+        if slots is None:
+            slots = self.managed_slots
         return {**dict.fromkeys(slots, SlotCredential.empty()), **codes}
 
 
