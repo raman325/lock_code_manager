@@ -274,6 +274,11 @@ class BaseLock:
     # ``_cleared_slots``: every write funnels through this class, including
     # the ones a service call makes directly, and a memory the sync manager
     # kept could not see those and would go stale.
+    #
+    # Both memories are forgotten BEFORE any write to the slot is sent and
+    # recorded only after it returns: a write that raises may still have
+    # landed, and a memory that survived it would describe the slot as it
+    # was, not as it may now be.
     _last_set_pins: dict[int, str] = field(default_factory=dict, init=False)
     # Writes the lock has not yet been seen to hold: every optimistic write,
     # and on a polled lock every confirmed one too, since there the only
@@ -545,17 +550,19 @@ class BaseLock:
         further apart than the slot breaker's window, and a write the lock
         never keeps would retry forever without ever tripping it.
 
-        The address is marked unverified on the coordinator at the same time,
-        so ``is_verified`` and this dict agree about the write from the
-        moment it is recorded rather than from the first read that happens
-        to miss it.
+        The coordinator reads this record to answer ``is_verified``, so the
+        two agree from the moment the write is recorded without anything
+        being mirrored.
         """
         self._pending_writes[pin_address(code_slot)] = (
             pin,
             time.monotonic() + PENDING_WRITE_TTL,
         )
-        if self.coordinator is not None:
-            self.coordinator.mark_unverified(pin_address(code_slot))
+
+    @final
+    def has_pending_write(self, address: CredentialAddress) -> bool:
+        """Return whether a write is still pending against ``address``."""
+        return address in self._pending_writes
 
     @callback
     def _record_optimistic_write(self, code_slot: int, pin: str) -> None:
@@ -1411,9 +1418,6 @@ class BaseLock:
         # remembered as cleared would be reported cleared while it holds a
         # working code.
         self._cleared_slots.discard(code_slot)
-        # Forgotten before the write for the same reason: a set that raises
-        # may still have landed, and the PIN remembered would then be the
-        # previous one -- which a write-only lock could never contradict.
         self._last_set_pins.pop(code_slot, None)
         LOGGER.debug(
             "Setting usercode on %s slot %s (pin=%s, source=%s)",
@@ -1447,9 +1451,11 @@ class BaseLock:
             name=name,
             source=source,
         )
+        pin = str(usercode)
+        address = pin_address(code_slot)
         # Whatever the result, this is now the PIN the lock was last given
         # for the slot; NO_CHANGE means it already held it.
-        self._last_set_pins[code_slot] = str(usercode)
+        self._last_set_pins[code_slot] = pin
         if result is WriteResult.OPTIMISTIC:
             # Ambiguous write: record it pending and push the believed value as
             # unverified, then actively read the lock back to confirm it. Some
@@ -1459,37 +1465,46 @@ class BaseLock:
             # slot whose code actually landed. The active read confirms a
             # present-but-masked slot; a genuinely-absent slot stays pending and
             # the sync tick re-syncs after the TTL.
-            self._record_optimistic_write(code_slot, str(usercode))
+            self._record_optimistic_write(code_slot, pin)
             if self.coordinator is not None:
-                await self.coordinator.async_confirm_pending_writes()
+                await self.coordinator.async_confirm_pending_writes(force=True)
         elif result is WriteResult.CONFIRMED:
             if self.supports_push:
-                # The provider's own push (or the driver's event) is what
-                # confirms a write here, and it has already happened or is
-                # on its way. Supersede any pending optimistic state and
-                # drop the slot from the unverified set left by a prior
-                # optimistic write, so it can converge instead of churning
-                # to a suspend.
-                self._pending_writes.pop(pin_address(code_slot), None)
+                # The provider's own push (or the driver's event) is the
+                # lock's word for the write. Supersede any pending optimistic
+                # state and drop a believed value left by a prior optimistic
+                # write on the slot, so it converges instead of churning to
+                # a suspend.
+                self._pending_writes.pop(address, None)
                 if self.coordinator is not None:
-                    self.coordinator.mark_verified(pin_address(code_slot))
-            elif source == "sync":
+                    self.coordinator.mark_verified(address)
+            elif self.is_slot_managed(code_slot):
                 # A polled lock has nothing to vouch for the write but a
-                # later read. "Confirmed" here is the API accepting it -- the
-                # Schlage cloud, say -- not the lock reporting it. Record it
-                # pending so the refresh below confirms it on presence, and
-                # an absent read stays unverified instead of becoming the
-                # truth that our own write then has to argue with (issue
-                # #1538). Only for a sync write: pending means a tick is
-                # waiting to confirm or time it out, and a direct service
-                # write to a slot nothing manages has no tick -- its entry
-                # would outlive the process and be charged to whichever
-                # manager inherited the slot.
-                self._record_pending_write(code_slot, str(usercode))
+                # later read: "confirmed" here is the cloud service accepting
+                # it, not the lock reporting it. Record the write pending so
+                # an absent read stays unverified until a read sees the slot
+                # hold it. Any earlier pending write to the slot is replaced,
+                # so a direct write over a lagging sync write is the one the
+                # read then confirms. Only a managed slot has a sync tick to
+                # confirm the entry or time it out. Then read straight back,
+                # as the optimistic path does: when the lock already reports
+                # the write the slot is in sync on this tick, and only a
+                # lagging read leaves it pending.
+                self._record_pending_write(code_slot, pin)
+                if self.coordinator is not None:
+                    await self.coordinator.async_confirm_pending_writes(force=True)
+            else:
+                self._pending_writes.pop(address, None)
         # Skip coordinator refresh for push providers — they update optimistically
         # via push_update(), and refreshing from cache could overwrite with stale
         # data when the driver defers cache updates until device confirmation.
-        if result.changed and self.coordinator and not self.supports_push:
+        # A write recorded pending has just been read for above.
+        if (
+            result.changed
+            and self.coordinator
+            and not self.supports_push
+            and not self.has_pending_write(address)
+        ):
             await self.coordinator.async_request_refresh()
 
     async def async_clear_usercode(
@@ -1601,11 +1616,6 @@ class BaseLock:
         # stale pending entry must not keep gating reconciliation (the sync tick
         # keys PENDING_CONFIRMATION on this dict).
         self._pending_writes.pop(pin_address(code_slot), None)
-        # Forgotten BEFORE the clear, for the same reason the set discards
-        # ``_cleared_slots`` before it writes: a clear that raises may still
-        # have landed, and a PIN still remembered for an emptied slot would
-        # let the next set of that same PIN read as already in sync on a
-        # lock that cannot say otherwise.
         self._last_set_pins.pop(code_slot, None)
         changed = await self._execute_rate_limited(
             "clear",
@@ -2303,9 +2313,7 @@ class BaseLock:
 
         Kept for this instance's lifetime, which is not always one entry's: a
         lock two entries manage shares one instance, so reloading one entry
-        does not forget what the other's writes -- or its own earlier ones --
-        put here. That is the memory doing its job; a write-only lock cannot
-        be asked, so what was last written is the best there is.
+        keeps what was written here.
         """
         return self._last_set_pins.get(code_slot)
 

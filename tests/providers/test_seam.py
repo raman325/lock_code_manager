@@ -1119,7 +1119,7 @@ async def test_optimistic_set_actively_confirms_instead_of_waiting(
 async def test_confirmed_set_on_a_poller_is_pending_until_a_read_sees_it(
     hass: HomeAssistant,
 ) -> None:
-    """A polled lock's CONFIRMED sync write is recorded pending, for the time to live.
+    """A polled lock's CONFIRMED write to a managed slot is pending, for the time to live.
 
     "Confirmed" on a poller is the API accepting the write, not the lock
     reporting it -- the Schlage cloud says yes and its read catches up later.
@@ -1130,8 +1130,7 @@ async def test_confirmed_set_on_a_poller_is_pending_until_a_read_sees_it(
     tick asks for a confirming read while it waits, and a deadline stretched
     by the interval would put consecutive timeouts further apart than the
     slot breaker's window, so a write the lock never keeps could never trip
-    it. On this stub the two are both 60 s, so the upper bound is what
-    proves the interval was left out.
+    it.
     """
     lock, pushed = _slot_only_lock_with_coordinator(hass)
     lock._min_operation_delay = 0.0
@@ -1139,33 +1138,34 @@ async def test_confirmed_set_on_a_poller_is_pending_until_a_read_sees_it(
     before = time.monotonic()
     with (
         patch.object(BaseLock, "async_is_integration_connected", return_value=True),
+        patch.object(lock, "is_slot_managed", return_value=True),
         patch.object(
             lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
         ),
     ):
-        await lock.async_internal_set_usercode(4, "1234", "carol", source="sync")
+        await lock.async_internal_set_usercode(4, "1234", "carol")
 
     pin, deadline = lock._pending_writes[pin_address(4)]
     assert pin == "1234"
-    interval = lock.usercode_scan_interval.total_seconds()
-    assert PENDING_WRITE_TTL <= deadline - before < PENDING_WRITE_TTL + interval
+    assert deadline - before == pytest.approx(PENDING_WRITE_TTL, abs=1.0)
     # No believed value is pushed: the read that follows is what will say
     # whether the write landed.
     assert pushed == []
 
 
-async def test_confirmed_direct_set_on_a_poller_is_remembered_but_not_pending(
+async def test_confirmed_set_to_an_unmanaged_slot_is_remembered_but_not_pending(
     hass: HomeAssistant,
 ) -> None:
-    """A direct service write updates the last-set memory but is not pending.
+    """A write to a slot nothing manages updates the last-set memory, not pending.
 
     Pending means a sync tick is waiting to confirm the write or time it out.
-    A direct write to a slot nothing manages has no tick, so its entry would
-    outlive the process and be charged to whichever manager later inherited
-    the slot. The memory of what was written is still the provider's to keep.
+    An unmanaged slot has no tick, so its entry would outlive the process and
+    be charged to whichever manager later inherited the slot. The memory of
+    what was written is still the provider's to keep.
     """
     lock, _pushed = _slot_only_lock_with_coordinator(hass)
     lock._min_operation_delay = 0.0
+    assert lock.is_slot_managed(4) is False
     with (
         patch.object(BaseLock, "async_is_integration_connected", return_value=True),
         patch.object(
@@ -1176,6 +1176,32 @@ async def test_confirmed_direct_set_on_a_poller_is_remembered_but_not_pending(
 
     assert pin_address(4) not in lock._pending_writes
     assert lock.last_set_pin(4) == "1234"
+
+
+async def test_a_direct_write_supersedes_a_pending_sync_write_to_the_same_slot(
+    hass: HomeAssistant,
+) -> None:
+    """The pending record follows the latest write, whoever made it.
+
+    A sync write is pending and its read is lagging; a service call then
+    writes a different PIN to the same slot. The read that finally sees the
+    slot present must confirm the PIN actually on the lock -- the direct one
+    -- not the superseded sync one.
+    """
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    lock._record_pending_write(4, "1234")
+    with (
+        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
+        patch.object(lock, "is_slot_managed", return_value=True),
+        patch.object(
+            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
+        ),
+    ):
+        await lock.async_internal_set_usercode(4, "5678", "carol")
+
+    pin, _deadline = lock._pending_writes[pin_address(4)]
+    assert pin == "5678"
 
 
 async def test_confirmed_set_on_a_push_provider_records_nothing_pending(
@@ -1197,7 +1223,7 @@ async def test_confirmed_set_on_a_push_provider_records_nothing_pending(
             lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
         ),
     ):
-        await lock.async_internal_set_usercode(4, "1234", "carol", source="sync")
+        await lock.async_internal_set_usercode(4, "1234", "carol")
 
     assert pin_address(4) not in lock._pending_writes
 

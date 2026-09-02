@@ -205,10 +205,11 @@ BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
 # Poll failure alerting
 POLL_FAILURE_ALERT_THRESHOLD: int = 12
 
-# How long a write waits to be seen on the lock before the sync tick
-# stops waiting, charges the breaker and re-syncs. On a polled lock the
-# seam adds one scan interval, since the read that would confirm it may
-# be that far away.
+# How long a write waits to be seen on the lock before the sync tick stops
+# waiting and re-syncs. The tick asks for a confirming read while it waits,
+# so this does not have to span a polled lock's scan interval -- and must
+# not: three of these have to fit inside SYNC_ATTEMPT_WINDOW for a write the
+# lock never keeps to trip the slot breaker.
 PENDING_WRITE_TTL: float = 60.0
 
 # Sync timing

@@ -42,6 +42,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    PENDING_WRITE_TTL,
     SERVICE_SET_USERCODE,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
@@ -620,7 +621,13 @@ async def test_coordinator_refresh_failure_schedules_retry(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that coordinator refresh failure after sync sets dirty flag."""
+    """A read that fails after a confirmed write leaves the write pending, not settled.
+
+    On a polled lock the write is trusted only once a read has seen it. The
+    read straight after the write fails here, so nothing has vouched for it:
+    the slot waits, pending, and the tick asks for the read again rather than
+    declaring the slot out of sync and writing the code a second time.
+    """
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
 
     # Verify initial state - slot should be active and in sync
@@ -657,10 +664,11 @@ async def test_coordinator_refresh_failure_schedules_retry(
         await in_sync_entity_obj._sync_manager._async_tick()
         await hass.async_block_till_done()
 
-    # State should be OUT_OF_SYNC due to coordinator refresh failure
-    assert in_sync_entity_obj._sync_manager._state is SyncState.OUT_OF_SYNC, (
-        "State should be OUT_OF_SYNC when coordinator refresh fails after sync"
-    )
+    # The write went through; the read that would vouch for it did not.
+    assert lock_provider.codes[1] == "9999"
+    assert in_sync_entity_obj._sync_manager._state is SyncState.PENDING_CONFIRMATION
+    assert pin_address(1) in lock_provider._pending_writes
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_OFF
 
 
 async def test_coordinator_update_triggers_sync_on_external_change(
@@ -1792,16 +1800,18 @@ async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    freezer,
 ):
     """
-    If the refresh after a successful sync fails, the read that follows settles it.
+    A confirming read that fails is asked again; the one that succeeds settles it.
 
-    This exercises the try/except around coordinator.async_refresh() in
-    _async_tick_impl. The sync succeeded but we cannot verify it, so the
-    slot is out of sync and the write stays pending: on a polled lock a
-    confirmed write is trusted only once a read has seen it. The next
-    successful read confirms it, and the tick after that is in sync --
-    without writing the code a second time.
+    On a polled lock a confirmed write is trusted only once a read has seen
+    it, so after the set the slot waits, pending. The tick asks for a
+    confirming read while it waits; the first one fails and is simply asked
+    again once the throttle passes. The read that succeeds sees the code
+    present and confirms the write, and the tick after that is in sync --
+    without writing the code a second time and without charging the breaker
+    for a read that never happened.
     """
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
 
@@ -1843,25 +1853,24 @@ async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
     # The code was set on the lock even though refresh failed
     assert lock_provider.codes[1] == "9999"
 
-    # State should be OUT_OF_SYNC because we could not verify. The write is
-    # pending, and its deadline owns any charge -- the failed refresh must not
-    # count the same write against the breaker as well.
-    assert mgr._state is SyncState.OUT_OF_SYNC
+    # The write is pending and the slot waits for a read to vouch for it.
+    assert mgr._state is SyncState.PENDING_CONFIRMATION
     assert pin_address(1) in lock_provider._pending_writes
     assert mgr._slot_breaker.failure_count == failures_before
 
-    # The tick alone settles it. While the write is pending on a polled lock
-    # the tick asks the coordinator for a confirming read rather than waiting
-    # for the scheduled poll; that read succeeds this time and sees the code
-    # present, which confirms the pending write, and the tick after that
-    # finds nothing left to do. No second set is issued along the way.
+    # The tick alone settles it: each pass past the throttle asks for a
+    # confirming read. The first raises and is swallowed; the second succeeds,
+    # sees the code present and confirms the write; the tick after that finds
+    # nothing left to do. No second set is issued along the way.
     with patch.object(
         lock_provider, "async_set_usercode", wraps=lock_provider.async_set_usercode
     ) as second_set:
-        await mgr._async_tick()
-        await mgr._async_tick()
+        for _ in range(3):
+            freezer.tick(timedelta(seconds=PENDING_WRITE_TTL / 4 + 1))
+            await mgr._async_tick()
         await hass.async_block_till_done()
     second_set.assert_not_called()
+    assert mgr._slot_breaker.failure_count == failures_before
 
     assert pin_address(1) not in lock_provider._pending_writes
     assert mgr._state is SyncState.IN_SYNC

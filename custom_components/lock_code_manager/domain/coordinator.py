@@ -98,12 +98,11 @@ class LockUsercodeUpdateCoordinator(
             config_entry=config_entry,
         )
         self.data: dict[CredentialAddress, SlotCredential] = {}
-        # Slots awaiting confirmation, kept in lockstep with ``data``. A slot is
-        # unverified only while a write the lock has not yet been seen to hold
-        # is pending -- an optimistic write anywhere, or a confirmed sync write
-        # on a polled lock; every other source -- genuine push events, polls,
-        # hard refreshes, and a push provider's own confirmed write -- is
-        # verified.
+        # Addresses whose ``data`` holds a BELIEVED value: the PIN an optimistic
+        # write pushed before anything confirmed it. Kept in lockstep with
+        # ``data``. This is one half of ``is_verified``; the other -- a write
+        # still pending against the address -- is read off the lock's own
+        # record rather than mirrored here, so the two cannot drift apart.
         #
         # A set rather than a per-slot flag, because "verified" has no
         # representation of its own: membership is the whole state. Storing it as
@@ -111,9 +110,12 @@ class LockUsercodeUpdateCoordinator(
         # ``True`` that read identically to absence -- and every writer had to
         # remember which of the two to use. See the Phase 2 push-as-commit spec.
         self._unverified: set[CredentialAddress] = set()
-        # Monotonic time of the last confirmation read; see
-        # ``async_confirm_pending_writes``. Zero so the first call always runs.
-        self._last_confirm_read: float = 0.0
+        # Monotonic time the last genuine read completed -- poll, drift check,
+        # or confirmation read -- stamped by ``_apply_read``. Throttles
+        # ``async_confirm_pending_writes`` and tells the sync tick whether a
+        # read has had its say about a write. Zero so the first read is never
+        # throttled.
+        self._last_read_at: float = 0.0
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -219,41 +221,38 @@ class LockUsercodeUpdateCoordinator(
                 self._unverified.discard(address)
         # Keep the unverified set in lockstep with the read.
         self._unverified &= out.keys()
+        self._last_read_at = time.monotonic()
         return out
 
     def is_verified(self, address: CredentialAddress) -> bool:
         """
         Return whether the address's credential is a confirmed observation.
 
-        Unlisted addresses are verified: an address is only unverified while
-        an optimistic write awaits confirmation (push event or hard refresh).
+        False while either of two things is true: ``data`` holds a value an
+        optimistic write pushed before anything confirmed it, or a write is
+        still pending against the address on the lock -- an optimistic write
+        anywhere, or a confirmed sync write on a polled lock, until a read has
+        seen the slot hold it. Everything else is the lock's word.
         """
-        return _checked(address) not in self._unverified
-
-    @callback
-    def mark_unverified(self, address: CredentialAddress) -> None:
-        """
-        Add an address to the unverified set.
-
-        Called when the seam records a write the lock has not yet been seen
-        to hold, so ``is_verified`` says so from that moment -- not from the
-        first read that happens to miss it. Without this the coordinator
-        would report a slot verified while the lock's own pending record
-        said otherwise, and the sync layer would be reading the private dict
-        to tell the difference.
-        """
-        self._unverified.add(_checked(address))
+        checked = _checked(address)
+        return checked not in self._unverified and not self._lock.has_pending_write(
+            checked
+        )
 
     @callback
     def mark_verified(self, address: CredentialAddress) -> None:
         """
-        Drop an address from the unverified set.
+        Drop an address's believed value from the unverified set.
 
-        Called when a write is confirmed by the lock (an authoritative
-        ``WriteResult.CONFIRMED``), so an address left unverified by a prior
+        Called on a push provider's ``WriteResult.CONFIRMED``, whose own push
+        is the lock's word for the write, so a believed value left by a prior
         optimistic write on the same address cannot strand it.
         """
         self._unverified.discard(_checked(address))
+
+    def read_completed_since(self, moment: float) -> bool:
+        """Return whether a genuine read has completed since ``moment`` (monotonic)."""
+        return self._last_read_at >= moment
 
     def credential(self, address: CredentialAddress) -> SlotCredential | None:
         """
@@ -289,7 +288,7 @@ class LockUsercodeUpdateCoordinator(
             if address.credential_type is credential_type
         }
 
-    async def async_confirm_pending_writes(self) -> None:
+    async def async_confirm_pending_writes(self, *, force: bool = False) -> None:
         """
         Actively read the lock back to confirm outstanding writes.
 
@@ -308,25 +307,35 @@ class LockUsercodeUpdateCoordinator(
         driver's ``userCode == codeData`` check) and ``_apply_read`` confirms it;
         a genuinely-absent slot stays pending and re-syncs on the next tick.
 
-        The sync tick also calls this on every pass while a polled lock's
-        confirmed write is pending, because that lock's next scheduled read
-        may be a whole scan interval away and the write's deadline is not.
-        Throttled here rather than there: a read costs a round trip (a cloud
-        call, on Schlage), so at most one is made per quarter of the
-        pending-write time to live, whoever asks. The first call is never
-        throttled, so the seam's read straight after an optimistic write
-        goes out as it always did.
+        The sync tick also calls this on every pass while a write is pending,
+        because a polled lock's next scheduled read may be a whole scan
+        interval away and the write's deadline is not, and because a push
+        provider's one read may have failed. Throttled here rather than
+        there, against the last read of any kind: a read costs a round trip
+        (a cloud call, on Schlage), so one is made at most per quarter of the
+        pending-write time to live, whoever asks. ``force`` is the seam's,
+        for the read straight after its own write -- the first look at THIS
+        write, whatever was read a moment ago for another.
+
+        A polled lock is read through the ordinary poll path, which is the
+        read that will vouch for it anyway; a hard refresh is for push
+        providers, whose ordinary path is the cache the write may not have
+        reached.
 
         A failed read is non-fatal and does not apply backoff: the slot stays
         pending and the sync tick reconciles it within the time to live.
         """
         if not self._lock._pending_writes:
             return
-        now = time.monotonic()
-        if now - self._last_confirm_read < _CONFIRM_READ_MIN_INTERVAL:
+        if (
+            not force
+            and time.monotonic() - self._last_read_at < _CONFIRM_READ_MIN_INTERVAL
+        ):
             return
-        self._last_confirm_read = now
         try:
+            if not self._is_push:
+                await self.async_refresh()
+                return
             new_data = self._apply_read(
                 self._normalize_keys(
                     await self._lock.async_internal_hard_refresh_codes()

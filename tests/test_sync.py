@@ -896,6 +896,38 @@ class TestSyncStateMachine:
         assert manager._state is SyncState.PENDING_CONFIRMATION
         mock_sync.assert_not_called()
 
+    async def test_timeout_with_no_read_completed_does_not_charge(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """A deadline that passes with no read completing is not a slot failure.
+
+        Reads failing, or an outage that outlived the deadline, mean the lock
+        was never asked; charging the slot breaker for that would blame the
+        code for the connection. The entry is dropped and the slot re-syncs,
+        uncharged.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        # The write happens after the last read, not in the same frozen instant.
+        freezer.tick(timedelta(seconds=1))
+        manager._lock._record_pending_write(1, "1234")
+        manager._state = SyncState.OUT_OF_SYNC
+        seeded = manager._slot_breaker.failure_count
+
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+        with patch.object(manager, "_perform_sync", new_callable=AsyncMock):
+            await manager._async_tick_impl()
+
+        assert pin_address(1) not in manager._lock._pending_writes
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._slot_breaker.failure_count == seeded
+
     async def test_unreachable_lock_suspends_even_with_a_write_pending(
         self,
         hass: HomeAssistant,
@@ -913,11 +945,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
 
-        manager._lock._pending_writes[pin_address(1)] = (
-            "1234",
-            time.monotonic() + 100.0,
-        )
-        manager._coordinator.mark_unverified(pin_address(1))
+        manager._lock._record_pending_write(1, "1234")
         for _ in range(BACKOFF_FAILURE_THRESHOLD):
             manager._coordinator.note_connectivity_failure()
         assert manager._coordinator.unreachable
@@ -2049,17 +2077,19 @@ class TestBreakerTickSoleMutatorInvariant:
         assert pin == "1234"
         assert time.monotonic() < deadline <= time.monotonic() + PENDING_WRITE_TTL
 
-        # Still inside the deadline: the tick asks for the read that would
-        # confirm the write instead of waiting for the scheduled poll.
-        reads_before = len(lock_provider.service_calls["hard_refresh_codes"])
+        # Still inside the deadline: once the throttle since the seam's own
+        # read has passed, the tick asks for the read that would confirm the
+        # write instead of waiting for the scheduled poll.
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL / 4 + 1))
+        reads_before = len(lock_provider.service_calls["get_usercodes"])
         with set_confirmed:
             await manager._async_tick_impl()
-        assert len(lock_provider.service_calls["hard_refresh_codes"]) > reads_before
+        assert len(lock_provider.service_calls["get_usercodes"]) > reads_before
         assert manager._state is SyncState.PENDING_CONFIRMATION
         assert manager._slot_breaker.failure_count == seeded
 
         # The real deadline passes -- the clock moves, the entry is not
-        # rewritten -- with no read having seen the write.
+        # rewritten -- with every read since the write having missed it.
         freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
         with set_confirmed:
             await manager._async_tick_impl()

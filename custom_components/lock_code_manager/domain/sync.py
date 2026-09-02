@@ -51,6 +51,7 @@ from ..const import (
     ATTR_CODE,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    PENDING_WRITE_TTL,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
@@ -459,12 +460,10 @@ class SlotSyncManager:
         if snapshot.active_state == STATE_ON:
             if credential is not None:
                 if credential.is_empty:
-                    # The lock's answer, not a lagging read: a read that could
-                    # still be trailing one of our writes leaves the address
-                    # unverified, and the guard above already refused it. So
-                    # there is no write of ours to weigh against this, and an
-                    # active slot the lock says is empty is out of sync --
-                    # whatever we last wrote there (issue #1538).
+                    # The lock's answer, not a lagging read: while a write of
+                    # ours could still be ahead of the read, the address is
+                    # unverified and the guard above refuses it. An active slot
+                    # the lock says is empty is out of sync.
                     return False
                 if not credential.is_readable:
                     # No read will ever say what a write-only lock holds, so
@@ -776,18 +775,17 @@ class SlotSyncManager:
         # misleading "report this bug" suspension — and, for Z-Wave, re-fire
         # the slot-count recovery device query on every attempt. Ahead of the
         # pending check so an outage right after an accepted write reads as
-        # the outage it is, not as a write the lock declined -- and so the
-        # timeout below only ever charges once a read has had its say.
+        # the outage it is, not as a write the lock declined.
         if self._coordinator.unreachable or not self._lock.provider_setup_succeeded:
             self._state = SyncState.SUSPENDED
             self._write_state()
             return
 
         # -- PENDING_CONFIRMATION: a write is awaiting confirmation.
-        # Don't re-write while waiting; a push event / hard refresh resolves it
-        # (clearing the pending entry). On timeout, count a breaker failure and
-        # fall through to re-sync -- so a write the lock never committed ends in
-        # a visible suspend, never a silent in-sync.
+        # Don't re-write while waiting; a push event, a poll or a confirmation
+        # read resolves it (clearing the pending entry). On timeout, count a
+        # breaker failure and fall through to re-sync -- so a write the lock
+        # never committed ends in a visible suspend, never a silent in-sync.
         pending = self._lock._pending_writes.get(self._address)
         if pending is not None:
             believed_pin, deadline = pending
@@ -804,21 +802,25 @@ class SlotSyncManager:
                 if self._state is not SyncState.PENDING_CONFIRMATION:
                     self._state = SyncState.PENDING_CONFIRMATION
                     self._write_state()
-                if not self._lock.supports_push:
-                    # A polled lock's next scheduled read may be a whole scan
-                    # interval away; the deadline is not. Ask for the read
-                    # that would confirm the write instead of waiting for it.
-                    # The coordinator throttles, so asking every tick is
-                    # asking at most a few times per pending write.
-                    await self._coordinator.async_confirm_pending_writes()
+                # Ask for the read that would confirm the write instead of
+                # waiting for it: a polled lock's next scheduled read may be a
+                # scan interval away, and a push provider's one read may have
+                # failed. The coordinator throttles, so asking every tick is
+                # asking a few times per pending write.
+                await self._coordinator.async_confirm_pending_writes()
                 return
             # Drop the entry and re-sync on the NEXT tick. Returning here (rather
             # than falling through to _perform_sync this tick) lets a confirming
             # push that lands between ticks resolve the slot first, and avoids
             # double-charging the breaker when the re-sync itself also fails.
             del self._lock._pending_writes[self._address]
-            if still_wanted:
-                # Genuine timeout: the write we still want never confirmed.
+            if still_wanted and self._coordinator.read_completed_since(
+                deadline - PENDING_WRITE_TTL
+            ):
+                # Genuine timeout: the write we still want was read for and
+                # not found. A deadline that passed with no read completing --
+                # an outage, reads failing -- is not the lock declining the
+                # write; re-sync without a charge.
                 self._slot_breaker.record_failure()
                 _LOGGER.warning(
                     "%s: write not confirmed within the timeout; "
@@ -956,7 +958,13 @@ class SlotSyncManager:
             # Sync succeeded — refresh coordinator to verify.
             # Skip for push providers — they update coordinator optimistically
             # via push_update() and refreshing from cache could read stale data.
-            if not self._lock.supports_push:
+            # A write recorded pending has already been read for by the seam,
+            # and the pending machinery owns its confirmation from here; a
+            # second read two seconds later would find the same answer.
+            if (
+                not self._lock.supports_push
+                and self._address not in self._lock._pending_writes
+            ):
                 try:
                     await self._coordinator.async_refresh()
                 except Exception:
@@ -969,11 +977,10 @@ class SlotSyncManager:
                     # Treat an unverified set the same as a verification
                     # miss: repeated unverified sets must eventually trip
                     # the slot breaker, otherwise a persistently failing
-                    # refresh path leaves the slot retrying forever. Unless
-                    # the write is pending, in which case its deadline owns
-                    # the charge -- charging here too would count one write
-                    # twice and suspend after two attempts instead of three.
-                    if was_set and self._address not in self._lock._pending_writes:
+                    # refresh path leaves the slot retrying forever. (A
+                    # pending write never reaches here: the read above is
+                    # skipped for it, and its deadline owns the charge.)
+                    if was_set:
                         self._slot_breaker.record_failure()
                     self._state = SyncState.OUT_OF_SYNC
                     return
@@ -986,7 +993,7 @@ class SlotSyncManager:
         # that would confirm it arrives -- and a write the lock never kept is
         # not declared in sync and then rewritten on a loop. A readable
         # readback of a DIFFERENT code is not lag: _apply_read takes it as
-        # the lock's word, as it always has.
+        # the lock's word.
         if self._address in self._lock._pending_writes:
             self._state = SyncState.PENDING_CONFIRMATION
             self._write_state()

@@ -1442,28 +1442,35 @@ async def test_accessors_are_addressed_not_slot_numbered(push_coordinator) -> No
     assert push_coordinator.is_verified(address) is False
     push_coordinator.mark_verified(address)
     assert push_coordinator.is_verified(address) is True
-    # And back: recording a write the lock has not been seen to hold.
-    push_coordinator.mark_unverified(address)
-    assert push_coordinator.is_verified(address) is False
 
 
-async def test_recording_a_pending_write_marks_it_unverified_at_once(
+async def test_a_pending_write_is_unverified_from_the_moment_it_is_recorded(
     poll_lock, poll_coordinator
 ) -> None:
-    """``is_verified`` and the pending record agree from the moment of the write.
+    """``is_verified`` reads the lock's pending record; nothing is mirrored.
 
-    Not from the first read that happens to miss it: until then the
-    coordinator would report a slot verified while the lock's own pending
-    record said otherwise, and the sync layer would have to read the private
-    dict to tell the difference.
+    So the two cannot disagree: not from the write to the first read that
+    misses it, and not after the record is dropped without a read either.
     """
-    poll_lock.coordinator = poll_coordinator
     poll_coordinator.push_update({1: SlotCredential.known("0000")})
     assert poll_coordinator.is_verified(pin_address(1)) is True
 
     poll_lock._record_pending_write(1, "1234")
-
     assert poll_coordinator.is_verified(pin_address(1)) is False
+
+    del poll_lock._pending_writes[pin_address(1)]
+    assert poll_coordinator.is_verified(pin_address(1)) is True
+
+
+async def test_read_completed_since_is_stamped_by_a_genuine_read(
+    poll_lock, poll_coordinator, freezer
+) -> None:
+    """Every real read stamps the coordinator; the sync tick asks it before charging."""
+    moment = time.monotonic()
+    assert poll_coordinator.read_completed_since(moment) is False
+    freezer.tick(timedelta(seconds=1))
+    await poll_coordinator.async_refresh()
+    assert poll_coordinator.read_completed_since(moment) is True
 
 
 async def test_confirm_pending_writes_is_throttled_across_callers(
@@ -1477,23 +1484,31 @@ async def test_confirm_pending_writes_is_throttled_across_callers(
     The first call always goes out, so the seam's read straight after an
     optimistic write is unaffected.
     """
-    poll_lock._pending_writes[pin_address(1)] = ("1234", time.monotonic() + 60.0)
     poll_lock.codes.pop(1, None)  # every read comes back absent; stays pending
-    reads = poll_lock.service_calls["hard_refresh_codes"]
+    poll_lock._record_pending_write(1, "1234")
+    # A polled lock is confirmed through its ordinary read, not a hard refresh.
+    reads = poll_lock.service_calls["get_usercodes"]
+    hard_reads = poll_lock.service_calls["hard_refresh_codes"]
+    before = len(reads)
+    hard_before = len(hard_reads)
 
     await poll_coordinator.async_confirm_pending_writes()
     await poll_coordinator.async_confirm_pending_writes()
-    assert len(reads) == 1
+    assert len(reads) == before + 1
+
+    # The seam's own read straight after its write is never throttled.
+    await poll_coordinator.async_confirm_pending_writes(force=True)
+    assert len(reads) == before + 2
 
     freezer.tick(timedelta(seconds=PENDING_WRITE_TTL / 4 + 1))
     await poll_coordinator.async_confirm_pending_writes()
-    assert len(reads) == 2
+    assert len(reads) == before + 3
+    assert len(hard_reads) == hard_before
     assert pin_address(1) in poll_lock._pending_writes
 
 
 @pytest.mark.parametrize(
-    "accessor",
-    ["is_verified", "mark_unverified", "mark_verified", "desired_credential"],
+    "accessor", ["is_verified", "mark_verified", "desired_credential"]
 )
 async def test_non_pin_address_is_rejected(push_coordinator, accessor) -> None:
     """A non-PIN address is a programming error, not a missing entry.
