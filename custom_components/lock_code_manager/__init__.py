@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import voluptuous as vol
+import probatio as vol
 
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.components.http import StaticPathConfig
@@ -1349,7 +1349,9 @@ def _async_remove_slot_devices(
     dev_reg = dr.async_get(hass)
     for slot_num in slot_nums:
         identifier = build_slot_device_identifier(config_entry.entry_id, slot_num)
-        if device := dev_reg.async_get_device(identifiers={(DOMAIN, identifier)}):
+        if device := dev_reg.async_get_device_by_identifier(
+            (DOMAIN, identifier), config_entry.entry_id
+        ):
             _LOGGER.debug(
                 "%s (%s): Removing device for slot %s",
                 config_entry.entry_id,
@@ -1442,7 +1444,9 @@ def _async_remove_hub_device(
     break, so leaving it behind would log on every registration.
     """
     dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get_device(identifiers={(DOMAIN, config_entry.entry_id)})
+    device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, config_entry.entry_id), config_entry.entry_id
+    )
     if device is None:
         return
     _LOGGER.debug(
@@ -1517,10 +1521,13 @@ def _async_purge_dropped_slots(
             ent_reg.async_remove(entity.entity_id)
     dev_reg = dr.async_get(hass)
     for slot_num in slots:
-        identifiers = {
-            (DOMAIN, build_slot_device_identifier(config_entry.entry_id, slot_num))
-        }
-        if device := dev_reg.async_get_device(identifiers):
+        identifier = (
+            DOMAIN,
+            build_slot_device_identifier(config_entry.entry_id, slot_num),
+        )
+        if device := dev_reg.async_get_device_by_identifier(
+            identifier, config_entry.entry_id
+        ):
             dev_reg.async_remove_device(device.id)
 
 
@@ -1617,7 +1624,7 @@ def _async_rename_slot_devices(
     config = get_entry_config(config_entry)
     for slot_num, name in ((num, config.name_for(num)) for num in config.slot_numbers):
         identifier = build_slot_device_identifier(entry_id, slot_num)
-        device = dev_reg.async_get_device(identifiers={(DOMAIN, identifier)})
+        device = dev_reg.async_get_device_by_identifier((DOMAIN, identifier), entry_id)
         # Same shape build_slot_device_info uses, entry title included: a
         # rename that dropped the prefix would leave the device disagreeing
         # with the entity IDs derived from it.

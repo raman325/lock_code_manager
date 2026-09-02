@@ -7,12 +7,12 @@ import json
 import logging
 from unittest.mock import AsyncMock, patch
 
+import probatio as vol
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_capture_events,
 )
-import voluptuous as vol
 
 from homeassistant.components.event import (
     ATTR_EVENT_TYPE,

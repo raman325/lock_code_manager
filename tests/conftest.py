@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from hypothesis import settings as hypothesis_settings
+from probatio import to_field_list
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -20,7 +21,6 @@ from pytest_homeassistant_custom_component.common import (
     mock_integration,
     mock_platform,
 )
-import voluptuous_serialize
 
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
@@ -105,6 +105,12 @@ def assert_flow_forms_serialize() -> Generator[None]:
     untouched, so a validator the frontend has no representation for reaches
     a real browser as an unknown error and never a failing test. Converting
     here makes every test that shows a form the test that catches it.
+
+    ``to_field_list`` with ``cv.custom_serializer`` is the exact call
+    ``_BaseFlowManagerView._prepare_result_json`` makes, so what passes here
+    is what renders. Converting with anything else -- a serializer the
+    frontend does not use -- would let a form pass the test and fail the
+    browser, which is issue #1495 with the suite still green.
     """
 
     def checked(cls: type[FlowHandler]) -> Any:
@@ -120,9 +126,7 @@ def assert_flow_forms_serialize() -> Generator[None]:
         def _converted(self, **kwargs: Any):
             result = original(self, **kwargs)
             if schema := result.get("data_schema"):
-                voluptuous_serialize.convert(
-                    schema, custom_serializer=cv.custom_serializer
-                )
+                to_field_list(schema, custom_serializer=cv.custom_serializer)
             return result
 
         return patch.object(cls, "async_show_form", _converted)
