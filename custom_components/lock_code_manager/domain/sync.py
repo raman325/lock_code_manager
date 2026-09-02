@@ -149,8 +149,7 @@ class SlotSyncManager:
         - ``request_sync_check`` transitions IN_SYNC -> OUT_OF_SYNC or
           SUSPENDED -> OUT_OF_SYNC for immediate UI feedback.
         - ``_async_tick_impl`` is the single authoritative place for all
-          other state transitions, circuit breaker, sync operations,
-          and ``_last_set_pin`` changes.
+          other state transitions, circuit breaker and sync operations.
         - The slot circuit breaker is mutated only inside
           ``_async_tick_impl``. Non-tick code paths that want to reset it
           (callbacks, suspend/disable helpers) set
@@ -220,15 +219,6 @@ class SlotSyncManager:
         self._state: SyncState = SyncState.LOADING
         self._entity_id_map: dict[str, str] = {}
         self._tracked_entity_ids: set[str] = set()
-
-        # Track the last PIN we successfully set, so we can detect when the
-        # configured PIN changes while the lock code is UNKNOWN (masked/write-only).
-        # This is in-memory only — on restart, _last_set_pin is None, which means
-        # UNKNOWN slots will be treated as out-of-sync and re-set. This is the
-        # safest behavior: it guarantees the lock has the correct PIN even if the
-        # config changed while HA was down, at the cost of one extra set per
-        # masked/write-only slot on every restart.
-        self._last_set_pin: str | None = None
 
         # Slot-level circuit breaker: trips when a code repeatedly fails to
         # converge within the window, suspending just this lock and slot.
@@ -451,10 +441,10 @@ class SlotSyncManager:
         Inactive (state=OFF): Code on lock should be empty.
 
         For unreadable credentials (masked/write-only): in sync only if the
-        configured PIN matches what we last successfully set. This ensures
-        that PIN changes trigger a re-set even when the lock code is
-        unreadable, and that taking over a slot with an existing masked code
-        triggers a set.
+        configured PIN matches the one the lock was last given for the slot
+        (``BaseLock.last_set_pin``). This ensures that PIN changes trigger a
+        re-set even when the lock code is unreadable, and that taking over a
+        slot with an existing masked code triggers a set.
 
         An unverified slot (an optimistic write still awaiting confirmation,
         or one whose confirmation never arrived) is never in sync: the
@@ -478,9 +468,13 @@ class SlotSyncManager:
                     return False
                 if not credential.is_readable:
                     # No read will ever say what a write-only lock holds, so
-                    # the last PIN we wrote is the only thing to compare the
-                    # configured one against -- and it does not go stale.
-                    return snapshot.credential_state == self._last_set_pin
+                    # the last PIN written is the only thing to compare the
+                    # configured one against. Asked of the lock, which sees
+                    # every write, not remembered here, which sees only the
+                    # ones this tick made.
+                    return snapshot.credential_state == self._lock.last_set_pin(
+                        self._slot_num
+                    )
                 return credential.matches(snapshot.credential_state)
             # No coordinator data — fall back to the code sensor entity state.
             return snapshot.credential_state == snapshot.code_state
@@ -492,7 +486,7 @@ class SlotSyncManager:
                 # The lock says the slot holds something but will not say
                 # what, so it can neither confirm nor deny the clear. The
                 # clear already issued is the only evidence there is -- the
-                # same trade the set path above makes with ``_last_set_pin``.
+                # same trade the set path above makes with ``last_set_pin``.
                 # Without it the slot is never in sync, and every tick issues
                 # another clear at a lock that has already done as it was
                 # asked.
@@ -520,11 +514,9 @@ class SlotSyncManager:
                 snapshot.name_state,
                 source="sync",
             )
-            self._last_set_pin = snapshot.credential_state
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
             return True
         await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
-        self._last_set_pin = None
         _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
         return False
 
@@ -724,8 +716,7 @@ class SlotSyncManager:
         Core tick logic — called from _async_tick for LOADING and OUT_OF_SYNC states.
 
         This is the single authoritative place for all sync state mutations:
-        circuit breaker tracking, sync operations, and ``_last_set_pin``
-        changes.
+        circuit breaker tracking and sync operations.
         """
         # Consume any external reset requests before reading breaker state.
         # ``request_sync_check`` cannot reset the breaker directly because

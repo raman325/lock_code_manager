@@ -268,6 +268,13 @@ class BaseLock:
     # Slots whose most recent write from this integration was a clear that
     # changed something. See ``last_write_was_clear``.
     _cleared_slots: set[int] = field(default_factory=set, init=False)
+    # The PIN last written to each slot. The only thing the sync layer can
+    # compare a configured PIN against on a lock that reports a slot occupied
+    # without saying what it holds. Kept here for the same reason as
+    # ``_cleared_slots``: every write funnels through this class, including
+    # the ones a service call makes directly, and a memory the sync manager
+    # kept could not see those and would go stale.
+    _last_set_pins: dict[int, str] = field(default_factory=dict, init=False)
     # Slots with an outstanding optimistic (ambiguous-but-treated-as-completed)
     # write awaiting confirmation, mapped to (believed_pin, monotonic_deadline).
     # A confirmation -- a push event or a hard-refresh read observing the slot
@@ -1434,6 +1441,9 @@ class BaseLock:
             name=name,
             source=source,
         )
+        # Whatever the result, this is now the PIN the lock was last given
+        # for the slot; NO_CHANGE means it already held it.
+        self._last_set_pins[code_slot] = str(usercode)
         if result is WriteResult.OPTIMISTIC:
             # Ambiguous write: record it pending and push the believed value as
             # unverified, then actively read the lock back to confirm it. Some
@@ -1578,6 +1588,12 @@ class BaseLock:
         # stale pending entry must not keep gating reconciliation (the sync tick
         # keys PENDING_CONFIRMATION on this dict).
         self._pending_writes.pop(pin_address(code_slot), None)
+        # Forgotten BEFORE the clear, for the same reason the set discards
+        # ``_cleared_slots`` before it writes: a clear that raises may still
+        # have landed, and a PIN still remembered for an emptied slot would
+        # let the next set of that same PIN read as already in sync on a
+        # lock that cannot say otherwise.
+        self._last_set_pins.pop(code_slot, None)
         changed = await self._execute_rate_limited(
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
@@ -2260,6 +2276,21 @@ class BaseLock:
             ) from err
 
     @final
+    @final
+    def last_set_pin(self, code_slot: int) -> str | None:
+        """
+        Return the PIN last written to ``code_slot``, or None if none is remembered.
+
+        What the sync layer compares the configured PIN against on a lock that
+        reports the slot occupied but will not say what it holds: no read will
+        ever answer, so the last write is the only evidence there is. Forgotten
+        by a clear -- before the clear is sent, since one that raises may still
+        have landed -- and by a restart, which is deliberate: an unknown slot is
+        re-set once rather than assumed, so the lock ends up holding the
+        configured PIN even if that changed while Home Assistant was down.
+        """
+        return self._last_set_pins.get(code_slot)
+
     @final
     def last_write_was_clear(self, code_slot: int) -> bool:
         """

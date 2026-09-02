@@ -80,10 +80,10 @@ def _manager(
     slot_num: int = 1,
     cleared_slot: bool = False,
 ) -> SlotSyncManager:
-    """Build a mock SlotSyncManager with _last_set_pin and a verified coordinator."""
+    """Build a mock SlotSyncManager over a lock remembering ``last_set_pin``."""
     mgr = MagicMock(spec=SlotSyncManager)
-    mgr._last_set_pin = last_set_pin
     mgr._lock = MagicMock()
+    mgr._lock.last_set_pin.return_value = last_set_pin
     mgr._lock.last_write_was_clear.return_value = cleared_slot
     mgr._slot_num = slot_num
     mgr._address = pin_address(slot_num)

@@ -1181,6 +1181,71 @@ async def test_confirmed_set_on_a_push_provider_records_nothing_pending(
     lock.coordinator.mark_verified.assert_called_once_with(pin_address(4))
 
 
+async def test_last_set_pin_remembers_every_set_that_went_through_the_seam(
+    hass: HomeAssistant,
+) -> None:
+    """The PIN last given to a slot is remembered whatever the write result.
+
+    Kept on the provider so a service call that writes directly updates it;
+    a memory in the sync manager saw only the writes the tick made and went
+    stale. NO_CHANGE counts: the lock already held that PIN, which is the
+    same fact.
+    """
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    assert lock.last_set_pin(4) is None
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        with patch.object(
+            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
+        ):
+            await lock.async_internal_set_usercode(4, "1234", "carol")
+        assert lock.last_set_pin(4) == "1234"
+
+        with patch.object(
+            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.NO_CHANGE)
+        ):
+            await lock.async_internal_set_usercode(4, "5678", "carol")
+        assert lock.last_set_pin(4) == "5678"
+
+        # A clear that goes through forgets it too.
+        with patch.object(lock, "async_clear_usercode", AsyncMock(return_value=True)):
+            await lock.async_internal_clear_usercode(4)
+        assert lock.last_set_pin(4) is None
+
+
+async def test_last_set_pin_is_forgotten_before_a_clear_is_sent(
+    hass: HomeAssistant,
+) -> None:
+    """A clear forgets the PIN even when the clear itself raises.
+
+    Same discipline as the set discarding ``_cleared_slots`` before it
+    writes: a clear that raises may still have landed. A PIN still remembered
+    for an emptied slot would let the next set of that same PIN read as
+    already in sync on a lock that cannot say what it holds -- with no write
+    issued, and a door that does not open.
+    """
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        with patch.object(
+            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.CONFIRMED)
+        ):
+            await lock.async_internal_set_usercode(4, "1234", "carol")
+        assert lock.last_set_pin(4) == "1234"
+
+        with (
+            patch.object(
+                lock,
+                "async_clear_usercode",
+                AsyncMock(side_effect=LockDisconnected("lost mid-clear")),
+            ),
+            pytest.raises(LockDisconnected),
+        ):
+            await lock.async_internal_clear_usercode(4)
+
+    assert lock.last_set_pin(4) is None
+
+
 async def test_confirm_slot_keeps_believed_value_on_present_observation(
     hass: HomeAssistant,
 ) -> None:

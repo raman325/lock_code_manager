@@ -42,8 +42,10 @@ def _manager(
     manager._slot_num = 1
     manager._address = pin_address(1)
     manager._coordinator = SimpleNamespace(is_verified=lambda address: verified)
-    manager._last_set_pin = last_set_pin
-    manager._lock = SimpleNamespace(last_write_was_clear=lambda slot: cleared_slot)
+    manager._lock = SimpleNamespace(
+        last_write_was_clear=lambda slot: cleared_slot,
+        last_set_pin=lambda slot: last_set_pin,
+    )
     return manager
 
 

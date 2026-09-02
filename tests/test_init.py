@@ -1368,20 +1368,20 @@ async def test_reload_resets_sync_state_cleanly(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Config entry reload creates fresh sync managers with clean state."""
+    """Config entry reload creates fresh sync managers and providers with clean state."""
     entry = lock_code_manager_config_entry
 
-    # Drive initial sync so _last_set_pin gets populated
+    # Drive initial sync so the provider's write memory has had a chance to
+    # populate (the initial code was set, or the slot was already in sync and
+    # nothing was written -- either way the point below is that reload
+    # forgets it).
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
     await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
 
-    # Get the sync manager reference and verify _last_set_pin has a value
     entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
     old_sync_mgr = entity_obj._sync_manager
-    # After sync the _last_set_pin should be set (the initial code was set)
-    # or the slot is already in sync without needing a set. Either way we
-    # capture the reference for identity comparison later.
     old_mgr_id = id(old_sync_mgr)
+    old_lock_id = id(entry.runtime_data.locks[LOCK_1_ENTITY_ID])
 
     # Unload the config entry
     await hass.config_entries.async_unload(entry.entry_id)
@@ -1398,8 +1398,12 @@ async def test_reload_resets_sync_state_cleanly(
         "After reload, sync manager should be a fresh instance"
     )
 
-    # Fresh instance should have _last_set_pin as None
-    assert new_sync_mgr._last_set_pin is None
+    # A fresh provider too, and it remembers no write: the last-set memory is
+    # in-process by design, so a restart re-sets an unreadable slot once
+    # rather than assuming it still holds what was configured before.
+    new_lock = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert id(new_lock) != old_lock_id
+    assert new_lock.last_set_pin(1) is None
 
     # Drive initial tick and verify the sync manager reaches a real state
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
