@@ -280,6 +280,10 @@ class LockUsercodeUpdateCoordinator(
         to the same address replaces the record, so the read confirms the PIN
         actually sent last.
         """
+        if self._shutdown_requested:
+            # A write returning after unload has no one left to confirm it
+            # for; recording it would start a look against a torn-down lock.
+            return
         checked = _checked(address)
         self._pending[checked] = PendingWrite(pin, time.monotonic(), believed)
         self._failed_writes.discard(checked)
@@ -334,6 +338,7 @@ class LockUsercodeUpdateCoordinator(
         """
         checked = _checked(address)
         pending = self._pending.pop(checked, None)
+        failed = False
         if pending is None:
             value = observed
         elif observed.is_present and not (
@@ -342,10 +347,11 @@ class LockUsercodeUpdateCoordinator(
             value = SlotCredential.known(pending.pin)
         else:
             self._failed_writes.add(checked)
+            failed = True
             value = observed
         before = self.data
         self.push_update({checked.user_ref: value})
-        if self.data is before and checked in self._failed_writes:
+        if failed and self.data is before:
             # Same data, failed write: let the sync layer judge it now.
             self.async_update_listeners()
 
@@ -445,6 +451,7 @@ class LockUsercodeUpdateCoordinator(
             # Replace, as the poll and drift paths do: the read names every
             # managed and pending slot plus whatever else the lock holds, so a
             # slot it no longer reports is one the lock no longer has.
+            failed_before = len(self._failed_writes)
             new_data = self._apply_read(self._normalize_keys(raw))
         except LockCodeManagerError as err:
             self._give_up_overdue(err)
@@ -458,10 +465,10 @@ class LockUsercodeUpdateCoordinator(
             return
         if new_data != self.data:
             self.async_set_updated_data(new_data)
-        elif self._failed_writes:
-            # The data did not move, but a write failed against it: a slot
-            # left in sync must judge that now, not be charged for it by some
-            # later, unrelated sync.
+        elif len(self._failed_writes) > failed_before:
+            # The data did not move, but a write just failed against it: a
+            # slot left in sync must judge that now, not be charged for it by
+            # some later, unrelated sync.
             self.async_update_listeners()
 
     @callback

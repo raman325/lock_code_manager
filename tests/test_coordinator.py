@@ -1823,3 +1823,57 @@ async def test_confirmation_read_drops_a_slot_the_lock_no_longer_reports(
 
     assert pin_address(9) not in poll_coordinator.data
     assert poll_coordinator.is_verified(pin_address(1)) is True
+
+
+async def test_record_write_after_shutdown_records_nothing(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A write returning after unload starts no look against a torn-down lock."""
+    await poll_coordinator.async_shutdown()
+    poll_coordinator.record_write(pin_address(1), "9999", believed=False)
+    assert poll_coordinator.has_pending_write(pin_address(1)) is False
+    assert poll_coordinator._confirm_task is None
+    assert poll_coordinator._confirm_unsub is None
+
+
+async def test_quiet_read_with_an_old_failed_write_does_not_wake_listeners(
+    poll_lock: MockLCMLock, poll_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """Listeners are woken for a write that just failed, not for every read after.
+
+    A failed direct write to a slot nothing manages has no one to consume
+    it; it must not turn every later unchanged read into a full notify.
+    """
+    await poll_coordinator.async_refresh()
+    wakes: list[int] = []
+    poll_coordinator.async_add_listener(lambda: wakes.append(1))
+
+    poll_lock.codes.pop(9, None)
+    poll_coordinator.record_write(pin_address(9), "4321", believed=False)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    await poll_coordinator.async_confirm_pending_writes()  # fails slot 9's write
+    assert poll_coordinator.is_verified(pin_address(9)) is True
+    await poll_coordinator.async_refresh()  # settle: slot 9 leaves the read scope
+    woken = len(wakes)
+
+    # A later write the lock does keep; the read changes nothing in the data.
+    poll_coordinator.record_write(pin_address(1), poll_lock.codes[1], believed=False)
+    await poll_coordinator.async_confirm_pending_writes()
+    assert poll_coordinator.is_verified(pin_address(1)) is True
+    assert len(wakes) == woken
+
+
+async def test_unchanged_push_on_a_slot_with_an_old_failed_write_does_not_wake_listeners(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Only the push that fails a write wakes listeners on unchanged data."""
+    wakes: list[int] = []
+    push_coordinator.async_add_listener(lambda: wakes.append(1))
+
+    push_coordinator.record_write(pin_address(9), "4321", believed=True)
+    push_coordinator.observe_push(pin_address(9), SlotCredential.empty())  # fails it
+    assert push_coordinator.data[pin_address(9)] == SlotCredential.empty()
+    woken = len(wakes)
+
+    push_coordinator.observe_push(pin_address(9), SlotCredential.empty())  # restated
+    assert len(wakes) == woken
