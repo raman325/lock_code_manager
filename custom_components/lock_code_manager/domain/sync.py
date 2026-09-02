@@ -830,7 +830,8 @@ class SlotSyncManager:
         if self._coordinator.take_failed_write(self._address):
             self._slot_breaker.record_failure()
             _LOGGER.warning(
-                "%s: write not confirmed within the timeout; re-syncing (attempt %s)",
+                "%s: the lock did not keep the write (not seen by the deadline, "
+                "or holding a different code); re-syncing (attempt %s)",
                 self._log_prefix,
                 self._slot_breaker.failure_count,
             )
