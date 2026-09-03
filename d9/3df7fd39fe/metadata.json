@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "d93df7fd39fe",
+  "strategy": "manual-commit",
+  "branch": "fix/1538-matter-deletion-visible",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/conftest.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d9/3df7fd39fe/0/metadata.json",
+      "transcript": "/d9/3df7fd39fe/0/full.jsonl",
+      "compact_transcript": "/d9/3df7fd39fe/0/transcript.jsonl",
+      "content_hash": "/d9/3df7fd39fe/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 625,
+    "cache_creation_tokens": 25799,
+    "cache_read_tokens": 2408404,
+    "output_tokens": 18370,
+    "api_call_count": 5
+  }
+}
