@@ -1447,6 +1447,19 @@ class TestEventSubscription:
 # =============================================================================
 
 
+def _cleared_event(user_index: int, data_type: int = 2) -> MatterNodeEvent:
+    """A LockUserChange CLEAR for ``user_index`` (a user record by default)."""
+    return _make_node_event(
+        event_id=4,
+        data={
+            "lockDataType": data_type,
+            "dataOperationType": 1,
+            "dataIndex": user_index,
+            "userIndex": user_index,
+        },
+    )
+
+
 class TestLockUserChangeEvent:
     """Test _handle_lock_user_change callback and coordinator push updates.
 
@@ -1904,7 +1917,10 @@ class TestLockUserChangeEvent:
             pin_address(3), SlotCredential.empty()
         )
         # Forgotten once used: a later event for a reused index is not ours.
-        assert 42 not in matter_lock._slot_by_user_index
+        with self._patch_users([]):
+            matter_lock._on_node_event(None, _cleared_event(42))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_called_once()
 
     async def test_pin_cleared_for_a_vanished_user_resolves_through_the_last_read(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -2012,7 +2028,13 @@ class TestLockUserChangeEvent:
             await hass.async_block_till_done()
 
         mock_coordinator.observe_push.assert_not_called()
-        assert matter_lock._slot_by_user_index[42] == 3
+        # ...and the anchor is still there for the deletion that follows.
+        with self._patch_users([]):
+            matter_lock._on_node_event(None, _cleared_event(42))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.empty()
+        )
 
     async def test_a_read_without_the_user_keeps_its_anchor_for_the_clear_that_follows(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -2124,6 +2146,8 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A user LCM creates is known before any read; a user it deletes is forgotten."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
         with (
             self._patch_users([]),
             patch(
@@ -2132,11 +2156,104 @@ class TestLockUserChangeEvent:
             ),
         ):
             await matter_lock.async_set_user(User(user_id=3, name="lcm:3:Carol"))
-        assert matter_lock._slot_by_user_index[9] == 3
+            matter_lock._on_node_event(None, _cleared_event(9))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.empty()
+        )
 
-        with patch(f"{_PROVIDER_MODULE}.clear_lock_user", AsyncMock(return_value=None)):
+        with (
+            self._patch_users([]),
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_user",
+                AsyncMock(return_value={"user_index": 9}),
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", AsyncMock(return_value=None)),
+        ):
+            await matter_lock.async_set_user(User(user_id=3, name="lcm:3:Carol"))
             await matter_lock.async_delete_user(9)
-        assert 9 not in matter_lock._slot_by_user_index
+            matter_lock._on_node_event(None, _cleared_event(9))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_called_once()  # no second resolution
+
+    async def test_adopting_an_untagged_user_records_the_index_it_anchors(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Legacy adoption is a write, not a read: the map learns the index from it."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        untagged_holder = [
+            {
+                "user_index": 5,
+                "user_name": "Legacy Carol",
+                "credentials": [{"type": "pin", "index": 3}],
+            }
+        ]
+        with (
+            self._patch_users(untagged_holder),
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_user",
+                AsyncMock(return_value={"user_index": 5}),
+            ),
+        ):
+            await matter_lock.async_set_user(User(user_id=3, name="lcm:3:Carol"))
+        with self._patch_users([]):
+            matter_lock._on_node_event(None, _cleared_event(5))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.empty()
+        )
+
+    async def test_a_read_that_fails_during_a_clear_still_resolves_from_the_map(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A flaky read at the moment of deletion must not lose the deletion."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        with self._patch_users(
+            [
+                {
+                    "user_index": 42,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ]
+        ):
+            await matter_lock.async_get_users()
+        with patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            AsyncMock(side_effect=HomeAssistantError("offline")),
+        ):
+            matter_lock._on_node_event(None, _cleared_event(42))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.empty()
+        )
+
+    async def test_the_lock_as_read_now_beats_what_the_map_remembers(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A user re-tagged to another slot since the last read empties that slot."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        with self._patch_users(
+            [
+                {
+                    "user_index": 42,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ]
+        ):
+            await matter_lock.async_get_users()
+        with self._patch_users(
+            [{"user_index": 42, "user_name": "lcm:4:Carol", "credentials": []}]
+        ):
+            matter_lock._on_node_event(None, _cleared_event(42, data_type=6))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_called_once_with(
+            pin_address(4), SlotCredential.empty()
+        )
 
 
 # =============================================================================
@@ -3855,6 +3972,35 @@ class TestSetCredential:
             )
         assert result is WriteResult.CONFIRMED
         status.assert_not_awaited()
+
+    async def test_set_credential_duplicate_retry_answer_is_verified_too(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """The write that lands after a duplicate clear is checked like any other."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        mock_set_credential = AsyncMock(
+            side_effect=[
+                _make_set_credential_failed_error("duplicate"),
+                {"credential_index": 4, "user_index": 1},
+            ]
+        )
+        mock_clear = AsyncMock(return_value={})
+        with (
+            self._patch_user_with_pin(user_id=1, credential_index=10),
+            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
+            self._patch_status(user_index=7),
+            pytest.raises(LockOperationFailed, match="under user 7"),
+        ):
+            await matter_lock.async_set_credential(
+                1, self._make_credential(slot=1), "1234", name=None, source="sync"
+            )
+        cleared = [
+            call.kwargs["credential_index"] for call in mock_clear.await_args_list
+        ]
+        assert cleared == [10, 4]  # the duplicate, then the misfiled retry
+        mock_coordinator.push_update.assert_not_called()
 
 
 class TestDeleteCredential:
