@@ -29,6 +29,7 @@ _SDK_FUNCTION_NAMES = frozenset(
         "clear_lock_user",
         "set_lock_credential",
         "clear_lock_credential",
+        "get_lock_credential_status",
     }
 )
 

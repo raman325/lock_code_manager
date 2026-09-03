@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from matter_server.client.models.node import MatterNode
@@ -216,9 +217,30 @@ def matter_mock_helpers() -> dict[str, AsyncMock]:
         }
     )
 
-    # set_lock_credential: called by async_set_credential
-    helpers["set_lock_credential"] = AsyncMock(
-        return_value={"credential_index": 1, "user_index": 1},
+    # set_lock_credential: called by async_set_credential. Echoes the request,
+    # as the real helper does, so a write for any slot is answered for its
+    # own user.
+    last_write: dict[str, Any] = {}
+
+    async def _set_lock_credential(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        last_write.update(kwargs)
+        return {
+            "credential_index": kwargs.get("credential_index") or 1,
+            "user_index": kwargs.get("user_index"),
+        }
+
+    helpers["set_lock_credential"] = AsyncMock(side_effect=_set_lock_credential)
+
+    # get_lock_credential_status: the pairing check after a set asks which user
+    # holds the written credential; the lock answers with the user it was
+    # written for, so no honest write is judged misfiled.
+    async def _get_lock_credential_status(
+        *_args: Any, **_kwargs: Any
+    ) -> dict[str, Any]:
+        return {"credential_exists": True, "user_index": last_write.get("user_index")}
+
+    helpers["get_lock_credential_status"] = AsyncMock(
+        side_effect=_get_lock_credential_status
     )
 
     # set_lock_user: called by async_set_user
@@ -267,6 +289,10 @@ async def lcm_config_entry(
         patch(
             f"{_PROVIDER_MODULE}.set_lock_credential",
             matter_mock_helpers["set_lock_credential"],
+        ),
+        patch(
+            f"{_PROVIDER_MODULE}.get_lock_credential_status",
+            matter_mock_helpers["get_lock_credential_status"],
         ),
         patch(
             f"{_PROVIDER_MODULE}.set_lock_user",
