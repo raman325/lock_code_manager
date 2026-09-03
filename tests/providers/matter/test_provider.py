@@ -2230,6 +2230,39 @@ class TestLockUserChangeEvent:
             pin_address(3), SlotCredential.empty()
         )
 
+    async def test_a_user_now_untagged_on_the_lock_is_not_ours_to_empty(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """The lock reusing an index for a vendor-app user drops the old anchor.
+
+        Without this the vendor user's own later deletion would empty the
+        slot the index anchored for LCM long ago.
+        """
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        with self._patch_users(
+            [
+                {
+                    "user_index": 42,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ]
+        ):
+            await matter_lock.async_get_users()
+        vendor_user = [
+            {"user_index": 42, "user_name": "Vendor app user", "credentials": []}
+        ]
+        with self._patch_users(vendor_user):
+            matter_lock._on_node_event(None, _cleared_event(42, data_type=6))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_not_called()
+        # And the anchor is gone: the vendor user's own deletion resolves nothing.
+        with self._patch_users([]):
+            matter_lock._on_node_event(None, _cleared_event(42))
+            await hass.async_block_till_done()
+        mock_coordinator.observe_push.assert_not_called()
+
     async def test_the_lock_as_read_now_beats_what_the_map_remembers(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:

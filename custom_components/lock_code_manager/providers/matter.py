@@ -1150,6 +1150,15 @@ class MatterLock(BaseLock):
             )
             return
         owner = status.get("user_index")
+        LOGGER.debug(
+            "Lock %s: the lock reports credential %s for slot %s exists=%s under "
+            "user_index %s",
+            self.lock.entity_id,
+            credential_index,
+            slot,
+            status.get("credential_exists"),
+            owner,
+        )
         if owner is None or owner == user_id:
             return
         LOGGER.warning(
@@ -1591,6 +1600,12 @@ class MatterLock(BaseLock):
             )
         else:
             code_slot = _lcm_slot_from_raw_users_by_user_index(raw_users, user_index)
+            if code_slot is None and any(
+                raw_user.get("user_index") == user_index for raw_user in raw_users
+            ):
+                # Present but untagged: somebody else's user now, whatever
+                # this index anchored before.
+                self._slot_by_user_index.pop(user_index, None)
         if code_slot is None and resolved.is_empty:
             code_slot = self._slot_by_user_index.pop(user_index, None)
         if code_slot is None:
