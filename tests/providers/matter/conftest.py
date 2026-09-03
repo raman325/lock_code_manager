@@ -221,6 +221,12 @@ def matter_mock_helpers() -> dict[str, AsyncMock]:
         return_value={"credential_index": 1, "user_index": 1},
     )
 
+    # get_lock_credential_status: the pairing check after a set asks which user
+    # holds the written credential; user 1 matches set_lock_credential above.
+    helpers["get_lock_credential_status"] = AsyncMock(
+        return_value={"credential_exists": True, "user_index": 1},
+    )
+
     # set_lock_user: called by async_set_user
     helpers["set_lock_user"] = AsyncMock(return_value={"user_index": 1})
 
@@ -267,6 +273,10 @@ async def lcm_config_entry(
         patch(
             f"{_PROVIDER_MODULE}.set_lock_credential",
             matter_mock_helpers["set_lock_credential"],
+        ),
+        patch(
+            f"{_PROVIDER_MODULE}.get_lock_credential_status",
+            matter_mock_helpers["get_lock_credential_status"],
         ),
         patch(
             f"{_PROVIDER_MODULE}.set_lock_user",

@@ -2014,6 +2014,89 @@ class TestLockUserChangeEvent:
         mock_coordinator.observe_push.assert_not_called()
         assert matter_lock._slot_by_user_index[42] == 3
 
+    async def test_a_read_without_the_user_keeps_its_anchor_for_the_clear_that_follows(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A read that no longer lists the user must not swallow its deletion event.
+
+        Reads run for every write on any slot; one landing between the
+        out-of-band deletion and its event must leave the anchor in place.
+        """
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        with self._patch_users(
+            [
+                {
+                    "user_index": 42,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ]
+        ):
+            await matter_lock.async_get_users()
+        with self._patch_users([]):
+            await matter_lock.async_get_users()  # the user is already gone
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 2,
+                        "dataOperationType": 1,
+                        "dataIndex": 42,
+                        "userIndex": 42,
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+
+        mock_coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.empty()
+        )
+
+    async def test_a_read_showing_the_user_renamed_off_lcm_drops_its_anchor(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A user someone renamed to an untagged name is no longer ours to empty."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        with self._patch_users(
+            [
+                {
+                    "user_index": 42,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ]
+        ):
+            await matter_lock.async_get_users()
+        with self._patch_users(
+            [
+                {
+                    "user_index": 42,
+                    "user_name": "Carol at the vendor app",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ]
+        ):
+            await matter_lock.async_get_users()
+        with self._patch_users([]):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 2,
+                        "dataOperationType": 1,
+                        "dataIndex": 42,
+                        "userIndex": 42,
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+
+        mock_coordinator.observe_push.assert_not_called()
+
     async def test_clear_for_a_user_index_never_read_is_ignored(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
@@ -3176,10 +3259,18 @@ class TestSetCredential:
         Tests that want to exercise the MODIFY path can override this patch
         in their own context manager.
         """
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(return_value={"max_users": 10, "users": []}),
-        ) as mock:
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                AsyncMock(return_value={"max_users": 10, "users": []}),
+            ) as mock,
+            # The pairing check asks the lock who holds the written credential;
+            # an unknown owner is not a mismatch.
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_credential_status",
+                AsyncMock(return_value={"credential_exists": True, "user_index": None}),
+            ),
+        ):
             yield mock
 
     def _make_credential(self, slot: int = 1, pin: str = "1234") -> Credential:
@@ -3640,109 +3731,130 @@ class TestSetCredential:
     # async_delete_credential tests
     # =============================================================================
 
-    async def test_set_credential_filed_under_another_user_is_a_failed_write(
+    @staticmethod
+    def _patch_status(**status: Any) -> Any:
+        """Answer the pairing check's GetCredentialStatus."""
+        return patch(
+            f"{_PROVIDER_MODULE}.get_lock_credential_status",
+            AsyncMock(return_value={"credential_exists": True, **status}),
+        )
+
+    async def test_set_credential_filed_under_another_user_is_cleared_and_failed(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A PIN the lock filed under another user opens the door as somebody else.
 
-        The lock's answer names the credential index; the re-read shows user
-        7 holding it although the write was for user 1. That is a failed
-        write for the slot breaker, not a success to push (issue #1538).
+        The lock's own credential status names user 7 for the index the write
+        went to, although the write was for user 1. The credential is cleared
+        again and the write fails for the slot breaker; nothing is pushed as
+        a success (issue #1538).
         """
         mock_coordinator = MagicMock()
         matter_lock.coordinator = mock_coordinator
-        mock_set_credential = AsyncMock(
-            return_value={"credential_index": 4, "user_index": 1}
-        )
-        users = {
-            "max_users": 10,
-            "users": [
-                {"user_index": 1, "user_name": "lcm:1:Alice", "credentials": []},
-                {
-                    "user_index": 7,
-                    "user_name": "lcm:7:Grace",
-                    "credentials": [{"type": "pin", "index": 4}],
-                },
-            ],
-        }
+        mock_clear = AsyncMock(return_value={})
         with (
-            patch(f"{_PROVIDER_MODULE}.get_lock_users", AsyncMock(return_value=users)),
-            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                AsyncMock(return_value={"credential_index": 4, "user_index": 1}),
+            ),
+            self._patch_status(user_index=7),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
+            pytest.raises(LockOperationFailed, match="under user 7, not user 1"),
+        ):
+            await matter_lock.async_set_credential(
+                1, self._make_credential(slot=1), "1234", name=None, source="sync"
+            )
+
+        mock_clear.assert_awaited_once()
+        assert mock_clear.await_args.kwargs["credential_index"] == 4
+        mock_coordinator.push_update.assert_not_called()
+
+    async def test_set_credential_misfiled_pin_that_cannot_be_cleared_still_fails(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Failing to clear the misfiled credential does not turn it into a success."""
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                AsyncMock(return_value={"credential_index": 4, "user_index": 1}),
+            ),
+            self._patch_status(user_index=7),
+            patch(
+                f"{_PROVIDER_MODULE}.clear_lock_credential",
+                AsyncMock(side_effect=HomeAssistantError("offline")),
+            ),
             pytest.raises(LockOperationFailed, match="under user 7"),
         ):
             await matter_lock.async_set_credential(
                 1, self._make_credential(slot=1), "1234", name=None, source="sync"
             )
 
-        mock_coordinator.push_update.assert_not_called()
-
-    async def test_set_credential_answer_naming_another_user_is_a_failed_write(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """The lock's own answer associating the PIN with another user fails the write."""
-        mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
-        mock_set_credential = AsyncMock(
-            return_value={"credential_index": 1, "user_index": 5}
-        )
-        with (
-            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
-            pytest.raises(LockOperationFailed, match="with user 5"),
-        ):
-            await matter_lock.async_set_credential(
-                1, self._make_credential(slot=1), "1234", name=None, source="direct"
-            )
-
-        mock_coordinator.push_update.assert_not_called()
-
-    async def test_set_credential_answer_without_an_index_skips_the_owner_check(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """With no credential index in the answer there is nothing to look up."""
-        mock_set_credential = AsyncMock(return_value={"user_index": 1})
-        with (
-            patch(
-                f"{_PROVIDER_MODULE}.get_lock_users",
-                AsyncMock(return_value={"max_users": 10, "users": []}),
-            ) as reads,
-            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
-        ):
-            result = await matter_lock.async_set_credential(
-                1, self._make_credential(slot=1), "1234", name=None, source="sync"
-            )
-        assert result is WriteResult.CONFIRMED
-        assert reads.await_count == 1  # the MODIFY-or-CREATE lookup only
-
     async def test_set_credential_filed_under_the_right_user_is_confirmed(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
-        """The re-read showing the PIN under the intended user confirms the write."""
-        mock_set_credential = AsyncMock(
-            return_value={"credential_index": 4, "user_index": 1}
-        )
-        users = {
-            "max_users": 10,
-            "users": [
-                {
-                    "user_index": 1,
-                    "user_name": "lcm:1:Alice",
-                    "credentials": [{"type": "pin", "index": 4}],
-                },
-            ],
-        }
-        # The first read decides MODIFY vs CREATE (empty: CREATE); the second
-        # is the pairing check.
+        """The lock naming the intended user confirms the write."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
         with (
             patch(
-                f"{_PROVIDER_MODULE}.get_lock_users",
-                AsyncMock(side_effect=[{"max_users": 10, "users": []}, users]),
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                AsyncMock(return_value={"credential_index": 4, "user_index": 1}),
             ),
-            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
+            self._patch_status(user_index=1),
         ):
             result = await matter_lock.async_set_credential(
                 1, self._make_credential(slot=1), "1234", name=None, source="sync"
             )
         assert result is WriteResult.CONFIRMED
+        mock_coordinator.push_update.assert_called_once_with(
+            {1: SlotCredential.unreadable()}
+        )
+
+    async def test_set_credential_unanswered_status_leaves_the_write_standing(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A status read that fails proves nothing; the landed write is not undone.
+
+        Raising here would make the seam roll a just-created user back,
+        deleting the PIN that just landed and charging the lock breaker for a
+        write that succeeded.
+        """
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                AsyncMock(return_value={"credential_index": 4, "user_index": 1}),
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_credential_status",
+                AsyncMock(side_effect=HomeAssistantError("offline")),
+            ),
+        ):
+            result = await matter_lock.async_set_credential(
+                1, self._make_credential(slot=1), "1234", name=None, source="sync"
+            )
+        assert result is WriteResult.CONFIRMED
+        mock_coordinator.push_update.assert_called_once_with(
+            {1: SlotCredential.unreadable()}
+        )
+
+    async def test_set_credential_answer_without_an_index_asks_nothing(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """With no credential index in the answer there is nothing to look up."""
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                AsyncMock(return_value={"user_index": 1}),
+            ),
+            self._patch_status(user_index=7) as status,
+        ):
+            result = await matter_lock.async_set_credential(
+                1, self._make_credential(slot=1), "1234", name=None, source="sync"
+            )
+        assert result is WriteResult.CONFIRMED
+        status.assert_not_awaited()
 
 
 class TestDeleteCredential:

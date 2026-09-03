@@ -28,6 +28,7 @@ from homeassistant.components.matter.lock_helpers import (
     SetCredentialFailedError,
     clear_lock_credential,
     clear_lock_user,
+    get_lock_credential_status,
     get_lock_info,
     get_lock_users,
     set_lock_credential,
@@ -493,7 +494,7 @@ class MatterLock(BaseLock):
         # credential index are narrowed by explicit guards before use: the
         # Matter helper types both as ``int | None``.
         users: list[User] = []
-        slot_by_user_index: dict[int, int] = {}
+        anchors: dict[int, int | None] = {}
         for raw_user in await self._raw_lock_users():
             user_index = raw_user.get("user_index")
             if user_index is None:
@@ -502,8 +503,7 @@ class MatterLock(BaseLock):
             lcm_slot_from_tag: int | None = None
             if user_name:
                 lcm_slot_from_tag, _ = parse_tag(user_name)
-            if lcm_slot_from_tag is not None:
-                slot_by_user_index[user_index] = lcm_slot_from_tag
+            anchors[user_index] = lcm_slot_from_tag
             pin_credentials: list[Credential] = []
             for cred in raw_user.get("credentials") or []:
                 credential_index = cred.get("index")
@@ -529,7 +529,14 @@ class MatterLock(BaseLock):
                     credentials=pin_credentials,
                 )
             )
-        self._slot_by_user_index = slot_by_user_index
+        # Merge, never replace: a user that has vanished keeps its entry, so
+        # the CLEAR event that follows can still say which slot emptied. A
+        # user still present overwrites its entry -- or, untagged, removes it.
+        for index, anchored in anchors.items():
+            if anchored is None:
+                self._slot_by_user_index.pop(index, None)
+            else:
+                self._slot_by_user_index[index] = anchored
         return users
 
     async def async_get_capabilities(self) -> LockCapabilities:
@@ -1083,57 +1090,99 @@ class MatterLock(BaseLock):
                     reason=str(retry_err),
                 ) from retry_err
 
-        await self._verify_credential_landed(slot, user_id, result)
+        await self._verify_credential_landed(client, node, slot, user_id, result)
         self._push_credential_update(slot, SlotCredential.unreadable())
         return WriteResult.CONFIRMED
 
     async def _verify_credential_landed(
-        self, slot: int, user_id: int, result: dict[str, Any]
+        self,
+        client: Any,
+        node: Any,
+        slot: int,
+        user_id: int,
+        result: dict[str, Any],
     ) -> None:
         """
-        Check the lock filed the PIN under the user it was written for.
+        Check the lock associated the PIN with the user it was written for.
 
-        PINs are write-only, so this is the only pairing check there is: the
-        lock's answer names the credential index it allocated, and a re-read
-        shows which user holds that index. A PIN filed under another user
-        opens the door as somebody else while every slot still reads
-        occupied, so it is raised as a failed write -- the slot breaker
-        sees it and the slot suspends with the real reason -- rather than
-        pushed as a success.
+        PINs are write-only, so this is the only pairing check there is. The
+        helper's answer names the credential index it wrote to; the lock's
+        own GetCredentialStatus for that index names the user it associated
+        the credential with. A PIN filed under another user opens the door
+        as somebody else while every slot still reads occupied, so it is
+        cleared again and raised as a failed write -- the slot breaker sees
+        it and the slot suspends with the real reason -- rather than pushed
+        as a success.
+
+        A status read that fails proves nothing either way. The write has
+        landed; undoing it over an unanswered question (the seam rolls a
+        just-created user back on any error) would be worse than leaving
+        it unverified, so the failure is logged and the write stands.
         """
         credential_index = result.get("credential_index")
-        reported_user = result.get("user_index")
         LOGGER.debug(
-            "Lock %s: PIN for slot %s written to user_index %s; the lock reports "
-            "user_index %s, credential_index %s",
+            "Lock %s: PIN for slot %s written to user_index %s at credential_index %s",
             self.lock.entity_id,
             slot,
             user_id,
-            reported_user,
             credential_index,
         )
-        if reported_user is not None and reported_user != user_id:
-            raise LockOperationFailed(
-                f"{self.lock.entity_id}: the lock associated the PIN for slot "
-                f"{slot} with user {reported_user}, not user {user_id}"
-            )
         if credential_index is None:
             return
-        owner = next(
-            (
-                raw_user.get("user_index")
-                for raw_user in await self._raw_lock_users()
-                for cred in raw_user.get("credentials") or []
-                if cred.get("type") == "pin" and cred.get("index") == credential_index
-            ),
-            None,
-        )
-        if owner is not None and owner != user_id:
-            raise LockOperationFailed(
-                f"{self.lock.entity_id}: the lock filed the PIN for slot {slot} "
-                f"(credential {credential_index}) under user {owner}, not user "
-                f"{user_id}"
+        try:
+            status = await self._invoke_sdk(
+                "get_lock_credential_status",
+                get_lock_credential_status(
+                    client,
+                    node,
+                    credential_type="pin",
+                    credential_index=credential_index,
+                ),
             )
+        except (LockDisconnected, LockOperationFailed) as err:
+            LOGGER.debug(
+                "Lock %s: could not verify which user holds credential %s "
+                "written for slot %s: %s",
+                self.lock.entity_id,
+                credential_index,
+                slot,
+                err,
+            )
+            return
+        owner = status.get("user_index")
+        if owner is None or owner == user_id:
+            return
+        LOGGER.warning(
+            "Lock %s: the lock filed the PIN for slot %s (credential %s) under "
+            "user %s, not user %s; clearing it so it cannot open the door as "
+            "somebody else",
+            self.lock.entity_id,
+            slot,
+            credential_index,
+            owner,
+            user_id,
+        )
+        try:
+            await self._invoke_sdk(
+                "clear_lock_credential",
+                clear_lock_credential(
+                    client,
+                    node,
+                    credential_type="pin",
+                    credential_index=credential_index,
+                ),
+            )
+        except (LockDisconnected, LockOperationFailed) as err:
+            LOGGER.warning(
+                "Lock %s: could not clear misfiled credential %s: %s",
+                self.lock.entity_id,
+                credential_index,
+                err,
+            )
+        raise LockOperationFailed(
+            f"{self.lock.entity_id}: the lock filed the PIN for slot {slot} "
+            f"(credential {credential_index}) under user {owner}, not user {user_id}"
+        )
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
