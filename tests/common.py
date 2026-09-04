@@ -20,6 +20,7 @@ from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.util import slugify
@@ -433,3 +434,31 @@ class MockCalendarEntity(CalendarEntity):
                 continue
             events.append(event)
         return events
+
+
+async def async_configure_flow(
+    hass: HomeAssistant, flow_id: str, user_input: dict[str, Any] | None = None
+) -> Any:
+    """
+    Submit to a config flow, waiting out any progress step it shows.
+
+    Allocation runs as a progress task (#1536): the step that takes the
+    submission shows progress, Home Assistant re-enters it when the task is
+    done, and the next result is what the user would see.
+    """
+    result = await hass.config_entries.flow.async_configure(flow_id, user_input)
+    while result["type"] == FlowResultType.SHOW_PROGRESS:
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
+    return result
+
+
+async def async_configure_options(
+    hass: HomeAssistant, flow_id: str, user_input: dict[str, Any] | None = None
+) -> Any:
+    """Submit to an options flow, waiting out any progress step it shows."""
+    result = await hass.config_entries.options.async_configure(flow_id, user_input)
+    while result["type"] == FlowResultType.SHOW_PROGRESS:
+        await hass.async_block_till_done()
+        result = await hass.config_entries.options.async_configure(flow_id)
+    return result
