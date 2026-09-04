@@ -37,7 +37,10 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     pin_address,
 )
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
+from custom_components.lock_code_manager.domain.exceptions import (
+    LockBusy,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
@@ -1942,3 +1945,60 @@ async def test_apply_read_keeps_showing_a_believed_write_while_waiting(
     out = push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
     assert out[pin_address(1)] == SlotCredential.known("9999")
     assert push_coordinator.is_verified(pin_address(1)) is False
+
+
+async def test_poll_finding_the_lock_busy_keeps_its_data_without_backoff(
+    poll_lock: MockLCMLock, poll_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """A poll that never got its turn is not a failed poll (issue #1535)."""
+    await poll_coordinator.async_refresh()
+    before = dict(poll_coordinator.data)
+    with patch.object(
+        poll_lock, "async_get_usercodes", AsyncMock(side_effect=LockBusy("busy"))
+    ):
+        data = await poll_coordinator.async_get_usercodes()
+    assert data == before
+    assert poll_coordinator._lock_breaker.failure_count == 0
+
+
+async def test_first_poll_finding_the_lock_busy_fails_without_backoff(
+    poll_lock: MockLCMLock, poll_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """Before anything was ever read there is nothing to keep, and no false success."""
+    with (
+        patch.object(
+            poll_lock, "async_get_usercodes", AsyncMock(side_effect=LockBusy("busy"))
+        ),
+        pytest.raises(UpdateFailed),
+    ):
+        await poll_coordinator.async_get_usercodes()
+    assert poll_coordinator._lock_breaker.failure_count == 0
+
+
+async def test_confirmation_look_finding_the_lock_busy_keeps_waiting(
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    freezer,
+) -> None:
+    """A look that never reached the lock gives nothing up, even past the deadline."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    with patch.object(
+        push_lock, "async_hard_refresh_codes", AsyncMock(side_effect=LockBusy("busy"))
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+    assert push_coordinator.has_pending_write(pin_address(1)) is True
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_drift_check_finding_the_lock_busy_applies_no_backoff(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """Drift detection that never got its turn is not a failed refresh."""
+    await push_coordinator.async_refresh()
+    with patch.object(
+        push_lock, "async_hard_refresh_codes", AsyncMock(side_effect=LockBusy("busy"))
+    ):
+        await push_coordinator._async_drift_check(dt_util.utcnow())
+    assert push_coordinator._lock_breaker.failure_count == 0
+    assert push_coordinator.unreachable is False

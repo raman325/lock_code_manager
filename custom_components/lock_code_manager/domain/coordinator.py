@@ -33,7 +33,7 @@ from ..const import (
     POLL_FAILURE_ALERT_THRESHOLD,
 )
 from .credentials import CredentialAddress, CredentialType, pin_address
-from .exceptions import LockCodeManagerError
+from .exceptions import LockBusy, LockCodeManagerError
 from .models import SlotCredential
 from .queries import get_entry_config
 from .resilience import CircuitBreaker
@@ -478,6 +478,14 @@ class LockUsercodeUpdateCoordinator(
             self._fail_overdue(
                 [address for address in self._pending if address not in new_data]
             )
+        except LockBusy as err:
+            # Never reached the lock; the next look asks again.
+            _LOGGER.debug(
+                "Confirmation read for %s waits for its turn: %s",
+                self._lock.lock.entity_id,
+                err,
+            )
+            return
         except LockCodeManagerError as err:
             self._give_up_overdue(err)
             return
@@ -701,6 +709,14 @@ class LockUsercodeUpdateCoordinator(
         """Fetch usercodes from the provider, normalize slot keys, and apply backoff handling."""
         try:
             data = await self._lock.async_internal_get_usercodes()
+        except LockBusy as err:
+            # Another operation had the lock's turn for the whole wait. Not the
+            # lock's word: no backoff. Keep what we have; before anything has
+            # been read there is nothing to keep, and a false success would
+            # hide that (#1268).
+            if self.data:
+                return self.data
+            raise UpdateFailed from err
         except LockCodeManagerError as err:
             self._apply_backoff()
             # Don't swallow into {}: DataUpdateCoordinator records any return as
@@ -734,6 +750,13 @@ class LockUsercodeUpdateCoordinator(
                     await self._lock.async_internal_hard_refresh_codes()
                 )
             )
+        except LockBusy as err:
+            _LOGGER.debug(
+                "Drift detection for %s waits for its turn: %s",
+                self._lock.lock.entity_id,
+                err,
+            )
+            return
         except LockCodeManagerError as err:
             self._apply_backoff()
             _LOGGER.warning(

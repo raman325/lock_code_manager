@@ -88,6 +88,18 @@ class LockDisconnected(LockCodeManagerProviderError):
     """Raised when lock can't be communicated with."""
 
 
+class LockBusy(LockCodeManagerProviderError):
+    """
+    Raised when a caller's turn at the lock did not come within its wait budget.
+
+    Another operation on the same lock held the mutex for the whole wait.
+    That says nothing about the lock -- the caller never reached it -- so
+    this charges no breaker: the sync tick tries again on its own cadence,
+    the poll keeps its last data, and a direct action tells the user the
+    lock is busy.
+    """
+
+
 class LockOperationFailed(LockCodeManagerProviderError):
     """
     Raised when the lock is reachable but the operation failed.

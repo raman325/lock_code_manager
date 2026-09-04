@@ -30,6 +30,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
+    LockBusy,
     LockDisconnected,
     LockOperationFailed,
     LockOperationUnsupported,
@@ -2203,3 +2204,33 @@ class TestPendingWritesOwnedByCoordinator:
 
         await manager.async_start()
         assert manager._coordinator.take_failed_write(pin_address(1)) is False
+
+
+class TestLockBusy:
+    """A tick that did not get its turn at the lock learned nothing about it."""
+
+    async def test_busy_lock_is_retried_without_charging_any_breaker(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """LockBusy returns the slot to OUT_OF_SYNC and charges neither breaker."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
+        lock_failures = manager._coordinator._lock_breaker.failure_count
+        slot_failures = manager._slot_breaker.failure_count
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockBusy("another operation has the lock"),
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._coordinator._lock_breaker.failure_count == lock_failures
+        assert manager._slot_breaker.failure_count == slot_failures

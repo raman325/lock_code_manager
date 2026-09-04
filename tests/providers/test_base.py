@@ -55,6 +55,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.events import CredentialOperation
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
+    LockBusy,
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
@@ -2945,3 +2946,72 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
     # a bare CancelledError that formats as the empty string -- which would
     # make the log line report the failure without naming it.
     assert "no answer within" in str(lock.coordinator.last_exception)
+
+
+async def test_a_waiter_whose_turn_never_comes_is_busy_not_disconnected(
+    hass: HomeAssistant,
+):
+    """
+    Queueing behind a long holder is not the lock failing to answer (issue #1535).
+
+    The waiter never reached the lock, so what it raises must not be the
+    disconnect that charges the lock breaker: three queued slots used to
+    mark a working lock unreachable with no device evidence at all.
+    """
+    lock = _make_base_test_lock(hass, "busy_not_disconnected")
+    lock._min_operation_delay = 0
+    lock._budget = 10.0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda s: s._budget)
+    ):
+        holder = asyncio.create_task(lock._execute_rate_limited("set", _never_returns))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert lock._aio_lock.locked()
+
+        lock._budget = 0.05
+        with pytest.raises(LockBusy) as excinfo:
+            await asyncio.wait_for(
+                lock._execute_rate_limited("get", AsyncMock(return_value="x")),
+                timeout=5,
+            )
+        assert not isinstance(excinfo.value, LockDisconnected)
+        assert not holder.done()  # the holder is still the one being waited for
+        holder.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await holder
+
+
+async def test_the_operation_deadline_starts_when_the_turn_comes(
+    hass: HomeAssistant,
+):
+    """
+    Waiting one's turn does not eat into the budget for the call itself.
+
+    Holder takes 0.2 s, the waiter's call takes 0.2 s, the budget is 0.3 s:
+    one deadline over both would cut the waiter off; a deadline that starts
+    at acquire lets it finish.
+    """
+    lock = _make_base_test_lock(hass, "deadline_at_acquire")
+    lock._min_operation_delay = 0
+
+    async def _slow(*_args, **_kwargs):
+        await asyncio.sleep(0.2)
+        return "done"
+
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda _s: 0.3)
+    ):
+        holder = asyncio.create_task(lock._execute_rate_limited("set", _slow))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        result = await asyncio.wait_for(
+            lock._execute_rate_limited("get", _slow), timeout=5
+        )
+        await holder
+
+    assert result == "done"

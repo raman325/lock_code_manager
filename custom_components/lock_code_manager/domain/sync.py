@@ -57,6 +57,7 @@ from .config import build_slot_unique_id
 from .credentials import CredentialAddress, CredentialType
 from .exceptions import (
     CodeRejectedError,
+    LockBusy,
     LockDisconnected,
     LockOperationFailed,
     LockOperationUnsupported,
@@ -892,6 +893,13 @@ class SlotSyncManager:
             # request_sync_check will see the slot as in-sync (no code
             # desired, no code on lock). Set to OUT_OF_SYNC so the next
             # tick resolves to IN_SYNC.
+            self._state = SyncState.OUT_OF_SYNC
+            return
+        except LockBusy as err:
+            # Another operation on this lock had the turn for the whole wait.
+            # Not the lock's word about anything, so nothing is charged; the
+            # next tick asks again.
+            _LOGGER.debug("%s: %s. Will retry on next tick.", self._log_prefix, err)
             self._state = SyncState.OUT_OF_SYNC
             return
         except LockDisconnected as err:
