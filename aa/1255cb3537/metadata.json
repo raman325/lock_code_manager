@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "aa1255cb3537",
+  "strategy": "manual-commit",
+  "branch": "fix/1528-budget-per-exchange",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zha.py",
+    "tests/providers/test_base.py",
+    "tests/providers/zha/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/aa/1255cb3537/0/metadata.json",
+      "transcript": "/aa/1255cb3537/0/full.jsonl",
+      "compact_transcript": "/aa/1255cb3537/0/transcript.jsonl",
+      "content_hash": "/aa/1255cb3537/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 5518,
+    "cache_read_tokens": 869686,
+    "output_tokens": 6392,
+    "api_call_count": 1
+  }
+}
