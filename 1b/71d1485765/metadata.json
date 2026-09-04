@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "1b71d1485765",
+  "strategy": "manual-commit",
+  "branch": "fix/1535-wait-is-not-a-disconnect",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "tests/providers/test_base.py",
+    "tests/test_coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1b/71d1485765/0/metadata.json",
+      "transcript": "/1b/71d1485765/0/full.jsonl",
+      "compact_transcript": "/1b/71d1485765/0/transcript.jsonl",
+      "content_hash": "/1b/71d1485765/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 13950,
+    "cache_read_tokens": 4914382,
+    "output_tokens": 11145,
+    "api_call_count": 6
+  }
+}
