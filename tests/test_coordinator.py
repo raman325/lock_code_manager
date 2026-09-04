@@ -1980,7 +1980,14 @@ async def test_confirmation_look_finding_the_lock_busy_keeps_waiting(
     push_coordinator: LockUsercodeUpdateCoordinator,
     freezer,
 ) -> None:
-    """A look that never reached the lock gives nothing up, even past the deadline."""
+    """A look that never reached the lock gives nothing up, even past the deadline.
+
+    A read that fails past the deadline does give the write up, because the
+    lock has had its time to be seen holding it. Waiting for a turn is not
+    that: it is time spent behind somebody else's operation, and charging a
+    slot for it would blame a lock that was merely busy working. Turns are
+    handed out in order, so a look that keeps asking gets one.
+    """
     push_coordinator.record_write(pin_address(1), "9999", believed=True)
     freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
     with patch.object(
@@ -2026,3 +2033,31 @@ async def test_poll_finding_the_lock_busy_during_backoff_is_not_a_recovery(
     ):
         await poll_coordinator.async_get_usercodes()
     assert poll_coordinator._lock_breaker.failure_count == failures
+
+
+async def test_a_busy_poll_after_a_failed_one_does_not_report_a_recovery(
+    poll_lock: MockLCMLock, poll_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """Keeping the last data is only safe while the last poll actually succeeded.
+
+    One failed poll does not trip the breaker, so a busy poll behind it would
+    otherwise return data and be recorded as the lock recovering -- with
+    nothing read.
+    """
+    await poll_coordinator.async_refresh()
+    with patch.object(
+        poll_lock,
+        "async_get_usercodes",
+        AsyncMock(side_effect=LockDisconnected("gone")),
+    ):
+        await poll_coordinator.async_refresh()
+    assert poll_coordinator.last_update_success is False
+    assert not poll_coordinator._lock_breaker.tripped
+
+    with (
+        patch.object(
+            poll_lock, "async_get_usercodes", AsyncMock(side_effect=LockBusy("busy"))
+        ),
+        pytest.raises(UpdateFailed),
+    ):
+        await poll_coordinator.async_get_usercodes()

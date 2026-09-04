@@ -793,8 +793,9 @@ class SlotSyncManager:
         # pending check so an outage right after an accepted write suspends
         # as the outage it is while it lasts. If the lock is still unreadable
         # at that write's deadline the coordinator gives the write up all the
-        # same, and the re-sync after recovery costs the one strike that
-        # trade accepts: a landed write re-syncs as no change.
+        # same -- unless its looks never got a turn at the lock, which says
+        # nothing about the lock -- and the re-sync after recovery costs the
+        # one strike that trade accepts: a landed write re-syncs as no change.
         if self._coordinator.unreachable or not self._lock.provider_setup_succeeded:
             self._state = SyncState.SUSPENDED
             self._write_state()
