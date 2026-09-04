@@ -449,6 +449,14 @@ class LockUsercodeUpdateCoordinator(
         fails once a pending write is past its deadline gives that write up
         all the same: the lock has had the time to live to be seen holding it,
         and was not.
+
+        Not getting a turn at the lock is the one exception. That is time
+        spent behind somebody else's operation rather than evidence about the
+        lock, and giving a write up for it would charge a slot for a lock
+        that was merely busy doing legitimate work -- the fault this
+        integration invented ``LockBusy`` to stop inventing. Turns are handed
+        out in the order they were asked for, so a look that keeps asking
+        gets one.
         """
         if not self._pending:
             return
@@ -712,10 +720,16 @@ class LockUsercodeUpdateCoordinator(
         except LockBusy as err:
             # Another operation had the lock's turn for the whole wait. Not the
             # lock's word: no backoff either way. Keep what we have, unless
-            # nothing has ever been read (a false first success would hide
-            # that, #1268) or the lock is in backoff (a returned value would
-            # read as "recovered" while the breaker still says otherwise).
-            if self._reached_once and not self._lock_breaker.tripped:
+            # there is nothing to keep or keeping it would be read as news.
+            # Nothing has ever been read: a false first success would hide
+            # that (#1268). The last poll failed, or the breaker has the lock
+            # in backoff: returning data would report a recovery this read did
+            # nothing to earn.
+            if (
+                self.last_update_success
+                and self._reached_once
+                and not self._lock_breaker.tripped
+            ):
                 return self.data
             raise UpdateFailed from err
         except LockCodeManagerError as err:

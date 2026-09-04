@@ -3208,3 +3208,35 @@ class TestOperationBudget:
             )
             await holder
         assert result == "written"
+
+
+async def test_a_probe_that_never_answers_is_cut_off_before_the_queue(
+    hass: HomeAssistant,
+):
+    """The availability probes get their own bound, ahead of the wait for a turn.
+
+    They are device I/O on some providers -- Schlage's is a cloud round trip
+    -- so they are bounded; and they run before the mutex, so a lock that
+    cannot even be probed is reported as unreachable without first queueing
+    behind somebody else's operation. Collapsing the two bounds into one
+    would let a slow probe eat the budget meant for the call, holding the
+    mutex while it did.
+    """
+    lock = _make_base_test_lock(hass, "probe_before_queue")
+    lock._min_operation_delay = 0
+
+    async def _never_answers():
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        patch.object(lock, "async_is_integration_connected", _never_answers),
+        pytest.raises(LockDisconnected, match="availability check gave no answer"),
+    ):
+        await asyncio.wait_for(
+            lock._execute_rate_limited("get", AsyncMock(return_value="x")), timeout=5
+        )
+
+    assert not lock._aio_lock.locked()
