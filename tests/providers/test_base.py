@@ -3150,17 +3150,18 @@ class TestOperationBudget:
         lock._min_operation_delay = 0
 
         async def _long_read(*_args, **_kwargs):
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.4)
             return "read"
 
-        # Floor 0.05 s, exchange budget 1.0 s: the holder and the wait get 3 s
-        # while a one-slot write's own budget stays 0.05 s -- well under the
-        # 0.2 s hold, so sizing the wait to the floor is LockBusy, not jitter.
+        # Exchange budget 0.2 s over a 0.05 s floor, three managed slots: the
+        # holder's read and the wait get 0.6 s for a 0.4 s hold, while a
+        # one-slot write's own budget is 0.2 s -- under the hold, so a wait
+        # sized to the floor or to the caller's own budget is LockBusy.
         with (
             patch.object(
                 type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
             ),
-            patch.object(type(lock), "per_exchange_budget", 1.0),
+            patch.object(type(lock), "per_exchange_budget", 0.2),
             patch.object(
                 type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
             ),

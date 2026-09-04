@@ -1238,13 +1238,14 @@ async def test_zha_declares_a_per_exchange_budget_and_keeps_the_flat_floor(
     One ZCL command per slot, each of them slow, is declared, not overridden.
 
     Each of zigpy's three attempts waits for the radio's send confirmation
-    (30s on zigpy-znp) and then 28s for the reply, so one command can take
-    174s before zigpy gives up on it; the declared budget sits strictly above
-    that so zigpy's own word about a slot always comes first. The flat floor
-    is unchanged: the walk scales it at the call site (#1528).
+    (up to 120s on zigpy-xbee) and then 28s for the reply, so one command can
+    take 444s before zigpy gives up on it; the declared budget sits strictly
+    above that on every radio zigpy ships, so zigpy's own word about a slot
+    always comes first. The flat floor is unchanged: the walk scales it at
+    the call site (#1528).
     """
     assert ZHALock.per_exchange_budget == zha_module._WORST_CASE_ZCL_COMMAND
-    assert zha_module._WORST_CASE_ZCL_COMMAND > 3 * (30 + 28)
+    assert zha_module._WORST_CASE_ZCL_COMMAND > 3 * (120 + 28)
     with patch.object(
         type(zha_lock), "managed_slots", property(lambda _self: frozenset(range(1, 11)))
     ):
