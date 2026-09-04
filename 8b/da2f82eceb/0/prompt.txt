@@ -1,0 +1,1379 @@
+Investigate **issue #1538** in `lock_code_manager` — a released 5.5.3 bug against two Aqara U200 Matter-over-Thread locks, with four symptoms and real security impact. Read the issue first; it's detailed and includes sanitized `matter.get_lock_users` output.
+
+**Research already done — don't redo it:**
+
+*Confirmed in code.* The degenerate `lcm3`/`lcm4`/`lcm5` user names come from `providers/matter.py:697` (`_try_set_lock_user_with_fallbacks`). It tries `[lcm:{slot}:{name}, lcm{slot}, {slot}]` in order (candidates built at `matter.py:691`), falling through on `MatterError`. That's meant for firmware that rejects colons — but a *busy or timing-out device* also reports `MatterError`, and the reporter's logs show repeated poll failures. So a transient failure while writing the canonical name permanently stores a display-less one. That's why slots 1–2 got `lcm:N:Name` and 3–5 didn't, on a lock that demonstrably accepts colons. Note `_base.py:1768` (`_build_tagged_user_name`) never emits the compact form — only matter.py does.
+
+*Strong evidence, unconfirmed.* The Matter table shows a systematic index shift: LCM slot 1→user_index 5, 2→1, 3→2, 4→3, 5→4, with `credentialIndex == userIndex` throughout. The event resolver at `matter.py:1300` (`_dispatch_lock_operation`) looks correct in principle — `userIndex` → `user.name` → `parse_tag` → slot, with a credential-index walk as fallback. So for User D's PIN to report as slot 3, either the lock omits `userIndex` and the fallback lands wrong, or `SetUser` and `SetCredential` disagreed on the index at creation. Chase the reporter's hypothesis #7 first.
+
+*Not investigated.* Cross-lock credential deletion and false in-sync — the two worst.
+
+**Suggested order** (worst blast radius first):
+1. **Cross-lock deletion** — removing lock B wiped lock A's credentials. Near code recently changed by #1522 (release-path adopt) and `async_release_locks`; a regression is plausible.
+2. **False in-sync** — sync likely trusts coordinator state instead of verifying the credential exists. Reporter's read is probably right.
+3. **Attribution** — trace `SetUser` vs `SetCredential` index agreement.
+4. **Name fallback** — narrow it to genuine charset rejection, and refuse the write rather than storing an identifier that can't be decoded (there's a `feedback_fail_loud_on_unencodable_identifier` memory note on exactly this).
+
+**Repo context:** venv at `/Users/raman/projects/lock_code_manager/.venv/bin/python`. Run `pytest tests/` (full suite, ~95s, 100% coverage enforced). Use `prek`, not `pre-commit`, and run it *only* on changed files — `prek run --all-files` triggers yarn hooks that sweep unrelated `package.json`/`yarn.lock` churn into commits (happened twice this session). Work in a worktree with absolute paths. `.worktrees/` has five stale ones (`budget-scope`, `probe-retry`, `sync-timeout`, `timeout-edges` are all merged or closed and can be removed; `v6-merge` is live). Coverage is at 100% and line coverage has repeatedly hidden bugs — mutation-test every fix.
+
+**Recent history that matters:** 5.5.2 and 5.5.3 shipped the #1523 timeout work (#1525, #1526, #1527). PR #1529 was closed unmerged after six review rounds — read the close comment and #1528, which now carries a design brief with three constraints for per-round-trip deadlines. #1535 and #1536 are related open gaps. None of that should block #1538.
+
+---
+
+yes and stop classifying
+
+---
+
+run code review on all open PRs. If you can't make it past 2 or 3 code reviews without at least one clean review then there's a code smell problem
+
+---
+
+address both. For voluptuous-serialize, see what HA is using (I think probatio) and see if that is what we should use instead
+
+---
+
+continue, but note that we can fix this by also setting the minimum version to 2026.9 with this PR. Once it's released tomorrow we can release and then we don't have to worry about backwards compatibility
+
+---
+
+continue, but note that we can fix this by also setting the minimum version to 2026.9 with this PR. Once it's released tomorrow we can release and then we don't have to worry about backwards compatibility
+
+---
+
+continue, but note that we can fix this by also setting the minimum version to 2026.9 with this PR. Once it's released tomorrow we can release and then we don't have to worry about backwards compatibility
+
+---
+
+continue, but note that we can fix this by also setting the minimum version to 2026.9 with this PR. Once it's released tomorrow we can release and then we don't have to worry about backwards compatibility
+
+---
+
+is the PR title and description for 1539 accurate? run code review after
+
+---
+
+<task-notification>
+<task-id>a90ce05b6fd43f82b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a90ce05b6fd43f82b.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: reuse finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings assembled. I verified each existing mechanism at a concrete file:line before flagging.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 242,
+    "summary": "`_last_set_expires_at` is a second `(pin, monotonic_deadline)` record kept on the sync manager, while BaseLock already owns the write-memory seam (`_pending_writes` at providers/_base.py:282, armed with the same `time.monotonic() + PENDING_WRITE_TTL` at _base.py:531-534) and the codebase's own docstring at _base.py:2227-2240 (`last_write_was_clear`) states the rule that write memory belongs on the provider, not the sync manager.",
+    "failure_scenario": "Duplicated: the 'is this write still live' predicate now exists three times against one constant -- _base.py:533 (arm), sync.py:817 (`time.monotonic() &lt; deadline` for PENDING_CONFIRMATION), sync.py:493 (`time.monotonic() &lt; self._last_set_expires_at`). The seam's record is not reused because CONFIRMED writes pop `_pending_writes` (_base.py:1426) and the tick gates PENDING_CONFIRMATION on that dict's membership (sync.py:805, 1001), so CONFIRMED sets cannot simply be added to it. The existing pattern to extend is `_cleared_slots`: `async_internal_set_usercode` already touches it at _base.py:1377 (`self._cleared_slots.discard(code_slot)`) and `async_internal_clear_usercode` already pops set-memory at _base.py:1543 -- a symmetric `_recent_sets: dict[int, tuple[str, float]]` written at 1377 for every WriteResult, dropped at 1543, exposed as `recent_set_pin(code_slot) -&gt; str | None` next to `last_write_was_clear`, would let the EMPTY branch read `snapshot.credential_state == self._lock.recent_set_pin(self._slot_num)` and delete both the new attribute and the clear-side release at sync.py:542-546. What drifts: services.py:90 calls `lock.async_internal_set_usercode` directly, so a service-call set never updates `_last_set_pin`/`_last_set_expires_at` -- exactly the staleness `last_write_was_clear`'s docstring was written to avoid on the clear side. A direct set followed by an eventually-consistent EMPTY read (Schlage) reports out of sync and rewrites; and any future change to how the seam ages a write (e.g. per-provider TTL) has to be made in two layers."
+  },
+  {
+    "file": "tests/test_sync.py",
+    "line": 89,
+    "summary": "The `write_is_fresh` branch and its '0.0 is already in the past for any monotonic clock' comment are pasted identically into two `_manager()` factories (tests/test_sync.py:89-94 and tests/properties/test_in_sync.py:52-56), and the `0.0` idiom diverges from the file's own existing stale-deadline idiom.",
+    "failure_scenario": "Duplicated: same expression `time.monotonic() + PENDING_WRITE_TTL if write_is_fresh else 0.0` and near-identical rationale comment in two files that each had to be edited in lockstep in this PR. The same file already expresses 'already expired' as `time.monotonic() - 1.0` at tests/test_sync.py:1014 (and fresh as `time.monotonic() + 100.0` / `+ 60.0` at 945, 979, 1059), so there are now two idioms for the same fact. Neither tests/common.py nor tests/conftest.py has a sync-manager factory to hoist into (grep for `SlotSyncManager|def _manager` found none), but a pair of one-line helpers in tests/common.py (e.g. `fresh_deadline()` / `expired_deadline()`) used by both `_manager()`s and the three hand-written `_pending_writes` entries would give one place to change if the arming rule moves (see finding 1). Note `freezer` is not the convention for this clock: it is used only in tests/test_resilience.py for the `dt_util.utcnow()`-based CircuitBreaker (domain/resilience.py:47,81); every monotonic-deadline test in test_sync.py writes the deadline directly, so the PR's approach matches the repo convention there and I am not flagging the absence of `freezer`."
+  }
+]
+```
+
+Checked and deliberately not flagged:
+
+- `PENDING_WRITE_TTL = 60.0` (const.py:213) being an unannotated float next to `timedelta` constants (`TICK_INTERVAL`, `SYNC_ATTEMPT_WINDOW`) and annotated ints (`POLL_FAILURE_ALERT_THRESHOLD: int`): this is a style inconsistency, not duplication. The float is forced by `time.monotonic()` arithmetic at both call sites; the only actionable nit is adding `: float` to match its annotated neighbours.
+- `domain/resilience.py` `CircuitBreaker`: uses `dt_util.utcnow()` and `timedelta`, a different clock domain from the seam; no shared "is this timestamp live" helper exists to reuse, so the new code is not bypassing one.
+- `WriteResult.CONFIRMED` providers (schlage.py:431, matter.py:1063, zha.py:328, zigbee2mqtt.py:519, akuvox.py:402, virtual.py:139, zwave_js_ui.py:1309, zwave_js.py:696) confirm that most providers never create a `_pending_writes` entry, which is why the seam's record could not be consulted as-is for the EMPTY branch; that is the gap finding 1 proposes closing on BaseLock rather than on the sync manager.</result>
+<usage><subagent_tokens>96516</subagent_tokens><tool_uses>9</tool_uses><duration_ms>173900</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8a3213d41295c7bf</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a8a3213d41295c7bf.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: CLAUDE.md conventions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Findings
+
+Verification performed in the worktree (`/Users/raman/projects/lock_code_manager/.worktrees/issue-1538`):
+
+- `prek run --files &lt;5 changed files&gt;`: every hook passed (ruff check, ruff format, pydocstyle, flake8, mypy, trailing whitespace, EOF, AST, debug statements). No pre-commit finding.
+- `pytest tests/properties/test_in_sync.py tests/test_sync.py` in the venv: 94 passed in 3.47s.
+- No inline/local imports added (grep of `+`-lines for indented `import`/`from ... import` returned nothing); ruff `I` (isort) is enabled with the section order AGENTS.md prescribes and passed.
+- No Google-style `Args:`/`Returns:` sections added; no `nonlocal`/`global`; no `caplog` assertions; no `hass.data` manipulation (the new e2e test uses the `mock_lock_config_entry` / `lock_code_manager_config_entry` fixtures); tests ship with the code change.
+- Note: the worktree has no `.claude/CLAUDE.md` (`.claude` is gitignored, line 5 of `.gitignore`); I read it from the main checkout at `/Users/raman/projects/lock_code_manager/.claude/CLAUDE.md`. Its three rules (templates, fast pytest, `prek`) are all satisfied or unverifiable-but-passing.
+
+The only written rule the diff breaks is AGENTS.md's acronym rule. Everything else you asked me to check has no corresponding rule text in the governing files.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 238,
+    "summary": "New comment uses the abbreviation 'TTL' where AGENTS.md requires acronyms in code comments to be spelled out.",
+    "failure_scenario": "'**Spell out acronyms** in code comments instead of using abbreviations.' from /Users/raman/projects/lock_code_manager/.worktrees/issue-1538/AGENTS.md (Code Style); offending line: '        # outlived the pending-write TTL is not a lag. The unreadable branch'"
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 486,
+    "summary": "New comment in the empty-credential branch of calculate_in_sync uses 'TTL' unexpanded.",
+    "failure_scenario": "'**Spell out acronyms** in code comments instead of using abbreviations.' from /Users/raman/projects/lock_code_manager/.worktrees/issue-1538/AGENTS.md (Code Style); offending line: '                    # cloud API); past the TTL the lock is not lagging, it is'"
+  },
+  {
+    "file": "tests/properties/test_in_sync.py",
+    "line": 89,
+    "summary": "New test docstring uses 'TTL' unexpanded; weaker fit because the rule text says 'code comments' and this is a docstring, so treat as advisory.",
+    "failure_scenario": "'**Spell out acronyms** in code comments instead of using abbreviations.' from /Users/raman/projects/lock_code_manager/.worktrees/issue-1538/AGENTS.md (Code Style); offending line: '    cloud API). Past the pending-write TTL there is no lag left to explain'"
+  },
+  {
+    "file": "tests/test_sync.py",
+    "line": 292,
+    "summary": "New test docstring uses 'TTL' unexpanded; weaker fit because the rule text says 'code comments' and this is a docstring, so treat as advisory.",
+    "failure_scenario": "'**Spell out acronyms** in code comments instead of using abbreviations.' from /Users/raman/projects/lock_code_manager/.worktrees/issue-1538/AGENTS.md (Code Style); offending line: '        Every table case above writes and reads inside one TTL, where'"
+  }
+]
+```
+
+Calibration notes for the acronym findings: the new `const.py` comment (lines 208-212) does not use "TTL" and is clean; the identifier `PENDING_WRITE_TTL` is pre-existing and merely relocated, and the rule covers comments, not identifiers. `origin/main` already carries unexpanded "TTL" in comments at `providers/_base.py:1422` and `domain/coordinator.py:285,306`, so the PR follows existing precedent, but the rule is written and the lines are new.
+
+Checked and explicitly NOT flaggable (no rule text in any governing file):
+
+- "Comments state intent, not history" / "comment the deviation, not the justification": absent from AGENTS.md and all three CLAUDE.md files. The `sync.py:543-545` "Released with the value it qualifies. Inert while..." comment and the `(issue #1538)` references at `sync.py:487-488`, `tests/properties/test_in_sync.py:92`, `tests/test_sync.py:290` cannot be cited. `origin/main` already has `(issue #1397)` in `sync.py:852`, so issue references are established practice.
+- Constant annotation: no rule requires typed constants. `PENDING_WRITE_TTL = 60.0` matches its immediate neighbours `TICK_INTERVAL`, `MAX_SYNC_ATTEMPTS`, `SYNC_ATTEMPT_WINDOW`, which are also unannotated; only the `BACKOFF_*` block is typed.
+- `test_a_set_arms_the_window_it_will_be_trusted_in` (`tests/test_sync.py:254-284`) calls private `_resolve_credential_snapshot` and `_perform_sync`. No written rule forbids calling private methods; the test uses real fixtures and the real `async_setup_entry`, which is what AGENTS.md's "Integration tests" rule asks for.
+- `_manager()` helper using `MagicMock(spec=SlotSyncManager)`: AGENTS.md explicitly permits this ("**Pure-logic tests** (e.g., `calculate_in_sync`): Fine to use mocks"); the "don't MagicMock coordinators" rule is about coordinators and the PR does not add one.</result>
+<usage><subagent_tokens>84903</subagent_tokens><tool_uses>10</tool_uses><duration_ms>101790</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aab6553ba1bf01c4e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/aab6553ba1bf01c4e.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: simplification finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Judgment on item 6 before the list: the `write_is_fresh` axis on `test_active_unreadable_credential_compares_last_set` is a legitimate invariant pin, not padding. With the axis defaulting to fresh, a mutant that adds `time.monotonic() &lt; self._last_set_expires_at` to the unreadable branch survives every existing case; only `write_is_fresh=False` with `pin == last_set_pin` distinguishes expected `True` from mutant `False`. A comment cannot kill that mutant. Not reported.
+
+I also verified the unit form for finding 5 runs against the worktree code (bare `MagicMock(spec=SlotSyncManager)` with `_lock = AsyncMock()`, `_log_prefix` set, `_perform_sync` bound the same way `calculate_in_sync` already is): `before: False`, `after: True`.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 242,
+    "summary": "`_last_set_expires_at` is a second field that is only meaningful while `_last_set_pin` is non-None; the two are one value and should be stored as one.",
+    "failure_scenario": "The clear path (lines 542-546) already has to reset both and carries a 3-line comment admitting the second reset is 'inert' — a dead store kept alive by a warning. The next person who deletes the dead store as cleanup, or reorders the `is not None` check, gets exactly the silent divergence the comment describes. Simpler form: `self._last_set: tuple[str, float] | None = None` — the same `(pin, deadline)` shape `_pending_writes` already uses for the identical concept in providers/_base.py:531-534. Set path: `self._last_set = (snapshot.credential_state, time.monotonic() + PENDING_WRITE_TTL)`; clear path: `self._last_set = None` (one line, no comment). Empty branch: `self._last_set is not None and time.monotonic() &lt; self._last_set[1] and snapshot.credential_state == self._last_set[0]`; unreadable branch: `self._last_set is not None and snapshot.credential_state == self._last_set[0]`. Touch points: sync.py 154, 227-242, 492-497, 509, 537-546, 746; tests/test_sync.py 86-94; tests/properties/test_in_sync.py 51-56; tests/test_init.py 1374-1402 (comments plus the `is None` assertion). The 'released together' property becomes structural and the tests' `write_is_fresh` plumbing collapses to passing one tuple."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 483,
+    "summary": "The TTL rationale is written out four times in production code (const.py 208-212, `__init__` 234-241, the EMPTY branch 483-490, the clear path 543-545) and twice more in test docstrings; most of it is justification narrative rather than the trap.",
+    "failure_scenario": "Six copies of one argument drift independently the first time the rule changes; and the one genuinely non-obvious fact — that the unreadable branch deliberately does NOT expire — lives in `__init__` (238-241), not on the unreadable branch (496-497) where a reader would be tempted to add the check. Redundant text: `__init__` 236-241 ('Only the empty-credential branch ... nothing for the write to lose a race against') duplicates the EMPTY-branch comment and tests/properties/test_in_sync.py:108-113; EMPTY-branch 487-490 ('Reporting THAT as in sync leaves a user who cannot open the door looking like one who can, and stops the tick that would put the code back') is repeated verbatim in tests/test_sync.py:296-297 and is consequence narrative, not a trap; the clear-path comment 543-545 is review narrative about a dead store (see finding 1). Single-location form: `__init__` gets one line ('Deadline after which the last set no longer overrides a lock that reports the slot empty'); EMPTY branch keeps two lines ('Trust our write over an empty read only while the read could still lag it; past the TTL the lock is answering, not lagging (#1538)'); the unreadable branch at 496 gets the trap ('No expiry here: a write-only lock never produces a later read for this write to lose to'); test docstrings shrink to one sentence each."
+  },
+  {
+    "file": "tests/test_sync.py",
+    "line": 254,
+    "summary": "`test_a_set_arms_the_window_it_will_be_trusted_in` boots a full HA config entry and two ticks, then hand-builds the snapshot it asserts on, so the integration setup does no work the assertion reads.",
+    "failure_scenario": "The three fixtures, `async_initial_tick`, `async_trigger_sync_tick` (a new conftest import) and the real coordinator exist only to make `_perform_sync` not blow up; the real coordinator state is never consulted because the snapshot passed to `calculate_in_sync` is `_slot(... coordinator_credential=SlotCredential.empty())`. It is also the slowest test in `TestCalculateInSync` for a two-attribute fact, and the preceding sync tick has very likely already run `_perform_sync` once, so the explicit call is a second write. Simpler consistent form (verified running): `mgr = _manager(last_set_pin=None, write_is_fresh=False); mgr._lock = AsyncMock(); mgr._log_prefix = 'test'; mgr._perform_sync = SlotSyncManager._perform_sync.__get__(mgr)`; assert `calculate_in_sync(empty snapshot)` is False before and True after `await mgr._perform_sync(_slot(pin='1234'))`. Starting stale makes the test prove the set arms the window, which the current form (starting from a fresh default) does not; it then sits beside its sibling `test_stale_write_...` as a unit test on the same helper."
+  },
+  {
+    "file": "tests/test_sync.py",
+    "line": 89,
+    "summary": "Both `_manager()` helpers grew the same `write_is_fresh` branch, the same `time.monotonic() + PENDING_WRITE_TTL if ... else 0.0` expression, and the same 3-line 'time travel' comment with slightly different wording (tests/properties/test_in_sync.py:52-56).",
+    "failure_scenario": "Two copies of a clock computation plus two copies of a comment explaining why `0.0` is a valid past deadline, and two new imports (`time`, `PENDING_WRITE_TTL`) per test file, to express a boolean `calculate_in_sync` only ever compares against `time.monotonic()`. Simpler: take the deadline directly, `last_set_expires_at: float = math.inf` (fresh) with callers passing `0.0` for stale — `time.monotonic() &lt; inf` is identical to the fresh case, no clock read, no constant, no comment needed, and the test stops depending on the TTL's magnitude (the arming test covers that). If finding 1 is adopted, this becomes a single `last_set: tuple[str, float] | None` parameter and both branches disappear entirely."
+  },
+  {
+    "file": "tests/properties/test_in_sync.py",
+    "line": 46,
+    "summary": "The comment 'calculate_in_sync only touches these six attributes' hard-codes a count that was already wrong before this PR and will be wrong again.",
+    "failure_scenario": "On origin/main the comment said 'four' while the helper set five attributes (`_slot_num`, `_address`, `_coordinator`, `_last_set_pin`, `_lock`); this PR changed it to 'six' and it is now accidentally correct. Every future attribute added to `calculate_in_sync` requires someone to remember to re-count. Simpler: drop the number — '# __new__ skips the heavyweight __init__ (hass, registries, entities); calculate_in_sync only reads the attributes set here.' The list below the comment is the truth; the count restates it."
+  },
+  {
+    "file": "custom_components/lock_code_manager/const.py",
+    "line": 208,
+    "summary": "A 5-line comment justifying why two callers share one constant, on a bare `PENDING_WRITE_TTL = 60.0` in a block whose neighbours are annotated.",
+    "failure_scenario": "Sharing a constant is the expected mechanism, and the comment is the justification for it ('One answer, so the two cannot drift') rather than a trap — the very thing the owner's convention says not to write; it also restates the rationale already in sync.py (finding 2). Simpler: `PENDING_WRITE_TTL: float = 60.0  # how long a write stands in for a read of the same credential`, matching `BACKOFF_MAX_SECONDS: int = 1800` two lines up. Do not convert to `timedelta` like `TICK_INTERVAL`: both consumers add it to `time.monotonic()` (sync.py:538, _base.py:533), so `timedelta` would cost a `.total_seconds()` at each site and simplify nothing."
+  }
+]
+```</result>
+<usage><subagent_tokens>84436</subagent_tokens><tool_uses>8</tool_uses><duration_ms>200356</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1ac825ae1715b515</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a1ac825ae1715b515.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle A: line-by-line diff scan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 493,
+    "summary": "The deadline is only consulted lazily inside calculate_in_sync, and _async_tick (line 729-734) returns early while IN_SYNC, so a slot that went IN_SYNC on a fresh-window EMPTY override is never re-evaluated at expiry unless some listener fires -- and for push providers nothing does, leaving the #1538 false in-sync fully intact.",
+    "failure_scenario": "zwave_js/zha/zigbee2mqtt/zwave_js_ui (supports_push=True; update_interval=None so no polls; hard_refresh_interval is None for zwave_js and 1h delta-gated for the others). t=0: tick sets PIN, arms window to t=60, provider pushes known(pin), post-set verification -&gt; IN_SYNC. t=5: lock pushes EMPTY (silent rejection, or the cross-lock deletion of #1538) -&gt; push_update sees a delta -&gt; request_sync_check -&gt; EMPTY branch, window fresh -&gt; True -&gt; stays IN_SYNC. From then on: tick skips IN_SYNC slots; coordinator data is already EMPTY so every later push_update (coordinator.py:353 `if new_data == self.data: return`) and every hourly _async_drift_check (coordinator.py:552 `if new_data != self.data`) is a no-op with no listener call; request_sync_check never runs again; the expired window is never observed. Slot reads in_sync forever with no code on the lock -- exactly the pre-PR symptom -- until the user edits the PIN/name/active switch."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 1008,
+    "summary": "Post-set verification runs microseconds after _perform_sync arms the window, so an EMPTY readback can never fail verification: the slot goes IN_SYNC and the breaker is reset (line 1010), then flips back OUT_OF_SYNC (with _breaker_reset_requested=True from request_sync_check:669) at the next poll -- the slot breaker's 'set that never converges' case is unreachable and the code is rewritten on every poll forever.",
+    "failure_scenario": "Polling provider (Schlage, 5-min poll) whose lock accepts the API call but never stores the code, or a second Matter lock that deletes it after every write (#1538 multi-lock). t=0 set -&gt; arm -&gt; async_refresh reads EMPTY -&gt; calculate_in_sync True (fresh) -&gt; IN_SYNC, _slot_breaker.reset(). t=300 poll reads EMPTY -&gt; request_sync_check: expired -&gt; OUT_OF_SYNC + breaker reset requested. Next tick: breaker reset consumed (754-756), set again -&gt; arm -&gt; verify EMPTY -&gt; IN_SYNC, reset. Loop every 5 min indefinitely; record_failure at 1017 is never reached for this outcome, the breaker never trips, no slot_suspended repair is ever raised, and in_sync toggles on/off every poll."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 542,
+    "summary": "_last_set_pin/_last_set_expires_at are only released after a successful clear; a clear that raises after the lock actually cleared leaves a live window that will later override an authoritative EMPTY without any write being issued.",
+    "failure_scenario": "t=0 set '1234' succeeds, window armed to t=60. t=10 user toggles slot OFF; async_internal_clear_usercode times out / raises LockOperationFailed after the lock has already cleared the slot -&gt; _perform_sync raises before line 542, so _last_set_pin='1234' and the window stay live. t=20 user toggles ON with '1234'; coordinator reports EMPTY (the clear landed) -&gt; EMPTY branch: pin matches, window fresh -&gt; True -&gt; IN_SYNC with no set issued. Door does not open; on a push provider (finding 1) this is never revisited, on a poller it self-heals only at the next poll after t=60."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 538,
+    "summary": "The window is armed from a WriteResult the sync layer never sees: a NO_CHANGE result (lock already holds the PIN) and a CONFIRMED result both arm a 60-second 'the lock may be lagging' override, even though for CONFIRMED/NO_CHANGE the provider has already asserted the code is present and an EMPTY read within that window is a contradiction, not lag.",
+    "failure_scenario": "Z-Wave (push) set returns CONFIRMED and mark_verified runs; 3 s later the driver's own post-write verification read reports the slot Available and pushes EMPTY (the #1397 pattern). calculate_in_sync treats it as Schlage-style lag because the window is fresh and returns True, suppressing the re-write that a contradicting read should trigger; combined with finding 1 the suppression is permanent on push providers."
+  },
+  {
+    "file": "tests/test_sync.py",
+    "line": 254,
+    "summary": "test_a_set_arms_the_window_it_will_be_trusted_in exercises only the NO_CHANGE path (MockLCMLock already holds '1234' in slot 1 and BASE_CONFIG sets slot 1 PIN='1234'), and asserts against a hand-built _slot(...) rather than the state the tick would actually read, so it never covers the post-set verification path at sync.py:1006-1019 where finding 2 lives.",
+    "failure_scenario": "Delete or bypass the breaker accounting at sync.py:1016-1017 for the EMPTY-readback case, or make verification unconditionally IN_SYNC after a set: this test still passes (it only checks calculate_in_sync on a synthetic snapshot), and no other test in the diff drives _async_tick_impl through a set whose readback is EMPTY, so the rewrite-forever/never-suspend behavior ships unasserted."
+  }
+]
+```
+
+Note: the `MagicMock(spec=SlotSyncManager)` helper is fine -- `spec` (not `spec_set`) permits assigning new attributes, and `_last_set_pin` already relied on the same behavior; the arming test does kill deletion of line 538 (window would read 0.0 → False), so it is valid as far as it goes.</result>
+<usage><subagent_tokens>111956</subagent_tokens><tool_uses>20</tool_uses><duration_ms>338873</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a18b82747e5ac2ca5</task-id>
+<tool-use-id>toolu_01ExTTmafuVrthnyzctiNqzt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a18b82747e5ac2ca5.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle B: removed-behavior auditor" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Angle B: removed-behaviour audit of PR #1539
+
+**Housekeeping checks (b) and (e) are clean:**
+- `PENDING_WRITE_TTL` is referenced only in `const.py:213`, `_base.py:47/533`, `sync.py:54/538`, and the two test files. No `_base import PENDING_WRITE_TTL` anywhere; `AGENTS.md`, `docs/`, and the wiki checkout never mention it or `_last_set_pin`.
+- `git diff origin/main...HEAD -- providers/matter.py` is empty; `--stat` shows exactly five files (const, sync, _base, two tests). No residue from the reverted userName cascade gate.
+- Targeted tests (`tests/test_sync.py`, `tests/properties/test_in_sync.py`): 94 passed in 3.45 s.
+
+**Invariant mapping for each deleted line:**
+- `_base.py` constant + comment: pure relocation; the seam still arms `time.monotonic() + PENDING_WRITE_TTL` at `_base.py:531-534`. Re-established.
+- `sync.py` EMPTY branch "trust forever": deliberately narrowed to 60 s. The half of the old invariant that is NOT re-established is "a lock whose read never shows a CONFIRMED write stays quiet" — see candidates 1 and 2.
+- Property `test_active_empty_credential_trusts_recent_set_only`: superseded by a strictly stronger property with a `write_is_fresh` axis; a `&lt; → True` mutant is killed by both the property and `test_stale_write_does_not_override...`; a "forgot to arm" mutant is killed by `test_a_set_arms_the_window...`. Nothing lost.
+- `tests/test_sync.py::_manager` default: (d) below.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 1010,
+    "summary": "For a CONFIRMED write whose readback is persistently EMPTY, the fresh window makes post-set verification always succeed, so the slot now cycles IN_SYNC -&gt; OUT_OF_SYNC -&gt; rewrite -&gt; IN_SYNC on every poll forever, and the slot breaker is reset at both ends of every cycle (line 1010 and the request at line 583), so MAX_SYNC_ATTEMPTS can never trip and no repair issue is ever raised.",
+    "failure_scenario": "Schlage lock, slot 1 active PIN 1234. _perform_sync -&gt; async_set_credential: delete tagged names, add fails 'already exists', swallowed at schlage.py:416, returns CONFIRMED without checking that a code tagged [LCM:1] now exists. Tick arms the window (line 538), async_refresh() -&gt; get_codes shows no [LCM:1] tag -&gt; EMPTY -&gt; calculate_in_sync True (window fresh) -&gt; IN_SYNC, breaker.reset(). Poll at +5 min (always_update=True) -&gt; request_sync_check -&gt; window expired -&gt; False -&gt; OUT_OF_SYNC, _breaker_reset_requested. Next tick: reset(), expected_in_sync False, tripped False -&gt; _perform_sync again -&gt; same result. Repeats every 5 min indefinitely: ~4-5 Schlage cloud calls per cycle per slot (get_codes, delete x2, add, refresh get_codes), binary_sensor in_sync toggles off/on each poll into the recorder, debug-level log only. Old code (origin/main): one write, then IN_SYNC forever, silently wrong. New code: correct state briefly, then unbounded rewrite loop that the breaker (3 in 5 min, also reset each cycle) structurally cannot bound. Behaviour change, not strictly a regression, but the 'lock may be rejecting the code silently' suspend path at line 866 is unreachable for exactly the case it describes."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/schlage.py",
+    "line": 402,
+    "summary": "Every rewrite the new expiry triggers on Schlage is a delete-then-add of the tagged code, so if the cloud read lags past 60 s while the code IS on the lock, each poll removes a working PIN and re-adds it; the 60 s TTL is never consulted by a 300 s poller except for the immediate post-set refresh, so the 'eventual consistency (Schlage cloud API)' protection the old comment cited is effectively gone for any lag longer than one tick.",
+    "failure_scenario": "Set at t=0 succeeds on the lock; Schlage cloud get_codes still omits the new code at t=300 s poll (lag &gt; 5 min, or the cloud dropped the entry). request_sync_check -&gt; EMPTY, window expired (60 s) -&gt; OUT_OF_SYNC -&gt; tick rewrites: _async_delete_code(existing_full_name) and _async_delete_code(tagged_name) (lines 403-406) remove the working code, then add re-creates it. The door has no valid PIN for the delete/add gap (&gt;= MIN_OPERATION_DELAY 2 s per call) on every poll while the lag persists. On origin/main the slot stayed IN_SYNC and the working code was never touched. Note PENDING_WRITE_TTL (60 s) versus usercode_scan_interval (300 s) means the window can only ever be seen fresh by the tick's own async_refresh(), never by a scheduled poll, for Schlage and any 5-minute poller."
+  },
+  {
+    "file": "custom_components/lock_code_manager/const.py",
+    "line": 213,
+    "summary": "The relocation comment claims the seam and the sync layer now 'ask one question' with 'one answer', but the two windows are armed at different instants (seam: before its confirmation read inside async_internal_set_usercode; sync: after that call returns, which includes the awaited async_confirm_pending_writes read and MIN_OPERATION_DELAY), so they can still disagree about the same write by up to one operation's duration.",
+    "failure_scenario": "OPTIMISTIC write at t=0: _record_optimistic_write arms pending deadline t=60. async_confirm_pending_writes read takes 8 s. _perform_sync returns at t=8 and arms _last_set_expires_at = 68. Between t=60 and t=68 the seam's pending entry has expired (tick charges the breaker and drops it at line 803-814) while calculate_in_sync would still override an EMPTY read as in sync. Low impact today because the pending-writes branch returns before calculate_in_sync is consulted, but the comment's invariant is stated stronger than the code enforces."
+  },
+  {
+    "file": "tests/test_sync.py",
+    "line": 84,
+    "summary": "The _manager() helper defaults write_is_fresh=True, so the pre-existing table case 'active-empty-code-matching-last-set' (line 172, expected True) now silently tests only the fresh half of the narrowed invariant while its id still describes the old unconditional rule, and any future _manager(last_set_pin=...) case with an EMPTY credential inherits the trusting outcome without the author opting in.",
+    "failure_scenario": "No pre-existing case changed outcome (all EMPTY+last_set cases were written inside one TTL by construction), and the stale half IS covered by test_stale_write_does_not_override_a_lock_reporting_the_slot_empty and the property test. The nameable risk is documentary: a reader of the parametrized table infers 'empty + matching last_set -&gt; True' unconditionally. Not a code defect; passing through because the task asked whether any case was masked."
+  }
+]
+```
+
+**Explicitly investigated and NOT a candidate:**
+- (c) as literally asked: the post-set `record_failure()` at line 1015 was unreachable for an EMPTY readback on origin/main too (old code also returned True there). What changed is only what the next poll does; that is candidate 1.
+- Matter: `async_set_credential` pushes `unreadable()` on CONFIRMED (`matter.py:1062`) and `supports_push=True` skips the post-set refresh, so the EMPTY branch is only reached via the 1 h hard refresh after an out-of-band deletion, where a rewrite is the intended #1538 fix. No loop unless the other lock keeps deleting, which is the bug being repaired.
+- Restart / LOADING: `_last_set_pin=None` and `_last_set_expires_at=0.0` both start cold; the first set arms both. Same as before.
+- Set raising: neither field is touched on exception, so a failed set does not extend a stale window.</result>
+<usage><subagent_tokens>107722</subagent_tokens><tool_uses>12</tool_uses><duration_ms>316843</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adacdf32f02c4497d</task-id>
+<tool-use-id>toolu_01JBo41HbDk9WUubGoYvgmzK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/adacdf32f02c4497d.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: efficiency finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything needed; nothing further to fetch. The trace is complete and the numbers are grounded in the code I read.
+
+## Findings (ranked by cost)
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 1010,
+    "summary": "Post-set verification reaches IN_SYNC through the just-re-armed trusted-write override and resets the slot breaker, so a Schlage slot whose write never appears in get_codes rewrites every poll forever with no suspend and no repair.",
+    "failure_scenario": "Schlage is poll-only (supports_push False, usercode_scan_interval 5 min, hard_refresh None, coordinator uses HA's default always_update=True so listeners fire on every poll). A present code maps to unreadable(), a missing one to empty() (schlage.py:353-355). Cycle: poll at +5 min reads empty -&gt; request_sync_check -&gt; calculate_in_sync False (window expired at +60 s) -&gt; OUT_OF_SYNC -&gt; tick -&gt; _perform_sync re-arms the window (sync.py:538) -&gt; tick's async_refresh() reads empty again (lag, or the add silently did not land) -&gt; calculate_in_sync at sync.py:1008 returns True solely via the override -&gt; IN_SYNC and _slot_breaker.reset() at line 1010. MAX_SYNC_ATTEMPTS can never trip. Cost per cycle, all cloud calls, each behind the 2 s MIN_OPERATION_DELAY floor: _execute_rate_limited('set') runs async_is_device_available which is itself a get_codes (schlage.py:135-138), then get_codes + 1-2 delete_code + add_code inside the sequence (schlage.py:383-409), then the seam's async_request_refresh (_base.py:1430, immediate) and the tick's async_refresh() (sync.py:975) each cost availability-get_codes + get_codes via _execute_rate_limited('get') (_base.py:2120). That is 8-9 cloud calls and &gt;=16 s of serialized _aio_lock time per cycle, 12 cycles/hour, ~100 cloud calls/hour per stuck slot, indefinitely, plus one delete-&gt;add gap per cycle (12/hour) during which the door has no working PIN for that slot. Before this PR the same slot cost zero I/O (wrongly IN_SYNC forever). Cheaper alternative: do not reset the breaker (or call record_failure) when the post-set in-sync was satisfied only by the override -- e.g. check `snapshot.coordinator_credential.is_empty` before the reset at 1010, or have the override branch report itself so the caller can distinguish observed from trusted (this is the observed-vs-trusted conflation already noted in memory). With that, a slot whose write never lands trips after 3 cycles (~15 min, ~30 cloud calls) and raises the repair instead of ~2,400 calls/day."
+  },
+  {
+    "file": "custom_components/lock_code_manager/const.py",
+    "line": 212,
+    "summary": "PENDING_WRITE_TTL (60 s) is shorter than every poll provider's usercode_scan_interval, so for Schlage the window only ever covers the immediate post-set refresh and never the scheduled poll it was described as protecting against.",
+    "failure_scenario": "After a set, the only reads inside the 60 s window are the seam's immediate async_request_refresh and the tick's async_refresh() (~0-10 s later). The next scheduled read is the +5 min poll, which is always outside the window, so 'eventual consistency, e.g. the Schlage cloud API' is only tolerated if the cloud catches up within 5 min; any read at +5 min that still reports the slot missing enters the loop in finding 1 regardless of whether the write landed. I cannot source Schlage's actual propagation lag, so I am not claiming it exceeds 5 min; the point is that the TTL is not sized against the interval that determines when the next disagreeing read arrives. Cheaper alternative: arm the sync-layer window per provider from the lock, e.g. `max(PENDING_WRITE_TTL, lock.usercode_scan_interval.total_seconds() + margin)` at sync.py:538, so one trusted window spans exactly one scheduled read, and leave the seam's 60 s PENDING_WRITE_TTL (which gates a different question, optimistic-write confirmation) untouched. This is a design mismatch rather than an independent cost; the I/O it produces is the cycle already priced in finding 1."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 651,
+    "summary": "All slots written in the same burst (startup, bulk PIN import) expire together, so one poll flips every empty-reporting slot to OUT_OF_SYNC at once and the rewrites serialize into a multi-slot cloud burst every 5 minutes.",
+    "failure_scenario": "request_sync_check runs per slot on the same coordinator notification; each flip does one _write_state() (cheap) and marks _breaker_reset_requested. The cost is downstream: every slot's next 2 s tick enters _perform_sync, all contending on _serialize_sequence + _aio_lock with the 2 s floor. Using finding 1's per-cycle count, N affected slots cost ~8N-9N cloud calls and &gt;=16N s of serialized traffic per 5 min window; 10 slots is ~160 s of every 300 s on the cloud and ~1,000 calls/hour. schlage.py has no 429/rate-limit/backoff handling (grep confirms none), and pyschlage is not installed in this venv so I could not verify whether the underlying client retries or throttles; treat the rate-limit exposure as unverified but unguarded at the provider layer. Cheaper alternative: the same fix as finding 1 caps each slot at MAX_SYNC_ATTEMPTS cycles, which bounds the burst to three windows; no separate staggering is needed once the loop terminates."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 493,
+    "summary": "On Matter the same loop runs at the 1 h hard-refresh cadence: a lock that acks SetCredential but whose GetCredentialStatus later reports the index unused gets rewritten every hour with the breaker reset each time.",
+    "failure_scenario": "Matter is push (supports_push True, no post-set refresh; the provider pushes unreadable() itself at matter.py:1062), so an empty() read only arrives from a push event or the 1 h hard refresh. If that read says the credential is gone, calculate_in_sync is False (window long expired), the tick rewrites (device ack -&gt; CONFIRMED), the override makes post-set verification True, and _slot_breaker.reset() runs. Cost: 1 device write/hour/slot (~24/day), which is the intended #1538 reconciliation when a user deleted the code out of band, but for a lock that acks-and-drops it is unbounded with no repair ever raised. Much cheaper than the Schlage case; same fix as finding 1 (do not reset the breaker on override-only in-sync) also bounds this. No delete-before-write cost here: the Matter set path only clears on the duplicate-retry branch (matter.py:1017-1030), so the _base.py:104 comment overstates it for the common path."
+  }
+]
+```
+
+## Items examined and not flagged
+
+- **`time.monotonic()` on the hot path** (sync.py:493): negligible. It is one clock read, only in the EMPTY branch, and `calculate_in_sync` already does more work resolving the snapshot; nothing to change.
+- **`test_a_set_arms_the_window_it_will_be_trusted_in`** (tests/test_sync.py:254): measured at 0.17 s setup + &lt;5 ms run via `.venv/bin/python -m pytest --durations`. It could be written against a bare `SlotSyncManager.__new__` with an `AsyncMock` lock (the `_perform_sync` -&gt; `calculate_in_sync` pair touches only `_lock`, `_slot_num`, `_log_prefix`, `_last_set_*`), but at 0.17 s it does not threaten the "full suite runs quickly" rule, so it does not qualify as wasted work.
+- **`request_sync_check` cascade at expiry**: the IN_SYNC -&gt; OUT_OF_SYNC flip only happens on a listener event (poll or tracked-entity change), never on a timer, so there is no extra churn between polls; its cost is entirely the rewrite priced in finding 1.</result>
+<usage><subagent_tokens>101504</subagent_tokens><tool_uses>19</tool_uses><duration_ms>237033</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab53b4f7f5e2da155</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/ab53b4f7f5e2da155.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle C: cross-file tracer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Tracing complete. Findings below; items 4–5 of the brief (constant relocation, `_last_set_pin` readers) came back clean and are noted after the array.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 493,
+    "summary": "The new expiry only changes the answer if someone re-asks after 60 s, but an IN_SYNC slot is re-evaluated solely by request_sync_check (coordinator listener / tracked-entity change) and the tick returns early for IN_SYNC (sync.py:729-734); push providers with hard_refresh_interval=None (zwave_js.py:220 returns None; zha.py:117 returns None when programming events are supported) get no poll, no drift check, and therefore no re-ask, so the #1538 symptom is still reachable on them.",
+    "failure_scenario": "zwave_js lock, slot active with PIN 1234. Tick sets 1234 (CONFIRMED), _last_set_pin='1234', window armed to T+60. At T+10 the driver emits credential-deleted (or userCode newValue='' via _handle_uc_code_update, zwave_js.py:908-928 — unguarded, unlike the AVAILABLE path at 893-903) → _confirm_slot pushes SlotCredential.empty() verified → coordinator listener → request_sync_check → calculate_in_sync: EMPTY, last_set matches, T+10 &lt; T+60 → True → stays IN_SYNC. update_interval is None (coordinator.py:84) and there is no drift timer (coordinator.py:119 skipped), so calculate_in_sync is never called again: binary sensor reports in sync forever while the credential is gone. Same on ZHA with programming events: _handle_programming_event → async_request_refresh → _apply_read EMPTY → listener → in-window True → never re-evaluated."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 1008,
+    "summary": "The post-_perform_sync verification calls calculate_in_sync microseconds after arming the window, so an EMPTY readback after a set is always judged in sync and _slot_breaker.reset() runs; when the window expires, request_sync_check flips to OUT_OF_SYNC and sets _breaker_reset_requested (line 669) on the false premise that 'the sync target changed', so the tick resets the breaker again before re-setting — MAX_SYNC_ATTEMPTS is unreachable on this path and the slot is rewritten every poll interval forever with no suspend and no repair issue (origin/main parked silently at IN_SYNC instead; neither behaviour is correct, but the PR turns a silent false-positive into an unbounded write loop).",
+    "failure_scenario": "Polling provider (scan interval 1 min), lock silently drops the code (or #1538's other lock deletes it). Tick N: OUT_OF_SYNC → _perform_sync set → CONFIRMED → async_refresh reads EMPTY → line 1008 True (window just armed) → IN_SYNC, breaker.reset(), _clear_resolved_issues() deletes any slot_suspended repair. Poll at +60..120 s: EMPTY, window expired → request_sync_check → False → OUT_OF_SYNC, _breaker_reset_requested=True. Next tick: breaker.reset() (line 757), expected_in_sync False, breaker.tripped False → set again → verify True → reset. failure_count never exceeds 0; the 'Sync attempts exceeded' branch at 828 and the was_set record_failure at 1016 are unreachable for EMPTY readbacks. Observable: a write to the lock every poll interval indefinitely, in_sync flapping True→False→True, no user-visible repair."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 538,
+    "summary": "The two deadlines the new const.py comment (const.py:208-212) says 'cannot drift' are armed at different instants for the same write: _pending_writes[address] is armed inside async_internal_set_usercode (providers/_base.py:531) BEFORE the awaited on-demand confirmation hard refresh (_base.py:1419-1421 → coordinator.async_confirm_pending_writes → _execute_rate_limited('refresh'): waits on _aio_lock behind other slots' operations, MIN_OPERATION_DELAY, full-lock read, bounded only by OPERATION_TIMEOUT=600 s), while _last_set_expires_at is armed after the call returns; and _confirm_slot (_base.py:554-561) resolves an EMPTY push observation by popping the pending entry and pushing EMPTY as VERIFIED, at which point _last_set_expires_at is the only thing standing and it is late by the confirm-read duration.",
+    "failure_scenario": "zwave_js masked lock, OPTIMISTIC set at T0: pending deadline T0+60, slot unverified. At T0+5 the driver's post-write report arrives as userCode newValue='' → _handle_uc_code_update → _confirm_slot(EMPTY): pending popped, EMPTY pushed verified; request_sync_check is a no-op because state is SYNCING. The confirmation hard refresh (queued behind 20 other slots × 2 s rate limit) returns at T0+45; _perform_sync returns, _last_set_expires_at = T0+105. Tick continues: address not in _pending_writes (line 1001 skipped), snapshot = EMPTY verified, last_set matches, T0+45 &lt; T0+105 → IN_SYNC, breaker.reset(). The write demonstrably did not land, the seam's own pending deadline would have charged the breaker at T0+60, but the sync layer's later-armed window says in sync; on zwave_js (no poll/drift) that is permanent (finding 1), on polling providers the false-in-sync window is stretched by the confirm-read/queue time."
+  }
+]
+```
+
+Items checked that produced no candidate:
+
+- **`PENDING_WRITE_TTL` relocation**: repo-wide grep (`.py`, `.md`, `.toml`, `.yaml`, `.txt`) finds only `const.py:213`, the imports in `providers/_base.py:47` and `domain/sync.py:54`, and tests importing from `const` (`tests/test_sync.py:24`, `tests/properties/test_in_sync.py:12`). No `_base.PENDING_WRITE_TTL`, no `patch("...providers._base.PENDING_WRITE_TTL")`, nothing in `AGENTS.md`.
+- **`_last_set_pin` readers**: only `domain/sync.py` and tests. Managers are constructed fresh on reload (`test_init.py:1365-1405` confirms identity change); nothing copies or rebuilds a manager, so no path can carry `_last_set_pin` without `_last_set_expires_at`. Test helpers in `tests/test_sync.py:88-95` and `tests/properties/test_in_sync.py:51-57` set both; the "six attributes" comment count is correct.
+- **Other `calculate_in_sync` callers**: LOADING branch (sync.py:763/778) runs with `_last_set_pin=None` after restart, unaffected. SUSPENDED-resume branch (682) only benefits from a True answer, and its clock-driven True→False cannot wrongly resume a slot; it can, however, feed the loop in finding 2 (resume on an in-window EMPTY report, clear the repair, then flap). `binary_sensor.py` and `websocket.py` read only the cached `in_sync`/`sync_status`, never `calculate_in_sync`.
+- **Providers with a periodic re-ask** (Matter, zigbee2mqtt, zwave_js_ui via `BaseMqttLock.hard_refresh_interval` = 1 h; ZHA without programming events = 1 h; all polling providers): the fix does reach them, at the cost described in finding 2.
+- **Test coverage note** (not a defect): the new tests exercise `calculate_in_sync` in isolation and `_perform_sync` arming; nothing drives `_async_tick_impl` across the window boundary, so neither finding 1 nor finding 2 would be caught by the suite.</result>
+<usage><subagent_tokens>132411</subagent_tokens><tool_uses>27</tool_uses><duration_ms>310837</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a133ebba9e785d79d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a133ebba9e785d79d.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: altitude finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 493,
+    "summary": "The TTL is a fourth trust predicate bolted onto the consumer (`calculate_in_sync`) when the producer already has the general mechanism: `_pending_writes` + `_apply_read` + `is_verified`, which today only CONFIRMED writes bypass.",
+    "failure_scenario": "The seam records a pending write only for OPTIMISTIC results (`providers/_base.py:1410-1421`); on CONFIRMED (`_base.py:1422-1428`) it pops any pending entry and calls `mark_verified`, so for Schlage/Matter/ZHA/z2m/akuvox/zwave_js_ui (every provider except one zwave_js branch) the coordinator has no record that a write just happened. `_apply_read` (`domain/coordinator.py:190-208`) then marks an empty read *verified* (line 203-205: no pending -&gt; `_unverified.discard`), the `is_verified` guard at `sync.py:477` passes, and the sync manager has to re-derive 'was there a recent write?' from its own private `_last_set_pin`/`_last_set_expires_at`. The generalisation: record every write that `result.changed` in `_pending_writes[(address)] = (pin, deadline)` with `optimistic` as a flag (only OPTIMISTIC triggers `async_confirm_pending_writes`), so `_apply_read`'s existing `elif pending is not None:` branch (line 199-201) keeps an empty read unverified, `calculate_in_sync` returns False at line 477, and the tick's PENDING_CONFIRMATION block (`sync.py:805-835`) owns the deadline, charges the breaker on timeout (line 828), and re-syncs. That deletes the empty branch at `sync.py:483-495` and `_last_set_expires_at` entirely and fixes both conceded trade-offs. One wrinkle to handle: Matter's CONFIRMED path pushes `unreadable()` via `_push_credential_update` (`providers/matter.py:1062`), not `_confirm_slot` (`_base.py:541-567`), so a present-push must also pop the pending entry or Matter slots would sit PENDING_CONFIRMATION for 60 s and then be charged a failure."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 1007,
+    "summary": "Post-set verification resets the slot breaker on a *trusted* answer, so `MAX_SYNC_ATTEMPTS` is unreachable on this path; the PR converts 'written once, green forever' into 'rewritten every poll, green forever' without ever raising a repair.",
+    "failure_scenario": "`_perform_sync` arms `_last_set_expires_at` at `sync.py:538`; microseconds later `sync.py:1006` calls `calculate_in_sync` on a snapshot whose coordinator value is whatever the immediate refresh returned (empty, for a lagging or discarding lock), the empty branch returns True inside the fresh window, and line 1008 does `_slot_breaker.reset()` + `_clear_resolved_issues`. A Matter lock that acknowledges `set_credential` and drops the PIN (the #1538 symptom family) now cycles OUT_OF_SYNC -&gt; write -&gt; IN_SYNC(trusted) -&gt; poll reads empty at 5 min -&gt; OUT_OF_SYNC forever, with the breaker reset on every cycle, so `slot_suspended` never fires and the user sees `on` flicker. The right depth is a verdict that carries provenance (observed vs trusted-write) or, better, the generalised pending mechanism from finding 1: a trusted answer leaves the slot in PENDING_CONFIRMATION (`sync.py:1001-1004`) and the deadline path at `sync.py:828` charges the breaker, making the existing suspend-after-3 behaviour apply to CONFIRMED providers too."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/coordinator.py",
+    "line": 203,
+    "summary": "The coordinator affirmatively marks an empty read *verified* when no optimistic write is pending, and the sync manager then overrides the coordinator it just trusted; two layers give opposite answers to 'is the lock lagging?'.",
+    "failure_scenario": "`_apply_read` has three arms: pending+present confirms (193-198), pending+absent stays unverified (199-201), no pending -&gt; verified (202-204). Because CONFIRMED writes never populate `_pending_writes`, the #1538 empty read lands in arm 3 and is declared truth. `calculate_in_sync` then checks `is_verified` (`sync.py:477`, True) and immediately contradicts it with the empty-branch trust override (`sync.py:491-495`). Any future consumer that reads `is_verified` directly (dashboard, diagnostics, a second credential type's sync) will get 'verified empty' for a slot the sync manager is reporting `on`. The fix belongs in arm 2's condition: a recent write of any kind (not just optimistic) should keep an empty read unverified, which is exactly what generalising `_pending_writes` gives you for free; `_apply_read` is also the only place that knows the read's timestamp, so the 'is the write still fresh?' comparison is correct there and approximate at `sync.py:493`, which judges whatever stale read is in `coordinator.data` against the current clock whenever `request_sync_check` fires for an unrelated reason (coordinator listener at `sync.py:1025`, or a tracked-entity change)."
+  },
+  {
+    "file": "custom_components/lock_code_manager/const.py",
+    "line": 213,
+    "summary": "A single global 60 s TTL for a lag that is provider-specific, on providers whose next read is 300 s away; the number never actually distinguishes 'lagging' from 'gone' for the provider it was written for.",
+    "failure_scenario": "Schlage polls every 5 min (`providers/schlage.py:84-86`), Matter too (`providers/matter.py:194-196`), akuvox 2 min (`providers/akuvox.py:94-96`), base default 1 min (`providers/_base.py:600-602`). After a CONFIRMED set the seam kicks one immediate refresh (`_base.py:1430-1431`), so the only read that can ever land *inside* the 60 s window is that one; every scheduled poll is outside it. The distinction the PR draws is therefore not 'recent vs old' but 'the immediate post-write refresh vs any later read', made by accident of two constants. If a provider's cloud lag exceeds the immediate refresh but not the poll interval (the exact case the override was written for), LCM now rewrites the same PIN once per poll and the PR body's trade-off 1 understates it as 'if lag ever exceeds the poll interval'. Deriving the window from the provider (`lock.usercode_scan_interval + margin`, or a `BaseLock.write_trust_window` property that Schlage overrides) would at least make the two cadences agree; folding it into `_pending_writes`' deadline (finding 1) lets each provider's seam choose it at the one place the write is recorded."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 538,
+    "summary": "The PR adds a second field to a trust record the codebase has already documented as living at the wrong layer: `_cleared_slots` was deliberately moved to the provider because direct service writes bypass the sync manager, and the same argument applies to `_last_set_pin`.",
+    "failure_scenario": "`last_write_was_clear` (`providers/_base.py:2227-2240`) says: 'Kept on the provider rather than in the sync manager because every write funnels through here, including the ones a service call makes directly -- a memory the sync manager kept could not see those and would go stale.' `_last_set_pin`/`_last_set_expires_at` are exactly such a memory: they are only written by `_perform_sync` (`sync.py:537-538`), never by `services.async_set_usercode` (`domain/services.py:90` -&gt; `async_internal_set_usercode` with default `source='direct'`). Concrete cost: a user calls `lock_code_manager.set_usercode` on a Schlage slot; the cloud lags; the immediate refresh reads empty; `_last_set_pin` is None (or the previous PIN) so `calculate_in_sync` is False and the tick rewrites the same PIN a second time within seconds, then a third time if the second refresh also lags. There are now three write-trust records at two layers (`_pending_writes` provider/optimistic sets, `_cleared_slots` provider/clears, `_last_set_pin`+deadline sync-manager/sync-sourced sets only); the PR makes the odd one out heavier instead of moving it. Note that `_last_set_pin` also serves the unreadable branch (`sync.py:496-497`, detecting a PIN *change* when the lock cannot report contents), so that role survives any refactor, but it too belongs beside `_cleared_slots` on the provider so direct writes update it."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 496,
+    "summary": "EMPTY expires and UNREADABLE never expires, expressed as two hand-written branches with divergent time semantics, when the asymmetry is a property of what a read can refute that `SlotCredential.is_present` and `_apply_read` already encode.",
+    "failure_scenario": "`_apply_read` already draws the right line: an observation that `is_present` (readable or unreadable) confirms a pending write (`coordinator.py:193`), an absent one leaves it pending (`coordinator.py:199`). The sync manager restates that rule as 'empty branch consults the deadline, unreadable branch does not' (`sync.py:491-497`) plus a 9-line comment at `sync.py:234-242` and a test at `tests/properties/test_in_sync.py:104-118` pinning that the unreadable branch must *not* expire. The next provider that reports a third shape (for example a present-but-disabled Matter credential, which memory `project_credential_state_cannot_express_deactivated` says is already needed) forces a third branch and a third decision about time in this function, plus another mutation test, while `_apply_read` would need no change. Also note the predicate is no longer pure: `calculate_in_sync` now reads `time.monotonic()` at line 493, which is why all three test helpers had to be taught to synthesise a deadline (`tests/properties/test_in_sync.py:54-56`, `tests/test_sync.py:92-94`); moving the clock comparison into `_apply_read` keeps `calculate_in_sync` a function of (snapshot, verified) again."
+  }
+]
+```
+
+Context for the caller, beyond the six items: I confirmed the PR body's claim that the TTL is only re-evaluated when something triggers a check. `_async_tick` returns early for IN_SYNC (`sync.py:735-741`), so the window is consulted at `request_sync_check` time (coordinator listener or tracked-entity change), not on the 2 s tick. This means the TTL's practical effect for Schlage is exactly as the author states (only bites if lag exceeds the poll interval), but it also means the comparison at line 493 is against the check clock rather than the read's timestamp, which is the concrete reason findings 3 and 4 point at `_apply_read` as the right home. Findings 1, 2 and 3 are one design change seen from three files, not three separate fixes; the owner's memory note (`project_in_sync_conflates_observed_and_trusted.md`) already names it and says "do not add consumers of `calculate_in_sync` that care about the difference" -- this PR does not add a consumer, but it adds a producer-side special case that the note's proposed fix would delete.</result>
+<usage><subagent_tokens>103052</subagent_tokens><tool_uses>15</tool_uses><duration_ms>224161</duration_ms></usage>
+</task-notification>
+
+---
+
+can you summarize everything you jsut said? what do you need me to decide or act on?
+
+---
+
+do it the way the codebase already implies
+
+---
+
+<task-notification>
+<task-id>abbb04fb1859b3c24</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/abbb04fb1859b3c24.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplification angle finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/coordinator.py",
+    "line": 234,
+    "summary": "`_unverified` is now a hand-maintained mirror of `lock._pending_writes` (every recorder calls `mark_unverified`, every read/confirm discards); derive `is_verified` as `address not in self._lock._pending_writes` and delete the set, `mark_unverified`, and `mark_verified`, which also replaces the tick's three direct reads of the private dict (sync.py:791, 976, 990) with one accessor.",
+    "failure_scenario": "The two stores are synced at seven sites and already drift: `async_internal_clear_usercode` (_base.py:1603) pops the pending entry without `mark_verified`, and the tick timeout (sync.py:819) does the same, so after a polled lock's pending set is superseded by a clear that finds nothing to clear (`changed=False`, no refresh), `is_verified` stays False with nothing pending; `calculate_in_sync` returns False every 2 s tick and re-issues the clear until the next scheduled poll's `_apply_read` happens to discard it. `_apply_read`'s `&amp;= out.keys()` (line 221) is a second divergence the tests/common.py comment had to document."
+  },
+  {
+    "file": "custom_components/lock_code_manager/const.py",
+    "line": 210,
+    "summary": "The `PENDING_WRITE_TTL` comment says \"On a polled lock the seam adds one scan interval\"; delete that sentence -- the code and its own docs say the opposite.",
+    "failure_scenario": "`_record_pending_write` (_base.py:536-542) spends a paragraph explaining the deadline is the TTL \"and only that\", and `test_confirmed_set_on_a_poller_is_pending_until_a_read_sees_it` (test_seam.py:1151) asserts `deadline - before &lt; PENDING_WRITE_TTL + interval` to prove the interval was NOT added. A reader tuning the constant from const.py will size it for a deadline that does not exist; the test itself only proves it because the stub's interval happens to equal the TTL, so `assert deadline - before == pytest.approx(PENDING_WRITE_TTL, abs=1)` would state the actual invariant."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 699,
+    "summary": "Replace the review-history narrative (\"Without this push the coordinator kept... three times over, a code the lock had held all along\") with the one-line intent: push the confirmed value so the coordinator holds it before the seam, which records nothing pending for a push provider, returns.",
+    "failure_scenario": "Lines 699-705 here, `_base.py:1479-1483` (\"the truth that our own write then has to argue with (issue #1538)\"), `sync.py:467` (\"(issue #1538)\"), `sync.py:989` (\"as it always has\"), `coordinator.py:240-242` (\"Without this the coordinator would report... and the sync layer would be reading the private dict\"), and `_base.py:2307` (\"That is the memory doing its job\") all describe the bug that was fixed or the alternative that was rejected rather than what the code does; per the project's comments-state-intent rule that belongs in the commit message, and the next person who reworks the read path has to decide whether the counterfactual still holds before touching the line."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/coordinator.py",
+    "line": 228,
+    "summary": "The `is_verified` docstring (\"only unverified while an optimistic write awaits confirmation\") and `mark_verified` docstring at 252 (\"Called when a write is confirmed by the lock\") were not updated and now contradict the `__init__` comment (106-111) and `mark_unverified` the same PR added; rewrite both to the new rule (unverified while any pending write is unconfirmed; `mark_verified` is the push-provider CONFIRMED path only).",
+    "failure_scenario": "A polled lock's CONFIRMED sync write is now unverified with no optimistic write anywhere, so the docstring on the predicate the sync layer keys its whole in-sync decision on is false; `sync.py:787` (\"a push event / hard refresh resolves it\") likewise omits the poll that is now the main resolver for Schlage. Someone extending `_apply_read` reads the accessor's contract, not the constructor comment."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 923,
+    "summary": "The new empty-`userCode` guard duplicates the `userIdStatus=AVAILABLE` guard (903-914) verbatim, and both branches end in `_confirm_slot(code_slot, SlotCredential.empty())`; have the AVAILABLE branch call `self._handle_uc_code_update(code_slot, None)` and keep the guard once.",
+    "failure_scenario": "Two copies of `coordinator is not None and coordinator.desired_credential(pin_address(code_slot)).is_present` plus two near-identical debug strings and two twin tests; the next tweak to the stale-empty heuristic (e.g. also checking a pending write) lands in one handler and not the other, which is exactly the AVAILABLE/empty asymmetry this PR is patching."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 1414,
+    "summary": "The two \"forgotten before the write / BEFORE the clear, for the same reason\" paragraphs (1414-1417 and 1604-1609) restate one invariant; state it once on the `_last_set_pins` field comment (270-276) -- \"popped before any write to the slot is sent, since one that raises may still have landed\" -- and leave a bare `pop` at each site.",
+    "failure_scenario": "Each site's comment points at the other (\"for the same reason\", \"the same reason the set discards `_cleared_slots`\"), so the rule lives in three places (`_cleared_slots.discard` comment at 1409-1413, both pops) and the `last_set_pin` docstring repeats it a fourth time at 2296-2298; a change to the discipline (e.g. pop only on `source==\"sync\"`) has to be reasoned about and re-narrated four times."
+  }
+]
+```</result>
+<usage><subagent_tokens>126290</subagent_tokens><tool_uses>14</tool_uses><duration_ms>195774</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7250db5585441775</task-id>
+<tool-use-id>toolu_01Amvw3E8rEbjkcREmrNGhGD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a7250db5585441775.output</output-file>
+<status>completed</status>
+<summary>Agent "Conventions (CLAUDE.md) finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "tests/providers/zwave_js/test_provider.py",
+    "line": 1404,
+    "summary": "New test substitutes a MagicMock() for the coordinator even though a real LockUsercodeUpdateCoordinator is trivially constructible (tests/test_coordinator.py builds one via _make_coordinator(hass, lock, config_entry)), and the assertion is on the mock's push_update call rather than on coordinator state.",
+    "failure_scenario": "/tmp/pr1539/AGENTS.md (Test conventions): \"Don't use `MagicMock()` for coordinators when the real coordinator can be used.\" Offending line: `    mock_coordinator = MagicMock()` followed by `    zwave_js_lock.coordinator = mock_coordinator` and `    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.known(\"5678\")})` in test_set_credential_confirmed_pushes_the_value_like_every_push_provider."
+  },
+  {
+    "file": "tests/providers/zwave_js/test_events.py",
+    "line": 842,
+    "summary": "New test builds the coordinator as a MagicMock() with a canned desired_credential return value instead of a real coordinator, so the guard under test (desired_credential(...).is_present) is exercised against a stub, not the real projection.",
+    "failure_scenario": "/tmp/pr1539/AGENTS.md (Test conventions): \"Don't use `MagicMock()` for coordinators when the real coordinator can be used.\" Offending lines: `    mock_coordinator = MagicMock()` / `    mock_coordinator.desired_credential.return_value = SlotCredential.known(\"1234\")` / `    zwave_js_lock.coordinator = mock_coordinator` in test_uc_shim_empty_code_ignored_when_pin_expected."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 923,
+    "summary": "New code comment uses the abbreviation \"LCM\" where the directly adjacent twin comment it explicitly mirrors (line 901) spells out \"Lock Code Manager\".",
+    "failure_scenario": "/tmp/pr1539/AGENTS.md (Code Style): \"**Spell out acronyms** in code comments instead of using abbreviations.\" Offending line: `            # it as the lock's word puts a slot LCM expects a PIN on into a` -- contrast with the existing twin at line 901: `        # Ignore AVAILABLE when Lock Code Manager expects a PIN on this`."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 1478,
+    "summary": "New code comment uses the abbreviation \"API\" rather than spelling it out (application programming interface / the cloud service).",
+    "failure_scenario": "/tmp/pr1539/AGENTS.md (Code Style): \"**Spell out acronyms** in code comments instead of using abbreviations.\" Offending line: `                # later read. \"Confirmed\" here is the API accepting it -- the` (new comment in the WriteResult.CONFIRMED / not-supports_push branch of async_internal_set_usercode)."
+  }
+]
+```</result>
+<usage><subagent_tokens>113097</subagent_tokens><tool_uses>19</tool_uses><duration_ms>185770</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a35a9ec7cef99bea1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a35a9ec7cef99bea1.output</output-file>
+<status>completed</status>
+<summary>Agent "Altitude angle finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 1476,
+    "summary": "The pending record should be a fact about the write (always recorded on a poller's CONFIRMED), with expiry owned by whoever reads it -- or at minimum gated on `is_slot_managed(code_slot)`, which already exists at _base.py:600 and answers the stated question ('is there a tick to expire it') directly -- not on the caller's `source` string.",
+    "failure_scenario": "A `lock_code_manager.set_usercode` service call (domain/services.py:90, default source='direct') to a slot that IS managed on a Schlage lock reproduces #1538 verbatim: CONFIRMED with nothing recorded pending, the seam's refresh reads the lagging cloud as absent, `_apply_read` marks the slot verified-empty, the tick sees an active slot the lock 'says' is empty, rewrites, reads absent again, charges the breaker (`was_set` with no pending entry), and suspends after three rounds. The comment's own justification ('a direct write to a slot nothing manages has no tick') is a property of the slot, not of the caller, and the discriminator chosen doesn't test it."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 819,
+    "summary": "`_record_pending_write` now acquires two stores (`lock._pending_writes` + `coordinator._unverified` via `mark_unverified`), but this release path drops only one; the inverse of the new public `mark_unverified` should run wherever a pending entry is deleted, or the coordinator should own a single store and derive `is_verified` from it.",
+    "failure_scenario": "Stale-entry path: user disables the slot while a poller's sync write is pending. Tick deletes the pending entry (no breaker charge, correct) but leaves the address in `_unverified`. Next tick: `is_verified` False -&gt; `calculate_in_sync` False -&gt; `_perform_sync` clears; the write never landed so the provider returns `changed=False`, so no refresh runs (`if changed and ... not supports_push`) and `_unverified` is never cleared. Every 2 s tick issues another clear at an empty slot until the next scheduled poll (1-5 min; hourly hard refresh on a push provider) happens to run `_apply_read`. A second asymmetry lives in `_apply_read` itself: `_unverified &amp;= out.keys()` drops the flag for a slot a read omits while `_pending_writes` keeps the entry -- tests/common.py had to be changed to paper over exactly that."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 706,
+    "summary": "The seam already pushes the believed value for OPTIMISTIC (`_record_optimistic_write`); it should do the same for a push provider's CONFIRMED, so 'push before returning CONFIRMED' is a base-class invariant instead of a convention each provider re-implements (zha:327, zigbee2mqtt:518, zwave_js_ui:1308, matter:1062, and now zwave_js:706).",
+    "failure_scenario": "The bug this PR fixes IS the missing sixth copy of the convention, and nothing was added to prevent a seventh: a future push provider (or a new write path in an existing one) that returns CONFIRMED without pushing is accepted by the seam, `_pending_writes` is popped and `mark_verified` is called against whatever stale value the coordinator held, and the tick reads a verified empty slot as the lock's answer -- the exact rewrite-three-times-and-suspend loop from the zwave_js comment. Redefining `WriteResult.CONFIRMED` in credentials.py to mean two things by `supports_push` documents the split rather than closing it; a provider cannot tell from the enum which contract it is signing."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 590,
+    "summary": "`_confirm_slot` and `_apply_read` are two predicates for one rule and have drifted: `_apply_read` keeps a pending write unverified on an absent observation, while `_confirm_slot` pops the pending entry and pushes `empty()` as VERIFIED; unifying them (pending + absent -&gt; stay pending, unverified) is the mechanism the zwave_js stale-empty guard at zwave_js.py:932 is a per-provider substitute for.",
+    "failure_scenario": "Because the push path takes a stale empty report as truth, the provider suppresses it based on DESIRED state -- now three copies (zwave_js AVAILABLE, zwave_js empty userCode, zwave_js_ui AVAILABLE). Desired-state suppression of observed state is the same move `calculate_in_sync` just had removed from it for #1538, and it hides a genuine out-of-band deletion: a code removed at the keypad or by another controller while LCM wants a PIN there is ignored, the coordinator keeps `known(pin)` verified, `in_sync` stays ON, and the door does not open for a user the UI says is synchronized. The PR's own claim that `_apply_read` 'already refuses to mark an absent read verified while a write is pending' is true of the poll path only; the push path never did."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 807,
+    "summary": "The 'read while pending' policy is split: the tick decides WHEN to re-ask (pollers only, by `supports_push`) and the coordinator decides HOW OFTEN (throttle); `async_confirm_pending_writes` already early-returns on no pending writes and owns `_is_push`, so it should own the whole rule and the tick should just call it.",
+    "failure_scenario": "A push provider's OPTIMISTIC write gets exactly one confirmation read (from the seam). If that read fails transiently (`LockCodeManagerError` is swallowed at debug level in `async_confirm_pending_writes`), nobody ever asks again: the tick skips the call because `supports_push` is True, the slot sits in PENDING_CONFIRMATION for the full 60 s TTL, then is charged a breaker failure and rewritten -- for a code the lock may already hold masked. A poller in the identical situation is re-asked every 15 s. The throttle already bounds cost for both transports; the transport check in the tick is the only thing making the retry policy differ."
+  },
+  {
+    "file": "custom_components/lock_code_manager/const.py",
+    "line": 212,
+    "summary": "Two layers state the deadline policy and disagree: the const's comment says 'on a polled lock the seam adds one scan interval', while `_record_pending_write` (_base.py:529) says, at length, that it deliberately does NOT and a test asserts the interval is absent; the deadline rule should be stated once, where it is enforced.",
+    "failure_scenario": "The next person tuning `PENDING_WRITE_TTL` reads const.py and believes a MQTT-without-push poller (5-minute `usercode_scan_interval`, _mqtt.py:93) has a ~6-minute deadline, and reasons about `SYNC_ATTEMPT_WINDOW` (5 min) and `MAX_SYNC_ATTEMPTS` (3) on that basis -- the exact 'three timeouts must fit inside the breaker window' arithmetic the PR's docstrings say motivated leaving the interval out. The comment is also the only place the old behavior survives, so it reads as a spec for a mechanism that no longer exists."
+  }
+]
+```</result>
+<usage><subagent_tokens>139589</subagent_tokens><tool_uses>22</tool_uses><duration_ms>226954</duration_ms></usage>
+</task-notification>
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>a4b46f602072db7da</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a4b46f602072db7da.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle B: removed-behavior auditor" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Nothing further is needed; the audit is complete. Verification notes before the findings: the full suite passes from the worktree (2359 passed, 3 skipped), `PENDING_WRITE_TTL` has no leftover importers outside `const.py` (Q7 clean), and every clear path except Matter's `async_release_managed_slot` override funnels through `async_internal_clear_usercode` (Q2). Q3, Q5, Q6, Q8 produced no nameable failure.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/coordinator.py",
+    "line": 332,
+    "summary": "The confirmation-read throttle is keyed on the last COMPLETED read (`_last_read_at` is stamped only inside `_apply_read`), and `_async_tick` has no overlap guard, so while a read is in flight or failing every 2 s tick passes the throttle and queues another read behind `_aio_lock`; the old code issued exactly one read per optimistic write.",
+    "failure_scenario": "zwave_js lock (push) on a lossy mesh, masking firmware: sync write returns OPTIMISTIC -&gt; pending. Tick enters PENDING_CONFIRMATION and awaits `async_confirm_pending_writes()` -&gt; `async_internal_hard_refresh_codes` (get_users + get_all_credentials, i.e. a GET per slot, ~30 s+). Ticks keep firing every 2 s (async_track_time_interval does not wait); state is still PENDING_CONFIRMATION so each reaches the pending block, `time.monotonic() - _last_read_at` is still the pre-write value (&gt;15 s), so each queues a full hard refresh on `_aio_lock`. ~15 full-device reads are queued per in-flight read and drain serially with MIN_OPERATION_DELAY for minutes, for the whole 60 s window and every rewrite cycle after it. If the reads fail (timeout), `_last_read_at` is never stamped and the storm never throttles at all."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 817,
+    "summary": "The removed unconditional `record_failure()` on pending-write timeout enforced 'a write the lock never confirmed ends in a visible suspend'; the new `read_completed_since` gate plus the push-path `async_confirm_pending_writes` swallowing read errors WITHOUT backoff means a lock whose writes succeed but whose reads fail is never charged on either breaker and rewrites forever with no repair.",
+    "failure_scenario": "zwave_js, #1397-style mesh where SET lands but GETs time out: set -&gt; OPTIMISTIC (ERROR_UNKNOWN) -&gt; pending. Every hard refresh raises LockOperationFailed; `async_confirm_pending_writes` catches it (push path: 'does not apply backoff'), `_last_read_at` never advances, `unreachable` never trips. At the deadline `still_wanted` is True but `read_completed_since(deadline - TTL)` is False -&gt; no `record_failure`, OUT_OF_SYNC -&gt; next tick `_perform_sync` -&gt; OPTIMISTIC again -&gt; repeat every ~60 s indefinitely. Before this PR the third timeout tripped the slot breaker and `_suspend_slot` published the link-health repair (#1397); now nothing ever surfaces. Polled variant: a read that fails with a non-LockCodeManagerError (e.g. ValueError from `_normalize_keys`) is swallowed by HA's coordinator, also skips `_apply_backoff`, and produces the same unbounded loop (the old post-sync 'persistently failing refresh path' `record_failure` at the `async_refresh` except is now unreachable for pending writes)."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/matter.py",
+    "line": 869,
+    "summary": "Moving `_last_set_pin` from the per-slot SlotSyncManager (recreated as None when a slot is re-added) to the lock-lifetime `BaseLock._last_set_pins` relies on every clear path popping it, but Matter's `async_release_managed_slot` override deletes the user directly, bypassing `async_internal_clear_usercode` and pushing nothing, so the slot's PIN memory and stale `unreadable()` coordinator data both survive slot removal.",
+    "failure_scenario": "Matter lock, slot 3 configured PIN 1234, in sync: coordinator data `unreadable()`, `_last_set_pins[3] == '1234'`. User removes slot 3 -&gt; `pairs_removed` -&gt; Matter `async_release_managed_slot(3)` -&gt; ClearUser cascade removes the credential; `_last_set_pins[3]` is not popped; the LockUserChange dispatch resolves the slot by re-reading users, the user is gone, so the event is ignored and no `empty()` is pushed (Matter has no polls, drift refresh is hourly). User re-adds slot 3 with the same PIN 1234 within the hour (config update is in place, lock instance survives). New SlotSyncManager LOADING tick: verified, active, credential `unreadable()` -&gt; `snapshot.credential_state == self._lock.last_set_pin(3)` -&gt; True -&gt; IN_SYNC, no write issued, lock holds no code, binary sensor ON. Before the PR the fresh manager's `_last_set_pin` was None so the slot was re-set immediately."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/coordinator.py",
+    "line": 337,
+    "summary": "For a polled lock the confirmation read is `async_refresh()`, whose failure path runs `async_get_usercodes` -&gt; `_apply_backoff()` and sets `last_update_success=False`; the docstring three lines up ('A failed read is non-fatal and does not apply backoff') is only true for the push branch, and combined with finding 1's per-tick retry a short outage right after a write now trips the lock breaker in ~6 s instead of ~3 scan intervals.",
+    "failure_scenario": "Schlage lock, 1-minute scan interval, BACKOFF_FAILURE_THRESHOLD=3. Sync write CONFIRMED -&gt; pending -&gt; seam's forced `async_refresh()` hits a transient cloud 5xx -&gt; `_apply_backoff` (failure 1), entities flip unavailable. `_last_read_at` not stamped, so the next two 2 s ticks each call `async_confirm_pending_writes()` unthrottled -&gt; two more failed reads -&gt; breaker tripped at ~T0+4 s: 'Update failed 3 consecutive times ... polling every 60s' warning, `unreachable` True, tick moves the slot to SUSPENDED. Before the PR the same blip cost one failed post-sync refresh and the next two scheduled polls a minute apart had to fail too."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/coordinator.py",
+    "line": 214,
+    "summary": "Routing a polled CONFIRMED write through the pending path means `_apply_read` now rewrites a write-only lock's `unreadable()` confirmation as `SlotCredential.known(pin)` in coordinator data, something that previously only happened for OPTIMISTIC Z-Wave writes; the next ordinary poll flips it back to `unreadable()`.",
+    "failure_scenario": "Schlage (always reports occupied slots as `unreadable()`): sync set 1234 -&gt; pending -&gt; forced read returns `unreadable()` -&gt; `pending is not None and cred.is_present` and not readable -&gt; `out[address] = known('1234')`; the slot's code sensor / websocket `slots` projection now carries the readable PIN for a lock that cannot be read. Up to one scan interval later the scheduled poll (no pending) stores `unreadable()` again -&gt; recorder logs a PIN-&gt;masked state change on every write, and any consumer that assumed a write-only provider never yields a readable credential is wrong for that window. Sync is unaffected (both branches compare to `last_set_pin`), so this is a data/presentation regression, half-believed."
+  }
+]
+```</result>
+<usage><subagent_tokens>181348</subagent_tokens><tool_uses>49</tool_uses><duration_ms>720987</duration_ms></usage>
+</task-notification>
+
+---
+
+lets go with Option B
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>a50cf601bea6a4b3e</task-id>
+<tool-use-id>toolu_014xYHz2WBNWhWqZqn2yX7FX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a50cf601bea6a4b3e.output</output-file>
+<status>completed</status>
+<summary>Agent "Hunt silent failures in confirm paths" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Error-handling review: PR #1545 (`fix/1538-coordinator-owns-pending`)
+
+Worktree: `/Users/raman/projects/lock_code_manager/.worktrees/pending-b`. All line numbers below are from the branch's working tree.
+
+### 1. HIGH — A read that *fails* past the deadline is counted as the lock *declining* the write, the charge survives an outage, and the only record of why is at DEBUG
+
+`custom_components/lock_code_manager/domain/coordinator.py:437-451`:
+```python
+except LockCodeManagerError as err:
+    _LOGGER.debug("Confirmation read failed for %s: %s", ...)
+    self._expire_overdue()
+    return
+```
+and `_expire_overdue` (`:457-463`) does `self._failed_writes.add(address)` — the same bucket a read that *observed* the slot absent/displaced uses. `_failed_writes` is cleared only by `record_write` (`:285`), `drop_pending` (`:311`) and `take_failed_write` (`:325`); nothing on lock recovery touches it.
+
+`custom_components/lock_code_manager/domain/sync.py:786-789` gates on `self._coordinator.unreachable` *before* `take_failed_write` at `:815-824`, which logs `"%s: write not confirmed within the timeout; re-syncing (attempt %s)"` and charges the slot breaker.
+
+Scenario: set accepted; lock drops offline 5 s later. Four confirmation reads raise `LockDisconnected` (four DEBUG lines). At 60 s `_expire_overdue` marks the write failed. Poll failures trip the lock breaker, tick returns SUSPENDED (unreachable) — flag kept. Lock recovers, `_reset_backoff` runs, next tick: `take_failed_write` is True, the slot breaker takes a charge and the WARNING says the write was not confirmed. Nothing at INFO or above ever said the lock was unreadable for the whole TTL, so a user debugging a later suspension sees "write not confirmed" ×3 with no hint it was an outage. On a push lock there is no scheduled poll, so `unreachable` is never even set by the read failures and the charge lands at TTL immediately. The docstring's claim "connectivity is the scheduled poll's to judge" (`:421-422`) does not hold for push providers.
+
+Fix (one line each): in both except branches, drop overdue writes instead of failing them when the read itself failed (`self._pending` pop only), or at minimum log the give-up at WARNING including `err` so the later tick warning has a cause on record; and clear `_failed_writes` in `_reset_backoff`.
+
+### 2. HIGH — `drop_pending` runs *before* the clear executes, so a failed clear leaves a believed, unconfirmed PIN in `data` marked verified
+
+`custom_components/lock_code_manager/providers/_base.py:1485-1491`:
+```python
+if self.coordinator is not None:
+    self.coordinator.drop_pending(pin_address(code_slot))
+changed = await self._execute_rate_limited("clear", ...)
+```
+`record_write(believed=True)` pushed `SlotCredential.known(pin)` into `data` (`coordinator.py:286-289`); `drop_pending` pops only `_pending`/`_failed_writes` (`:310-311`) and never reverts `data`; `is_verified` is `not in self._pending` (`:253`).
+
+Scenario: zwave_js returns `OPTIMISTIC` (`zwave_js.py:677`) → `data[slot] = known("1234")`, pending. User calls the direct clear service; `_execute_bounded` raises `LockDisconnected` at the availability check (`_base.py:344-352`) before any device traffic. Now: no pending, `data` still says `known("1234")`, slot config still ON. Next tick: `calculate_in_sync` → `credential.matches("1234")` (`sync.py:481`) → IN_SYNC, breaker reset. The confirmation machinery is bypassed; the write is never read back. On `main`, `_pending_writes.pop` did not discard from `_unverified`, so the slot stayed unverified — this is a regression.
+
+Fix: move `drop_pending` to after `_execute_rate_limited` returns (a clear that raised superseded nothing), or have `drop_pending` revert a `believed` write's value in `data`.
+
+### 3. MEDIUM — Post-read processing sits outside the try; a raise there strands pending writes with neither task nor timer
+
+`coordinator.py:452`: `new_data = {**self.data, **self._apply_read(self._normalize_keys(raw))}` is after the `try/except`. `_normalize_keys` raises `ValueError/TypeError` on a non-int key (`:200`). In `_async_confirmation_look` (`:358-366`) the `finally` clears `_confirm_task` but the `if self._pending:` re-arm is skipped on exception; same in `_async_confirmation_timer` (`:368-374`). The tick then holds PENDING_CONFIRMATION (`sync.py:797-804`) and never reads on its own. HA's task handler logs the traceback, so it is not silent, but the write sits until the 1-min scheduled poll (polled) or the drift check (push) runs `_apply_read` (`coordinator.py:638`, `:658`) — and the same bad key makes those raise too. Cancellation is handled correctly: `CancelledError` is a `BaseException`, propagates past the re-arm, no timer is armed after shutdown.
+
+Fix: pull the `_normalize_keys`/`_apply_read`/merge lines inside the `try` so the existing `except Exception` (which already calls `_expire_overdue`) covers them.
+
+### 4. MEDIUM — Once the timer has fired, neither handle tracks it; shutdown cannot cancel it and it re-arms afterwards
+
+`_async_confirmation_timer` sets `self._confirm_unsub = None` first (`:370`), and `_confirm_task` is not set for it. `async_shutdown` (`:697-702`) cancels/unsubs only those two and does not clear `_pending`. Scenario: timer fires, read in flight, entry unloads → shutdown is a no-op → read completes (or raises `LockDisconnected`, DEBUG) → `if self._pending:` re-arms `async_call_later` on a torn-down coordinator; repeats up to 4 more reads against the unloaded provider until `_expire_overdue` drains at TTL. Bounded and quiet, but it is provider traffic after unload with no log above DEBUG.
+
+Fix: `self._pending.clear()` in `async_shutdown`, and gate the re-arm on a shutdown flag (or run the timer body as `_confirm_task`).
+
+### 5. LOW — Same failure, two log levels; a `ProviderNotImplementedError` would be swallowed at DEBUG forever
+
+`async_internal_hard_refresh_codes` failing is WARNING in `_async_drift_check` (`coordinator.py:668-672`) but DEBUG in the confirmation path (`:437-443`). `ProviderNotImplementedError` is a `LockCodeManagerError` (`domain/exceptions.py:116`), so a push provider without `async_hard_refresh_codes` would have every `OPTIMISTIC` write expire as failed with only DEBUG output. Latent today: only zwave_js emits `OPTIMISTIC` and it implements hard refresh (`zwave_js.py:1137`). Fix: log the confirmation-read failure at INFO with `err`, matching the "expected condition is info" rule.
+
+### Questions with no finding
+
+- **Q1 (what is caught):** `LockCodeManagerError` → DEBUG; `Exception` → `_LOGGER.exception` (ERROR + traceback). `_expire_overdue()` runs on both (`:443`, `:450`). `CancelledError` is not caught. The broad except is justified — it is what keeps the look/timer chain alive — and ERROR is the right level for a programming error. The `asyncio.timeout` wrapper converts a hung read to `LockDisconnected` (`_base.py:311-331`), so hangs land in the specific branch. Only the placement gap in finding 3 and the level/attribution issues in findings 1 and 5.
+- **Q4 (seam branches):** No gap. `NO_CHANGE` → early return with nothing recorded (`_base.py:1358-1359`), and the tick's `else` branch still refreshes polled locks (`sync.py:957-960`) and judges push locks via `calculate_in_sync` + `was_set` charge (`:990`) — visible, same as `main`. Only `virtual.py:137` returns `NO_CHANGE`. An exception after the lock accepted the write records nothing, which is consistent with `_last_set_pin` (set only after the await, `sync.py:519`) and with `_cleared_slots.discard` deliberately happening before (`_base.py:1327`); the tick's except handlers set OUT_OF_SYNC and the retry is verified by refresh.
+- **Q5 (`slots` plumbing):** `async_internal_get_usercodes` passes `slots` only when given (`_base.py:2062-2075`). Only zwave_js overrides `async_get_usercodes` and it accepts `slots` (`zwave_js.py:323-325`). Every provider's `async_get_users` accepts `slots` (akuvox:307, virtual:153, schlage:301, zha:358, matter:457, zwave_js:262, zwave_js_ui:1223, zigbee2mqtt:581). `_project_users_to_slots` seeds every requested slot with `empty()` (`_base.py:1540-1541`), so a pending address is always present in the read and `_apply_read` can settle or expire it. No `TypeError` path.
+
+Ordering of severity is mine; finding 1 touches a stated design choice ("gives that write up all the same"), so the parent may prefer the logging-only fix over changing what `_expire_overdue` does on a failed read.</result>
+<usage><subagent_tokens>115449</subagent_tokens><tool_uses>15</tool_uses><duration_ms>306817</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa7bfbd33b179d8d6</task-id>
+<tool-use-id>toolu_017CYna2EMe5R1pdSpdbkbNd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/aa7bfbd33b179d8d6.output</output-file>
+<status>completed</status>
+<summary>Agent "Analyze test coverage quality of PR" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything needed. All paths below are under `/Users/raman/projects/lock_code_manager/.worktrees/pending-b/`. Method: read the PR diff (`HEAD~1..HEAD`; local `main` is 16 commits stale, so `main...HEAD` is the wrong diff), then ran six hand-written mutants as out-of-tree pytest plugins (in `/tmp/mut`, worktree untouched) against the touched test files. Baseline: 481 passed. Mutants A, B, C, E survived; D survived the test named for it; F was killed.
+
+## Summary
+
+The coordinator-side unit tests are good behavioural tests: they drive `record_write`/`_apply_read`/`observe_push`/`take_failed_write` through the public API on real coordinators and each one kills its obvious mutation. The weak spots are all at the boundary: every provider event path now funnels into `observe_push`, but the only real-coordinator `observe_push` tests start with a write pending, and several state transitions the docstrings promise are never exercised.
+
+## Findings (most important first)
+
+**1. `observe_push` with nothing pending is untested on a real coordinator (rating 9)**
+Mutant A (`observe_push` returns early when `pending is None`) survived all 481 tests. Every push-provider event routes through `_confirm_slot` → `observe_push`: `providers/zwave_js.py:806,814,910,934`, `providers/zigbee2mqtt.py:326`, `providers/zwave_js_ui.py:619,643`. The 48 mechanical tests assert `observe_push.assert_called_once_with(...)` on `MagicMock()` coordinators; the real-coordinator tests (`tests/test_coordinator.py:1459`, `tests/test_sync.py:2017`) all have a pending write first. Bug missed: an external keypad change or deletion on any Z-Wave/Z2M/zwave-js-ui lock never reaches `coordinator.data`, so the in-sync sensor stays ON for a code that is gone; that is the #1538 class of bug, reintroduced silently. Suggested: one `test_coordinator.py` case calling `observe_push(pin_address(1), SlotCredential.known("4321"))` with nothing pending and asserting `data` and `is_verified`; plus one end-to-end per push family (a zwave_js value event on a lock attached to a real coordinator) proving the outcome, not the handoff.
+
+**2. `record_write` after a failed write does not provably clear the failed flag (rating 7)**
+Mutant B (flag survives `record_write`) survived. `coordinator.py:285` is the only guard. Scenario: a read past the TTL fails the write; before the tick runs, a direct `set_usercode` service call re-records the address (the tick's pending block at `domain/sync.py` runs before `take_failed_write`, so the flag is never consumed); the read confirms; the next tick charges the breaker for a write the lock kept. Suggested: record, expire via `_apply_read` past the deadline, record again, confirm via a present `_apply_read`, assert `take_failed_write` is False.
+
+**3. `record_write` replacing an existing pending PIN is unproven (rating 7)**
+Mutant E (keep the old pending PIN) survived. The docstring at `coordinator.py:280` claims "a newer write to the same address replaces the record, so the read confirms the PIN actually sent last." Bug missed: two quick PIN changes leave the older PIN pending; the read shows the newer code as a "readable different code", counts the write failed, and charges the breaker. Suggested: `record_write("1111")`, `record_write("2222")`, `_apply_read` with `known("2222")` → confirmed, `take_failed_write` False, `pending_write().pin == "2222"` beforehand.
+
+**4. Second `record_write` while the timer is armed can start a duplicate look (rating 6)**
+Mutant C (start a task whenever `_confirm_task is None`, ignoring `_confirm_unsub`) survived. `tests/test_coordinator.py:1385` only covers two writes before the first look runs. Consequence: two looks each re-arm `async_call_later`, the second overwrites `_confirm_unsub`, the first timer is orphaned, cannot be cancelled by `async_shutdown`, and fires after shutdown. Suggested: extend `test_confirmation_timer_fires_reads_and_rearms_while_pending` (`:1567`): after the first look re-arms, record a second write and assert `_confirm_task is None` and exactly one read per interval.
+
+**5. `test_shutdown_cancels_the_confirmation_timer` never arms the timer (rating 5)**
+`tests/test_coordinator.py:1598`: `record_write` only creates a not-yet-started task, so `_confirm_unsub is None` passes trivially. Mutant D (shutdown forgets the unsub without calling it) passed this test and was caught only by the harness's lingering-timer teardown ERROR in two `test_binary_sensor.py` tests, which is an accidental detector. Suggested: `await hass.async_block_till_done()` after recording a write on an absent slot (timer now armed), shutdown, `async_fire_time_changed` past the interval, assert no further `get_usercodes` call.
+
+**6. Push-provider seam branch never runs through the tick on a real coordinator (rating 4)**
+The seam's `elif self.supports_push: drop_pending` branch and the "push providers push before CONFIRMED" contract (`providers/zwave_js.py:695` comment) are covered only by the MagicMock handoff at `tests/providers/test_seam.py:1206` and `tests/providers/zwave_js/test_provider.py:1389`. `MockLCMPushLock` appears in no top-level test other than `test_coordinator.py`; `tests/providers/zigbee2mqtt/` has zero `push_update` assertions on its set path. A push provider that stops pushing before CONFIRMED would re-set every tick until the breaker suspends, suite green. Suggested: a parametrized contract test over the push providers asserting `coordinator.data[slot]` is present after a CONFIRMED set, or a `MockLCMPushLock`-backed tick test.
+
+**7. Area 3, `test_the_next_confirmation_read_settles_a_pending_write_without_a_second_set` (rating 3)**
+`tests/test_binary_sensor.py:2388`: the `second_set` wrap is redundant. A second set could only happen if the confirming read failed the write AND the tick re-synced in the same tick, which the design never does (re-sync is the next tick). The load-bearing assertions are `is_verified` and `IN_SYNC`; the name over-promises slightly but the test does test what it says. `test_confirmation_read_failure_leaves_the_write_pending_and_uncharged` (`:2344`) fully matches its name. The two edited tests are strictly stronger than before.
+
+## Areas that yielded nothing
+
+- **Area 5 (forbidden private-state manipulation):** nothing. The new tests replaced hand-built `(pin, deadline)` tuples in `_pending_writes` with `record_write`/`drop_pending`. Remaining touches are pre-existing patterns (`manager._coordinator.data[...] =`, `manager._state =`) and assert-only reads of `_confirm_task`/`_confirm_unsub`; the `_confirm_unsub is None` assert at `:1596` is load-bearing (it killed Mutant F, the timer callback not clearing `_confirm_unsub`).
+- **Area 2, two-lock isolation and scoped read of an unseen slot:** nothing; the slot-9 test (`test_confirmation_read_on_a_poller_uses_the_ordinary_read_with_pending_scope`) covers the latter, and the former is structurally per-instance.
+- **Area 4, tests that pass with the change reverted:** the `read.assert_not_called()` in `tests/test_sync.py::test_pending_write_holds_in_pending_confirmation_without_io` is inert (the tick never called `async_confirm_pending_writes` in either version) but harmless. The `calculate_in_sync` EMPTY → False change, the post-set `has_pending_write` early return, `believed`, and the timer path are each killed by at least one test.</result>
+<usage><subagent_tokens>140166</subagent_tokens><tool_uses>30</tool_uses><duration_ms>469620</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ace54ffbba1fb6c6a</task-id>
+<tool-use-id>toolu_013XfKhPa9sKKcGc4UHEahmn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/ace54ffbba1fb6c6a.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify round-one fixes hold" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All evidence is in hand. Summary of verification for PR #1545 commit 4e866b42 (worktree `/Users/raman/projects/lock_code_manager/.worktrees/pending-b`, no files modified).
+
+## Test results
+
+| File | Result |
+|---|---|
+| `tests/test_coordinator.py` | 90 passed |
+| `tests/providers/test_seam.py` | 59 passed |
+| `tests/test_sync.py` | 89 passed |
+| Combined run | 238 passed, 0 failed, 4.10 s |
+
+## Item 1: clear drops pending only after it runs — VERIFIED, with one sibling gap
+
+`custom_components/lock_code_manager/providers/_base.py:1483-1495`: `changed = await self._execute_rate_limited("clear", ...)` now precedes `self.coordinator.drop_pending(pin_address(code_slot))`. A raise in the clear propagates out before the drop, so the believed value stays pending (unverified). Fixed as described.
+
+Other drop/pop sites:
+- Set path `_base.py:1360-1378`: `drop_pending` (line 1372, push+CONFIRMED) and both `record_write` calls run after `_execute_rate_limited("set")` returns; a raise skips them. Correct.
+- `domain/sync.py:815`: the tick's `drop_pending` fires only when the pending PIN no longer matches the desired target — a change of desire, not a superseding operation. Correct.
+- `observe_push` (`coordinator.py:334`) pops after the lock has spoken. Correct.
+- Base `async_release_managed_slot` (`_base.py:1882`) goes through `async_internal_clear_usercode`, so it inherits the fix.
+
+**Sibling gap (pre-existing, not introduced here):** `providers/matter.py:843-869` overrides `async_release_managed_slot` and calls `await self.async_delete_user(user_index)` directly, never touching `async_internal_clear_usercode`, so it never calls `drop_pending`. A write pending on a Matter slot at release time stays pending until the 60 s deadline, then lands in `_failed_writes` for a slot that no longer has a sync manager to consume it (see finding 3).
+
+## Item 2: single look entry — VERIFIED, plus one new edge
+
+- The only `async_create_task` for a look is inside `_start_look` (`coordinator.py:360`), guarded at line 355: `if self._confirm_task is not None or self._confirm_unsub is not None: return`. Callers: `record_write` (line 290) and `_async_confirmation_timer` (line 381), which first sets `_confirm_unsub = None` (line 380). Nothing else arms a timer (`async_call_later` only at line 373).
+- Mutual exclusion holds: `_confirm_unsub` is set only at line 373, immediately after `finally: self._confirm_task = None` (line 371), with no await between them.
+- Cancel mid-await: `CancelledError` is a `BaseException`, so `except Exception` at `async_confirm_pending_writes` (line 449) does not catch it; it passes through `finally` (task cleared) and skips the re-arm at 372-375, which is outside the `finally`. No re-arm on cancel. `async_shutdown` (732-750) clears `_pending` first, so even a timer that fires anyway produces a look that returns at `if not self._pending: return` (line 431) and does not re-arm.
+- `_shutdown_requested`: HA sets it in `DataUpdateCoordinator.async_shutdown` (`update_coordinator.py:212`) and consults it only in `_async_refresh` (line 430). Nothing in `coordinator.py` reads it.
+
+**New edge (minor):** `record_write` after shutdown does restart the chain. `lock.coordinator` is never set to `None` (no `coordinator = None` anywhere in `custom_components/`), and `async_unload_lock` (`__init__.py:1150-1160`) awaits nothing for an in-flight direct write (`domain/services.py:90` → `async_internal_set_usercode`). A poll-provider write or a zwave_js `OPTIMISTIC` write (the only provider returning it, `zwave_js.py:677`) that returns after `async_shutdown` seeds `_pending`, `_start_look` creates a task, and the read runs against a torn-down provider; on failure `_give_up_overdue` leaves it pending and the look re-arms every `CONFIRM_READ_INTERVAL` (15 s) until `PENDING_WRITE_TTL` (60 s, `const.py:213,217`), then adds to `_failed_writes` and calls `async_update_listeners()`. Bounded to 60 s and no data corruption, but it is a task/timer chain outliving the entry. A one-line guard on `self._shutdown_requested` in `_start_look` (or `record_write`) closes it.
+
+## Item 3: replace instead of merge — VERIFIED
+
+`coordinator.py:434-446`: `new_data = self._apply_read(self._normalize_keys(raw))` inside the `try`. Base projection `_base.py:1507-1552` seeds `scope` (= `slots` when given) with `SlotCredential.empty()` and overlays everything `async_get_users(slots)` returns, so the result always covers `managed | pending ⊇ managed`; no managed slot can go missing (the "unavailable" trap in the `async_get_usercodes` docstring, lines 1565-1569).
+
+Per poller:
+- schlage (`schlage.py:301-360`): returns exactly the scope, tagged-and-in-scope only. Its ordinary poll also excludes unmanaged codes, so `data` never held them; the replace loses nothing.
+- akuvox (`akuvox.py:307-345`): same shape as schlage.
+- virtual (`virtual.py:153-178`): `all_slots = managed_slots | stored_slots`, unmanaged occupied included.
+- zwave_js_ui api-only (`zwave_js_ui.py:1223-1259`): `_async_read_slots(scope)` exactly the scope; ordinary poll is exactly managed.
+- MockLCMLock (`tests/common.py:301-313`): seeds scope, overlays all codes.
+
+Push providers' hard refresh: matter (`matter.py:1479`) and zwave_js (`zwave_js.py:1137`) read the whole device (`slots` ignored). zwave_js_ui/zigbee2mqtt (`_mqtt.py:106`) and zha (`zha.py:474`) return `async_get_usercodes()` = managed only, which is exactly what their first refresh and drift path (`coordinator.py:670-676`, also a replace) return, so the confirmation read cannot drop anything the drift path would not. Also confirmed there is no path where a pending address lies outside the read scope (which `_apply_read` would never resolve, since it iterates `observed` only): only zwave_js emits `OPTIMISTIC`, and its refresh is full; every poll-side `record_write` is covered by the `managed | pending` scope.
+
+## Item 4: listener notification on unchanged data — VERIFIED
+
+- Re-entrancy: `observe_push` (`coordinator.py:322-350`) → `push_update` either returns before touching `self.data` (line 515, `new_data == self.data`, listeners never run, `self.data is before` stays True) or reassigns via `async_set_updated_data` (new dict object, identity differs, so the extra notify is skipped). Listeners run synchronously: `request_sync_check` → `_resolve_credential_snapshot` (state reads only) → `calculate_in_sync` → `_write_state`/`take_failed_write`. `take_failed_write` only discards from `_failed_writes`; nothing synchronous calls `record_write`/`drop_pending` (`sync.py:815` is inside the async tick). `_pending` cannot be mutated under `observe_push`. `self.data is before` is a sound "unchanged" test.
+- `self.data` is `{}` from `__init__` (`coordinator.py:118`), never `None`; HA's `async_update_listeners` (`update_coordinator.py:198-207`) just iterates `_listeners` and swallows exceptions. Safe before first refresh.
+- Over-notify: `elif self._failed_writes:` (`coordinator.py:463-465`) fires for any outstanding failed write on the lock. Listeners are every slot's `request_sync_check` (cheap, no state write unless transitioning), `binary_sensor.py:95,142` `async_write_ha_state` (unchanged state → `state_reported` only), and websocket `_send_update` (`websocket.py:767`, `1213`) which pushes a full payload to each subscribed dashboard. Bounded to one per 15 s while anything is pending, so harmless in the normal case; see finding 3 for the unbounded case.
+
+## Item 5: logging — VERIFIED
+
+`_give_up_overdue` (`coordinator.py:468-500`): info message has three `%s` and three args (`entity_id`, `err`, `[address.user_ref ...]`); debug has two and two. The tick's WARNING (`sync.py:824-829`) is gated on `take_failed_write` returning True, which clears the flag, so at most once per failed write. `request_sync_check`'s `elif snapshot is not None:` (`sync.py:650-653`) consumes it first only when IN_SYNC and `calculate_in_sync` is True, so a write discarded there never reaches the warning. Traced the target scenario: polled lock, IN_SYNC, direct write of another PIN, read shows configured PIN → `_apply_read` deletes pending, adds failed, data unchanged → `elif` notify → `is_verified` True, in sync → discarded, no warning, only the info line.
+
+## Additional findings (most severe first)
+
+1. **record_write after shutdown restarts the look chain** (`coordinator.py:353-364`, `__init__.py:1150-1160`). Detailed under item 2. Bounded to 60 s; suggested guard: `if self._shutdown_requested: return` in `_start_look`.
+2. **Matter release bypasses `drop_pending`** (`matter.py:843-869`). Detailed under item 1. Rare (requires a write pending at the instant of slot removal), but it is the one release path the fix does not cover.
+3. **`_failed_writes` entries with no consumer are never cleared.** `take_failed_write` is called only from a slot's `SlotSyncManager` (`sync.py:653`, `824`). A failed direct write to an unmanaged slot, or to a slot released while pending (finding 2), leaves an entry nobody consumes. With the new `elif self._failed_writes:` (`coordinator.py:463`), every later confirmation read whose data does not move re-notifies all listeners (including the websocket payload push) for as long as that entry lives, i.e. until a later `record_write`/`drop_pending` to the same address. Low severity, but the fix commit turned a dormant leak into a visible one.
+4. **`_normalize_keys` failures are now classified as read failures.** Moving it inside the `try` (`coordinator.py:446`) means a provider returning an unusable key hits `except Exception` → `_give_up_overdue`, so past the deadline the write is marked failed and the slot breaker is charged for a provider bug rather than a lock rejection. This is the trade the commit message explicitly chose ("cannot strand the chain"); noting it only because the resulting warning text ("write not confirmed within the timeout") will misdescribe the cause, though the `_LOGGER.exception` at line 450 does record the traceback.</result>
+<usage><subagent_tokens>128600</subagent_tokens><tool_uses>17</tool_uses><duration_ms>337929</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1188312b1d3c24cb</task-id>
+<tool-use-id>toolu_01QF1fb8AUW1adU7SKxhYSB1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a1188312b1d3c24cb.output</output-file>
+<status>completed</status>
+<summary>Agent "Clean-room review of PR #1545 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. Everything below was verified against the code at HEAD (`4e866b42`) of `fix/1538-coordinator-owns-pending`; the working tree also carries three uncommitted edits to `coordinator.py` (a `_shutdown_requested` guard in `record_write`, a local `failed` flag in `observe_push`, a `failed_before` count in the look) which I note where they intersect.
+
+## Findings
+
+### 1. MEDIUM — a pending address the read never names is never settled; on a push lock that is a hard refresh every 15s for the life of the coordinator
+
+`/Users/raman/projects/lock_code_manager/.worktrees/pending-b/custom_components/lock_code_manager/domain/coordinator.py:225` (`_apply_read`) only visits `observed.items()`; `_give_up_overdue` (`:467`) only runs when the read *raises*. A pending address that a *successful* read does not mention is untouched, and `_async_confirmation_look:372` re-arms the timer because `_pending` is non-empty:
+
+```python
+for address, cred in observed.items():
+    pending = self._pending.get(address)
+```
+
+For polled locks the look scopes the read to `managed_slots | pending` (`:441-443`) so every pending slot is named. For push locks it calls `async_internal_hard_refresh_codes()` (`:439`), which has no scope: zwave_js's `async_hard_refresh_codes` (`providers/zwave_js.py:1146`) returns `async_get_usercodes()` = managed scope plus whatever the lock holds. A pending slot that is not managed and that the lock does not hold is absent from every read.
+
+Scenarios: (a) a direct service write to an unmanaged slot on a masked zwave_js lock returns OPTIMISTIC (`_base.py:1366`) and never lands; (b) a managed slot is removed from the entry while its write is pending on a push lock; (c) a bridged lock flips to push via `note_push_capability` mid-pending. Reproduced with a scratch test (`/tmp/lcm_review/test_scratch_pending_absent.py`, run with `PYTHONPATH=. /tmp/ha29/bin/python -m pytest /tmp/lcm_review/... --rootdir=. -c pyproject.toml -q --no-cov -p no:randomly`): after 105s of monotonic time, 8 hard refreshes, `_pending` still holds the write, `take_failed_write` is False, timer still armed. For zwave_js that is `get_users` + `get_all_credentials` on a battery lock every 15s until restart. No wrong sync state (no manager for the slot), hence MEDIUM.
+
+Fix: in `async_confirm_pending_writes`, after `_apply_read`, give up every pending address that is `not in raw` and past its deadline (the same sweep `_give_up_overdue` does, keyed on absence from the read rather than on read failure).
+
+### 2. MEDIUM at HEAD (closed by the uncommitted working-tree edit) — `record_write` after `async_shutdown` starts a look against a torn-down provider
+
+`coordinator.py:263-290` has no shutdown guard; `_start_look:360` creates a task. `__init__.py:1152-1159` calls `lock.async_unload(...)` then `coordinator.async_shutdown()`, and sync managers are stopped first (`:1209-1222`), so the sync path cannot hit this — but a direct service write awaiting the provider during unload returns afterwards, records, and the look runs `async_internal_hard_refresh_codes` / `async_internal_get_usercodes` on the unloaded lock, re-arming every 15s until the deadline sweep (~75s). The on-disk `if self._shutdown_requested: return` in `record_write` is the right fix; `_shutdown_requested` is set by HA's `DataUpdateCoordinator.async_shutdown` (`update_coordinator.py:212`). Commit it.
+
+### 3. MEDIUM (latency-dependent) — the breaker-trip bound is not the one `const.py` states
+
+`const.py:208-212` says three TTLs fitting in `SYNC_ATTEMPT_WINDOW` guarantees the trip. But nothing outside a completed read enforces the deadline (the tick "only watches", `sync.py:796-818`), so one failed-write cycle is TTL + up to `CONFIRM_READ_INTERVAL` + read R + rate-limit + set W + two ticks: give-up lands at ≤ 75s + R, cycle ≈ 81 + R + W. Three failures span two cycles; `CircuitBreaker.tripped` (`resilience.py`) needs the third within 300s of the first, so it trips iff R + W ≲ 69s. Single slot: fine. N slots re-syncing serially behind `_aio_lock` (`_base.py:353-380`, 2s minimum each) push W to N×(2+W_op): ten slots at 5s each = 70s and the breaker never trips — every slot rewrites forever at ~2.5 min cadence. A look parked behind `_aio_lock` up to `OPERATION_TIMEOUT` (600s) stretches one cycle past the whole window on its own. The pre-PR tick charged at TTL regardless of reads; the PR deliberately removed that, so this is a trade to confirm, not an oversight. Fix options: have the tick's pending block give up on `now &gt;= pending.deadline` when the look has not completed, or shrink TTL/interval and correct the comment to state the real bound.
+
+### 4. LOW — an outage after an accepted write is still charged as a declined write
+
+`sync.py:783-794` orders the unreachable check ahead of the pending block "so an outage right after an accepted write reads as the outage it is". But `_give_up_overdue` (`coordinator.py:467-493`) marks the write failed after 60s of `LockDisconnected`, and on recovery `SUSPENDED -&gt; OUT_OF_SYNC -&gt; take_failed_write` charges a strike and warns "write not confirmed within the timeout" (`sync.py:824-833`). One strike (the breaker was just reset on resume), then re-sync; deliberate per the PR text, but it contradicts the tick comment. Fix: skip the give-up (or record it as outage, not failure) when the error is `LockDisconnected` / `_lock_breaker.tripped`.
+
+### 5. LOW — banked failures with no one to take them
+
+`_failed_writes` entries survive until some tick calls `take_failed_write`. Unmanaged-slot direct writes never get one; a manager in SUSPENDED-with-target, or IN_SYNC with `snapshot is None` (`sync.py:643-653`), does not discard. If the slot later becomes managed, the first OUT_OF_SYNC tick charges and warns for a write made long ago. At HEAD `async_confirm_pending_writes:461` (`elif self._failed_writes:`) also wakes every listener on every no-change look while any stale entry exists; the on-disk `failed_before` narrows the wake but not the banking. Fix: discard on slot removal, or drop entries for addresses with no manager.
+
+### 6. LOW — a second write while the timer is armed waits up to 15s for its first look
+
+`_start_look:355` returns when `_confirm_unsub` is set, so the "task straight after the write" only holds for the first pending slot on a lock; a later slot sits in PENDING_CONFIRMATION up to `CONFIRM_READ_INTERVAL` longer. `test_record_write_while_the_timer_is_armed_starts_no_second_look` pins this as intended. Fix if wanted: cancel the timer and start the task.
+
+## Hypotheses checked and dropped
+
+- **IN_SYNC on a value never seen**: only via `known(pending.pin)` on a present-but-unreadable read/push (`:229-235`, `:339-342`), which is the stated design and pre-dates the PR (Matter pushes `unreadable` then relies on `_last_set_pin`, same as before). `is_verified` is exactly `not in _pending`, `record_write` adds before it pushes, and no path drops pending without also re-reading or re-syncing.
+- **Double charge**: impossible; `_failed_writes` is a set consumed once, `record_write`/`drop_pending` discard it, and the tick charges then returns before re-syncing (`sync.py:824-833`). The post-set `was_set` charge (`:995`) cannot coexist with a pending write (`:959`).
+- **Believed value wiped by the first absent read** (`:240-241`): correct, the lock said empty; a timed-out zwave_js hard refresh raises and leaves data alone.
+- **Re-entrancy**: all `_pending`/`_failed_writes` mutations complete before any `async_update_listeners`/`async_set_updated_data`; `request_sync_check` only acts in IN_SYNC/SUSPENDED and the tick is SYNCING or PENDING_CONFIRMATION across every await; HEAD's `observe_push:348` post-listener check is equivalent to the on-disk local flag because pending and failed cannot coexist for one address.
+- **Orphan pending**: every add calls `_start_look`; task→timer→task only breaks on shutdown (which clears pending) or an exception escaping HA-guarded listener code.
+- **HA signatures**: `hass.async_create_task(coro, name, eager_start=False)` (`core.py:788`), `async_call_later(hass, float, cb(datetime))` (`event.py:1552`), `async_update_listeners()`, `async_set_updated_data(data)`, async `async_shutdown` all match 2026.9.0b4.
+- **Push-before-CONFIRMED**: zwave_js (`:701`), zwave_js_ui (`:1308`), zigbee2mqtt (`:518`), matter (`:1062`) all push before returning.
+
+Nothing HIGH. Findings 1 and 3 are the ones worth a decision before merge; 2 is already fixed on disk and should be committed.</result>
+<usage><subagent_tokens>184017</subagent_tokens><tool_uses>30</tool_uses><duration_ms>780593</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa5f5e2a437da20b3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/aa5f5e2a437da20b3.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify round-two fixes of PR #1545" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification report — PR #1545, commits 2646b7c9 / c34ec798
+
+All quotes from `/Users/raman/projects/lock_code_manager/.worktrees/pending-b/custom_components/lock_code_manager/`.
+
+### Item 1 — `record_write` post-shutdown guard: VERIFIED
+
+- `_shutdown_requested` exists in HA 2026.9 and is set first thing in shutdown (`/tmp/ha29/lib/python3.13/site-packages/homeassistant/helpers/update_coordinator.py:94` `self._shutdown_requested = False`; `:210-216`):
+  ```python
+  async def async_shutdown(self) -&gt; None:
+      self._shutdown_requested = True
+      self._async_unsub_refresh()
+      self._async_unsub_shutdown()
+      self._debounced_refresh.async_shutdown()
+  ```
+- No window between our clear and the flag. `domain/coordinator.py:761-777`: `_pending.clear()`, `_failed_writes.clear()`, `_confirm_task.cancel()`, `_confirm_unsub()`, `_drift_unsub()`, `_connection_unsub()` are all synchronous cancels that invoke no callbacks, and `await super().async_shutdown()` runs the coroutine body synchronously up to its first suspension — there is none, so the flag is set in the same loop step. `task.cancel()` delivers CancelledError on a later iteration; in `_async_confirmation_look` (`:380-389`) the `finally` clears `_confirm_task` and the exception propagates past `if self._pending:` so no timer is armed (and `_pending` is empty anyway). `except Exception` at `:474` does not swallow CancelledError.
+- Post-shutdown write return (base seam, `providers/_base.py:1359-1378`): `record_write` → early return (`coordinator.py:283-286`); `drop_pending` → `pop(..., None)` on an empty dict, harmless; `_push_credential_update` → `push_update` → `async_set_updated_data`. HA does not raise: `update_coordinator.py:619-633` sets data, calls `_schedule_refresh()` only `if self._listeners` (for a push lock `_update_interval_seconds is None` → immediate return; a polled lock never reaches `_push_credential_update`), then `async_update_listeners()`. A scheduled refresh on a shut-down coordinator is dropped at `:430` (`if self._shutdown_requested ... return`). `note_connectivity_failure` → `async_request_refresh` → debouncer ignores it (`debounce.py:95`). Nothing misbehaves.
+- Note: `_shutdown_requested` is a single-underscore HA attribute, not public API; acceptable coupling but worth knowing.
+
+### Item 2 — wake only for a write that just failed: VERIFIED
+
+- `_pending` and `_failed_writes` are disjoint by construction: `record_write` discards from failed when adding pending (`:288-289`); `drop_pending` pops both (`:306-307`); `_apply_read`/`_fail_overdue`/`observe_push` move an address pending → failed. So every add strictly increments `len(_failed_writes)`, and no code path between `failed_before = len(...)` (`:462`) and the comparison (`:484`) discards or awaits (`_apply_read` has no `record_write`/`drop`, `:220-242`). Length comparison is sound.
+- Every failure path wakes: `observe_push` local `failed` flag (`:341-356`); look via `async_set_updated_data` or `len &gt; failed_before` (`:482-488`); `_give_up_overdue` wakes when `overdue` (`:513-515`); poll path `async_get_usercodes` (`:691-703`) relies on HA `_async_refresh` which calls `async_update_listeners()` when `self.always_update` (`update_coordinator.py` refresh block lines 176-180) — our class never sets `always_update` (no match in coordinator.py), so HA's default `True` applies.
+- Only gap: `_async_drift_check` (`:722-750`) calls `_apply_read` but wakes only `if new_data != self.data`. Drift runs only on providers with `hard_refresh_interval` (mqtt, matter, zwave_js, zha — all push), and push providers record only `OPTIMISTIC` writes with `believed=True`, so `data` already holds `known(pin)` and any failure (absent or different readable code) changes data → wake. Practically unreachable; pre-existing, not introduced here.
+
+### Item 3 — read that never names a pending address: VERIFIED
+
+- No KeyError: the comprehension at `:469-471` is fully evaluated (only addresses still in `_pending`) before `_fail_overdue` indexes `self._pending[address]` (`:496-498`); no await in between. `_apply_read` iterates `observed.items()` and deletes from `_pending`, a different dict.
+- Polled: `async_confirm_pending_writes` scopes `managed_slots | {address.user_ref ...}` (`:455-458`) → `async_internal_get_usercodes(slots)` (`_base.py:2065-2078`) → `_project_users_to_slots(scope=slots)` which seeds `codes = {slot: SlotCredential.empty() for slot in scope}` (`_base.py:1548-1549`) — every in-scope slot is always present, empty or not. Only `zwave_js` overrides `async_get_usercodes` and it calls `super()` (`zwave_js.py:335`). Key types agree: `_checked` coerces `user_ref` to `int` (`coordinator.py:86`), `pin_address(user_ref: int)`, `_normalize_keys` does `pin_address(int(k))` (`:202`). So for pollers the unnamed branch is dead code — the write is never wrongly failed.
+- Push (only zwave_js returns OPTIMISTIC — `zwave_js.py:677`, sole match): `async_hard_refresh_codes` (`:1137-1146`) refreshes users+credentials then `async_get_usercodes()` with `slots=None` → scope = managed slots plus every user the node reports (`async_get_users` ignores `slots`, "the node read covers every user", `:262-322`), plus `_overlay_uc_occupancy` adds `unreadable()` for any UC slot with `in_use is True` even if not in scope (`:372-377`). So a managed pending slot is always named; an unmanaged pending slot is named iff the lock holds it — exactly the semantics the commit claims.
+
+### Item 4 — `_start_look` pulls the timer forward: VERIFIED
+
+- `_async_confirmation_look` `:380-389`: `finally: self._confirm_task = None` then `if self._pending: self._confirm_unsub = async_call_later(...)` — no await between, so no interleaving. At arm time `_confirm_unsub` is provably None: `_start_look` cancels+clears it before creating the task (`:366-370`), the timer callback clears it before calling `_start_look` (`:392-395`), and while a task is in flight `_start_look` returns early. One chain, never two tasks or two timers.
+- Burst: N managers writing concurrently queue FIFO on `_aio_lock` (`_base.py:356`). W1 returns → T1 created (not eager) and its read queues behind W2..WN; W2..WN return while `_confirm_task is not None` → join. Result: N writes + 1 read. Staggered writes (each returning while no task is in flight) yield one read per write — intended ("the write that just returned gets its immediate look"), see design note below. No livelock: the read is a FIFO waiter like any write; the whole operation is bounded by `asyncio.timeout(self.operation_timeout_seconds)` → `LockDisconnected` (`_base.py:311-330`), a `LockCodeManagerError` the look catches → `_give_up_overdue` → re-arms the timer.
+
+### Item 5 — `take_failed_write` in `async_start`: VERIFIED
+
+- `sync.py:288-301`. Reload: `async_unload_lock` calls `coordinator.async_shutdown()` (`__init__.py:1158-1159`) which clears `_failed_writes`, and setup creates a fresh coordinator, so there is nothing to discard. Shared lock (`_find_shared_lock_instance`, `__init__.py:1757-1765`): entry B reuses A's lock and coordinator, whose pending/failed writes survive; B's managers start on B's slots only. If a failed write for that slot predates the manager (a direct write, or B's own pre-reload write), the strike is dropped but the initial tick still reconciles: `pending_write` is None → `take_failed_write` False → `expected_in_sync` False when the lock lacks the PIN → OUT_OF_SYNC → re-write (`sync.py:807-846`). Only a breaker strike is lost, and the breaker is new with the manager anyway. Nothing wrongly discarded in effect.
+
+### Additional findings (none blocking)
+
+1. **Design note, not a defect** — pull-forward doubles rate-limited traffic for staggered writes on a polled cloud lock (write, read, write, read…). A simultaneous burst is still N+1 (FIFO). Before c34ec798 those writes would have joined the interval chain. Worth an eye on Schlage/Akuvox rate limits.
+2. **Pre-existing, practically unreachable** — `_async_drift_check` adds to `_failed_writes` without a wake when data is unchanged (`coordinator.py:747-750`). Only reachable if a believed write fails without changing data, which the believed-value semantics prevent.
+3. Coupling to HA's private `_shutdown_requested`; safe on 2026.9 (`update_coordinator.py:94,212`).
+
+### Tests
+
+| File | Result |
+|---|---|
+| tests/test_coordinator.py | 94 passed |
+| tests/providers/test_seam.py | 59 passed |
+| tests/test_sync.py | 90 passed |
+| tests/test_binary_sensor.py | 44 passed |
+
+No files were modified.</result>
+<usage><subagent_tokens>111092</subagent_tokens><tool_uses>11</tool_uses><duration_ms>375309</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a513d3222d00db046</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a513d3222d00db046.output</output-file>
+<status>completed</status>
+<summary>Agent "Round-3 clean-room review of PR #1545" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review of PR #1545 @ c34ec798 — verdict: no finding above MEDIUM
+
+I traced all three write lives end to end (poller via `MockLCMLock`/Schlage; zwave_js OPTIMISTIC; zwave_js/zwave_js_ui/zigbee2mqtt/matter CONFIRMED) through `providers/_base.py` → `domain/coordinator.py` → `domain/sync.py`, and checked every HA API against `/tmp/ha29`. `tests/test_coordinator.py` + `tests/test_sync.py`: 184 passed. The core design holds: the `_pending` entry is always mutated before any listener-notifying call, reads and writes serialize on `_aio_lock`, and every resolution path deletes the entry once.
+
+### 1. MEDIUM (conditional) — zwave_js maps an empty `userCode` event to `empty()` without the occupancy check, and this PR turns that into a failed write
+
+`custom_components/lock_code_manager/providers/zwave_js.py:917-920`
+```python
+def _handle_uc_code_update(self, code_slot: int, new_value: Any) -&gt; None:
+    if not new_value:
+        resolved = SlotCredential.empty()
+```
+and `domain/coordinator.py:344-351` (`observe_push`): an absent push while a write is pending is now a definitive failure.
+
+The non-falsy branch of the same handler consults `_uc_slot_in_use` before calling all-zeros "empty", and `_overlay_uc_occupancy` (zwave_js.py:345-370) exists because User Code CC locks report `userIdStatus` occupied while withholding the code (#1397) — the same lock class whose masked read-back yields `ERROR_UNKNOWN` → OPTIMISTIC → a pending write. `_handle_uc_status_update` returns early for occupied statuses on the premise that "the paired userCode update delivers the value"; for a withholding lock that paired update carries nothing.
+
+Scenario: OPTIMISTIC set of B → `record_write(believed=True)` → driver's verification report → status Enabled (ignored) + userCode falsy → `_confirm_slot(slot, empty())` → `observe_push` fails the write → tick charges → re-set → same again → 3 strikes inside ~6 s → slot suspended on a PIN that works on the keypad. Pre-PR the same push marked the slot verified and `calculate_in_sync`'s `_last_set_pin` override reported IN_SYNC (verified at 0f19fcea sync.py:476-478), so this PR changes the consequence from masked to breaker-tripping. Conditional: I could not source from the repo whether node-zwave-js emits a `value updated` for `userCode` with a falsy value in this case (vs. no event at all); if it never does, the hard-refresh look with the overlay confirms correctly and this is inert.
+
+Fix: `resolved = SlotCredential.unreadable() if self._uc_slot_in_use(code_slot) is True else SlotCredential.empty()` in the falsy branch — the overlay's own rule.
+
+### 2. LOW — `PendingWrite.believed` is stored but never read
+
+`domain/coordinator.py:60,288` — the only consumer is `record_write` itself (`if believed:` at line 290). `_apply_read`'s waiting branch (`line 240-241: out[address] = cred`) therefore replaces a believed `known(pin)` with `empty()` on the first pre-deadline read that doesn't show it, then flips back to `known(pin)` when confirmed. Sync state is unaffected (unverified → never in sync); it is code-sensor flicker and a dead field. Fix: drop the field from the NamedTuple (the belief is fully consumed at record time), or keep it and honour it in that branch.
+
+### Hypotheses checked and dropped
+
+- **`_fail_overdue` KeyError**: both callers (`coordinator.py:469-471`, `:513`) build the address list synchronously from `_pending` after the awaited read; no yield between list and delete. Does not hold.
+- **Look against a shut-down coordinator**: `record_write` returns on `_shutdown_requested` (attribute confirmed at `update_coordinator.py:94,212`); `async_shutdown` clears `_pending`, cancels the task, unsubs the timer; `CancelledError` propagates past the `finally` so `coordinator.py:386-389` never arms a timer. Does not hold.
+- **Pending write with neither task nor timer**: `_start_look` returns early only while a task is alive, and that task arms the timer if anything is pending; while a look is in flight `_confirm_unsub` is always `None`, so the "pull forward" branch cannot race a live task. HA's `async_update_listeners` swallows listener exceptions (`update_coordinator.py:198-207`), so a raising entity cannot abort the chain. Does not hold.
+- **Stale-read displacement race** (read issued before a new write, applied after): impossible — every read and write goes through `_execute_bounded`'s `_aio_lock` (`_base.py:356`), and `_apply_read` runs synchronously on return.
+- **Look starving behind the write queue past the deadline**: `OPERATION_TIMEOUT = 600`; a present observation confirms regardless of deadline, only a *failed* read consults it.
+- **Re-entrancy via `async_update_listeners`**: `_pending`/`_failed_writes` are mutated before `push_update`/`async_set_updated_data`/`async_update_listeners` in all four sites; the only listener that mutates the coordinator is `take_failed_write`, which is idempotent.
+- **Double charge**: the entry is deleted on first resolution; `take_failed_write` consumes; `record_write`/`drop_pending` discard.
+- **HA API**: `async_create_task(target, name=None, eager_start=True)` accepts the positional name + `eager_start=False`; `async_call_later(hass, float, @callback)` fine; `async_set_updated_data` reschedules the poll on data change (same as the existing drift path).
+
+Observed but within the PR's acknowledged limits, not re-reported: Schlage PINs are write-only (`schlage.py:410-413`), so every Schlage confirmation is by occupancy not value (the stated write-only trade); the AVAILABLE guards; the breaker bound.</result>
+<usage><subagent_tokens>168231</subagent_tokens><tool_uses>28</tool_uses><duration_ms>807940</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aded99cf14e4351c3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/aded99cf14e4351c3.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify round-three fixes of PR #1545" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both items are verified. Tests: `124 passed in 2.60s`.
+
+## Item 1 — `_handle_uc_code_update` falsy value → `unreadable()` when in use: VERIFIED
+
+A real clear (Available + empty code) cannot be misread as unreadable, because the cached status is already Available by the time the userCode handler runs.
+
+**Driver emit order** — node-zwave-js persists status before code, so the two `value updated` events arrive status-first:
+`/Users/raman/projects/node-zwave-js/packages/cc/src/cc/UserCodeCC.ts:262-263`
+```ts
+this.setValue(ctx, statusValue, userIdStatus);
+this.setValue(ctx, codeValue, userCode);
+```
+
+**Client cache-before-emit** — `zwave_js_server` updates the value DB before dispatching to listeners, so `_uc_slot_in_use` sees the new status when the paired code event fires:
+`/tmp/ha29/lib/python3.13/site-packages/zwave_js_server/model/node/__init__.py:528-531`
+```python
+self._handle_event_protocol(event)   # value.receive_event(...) updates cache
+...
+self.emit(event_type, event.data)
+```
+and `get_usercode` derives `in_use` from that cached `userIdStatus` (`util/lock.py:73-77`: `status_value.value == CodeSlotStatus.ENABLED`, `None` when unset).
+
+**Trace of a real clear on slot N:**
+1. `userIdStatus=AVAILABLE` → `_handle_uc_status_update` (`zwave_js.py:890-911`) pushes `empty()` unless LCM desires a PIN there (then it's ignored, pre-existing guard).
+2. `userCode=""` → `_uc_slot_in_use` reads cached AVAILABLE → `False` → `empty()` pushed (`zwave_js.py:919-924`). Same observation twice; no conflict.
+
+**Consistency with `_overlay_uc_occupancy`** (`zwave_js.py:365-369`): same rule — `in_use is not True → skip`, only `True` upgrades to unreadable; `None` is treated as no evidence in both places. `_handle_uc_status_update` pushes nothing for occupied statuses (`zwave_js.py:892-895`, "Occupied statuses carry no code; the paired userCode update delivers the value"), so the code handler is the sole pusher for occupied slots — no competing observation.
+
+The stale-`in_use=True` scenario in the prompt would require the code event to be processed before the status event; the driver and client ordering above rule that out for a single report.
+
+## Item 2 — `_apply_read` waiting branch returns `known(pending.pin)` when believed: VERIFIED
+
+`/Users/raman/projects/lock_code_manager/.worktrees/pending-b/custom_components/lock_code_manager/domain/coordinator.py:240-243` — the new `elif pending.believed:` branch only assigns `out[address]`; it does not `del self._pending[address]` (unlike the confirm branch at :230 and deadline branch at :237).
+
+- `is_verified` (`coordinator.py:257`) is `_checked(address) not in self._pending` → still `False`.
+- `calculate_in_sync` (`sync.py:467-468`) returns `False` first thing when unverified, before ever looking at the credential, so a `known(pin)` in `data` cannot produce in-sync. The tick stays in `PENDING_CONFIRMATION` (`sync.py:802-818`).
+- **Poll path**: `_async_update_data` returns `self._apply_read(...)` directly (`coordinator.py:707`). **Drift path**: `_async_drift_check` calls `_apply_read` (`:727-731`). **Confirmation look**: `_apply_read` at `:467`, then `_fail_overdue` only over addresses *not in* `new_data` (`:473-475`); an address observed absent is in `new_data`, so it stays pending until the deadline branch handles it.
+- **Deadline expiry**: the `elif now &gt;= pending.deadline` branch (`:236-239`) precedes `elif pending.believed`, so at/after deadline the entry is deleted, added to `_failed_writes`, and `out[address] = cred` — the observation replaces the believed PIN.
+- **Entity/card**: the code sensor reads `coordinator.credential(...)` and returns `credential.readable_pin` (`sensor.py:79-85`), so it shows the believed PIN; the in-sync binary sensor goes through `calculate_in_sync` and reports not in sync. `record_write(believed=True)` already put `known(pin)` into `data` (`coordinator.py:292-296`), so the change simply keeps that value stable across intermediate reads.
+
+The new test `test_apply_read_keeps_showing_a_believed_write_while_waiting` (`tests/test_coordinator.py:1914-1925`) asserts both `out == known("9999")` and `is_verified(...) is False`.
+
+## Extra findings (2)
+
+1. **Test does not exercise the ordering argument.** `test_uc_shim_empty_code_follows_occupancy` (`tests/providers/zwave_js/test_events.py:775-812`) patches `_uc_slot_in_use` directly, so it verifies the branch but not that a preceding `userIdStatus` event actually updates what `_uc_slot_in_use` reads. The nearby fixture-backed tests (`:698`, `:725`, which rely on the fixture's cached ENABLED/AVAILABLE for slots 2/3) cover the cache read, but no test drives status-then-code as a pair. Low risk given the driver/client evidence above; a two-event test would pin it.
+
+2. **Pre-existing, not introduced here:** when LCM desires a PIN on a slot, `_handle_uc_status_update` ignores `AVAILABLE` (`zwave_js.py:899-910`, anti-stale-event guard), but the paired `userCode=""` still pushes `empty()` via the code handler because the cache now says `in_use=False`. So the "ignore stale AVAILABLE" guard is effectively bypassed by the code event on any driver that emits both. Behavior is unchanged by this commit (it pushed `empty()` before too); noting only because the commit's reasoning leans on that guard.</result>
+<usage><subagent_tokens>75802</subagent_tokens><tool_uses>7</tool_uses><duration_ms>143392</duration_ms></usage>
+</task-notification>
+
+---
+
+check review comments. Also have reviews settled? so we think this is the right design?
+
+---
+
+released 5.5.4
+
+---
+
+<task-notification>
+<task-id>a95dd7c712a2edc77</task-id>
+<tool-use-id>toolu_01TWwLBPYERpTLErcRsbETGY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a95dd7c712a2edc77.output</output-file>
+<status>completed</status>
+<summary>Agent "Research fix for #1528 (deadline scope)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## 1. Claims in #1528 vs. current code (c070648a)
+
+**Scaling by `managed_slots` — verified.** `zha.py:93-98` `return max(super().operation_timeout_seconds, _WORST_CASE_ZCL_COMMAND * max(len(self.managed_slots), 1))`; `_mqtt.py:63-68` same shape with `self._per_slot_read_budget`. Base: `_base.py:466-474` returns `OPERATION_TIMEOUT` (`_base.py:116`, 600.0).
+
+**Callers of `operation_timeout_seconds`** (all `_base.py`): 311 (`_execute_rate_limited`, wraps `_execute_bounded`, which includes the availability probes at 343-344 *and* the `_aio_lock` acquire at 356 — verified by nesting); 812 (log only); 861-863 first coordinator refresh at setup; 918 provider setup (`_run_provider_setup_bounded`).
+
+**`_slots_in_scope` / `slot_scope` — no longer true / never landed.** Zero hits in `custom_components/`. `async_internal_get_usercodes(slots)` (`_base.py:2065-2078`) and `async_internal_get_occupied_indices(indices)` (`_base.py:2081-2120`, `partial(self.async_get_usercodes, wanted)`) already know the walked count at the call site; nothing consumes it.
+
+**Coordinator confirmation read inherits the scaling — verified.** `coordinator.py:460-462` passes `self._lock.managed_slots | {address.user_ref for address in self._pending}`; the walk is ≥ managed, so the managed-scaled budget is right here except for pending slots outside the managed set. A read failure there "touches no breaker" (`_give_up_overdue`, `coordinator.py:509-533`) — low stakes.
+
+**"Throwaway provider manages nothing" — partly true.** `managed_slots` is registry-derived: `_base.py:2201-2203` → `get_managed_slots` (`queries.py:33-54`) unions every LCM entry that `has_lock`. Empty only for a lock no entry manages yet (first config flow). For `add_users` (`services.py:513`) or a second entry on a managed lock, the budget is `per_slot × existing slots`, still unrelated to the scan window `range(read_up_to+1, window+1)` (`allocation.py:428-430`). Symptom `occupancy_unknown` at `allocation.py:436` — verified.
+
+**Per-slot walks:** `zha.py:383-391` `for slot_num in scope: result = await cluster.get_pin_code(slot_num)`; `_mqtt.py:302` `reads = {slot_num: await read_slot(slot_num) for slot_num in sorted(code_slots)}` (used by `zigbee2mqtt.py:613`, `zwave_js_ui.py:1251`). Schlage (`schlage.py:316` one `_async_get_codes()`), Akuvox (`akuvox.py:322` one `_async_list_users()`), Matter (`matter.py:452` one `_invoke_sdk`), zwave_js (`zwave_js.py:1148-1149`, two calls), virtual: no walks.
+
+**Existing inner bounds:** `zigbee2mqtt.py:648` `asyncio.wait_for(future, timeout=10.0)` → `None` (silence); `zwave_js_ui.py:1123-1129` `wait_for(future, API_CALL_TIMEOUT)` (60.0, `zwave_js_ui.py:60`) → raises `LockDisconnected` itself. Note `_per_slot_read_budget` for zwave_js_ui is the base 60.0 — the **same figure** as its inner bound, the z2m 10/10 collision again. ZHA: zigpy `device.py:689-722` retries `max_attempts`, `async with asyncio_timeout(timeout): return await future`, then `if attempt &gt;= max_attempts - 1: raise` — so zigpy raises `TimeoutError` itself (constraint 2 verified); `zha.py:391-399` `except Exception:` → `unreadable`. What zigpy does **not** bound: `await send_request(attempt)` and `_limit_concurrency` (device.py:691-703) — that is the ZHA wedge shape.
+
+## 2. Candidate designs
+
+**(a) Per-exchange `_round_trip`** (#1529 shape, diff `_base.py +117`). Corrected rules: wrapper figure must be *strictly greater* than any inner bound (z2m &gt;10, zjui &gt;60, ZHA &gt;84) so the inner always claims a silent lock and the wrapper only claims a wedged transport (hung publish / zigpy send). Use `async with asyncio.timeout(b) as cm` and re-raise unless `cm.expired()`, so zigpy's own `TimeoutError` stays `unreadable`. Outer backstop then needs a "self-bounded" declaration or it violates constraint 3 (9×70s=630&gt;600).
+
+**(b) Scope from the call site.** Turn `operation_timeout_seconds` into `_operation_budget(exchanges: int)` = `max(OPERATION_TIMEOUT, per_exchange × exchanges)`; `async_internal_get_usercodes` passes `len(slots or managed_slots)`, `get_occupied_indices` passes `len(wanted)`, hard-refresh/first-refresh pass `len(managed_slots)`, set/clear pass 1. Delete both overrides. Use a distinct keyword-only name (not `slots`, per #1529's `**kwargs` trap).
+
+**(c) Recommended hybrid — one declared number, both deadlines derived.** Providers declare `per_exchange_budget: ClassVar[float | None]` (ZHA 90, MQTT base 60→70, z2m 15; None elsewhere). Outer = (b). Per-exchange wrapping from (a) only where an exchange has no inner bound (ZHA's `get_pin_code`; optionally `async_publish`). No `self_bounded` flag: the outer is arithmetically ≥ per_exchange × walk, so a lock answering every command cannot trip it. Constraint 1: wrapper &gt; inner. Constraint 2: `cm.expired()`. Constraint 3: outer scales with the actual walk. #1397 guards untouched: `_async_read_slots` still sees `None` per silent slot, `len(reads) &gt; 1` and `_reads_have_succeeded` (`_mqtt.py:303-306`) unchanged.
+
+## 3. Blast radius
+
+- **zha**: delete 93-98; optional wrapper at 385; tests `zha/test_provider.py:1230` replaced ("budget follows walked count", "zigpy TimeoutError → unreadable", "wedge → LockDisconnected").
+- **zigbee2mqtt / zwave_js_ui**: no read-path change; `_mqtt.py:62-68` deleted; `zigbee2mqtt/test_provider.py:1225` replaced.
+- **matter, zwave_js, schlage, akuvox, virtual**: `per_exchange_budget=None` → flat 600, zero behaviour change; delete-then-write floor comment (`_base.py:101-109`) still holds.
+- **_base.py**: 288-370, 466-474, 861, 918, 2065-2120; `tests/providers/test_base.py` (9 refs, esp. 2708, 2835).
+- **allocation/coordinator**: no code change; behaviour: ZHA scan budget 90×window.
+- Mutation targets: `max` floor; `len(slots)`↔`len(managed_slots)`; wrapper `&gt;` inner; `cm.expired()` inversion; refresh passing 1 instead of managed count (re-creates constraint 3 via refresh at `_base.py:861`).
+- Regression risk: tighter 1-slot budgets on wide entries while `_aio_lock` wait sits inside the deadline (`_base.py:311→356`) → queued writes cut off → `sync.py:897-907` `note_connectivity_failure()` → false `unreachable`.
+
+## 4. Interactions
+
+**#1535**: today over-scaling accidentally pads the queue wait; right-sizing exposes it. Either exclude the `_aio_lock` wait from the operation deadline (the part of #1529 that survived review; keeps availability probes bounded separately) **in the same PR**, or land #1535 first. Do not land #1528 alone.
+**#1536**: (c) makes the scan budget honest (90×40=3600s/lock), not shorter. Any aggregate cap must be ≥ per_exchange × window or #1529's 120s failure recurs. Land #1528 first; (c)'s `per_exchange` parameter is the natural hook for an "interactive" smaller budget.
+
+## 5. Recommendation / maintainer decisions
+
+Do (c). Decisions only you can make: (1) whether to add ZHA's per-exchange wrapper now or defer (it's the only place the outer can't detect a wedge in &lt;walk time); (2) whether to bundle the `_aio_lock` deadline split with this PR; (3) the per-exchange figures above z2m's 10s / zjui's 60s (slack size); (4) whether refresh/setup paths (`_base.py:861, 918`) scale by `managed_slots` or stay flat.</result>
+<usage><subagent_tokens>117981</subagent_tokens><tool_uses>23</tool_uses><duration_ms>259743</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2c5bf4a71a8636bd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a2c5bf4a71a8636bd.output</output-file>
+<status>completed</status>
+<summary>Agent "Research fix for #1535 (unbounded lock queue)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result># Issue #1535 — what a proper fix takes (read-only research, worktree at c070648a)
+
+## 1. Claims vs. current code
+
+**Acquisition path — verified, with one important correction.** `_execute_rate_limited` wraps *everything* in the budget: `providers/_base.py:311-313` `async with asyncio.timeout(self.operation_timeout_seconds): return await self._execute_bounded(...)`, and `_execute_bounded` runs the probes (`:344-345`), then `async with self._aio_lock:` (`:356`), the 2 s min delay (`:360-363`, `MIN_OPERATION_DELAY = 2.0` at `:89`), then `func`. Any `TimeoutError` becomes `LockDisconnected(... "no answer within Ns")` (`:314-332`).
+
+So the issue's premise "the queue has no such bound" is **no longer true on main** — it described #1529's state (its body: "It also no longer covers the wait on `_aio_lock`"). On main the wait *is* inside the deadline, which produces the opposite defect: a waiter that never touched the device expires with `LockDisconnected`, and `sync.py:897-907` charges it: `except LockDisconnected ... self._coordinator.note_connectivity_failure()`. Three queued slots trip the breaker (`BACKOFF_FAILURE_THRESHOLD = 3`, `const.py:201`) with no device evidence. Second consequence: a waiter that acquires late has only `T - wait` left for real I/O (residual can be ~2 s), so healthy-but-slow locks get false disconnects.
+
+**Arithmetic.** "N wedged slots drain in N budgets" holds only when the wait is *outside* the budget (#1529). On main: holder cut at T, waiters (joined ~2 s apart, `TICK_INTERVAL = timedelta(seconds=2)`, `const.py:222`) each acquire with seconds left and are cut ~2 s later → drain ≈ T + 2N s, but N breaker charges. Per-call budget: `OPERATION_TIMEOUT = 600.0` (`:116`); ZHA `max(super, 90 * max(len(managed_slots), 1))` (`zha.py:93-97`) → 900 s for 10 slots, verified; MQTT bridges `_per_slot_read_budget * len(managed_slots)` (`_mqtt.py:63-67`, 60 s z2mqtt 10 s). #1528 is OPEN; `_round_trip` does not exist on main.
+
+**Who waits on `_aio_lock`:** every slot's tick via `_perform_sync` → `async_internal_set_usercode`/`clear` (`sync.py:516-524`, `_base.py:1349`, `:1485`); coordinator poll `async_get_usercodes` → `async_internal_get_usercodes()` (`coordinator.py:698`, `_base.py:2077`); post-#1545 confirmation look `async_confirm_pending_writes` → `async_internal_hard_refresh_codes()` / `async_internal_get_usercodes(managed | pending)` (`coordinator.py:457-461`); drift check (`:729`); direct service writes (`domain/services.py:90,98`). **Not** waiters: availability probes run before the lock (`_base.py:344-345`) and `async_internal_is_reachable` (`:1213-1218`) takes no lock; Schlage's probe is a hass service call (`schlage.py:135-138`).
+
+**Skip list — verified:** `sync.py:716-721` returns for `IN_SYNC, SYNCING, SUSPENDED`; per-slot timer `async_track_time_interval(self._hass, self._async_tick, TICK_INTERVAL)` (`:298`). **Unreachable gate — verified:** `sync.py:797-800` `if self._coordinator.unreachable or not ...provider_setup_succeeded: SUSPENDED`. **Breaker — verified:** `note_connectivity_failure` → `_apply_backoff` → `record_failure`; on fresh trip `async_create_task(self.async_request_refresh())` (`coordinator.py:566-569`) — the recovery poll queues on the same mutex; `backoff_delay = initial * 2**(count-threshold)` capped `BACKOFF_MAX_SECONDS = 1800` (`resilience.py:85-93`, `const.py:203`). Confirmation-look failures "touch no breaker" — verified: `except LockCodeManagerError as err: self._give_up_overdue(err)` (`:473-475`), but they *do* fail pending writes past `PENDING_WRITE_TTL = 60.0` → `_failed_writes` → slot-breaker strike on next tick (`sync.py:830`).
+
+## 2. Candidate designs
+
+**(a) Don't enqueue while `unreachable`.** Already exists (`sync.py:797`). Gap is exactly callers already in `SYNCING` when the trip happens *plus* the pre-trip window (first 3 waiters). On main the waiters are what trips it, so (a) alone cannot fix it. Honours "fresh evidence" poorly: still a breaker flag.
+
+**(b) Split the deadline: bound the wait separately; a wait-timeout is a distinct, non-charging outcome.** Goes in `_execute_bounded`: `asyncio.timeout(wait_budget)` around `self._aio_lock.acquire()`, raising a new `LockBusy` (subclass of `LockCodeManagerError`, *not* `LockDisconnected`/`LockOperationFailed`), then start `operation_timeout_seconds` after acquire — fixing the residual-budget defect too. Consumers: `sync.py` adds `except LockBusy: state = OUT_OF_SYNC; return` (debug log, no breaker); `coordinator.async_get_usercodes` must raise `UpdateFailed` *without* `_apply_backoff` (today `:698-705` charges any `LockCodeManagerError`); `async_confirm_pending_writes` must treat it as "retry next look" without `_give_up_overdue` (or the look starving behind writes converts landed writes into slot-breaker strikes). Avoids all three #1529 modes: refusal is based on "someone holds the lock now" (local, fresh, free), never the breaker; nothing charged; the recovery poll isn't guarded.
+
+**(e) Sharper variant of (b): the tick should not queue at all.** The tick *is* a 2 s retry loop, and `MIN_OPERATION_DELAY` is also 2 s — queuing on the mutex duplicates it. A `wait=False` (try-acquire) for the sync path: `if self._aio_lock.locked(): raise LockBusy`. One-shot callers (poll, look, direct service writes, allocation) keep waiting with the (b) bound. No starvation: a slot competes only until its write lands, then leaves the pool (PENDING_CONFIRMATION/IN_SYNC). N wedged slots then cost ≤ T each *sequentially*, still N·T worst case — but each is a real I/O attempt against a real wedge, which is honest; and the breaker trips after 3 genuine ones and SUSPENDs the rest (`:797`).
+
+**(c) One per-lock sync driver.** No per-lock registry exists: `runtime_data.sync_managers` is per entry (`models.py:153`), `SlotEntityCoordinator._sync_managers` is per slot across locks (`slot_coordinator.py:93`). `project_tick_consolidation` was about state mutations inside the tick, not a driver. Correct long-term shape (the coordinator already owns writes post-#1545) but a rewrite of `sync.py` and ~100 tests; not proportionate to this bug.
+
+**(d) Cancel waiters on trip.** Requires the coordinator to reach into the provider's waiter set and convert `CancelledError` into a non-charging outcome; the look must be exempt or it gives up writes. Once (b)/(e) removes waiter-caused trips, (d) reduces to #1529's guard minus feedback — still refuses on a stale flag against fresh probes. Skip.
+
+## 3. Blast radius
+
+Files: `providers/_base.py` (`_execute_rate_limited`/`_execute_bounded`), `domain/exceptions.py` (new exception), `domain/sync.py:897`, `domain/coordinator.py:698,473`. Tests: `tests/providers/test_base.py:654,684,2708-2860` (wedge suite; `test_a_wedged_operation_stops_blocking_every_other_slot` at `:2801` asserts a waiter eventually gets through — under (e) the sync path would instead be refused, so it must be parameterised on the caller kind), `tests/test_sync.py:866,1214`, `tests/test_coordinator.py:1549,1682`, `tests/properties/test_credential_machine.py`.
+
+Invariants to mutation-test: a refused waiter never calls `note_connectivity_failure`/`_apply_backoff`; the operation deadline begins at acquire (mutation: start it before — a test where waiting consumes the budget yet the op completes); a refused look gives up nothing; a refused slot returns to `OUT_OF_SYNC`, not `SYNCING`/`SUSPENDED`; one-shot callers still wait.
+
+`async_stop` (#1523 secondary): still an unbounded `gather` on in-flight ticks (`sync.py:326-329`, `__init__.py:1219-1222`), bounded only transitively by the op deadline — so unload can take up to T (900 s) today; under (e) at most one holder per lock, so ≤ T, no queue. Not a deadlock, still minutes; separate issue.
+
+## 4. Ordering with #1528 / #1536
+
+Do #1535 first: it defines *where* the outer backstop starts (post-acquire). #1528 then narrows what sits under it (per-exchange bounds inside `func`); its constraint 3 (backstop must not wrap a self-bounding walk) is easier once the wait is out. #1536's "smaller per-operation budget on the interactive path" only makes sense once "operation budget" no longer includes queueing; allocation's throwaway providers have their own `_aio_lock`, so the wait bound doesn't touch them.
+
+## 5. Recommendation
+
+(b)+(e): split the deadline, non-charging `LockBusy`, tick path try-acquire, one-shot paths wait-bounded (`wait_budget = operation_timeout_seconds`, one holder's worth). Note: the main checkout's log shows local commits titled "split the deadline…" and "bound the queue, not just each holder" — I did not read them; they may already be this.
+
+Decisions needed: (1) tick refuses vs. waits bounded; (2) `LockBusy` in the poll: `UpdateFailed` with no backoff, or silently keep last data; (3) should direct service writes wait, and how long; (4) accept N·T sequential honest attempts, or add per-lock "one wedge trips all" (that is (a)/(d) territory — recommend no); (5) whether to fix the `async_stop` unbounded gather now or file separately.</result>
+<usage><subagent_tokens>110702</subagent_tokens><tool_uses>10</tool_uses><duration_ms>288496</duration_ms></usage>
+</task-notification>
+
+---
+
+update and close issues as needed
+
+---
+
+clean up stale branches and worktrees, and switch the main directory to a sensible branch (I guess main?)
+
+---
+
+check the latest on 1538
+
+---
+
+<task-notification>
+<task-id>a4d0229c6f9528b92</task-id>
+<tool-use-id>toolu_01PdQ2EhgoSDVE4wd1DWijB3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a4d0229c6f9528b92.output</output-file>
+<status>completed</status>
+<summary>Agent "Clean-room review of PR #1547 (Matter)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review of PR #1547 (5b07b673) — findings, most severe first
+
+Matter suite: `182 passed in 13.83s`. Runtime dataclass check and SDK enum values verified (details under areas 6 and 2). Nothing HIGH.
+
+### 1. MEDIUM — A landed write is undone when the verify re-read fails (area 3d)
+`providers/matter.py:1086` `await self._verify_credential_landed(slot, user_id, result)` sits after a successful SetCredential and before the push. Its `self._raw_lock_users()` (line 1124) goes through `_invoke_sdk`, which turns any transport error into `LockDisconnected`. Before this PR nothing after the write could raise; now:
+- CREATE path: `_base.py:1818-1835` catches `Exception`, calls `async_delete_user(rollback_user_id)` → ClearUser removes the user **and the PIN that just landed**. Sync tick gets `LockDisconnected` → `note_connectivity_failure()` (charging the lock breaker for a write that succeeded), OUT_OF_SYNC, recreate next tick. Self-heals, but on a flaky Thread link (the U200 environment) every write can become set→delete→set churn plus spurious unreachability accounting.
+- MODIFY path: no rollback, no push; coordinator never learns the write landed; next tick re-MODIFYs the same PIN. Self-heals.
+Compared with `_find_pin_credential_index_for_user` failing: that raises *before* the write, so nothing lands and the retry is clean. This one is introduced.
+Fix: in `_verify_credential_landed`, catch `(LockDisconnected, LockOperationFailed)` from the re-read, log at debug, and return (write unverified but landed, push unreadable as before). Only a *positive* mismatch should raise.
+
+### 2. MEDIUM — A detected misfile is left live on the lock, and the retry disables the slot with the wrong reason (area 4)
+`matter.py:1131-1136` raises `LockOperationFailed` with the credential index in hand but does not clear it. Trace through `domain/sync.py:930-942`: slot breaker `record_failure()`, OUT_OF_SYNC, message logged at INFO only. Next tick: `_find_pin_credential_index_for_user(user_id)` returns None (LCM's user holds nothing) → CREATE → the same PIN now exists under the other user → lock answers `duplicate` → `matter.py:1025` `existing_credential_index is None` → `DuplicateCodeError` → `_disable_slot` with "duplicate detected by lock firmware". So the user sees a *disabled* slot blaming a duplicate, the misfiled PIN keeps opening the door as the other user, and drift detection can never flag it (the other slot reads `unreadable` either way; `_find_pin_credential_index_for_user` for the other user returns its first PIN, so the extra credential is orphaned until that user is deleted). The suspension path via MAX_SYNC_ATTEMPTS is never reached.
+Constructor: `LockOperationFailed(str)` is honoured (`HomeAssistantError(*args)`, `exceptions.py:96`).
+Fix: before raising, `clear_lock_credential(client, node, credential_type="pin", credential_index=credential_index)` (best-effort, log on failure), and put the misfile text in the repair by raising `LockOperationUnsupported`-style or at least logging at WARNING.
+
+### 3. LOW — The check's premise is overstated; `credential_index` is the request, not the lock's answer (area 3a/3b)
+`lock_helpers.py:754-758`: `SetLockCredentialResult(credential_index=credential_index, user_index=_get_attr(set_cred_response, "userIndex"), ...)` — `credential_index` is the helper's local (from its own `GetCredentialStatus` scan or the caller's value), not from `SetCredentialResponse`. The docstring at `matter.py:899-900` ("the credential index it filed the PIN under") and the PR text are wrong on this point. The check still detects "index I now owned by X ≠ U", which is the case that matters; it cannot detect "lock wrote PIN somewhere other than I".
+`SetCredentialResponse.userIndex` (`cluster_defs/DoorLock.py:1026`, nullable): the SDK file carries no spec text, so its semantics are **unverified offline**. My recollection of the spec is that it is null when an existing user was supplied (LCM always supplies one), which would make the `reported_user` guard at line 1113 dead in practice; the mutant-killing test for it (`test_set_credential_answer_naming_another_user_is_a_failed_write`) hand-builds `{"user_index": 5}`, so it validates the branch, not the contract. Note as a caveat, not a defect.
+For MODIFY, `existing_credential_index` already came from `_find_pin_credential_index_for_user(user_id)`, so the owner re-read can only pass unless kModify re-associates — the read buys near-zero information there. Fix: skip the verify on MODIFY, or just fix the docstring.
+
+### 4. LOW — Cheaper and more authoritative primitive available (area 3c)
+`get_lock_users` (`lock_helpers.py:404-430`) walks the `nextUserIndex` chain: one `GetUser` round trip per occupied user, so cost is O(occupied), not O(max_users). On a 5-user U200 that is ~5 Thread round trips per write on top of the 3-4 walks a CREATE already does (`_find_user_index_for_slot`→`async_get_users`; `set_lock_user(None)` scans GetUser 1..first free; `_find_pin_credential_index_for_user`; `set_lock_credential(None)` scans GetCredentialStatus). `get_lock_credential_status(client, node, credential_type="pin", credential_index=I)` (`lock_helpers.py:791`, same module already imported at `matter.py:27-35`) is one round trip and returns `user_index` from `GetCredentialStatusResponse` (`DoorLock.py:1046`) — the lock's own association, which is exactly the question being asked. Fix: import it and replace the `_raw_lock_users()` walk in `_verify_credential_landed`.
+
+### 5. LOW — Non-coordinator reads replace the anchor map and can swallow a later CLEAR (area 1, second half)
+`matter.py:532` `self._slot_by_user_index = slot_by_user_index` replaces wholesale. That is fine when the read feeds the coordinator: `_project_users_to_slots` (`_base.py:1548`) seeds every managed slot `empty()`, so the read itself flips the slot. But `async_get_users` is also called from `_find_user_index_for_slot` (`matter.py:826`, every set_user for *any* slot) and `async_clear_usercode` (`_base.py:1428`), which do not project to the coordinator. Scenario: out-of-band ClearUser of N (slot A); before the event lands, slot B's tick runs a set → read replaces map without N → CLEAR for N arrives → live read: absent; map: absent → ignored (line 1547 debug) → slot A stays "in sync" until the hourly hard refresh, the exact symptom this PR fixes. Window is event-latency wide, so rare; not jprasm's idle-deletion case. Fix that also simplifies: in `async_get_users`, for each `(index, slot)` in the old map whose index is no longer present, call `self._confirm_slot(slot, SlotCredential.empty())` — a read that finds an anchored user gone is itself the observation, independent of event delivery.
+
+### 6. LOW — CLEAR-vs-recreate race (area 1, first half): reachable, self-heals, pre-existing severity for slot A
+Scenario as posed: CLEAR for N (slot A) delayed; a tick re-creates a user for slot B at N (`set_lock_user(None)` takes the lowest free index, so N is the likely pick) → `matter.py:686` `_slot_by_user_index[N] = B` overwrites A → dispatch's live read finds B → `_confirm_slot(B, empty())`. B has nothing pending (Matter returns CONFIRMED → `drop_pending`), so `observe_push` stores empty → B out of sync → tick: `_find_pin_credential_index_for_user` finds B's cred → MODIFY same PIN → push unreadable → in sync, breaker untouched. A is unresolved, as it was before this PR. Preferring the map snapshot would not help: the map already says N→B by then. Needs a sync tick to *create a user* inside the event window, so improbable. No change recommended.
+
+### Areas that yielded nothing
+- **Area 2**: SDK values verified at `cluster_defs/DoorLock.py:173-203` — `kUserIndex=2`, `kPin=6`, `kAdd=0`, `kClear=1`, `kModify=2`; `matter.py:82-87` constants match. Which events ClearUser emits (UserIndex CLEAR only, or one PIN CLEAR per credential too) is **unverified offline** — no spec text in the SDK or matter_server package. The handler copes with either order and with duplicates: both types with `_DATA_OP_CLEAR` resolve to `empty()`; the first dispatch pops the map and confirms; the second finds the user absent and the map empty → ignored. Two concurrent dispatch tasks both start their reads before either confirms, so the recreate-in-between variant is the one in finding 6.
+- **Area 5**: A later ADD/MODIFY for LCM's own write → `_confirm_slot(slot, unreadable())` → `observe_push` with nothing pending → `push_update` no-ops on equal data (`coordinator.py:547`). Own release/rollback path: `async_delete_user` pops the map synchronously after ClearUser returns (`matter.py:858`), before the event task can run; the event then finds neither user nor map entry → ignored. Verified.
+- **Area 6**: `dataclasses.fields(MatterLock)` at runtime: `_slot_by_user_index` is field 24 of 25, `init=False`, `default_factory=dict`; the only no-default fields are the five leading BaseLock ones, so ordering is legal. `__post_init__` (`_base.py:428`) touches only `device_entry`; `eq=False` and the manual `__hash__/__eq__` are unaffected; no `dataclasses.replace`/`copy` on lock instances anywhere (the one `replace(...)` at `_base.py:1817` is on `User`). Precedent: `virtual.py:43` uses the identical pattern.
+
+### Dropped hypotheses
+- "UPDATE-path `_slot_by_user_index[existing_user_index] = slot` (line 650) is a bug" — redundant with the read in `_find_user_index_for_slot`, harmless.
+- "Legacy untagged users never enter the map" — true (line 505 gates on the tag), but they are renamed to tagged form on first write, so the gap closes on its own.</result>
+<usage><subagent_tokens>130836</subagent_tokens><tool_uses>32</tool_uses><duration_ms>381415</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ada0958c85da5356b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/ada0958c85da5356b.output</output-file>
+<status>completed</status>
+<summary>Agent "Test-quality review of PR #1547" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Scope note (read first)
+
+The analysis targets the **working tree**, not just `origin/main...HEAD`. The worktree carries ~270 uncommitted lines beyond `5b07b673` that change the design the questions were written against: `_verify_credential_landed` now takes `client, node`, asks `get_lock_credential_status` for the owner (no user-list re-read, no check of the `SetCredential` answer's `user_index`), swallows a failed status read (write stands), and clears a misfiled credential before raising. `async_get_users` now merges the map instead of replacing it. The test count moved 182 to 185 while I worked, so the tree was being edited concurrently; every mutant below was rerun against the final state (185 passed baseline).
+
+Process disclosure: one command of mine copied a scratch file into `tests/providers/matter/` by accident; I deleted it immediately and `git status` afterwards showed only the pre-existing uncommitted changes. All later probes ran from a symlink mirror at `/tmp/lcm_t1547/tree`. Mutation harness: `/tmp/lcm_t1547/mutant.py` (`MUTANT=&lt;name&gt; PYTHONPATH=/tmp/lcm_t1547 ... -p mutant`).
+
+## Findings, most important first
+
+**1. No real-coordinator test for the #1538 symptom (rating 8).**
+`tests/providers/matter/test_e2e.py` never injects a `LockUserChange` and never reads the in-sync sensor; every event test uses a `MagicMock` coordinator. I wrote and ran the missing test at `/tmp/lcm_t1547/tree/tests/providers/matter/test_probe_e2e.py`; it passes on the working tree: startup tick writes and goes `on`; out-of-band user-level CLEAR for `userIndex 1` with the lock no longer listing user 1 flips the sensor to `off`/`out_of_sync` through `observe_push`; `TICK_INTERVAL*2` later `set_lock_credential` is awaited with `credential_data="1234", credential_index=None, user_index=1`; restoring the user list and advancing brings it back `on`. Fixtures: `lcm_config_entry`, `lock_entity`, `matter_client`, `matter_node`, plus a module-level `matter_mock_helpers` override that sets `get_lock_users` to `lcm:1:slot1`/`lcm:2:slot2` (the shared fixture's untagged names leave the map empty, so the event would be dropped). Injection: pull the callback from `matter_client.subscribe_events.call_args_list` filtered on `NODE_EVENT`, `node_filter == matter_node.node_id`, **and** `callback.__self__ is &lt;LCM lock&gt;`. That last clause is required: Home Assistant's own Matter lock entity is also a class named `MatterLock` and registers an identical `NODE_EVENT` subscription; my first selector picked it and the sensor stayed `on`. Also reset `set_lock_credential` after the startup tick, since the first tick writes.
+
+**2. Read failure during a CLEAR dispatch is untested; mutant survives (rating 7).**
+`custom_components/lock_code_manager/providers/matter.py:1583-1595`: the PR deliberately changed the `except` from `return` to fall through to the map. Mutant `except_returns` (restore the `return`) passes all 185 tests. `test_pin_event_dispatch_swallows_lock_disconnected` (`test_provider.py:1682`) uses an ADD with no prior read, so it cannot see the difference. Bug missed: a flaky `get_lock_users` at the moment of deletion silently reinstates the #1538 symptom. Test: prior read `42 -&gt; lcm:3`, then `get_lock_users` raising `HomeAssistantError` during a user-level CLEAR for 42; assert `observe_push(pin_address(3), SlotCredential.empty())`.
+
+**3. Duplicate-retry result never reaches a verification test; mutant survives (rating 6).**
+`matter.py:1071` assigns the retry's `result`; `:1093` verifies it. Mutant `verify_skips_retry` (verify only after the first send at `:1003`, drop `:1093`) passes all tests: `test_set_credential_duplicate_sync_retries_and_succeeds` (`:3368`) uses the autouse status stub (`user_index: None`) so nothing checks the retry answer. Bug missed: a misfiled PIN from the post-clear retry is pushed as CONFIRMED. Test: sync duplicate, retry answers `credential_index 4`, `_patch_status(user_index=7)`; expect `LockOperationFailed`, `clear_lock_credential` awaited twice (index 10 then 4), no `push_update`. MODIFY vs CREATE needs no separate test: the check is per credential index at one call site.
+
+**4. Live-vs-map disagreement is untested; mutant survives (rating 5).**
+`matter.py:1594-1595`: live resolution is meant to win and the map is only a fallback. Mutant `map_first` (consult and pop the map before reading) passes all tests; no test has a live tagged user whose slot differs from the remembered one. Bug missed: a PIN CLEAR for a user renamed to another slot between reads empties the wrong slot. Test: prior read `42 -&gt; lcm:3`; PIN-level CLEAR while live lists 42 as `lcm:4:Carol`; assert `observe_push(pin_address(4), empty)`.
+
+**5. UPDATE-path map write (`matter.py:657`) is unreachable by tests; mutant survives (rating 4).**
+`_find_user_index_for_slot` calls `async_get_users`, which already records every tagged user, so the line only matters for **legacy adoption** of an untagged user. Mutant `update_no_record` passes. Either add the test (untagged user 5 holding PIN index 3; `async_set_user(User(3, "lcm:3:Carol"))`; then user-level CLEAR for 5 with live `[]` resolves to slot 3) or delete the line as redundant, which is the simpler fix.
+
+**6. Private-state peeks should become event assertions (quality, rating 4).**
+`test_provider.py:1907, 2015, 2135, 2139` read `matter_lock._slot_by_user_index`. Each claim is expressible through a second event and would still kill the mutants (I confirmed `live_pops_too` and `clear_user_keeps` are killed today by these lines): after use, a second CLEAR for 42 leaves `observe_push` at one call; after an ignored ADD, a CLEAR still resolves slot 3; after `async_set_user` creates user 9, a CLEAR for 9 with live `[]` resolves slot 3, and after `async_delete_user(9)` it is ignored.
+
+**7. E2E fixture contradicts itself once the sync manager runs (rating 5).**
+`tests/providers/matter/conftest.py:220-229`: `set_lock_credential` answers `credential_index 1, user_index 1` and `get_lock_credential_status` answers `user_index 1` regardless of the user written. Any write for slot 2 (user 2) is judged misfiled, `clear_lock_credential(credential_index=1)` fires, and the slot logs "Operation failed ... under user 1, not user 2" every tick. The committed e2e tests never advance time so they are silent (0 log hits), but the test in finding 1 trips it on the first advance. Make the status mock echo the `user_index` of the last `set_lock_credential` call.
+
+## Areas that yielded nothing
+
+- Verification robustness in the working tree: `verify_read_raises`, `misfiled_clears_wrong_index` killed by `test_set_credential_unanswered_status_leaves_the_write_standing` and `..._is_cleared_and_failed`. The "re-read raising LockDisconnected" question is now answered by design and by a test.
+- Map merge semantics: `merge_replace` and `untagged_keeps` killed by the two new working-tree tests at `:2017` and `:2059`.
+- Two CLEAR events for one deletion: the second is dropped after the `pop`; idempotent and benign, not worth a test.
+- Reverted-change survivors among the 13 moved `observe_push` assertions: none; the surviving mutants are exactly items 2-5 above.</result>
+<usage><subagent_tokens>166170</subagent_tokens><tool_uses>50</tool_uses><duration_ms>1145707</duration_ms></usage>
+</task-notification>
+
+---
+
+merged and released and responded
+
+---
+
+investigate what's going on in #13078
+
+---
+
+1307
+
+---
+
+<task-notification>
+<task-id>ab477234f0276b675</task-id>
+<tool-use-id>toolu_012fztwPcMinZqVhWdfocQRz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/ab477234f0276b675.output</output-file>
+<status>completed</status>
+<summary>Agent "Clean-room review of PR #1550" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review of PR #1550 (`0800eea2`, worktree `/Users/raman/projects/lock_code_manager/.worktrees/scoped-confirm`)
+
+**Verdict: nothing above LOW.** Tests run: `tests/test_coordinator.py tests/providers/zwave_js` → 232 passed. Driver-side claims verified against the local node-zwave-js checkout at **15.25.2** (master, Jul 4 2026, includes #8927) — not the reporter's 15.28.0; I did not fetch per the constraints.
+
+### Findings (most severe first)
+
+**1. LOW (nit) — dead branch in the rate-limited wrapper.**
+`custom_components/lock_code_manager/providers/_base.py:1290-1300`
+```python
+if slots is None:
+    return await self._execute_rate_limited("refresh", self.async_hard_refresh_codes)
+return await self._execute_rate_limited("refresh", self.async_hard_refresh_codes, slots)
+```
+`_execute_rate_limited(*args)` → `_execute_bounded(*args)` → `func(*args, **kwargs)` (`_base.py:288-313`, `:377`), and every override defaults `slots=None`, so the two branches are behaviorally identical. Fix: a single `_execute_rate_limited("refresh", self.async_hard_refresh_codes, slots)`. (Only observable difference is `AsyncMock.assert_awaited_once_with()` in tests that patch the override.)
+
+**2. LOW (pre-existing, not introduced) — ZHA's confirmation read never names an unmanaged pending slot.**
+`zha.py:378` `scope = self.managed_slots if slots is None else slots`; `zha.py:474-478` hard refresh → `async_get_usercodes()` unscoped → walks managed slots only. A direct write to an unmanaged slot on a ZHA lock is pending but never in `new_data`, so `coordinator.py:477-479` `_fail_overdue([... if address not in new_data])` gives it up at the deadline. Not this PR's change; zwave_js is unaffected because its projection includes "whatever the lock holds." Fix if wanted: ZHA hard refresh could read `managed_slots | slots`.
+
+**3. INFO — `known` → `unreadable` flip within one confirmation on a masking UC lock (pre-existing on drift check).**
+Ordering verified: the solicited `UserCodeCCReport` is persisted in `Driver.ts:4293 persistCCValues(completeMsg.command)` → `UserCodeCC.ts:1610 persistValues` → `persistUserCode` sets `userIdStatus` then `userCode` (`:262-263`), emitting value-updated events **before** the `sendCommand` promise resolves; same websocket stream, so the python client dispatches `_on_uc_value_updated` → `_confirm_slot` → `observe_push` (pops pending, `push_update(known(pending.pin))`) before `get_credential` returns. `_apply_read` (`coordinator.py:226-228`) then sees `pending is None` and takes the read's observation — `unreadable` if the code is masked/withheld. Data changes known→unreadable → `async_set_updated_data`. Sync judges it at `sync.py:478-481`: `if not credential.is_readable: return snapshot.credential_state == self._last_set_pin` → in sync, no charge. No double charge (observe_push already popped), no lost confirmation, `_fail_overdue` list excludes the popped address. Cosmetic only.
+
+### Areas that yielded nothing
+
+- **Item 1 (zwave_js scoped read is a genuine fresh read).** `access_control.py:741-757`: `get_credential` sends `"access_control.get_credential"` with `wait_for_result=True` and awaits; not the `_cached` variant. Driver `AccessControl.ts:947-969`: UC branch `const result = await api.get(slot)` → `UserCodeCC.ts:561-572` sends `UserCodeCCGet`, awaits `UserCodeCCReport`; persistence per finding 3, so the following `async_get_usercodes()` (`get_users_cached` + `get_all_credentials_cached` + `_overlay_uc_occupancy`) reflects the fresh value. Matches `_async_uc_reconcile_value_db`'s docstring (`zwave_js.py:952-975`). **Empty slot**: `UserIDStatus.Available` → `return undefined` (`AccessControl.ts:961-965`) → server `{ credential: undefined }` → JSON drops the key → python `result.get("credential") is None` → returns `None`, no exception, so no LockDisconnected. **Out-of-range slot**: `#assertValidSlot` (`AccessControl.ts:1951-1961`) throws `Argument_Invalid` → `_mapped_zwave_error` (`zwave_js.py:119-122`) → `LockOperationUnsupported`, not `LockDisconnected`; and in `async_confirm_pending_writes` either is `LockCodeManagerError` → `_give_up_overdue` only (no breaker). A pending write for an out-of-range slot cannot exist: `record_write` runs only after `result.changed` (`_base.py:1380-1399`) and the write path runs the same assertion. U3C branch (`#u3cAPI().getCredential(0,type,slot)` + `handleCommand(result)`) also persists, so the ungated scoped read is correct for both CCs.
+- **Item 3.** Positional pass-through confirmed above; `operation_timeout_seconds` unchanged (`OPERATION_TIMEOUT = 600.0`, `_base.py:116`; ZHA scales by `managed_slots`, `zha.py:92-98`). Unscoped callers verified: `__init__.py:519` `lock.async_internal_hard_refresh_codes()` and `coordinator.py:733` drift check.
+- **Item 4.** Only test override is `tests/common.py:260` (updated); `MockLCMPushLock(MockLCMLock)` inherits it. `_DegenerateStubLock` (`test_seam.py:130`) does not override and is never called with a scope; `test_exceptions.py:133` calls unscoped; `test_init.py:1903` patches with `AsyncMock` (accepts any args). No other subclass in `custom_components/` or `tests/`.
+- **Item 5.** `CredentialAddress.user_ref: int` (`credentials.py:166`); `record_write` stores `_checked(address)` which coerces `int(address.user_ref)` (`coordinator.py:87`, `:292`), so the set is `set[int]`. Schlage and Akuvox do not override `supports_push` (base default False), so they take the poller branch and never receive the scope. Push providers (matter, zwave_js, zwave_js_ui, zigbee2mqtt, zha) all use int slots.
+- **Item 6.** Matter: signature only (`matter.py:1629-1640`), body still `return await self.async_get_usercodes()`. ZHA's confirmation read is already bounded to managed slots (not a walk of the lock), so it is not the #1549 problem; and ZHA *cannot* simply pass `slots` through — its `async_get_users(slots)` returns only the scope and the coordinator replaces its data, which would drop every other managed slot (exactly the "narrowed projection" mutant the zwave_js test kills). Ignoring the scope there is correct.
+- `Collection` is imported in all eight touched provider files; `UserCredentialType` already imported in `zwave_js.py`.</result>
+<usage><subagent_tokens>124005</subagent_tokens><tool_uses>36</tool_uses><duration_ms>357877</duration_ms></usage>
+</task-notification>
+
+---
+
+check revie wcomment on 1550
