@@ -2948,6 +2948,44 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
     assert "no answer within" in str(lock.coordinator.last_exception)
 
 
+async def test_the_first_refresh_is_sized_to_a_walk_of_every_managed_slot(
+    hass: HomeAssistant,
+):
+    """
+    The initial read is a walk of the managed slots, and its deadline says so.
+
+    Three managed slots at 0.5 s each is a 1.5 s budget over a 0.5 s floor;
+    the recorded timeout names the budget that was actually applied (#1528).
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "first_refresh_walk", config_entry=config_entry
+    )
+    lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+    lock._min_operation_delay = 0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(type(lock), "operation_timeout_seconds", property(lambda _s: 0.5)),
+        patch.object(type(lock), "per_exchange_budget", 0.5),
+        patch.object(
+            type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
+        ),
+        patch.object(lock, "async_get_usercodes", _never_returns),
+    ):
+        await asyncio.wait_for(
+            lock.async_setup_internal(lock.lock_config_entry), timeout=10
+        )
+
+    assert lock.coordinator is not None
+    assert "no answer within 2s" in str(lock.coordinator.last_exception)
+    await lock.coordinator.async_shutdown()
+
+
 async def test_a_waiter_whose_turn_never_comes_is_busy_not_disconnected(
     hass: HomeAssistant,
 ):
