@@ -3025,3 +3025,108 @@ async def test_the_operation_deadline_starts_when_the_turn_comes(
         result = await asyncio.wait_for(waiter, timeout=5)
 
     assert result == "done"
+
+
+class TestOperationBudget:
+    """The deadline is sized to the exchanges a call walks (issue #1528)."""
+
+    def test_no_declared_budget_means_the_flat_floor(self, hass: HomeAssistant):
+        lock = _make_base_test_lock(hass, "budget_flat")
+        assert lock.per_exchange_budget is None
+        assert lock._operation_budget(1) == base_module.OPERATION_TIMEOUT
+        assert lock._operation_budget(250) == base_module.OPERATION_TIMEOUT
+
+    def test_a_walk_scales_the_floor_and_never_narrows_it(self, hass: HomeAssistant):
+        lock = _make_base_test_lock(hass, "budget_scaled")
+        with patch.object(type(lock), "per_exchange_budget", 90.0):
+            floor = base_module.OPERATION_TIMEOUT
+            assert lock._operation_budget(1) == floor  # one exchange: the floor
+            assert lock._operation_budget(10) == 900.0  # ten slow slots
+            assert lock._operation_budget(0) == floor
+
+    async def test_read_call_sites_say_how_many_exchanges_they_walk(
+        self, hass: HomeAssistant
+    ):
+        lock = _make_base_test_lock(hass, "budget_call_sites")
+        with (
+            patch.object(
+                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2}))
+            ),
+            patch.object(
+                lock, "_execute_rate_limited", AsyncMock(return_value={})
+            ) as run,
+        ):
+            await lock.async_internal_get_usercodes({1, 2, 3})
+            assert run.await_args.kwargs["exchanges"] == 3
+            await lock.async_internal_get_usercodes()
+            assert run.await_args.kwargs["exchanges"] == 2
+            await lock.async_internal_get_occupied_indices({4, 5, 6, 7})
+            assert run.await_args.kwargs["exchanges"] == 4
+            await lock.async_internal_hard_refresh_codes({7})
+            assert run.await_args.kwargs["exchanges"] == 1
+            await lock.async_internal_hard_refresh_codes()
+            assert run.await_args.kwargs["exchanges"] == 2
+
+    async def test_the_operation_deadline_follows_the_walk(self, hass: HomeAssistant):
+        """A three-slot read may take three exchanges; a one-slot write may not."""
+        lock = _make_base_test_lock(hass, "budget_follows_walk")
+        lock._min_operation_delay = 0
+
+        async def _takes_a_while(*_args, **_kwargs):
+            await asyncio.sleep(0.1)
+            return "done"
+
+        with (
+            patch.object(
+                type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+            ),
+            patch.object(type(lock), "per_exchange_budget", 0.05),
+        ):
+            assert (
+                await asyncio.wait_for(
+                    lock._execute_rate_limited("get", _takes_a_while, exchanges=3),
+                    timeout=5,
+                )
+                == "done"
+            )
+            with pytest.raises(LockDisconnected):
+                await asyncio.wait_for(
+                    lock._execute_rate_limited("set", _takes_a_while), timeout=5
+                )
+
+    async def test_a_caller_may_wait_out_a_full_walk_ahead_of_it(
+        self, hass: HomeAssistant
+    ):
+        """A one-slot write queued behind a full read is not cut off by its own small budget.
+
+        Round six of #1529 narrowed a write to the floor and cut it off behind a
+        poll that was still within its own budget; the wait is sized to the
+        longest holder there can be, a walk of every managed slot.
+        """
+        lock = _make_base_test_lock(hass, "budget_wait_full_walk")
+        lock._min_operation_delay = 0
+
+        async def _long_read(*_args, **_kwargs):
+            await asyncio.sleep(0.1)
+            return "read"
+
+        with (
+            patch.object(
+                type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+            ),
+            patch.object(type(lock), "per_exchange_budget", 0.05),
+            patch.object(
+                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
+            ),
+        ):
+            holder = asyncio.create_task(
+                lock._execute_rate_limited("get", _long_read, exchanges=3)
+            )
+            for _ in range(5):
+                await asyncio.sleep(0)
+            result = await asyncio.wait_for(
+                lock._execute_rate_limited("set", AsyncMock(return_value="written")),
+                timeout=5,
+            )
+            await holder
+        assert result == "written"

@@ -10,11 +10,12 @@ polling.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from zigpy.zcl.clusters.closures import DoorLock
 
@@ -87,15 +88,10 @@ class ZHALock(BaseLock):
     _endpoint_id: int | None = field(init=False, default=None)
     _supports_programming_events: bool | None = field(init=False, default=None)
 
-    # -- Properties ----------------------------------------------------------
+    # One ZCL command per slot, each of them slow; see _WORST_CASE_ZCL_COMMAND.
+    per_exchange_budget: ClassVar[float | None] = _WORST_CASE_ZCL_COMMAND
 
-    @property
-    def operation_timeout_seconds(self) -> float:
-        """Scale with the slot walk: one command per slot, each of them slow."""
-        return max(
-            super().operation_timeout_seconds,
-            _WORST_CASE_ZCL_COMMAND * max(len(self.managed_slots), 1),
-        )
+    # -- Properties ----------------------------------------------------------
 
     @property
     def domain(self) -> str:
@@ -382,7 +378,12 @@ class ZHALock(BaseLock):
         slot_states: dict[int, SlotCredential] = {}
         for slot_num in scope:
             try:
-                result = await cluster.get_pin_code(slot_num)
+                # zigpy bounds each attempt and gives up after three, raising
+                # its own TimeoutError inside ~84s; this bound is strictly
+                # above that, so zigpy's word about a slot always comes first
+                # and only a transport that answers nothing at all ends here.
+                async with asyncio.timeout(_WORST_CASE_ZCL_COMMAND) as exchange:
+                    result = await cluster.get_pin_code(slot_num)
                 _LOGGER.debug(
                     "Lock %s slot %s get_pin_code: %s",
                     self.lock.entity_id,
@@ -392,6 +393,23 @@ class ZHALock(BaseLock):
                 parsed = self._parse_pin_response(result)
             except LockDisconnected:
                 raise
+            except TimeoutError:
+                if exchange.expired():
+                    # Not zigpy giving up on one flaky slot -- that is the
+                    # branch below -- but a command nothing ever answered: the
+                    # transport is wedged, and waiting out the rest of the
+                    # walk would only say so later.
+                    raise LockDisconnected(
+                        f"Lock {self.lock.entity_id}: no answer for slot {slot_num} "
+                        f"within {_WORST_CASE_ZCL_COMMAND:.0f}s"
+                    ) from None
+                _LOGGER.debug(
+                    "Lock %s: slot %s timed out on the mesh, marking unreadable",
+                    self.lock.entity_id,
+                    slot_num,
+                )
+                slot_states[slot_num] = SlotCredential.unreadable()
+                continue
             except Exception:
                 _LOGGER.debug(
                     "Lock %s: failed to read slot %s, marking unreadable",
