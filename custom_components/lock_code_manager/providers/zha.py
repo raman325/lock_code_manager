@@ -471,7 +471,9 @@ class ZHALock(BaseLock):
             return None
         return min(int(supported), MAX_SEARCHED_SLOT)
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """Re-read all codes from the lock (no cache to invalidate)."""
         return await self.async_get_usercodes()
 

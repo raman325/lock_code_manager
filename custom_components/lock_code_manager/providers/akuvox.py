@@ -199,7 +199,9 @@ class AkuvoxLock(BaseLock):
         await self._async_tag_unmanaged_users()
         self._tagged_once = True
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """
         Re-tag unmanaged users, then return all codes.
 

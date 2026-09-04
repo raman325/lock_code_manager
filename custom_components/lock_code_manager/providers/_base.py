@@ -1264,18 +1264,35 @@ class BaseLock:
         elif self._last_connection_up is True and not is_up:
             self.unsubscribe_push_updates()
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Re-fetch all codes from the lock and return them in the same shape as async_get_usercodes()."""
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """
+        Re-read from the lock device and return the same shape as async_get_usercodes().
+
+        ``slots`` names the slots whose device state must be re-read; ``None``
+        means everything. The returned projection is never narrowed by it:
+        the coordinator replaces its data with what comes back, so a read
+        must still name every managed slot. A provider that reads the whole
+        device in one call may ignore ``slots``; one that walks the lock a
+        slot at a time should re-read only those, because the coordinator's
+        confirmation read asks about the one or two slots with a write
+        pending, and on a marginal radio link the difference between one
+        command and a walk of the lock is the difference between confirming
+        the write and never confirming it.
+        """
         self._raise_not_implemented(
             "async_hard_refresh_codes",
             "Override this method to re-fetch codes from the lock device.",
         )
 
     @final
-    async def async_internal_hard_refresh_codes(self) -> dict[int, SlotCredential]:
+    async def async_internal_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """Rate-limited wrapper around async_hard_refresh_codes()."""
         return await self._execute_rate_limited(
-            "refresh", self.async_hard_refresh_codes
+            "refresh", self.async_hard_refresh_codes, slots
         )
 
     async def async_set_usercode(
