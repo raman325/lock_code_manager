@@ -1,0 +1,62 @@
+<task-notification>
+<task-id>a662d55374e60e73f</task-id>
+<tool-use-id>toolu_01TDR5Pjm3qERqBLv4Rt9J9S</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/a662d55374e60e73f.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify #1553 round-one fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification of 448e6bfd (PR #1553)
+
+### 1. Scoped refresh walk vs declared exchanges -- VERIFIED
+
+- `providers/zha.py:508-510`: `return await self.async_get_usercodes(None if slots is None else self.managed_slots | frozenset(slots))`
+- `providers/_mqtt.py:111-113`: identical union.
+- `providers/_base.py:1367-1370`: `exchanges=len(self.managed_slots if slots is None else self.managed_slots | set(slots))`
+
+The union flows through unchanged: `_base.py:1635` `scope = self.managed_slots if slots is None else slots` and `_base.py:1640` `await self.async_get_users(slots)`; then zha.py:379 `scope = self.managed_slots if slots is None else slots` walks exactly that set, one `get_pin_code` each. zigbee2mqtt.py:614-616 and zwave_js_ui.py:1250-1252 both hand `self.managed_slots if slots is None else slots` to `_async_read_slots` (_mqtt.py:301, one request per slot). Walk length == declared exchanges for all three scaled providers.
+
+- **zwave_js_ui both API modes**: no `async_hard_refresh_codes` override anywhere in `zwave_js_ui.py` (only `_mqtt.py:99`, `zha.py:498`, `zwave_js.py:1145`, `_base.py:1333` define it), so `BaseMqttLock` covers it. The only mode branch is `if self.supports_push:` refreshing the subscription (zwave_js_ui.py:1239-1247); the read itself is the same `_async_read_slots` in both modes.
+- **zwave_js unaffected**: `zwave_js.py:1160-1168` scoped path calls `get_credential` only for `slots`, then unscoped `async_get_usercodes()` from cache. No `per_exchange_budget` in zwave_js.py, so base default `None` (`_base.py:515`) and `_operation_budget` returns the floor (`_base.py:538-539`); the union declaration is inert there.
+
+### 2. `_WORST_CASE_ZCL_COMMAND = 200.0` -- ISSUE (MEDIUM)
+
+zigpy 2.1.0 `device.py:705-706`: `await send_request(attempt=attempt)` runs **before** `async with asyncio_timeout(timeout):`, so the radio's confirm wait is not covered by the 28 s reply timeout. Per attempt = confirm + 28 s; `DEFAULT_REQUEST_RETRIES = 2` (device.py:56) -&gt; 3 attempts, plus 2 x 0.1 s retry delay. Installed radios:
+
+| radio | confirm constant | 3-attempt ladder | &lt; 200? |
+|---|---|---|---|
+| bellows 1.0.1 | `MESSAGE_SEND_TIMEOUT_BATTERY = 8` (application.py:51) | 108.2 s | yes |
+| zigpy_znp 1.1.0 | `EXTENDED_DATA_CONFIRM_TIMEOUT = 30` (application.py:37) | 174.2 s | yes |
+| zigpy_zigate 0.14.0 | `COMMAND_TIMEOUT = 1.5` | ~88.7 s | yes |
+| **zigpy_deconz 1.0.0** | `SEND_CONFIRM_TIMEOUT = 60` (application.py:51, used :592; no extended variant) | **264.2 s** | **no** |
+| **zigpy_xbee 0.22.0** | `TIMEOUT_TX_STATUS = 120` (application.py:35, used :307) | **444.2 s** | **no** |
+
+On deCONZ/ConBee (a common ZHA radio) and XBee, the bound at zha.py:391 fires while zigpy is still in attempt 3 (deconz) or 2 (xbee), and zha.py:399-409 takes the `exchange.expired()` branch: `raise LockDisconnected(f"... no answer for slot {slot_num} within ...")`, aborting the whole walk as a wedged transport instead of marking one slot unreadable. This is precisely the misclassification the fix set out to prevent. The comment at zha.py:67-76 ("the confirmation wait is the radio's: 8s on bellows, 30s on zigpy-znp ... zigpy's own timeout is always the one to claim a flaky slot") is therefore false for two of the five installed radio libraries. Either raise the figure above 444 s (or 264 s if XBee is deemed out of scope and said so) or narrow the claim in the comment.
+
+### 3. Retuned timing tests -- VERIFIED for the stated mutants, ISSUE (LOW) on the pin's strength
+
+Margins (from `_operation_budget = max(floor, per_exchange * exchanges)`):
+- `test_the_operation_deadline_follows_the_walk`: read budget max(0.05, 0.9) = 0.9 vs 0.6 s call -&gt; 0.3 s clear; write budget max(0.05, 0.3) = 0.3 vs 0.6 s call -&gt; cut off 0.3 s before the call would finish.
+- `test_a_caller_may_wait_out_a_full_walk_ahead_of_it`: wait budget max(0.05, 1.0 x 3) = 3.0 vs 0.2 s hold -&gt; 2.8 s clear.
+
+Stability: 5 consecutive runs, `2 passed in 1.24s` each time.
+
+Mutants (applied via an out-of-tree pytest plugin in /tmp, no worktree edits):
+- A `_operation_budget` returns the floor: both tests FAIL (test 1 as intended).
+- B `wait_budget = self.operation_timeout_seconds`: test 2 FAILS (LockBusy), test 1 passes as expected.
+- **C `wait_budget = self._operation_budget(exchanges)` (wait sized to the caller's own budget -- the round-six regression the docstring names): both tests PASS. Survives.**
+
+Root cause: the test comment at test_base.py ("a one-slot write's own budget stays 0.05 s") is wrong. With `per_exchange_budget = 1.0` and `exchanges=1`, the write's own budget is `max(0.05, 1.0) = 1.0 s`, which exceeds the 0.2 s hold, so a wait sized to the write's own budget also succeeds. Before the retune (`per_exchange 0.05`, hold 0.1) the own-budget was 0.05 &lt; 0.1 and mutant C would have died. The retune traded away that pin. Fix: keep `1 x per_exchange &lt; hold &lt; N x per_exchange`, e.g. `per_exchange 0.2`, `managed = {1,2,3}` (wait 0.6), hold 0.4, own budget 0.2.
+
+### 4. `test_scoped_hard_refresh_still_names_every_managed_slot` -- VERIFIED
+
+Fixture managed slots are `{1, 2}` (tests/providers/zha/conftest.py:50-51), and 7 is not among them, so `managed | {7}` is strictly larger than both alternatives. Ran the test under two ZHA mutants:
+- D ignore scope (`async_get_usercodes()`): `assert {1, 2} == {1, 2, 7}` -&gt; FAILS
+- E scope only (`async_get_usercodes(slots)`): `assert {7} == {1, 2, 7}` -&gt; FAILS
+
+It distinguishes all three; not a weaker pin than intended.
+
+### Extra findings
+
+None above LOW beyond the two ISSUEs above. Minor: under mutant B pytest reported `1 error` in teardown from the orphaned `holder` task when the write raised before `await holder`; that is only a test-hygiene artifact of the failing path and not a defect in the shipped code.</result>
+<usage><subagent_tokens>90728</subagent_tokens><tool_uses>17</tool_uses><duration_ms>301047</duration_ms></usage>
+</task-notification>
