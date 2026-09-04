@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "b452158d23cd",
+  "strategy": "manual-commit",
+  "branch": "fix/1528-budget-per-exchange",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/test_base.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b4/52158d23cd/0/metadata.json",
+      "transcript": "/b4/52158d23cd/0/full.jsonl",
+      "compact_transcript": "/b4/52158d23cd/0/transcript.jsonl",
+      "content_hash": "/b4/52158d23cd/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 9899,
+    "cache_read_tokens": 1479192,
+    "output_tokens": 8610,
+    "api_call_count": 2
+  }
+}
