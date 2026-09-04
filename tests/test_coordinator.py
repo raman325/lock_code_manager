@@ -1520,6 +1520,25 @@ async def test_confirmation_read_on_a_push_provider_hard_refreshes(
     assert push_coordinator.data[pin_address(1)] == SlotCredential.known("9999")
 
 
+async def test_confirmation_read_on_a_push_provider_asks_only_about_the_pending_slots(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """The confirmation read is scoped to the pending slots; the drift read is not.
+
+    On a lock that drops half its responses, re-reading one slot completes
+    about half the time and a walk of the whole lock essentially never; the
+    scope is what lets a write on such a lock ever confirm (issue #1549).
+    """
+    reads = push_lock.service_calls["hard_refresh_codes"]
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    push_coordinator.record_write(pin_address(3), "3333", believed=True)
+    await push_coordinator.async_confirm_pending_writes()
+    assert reads[-1] == ({1, 3},)
+
+    await push_coordinator._async_drift_check(dt_util.utcnow())
+    assert reads[-1] == (None,)
+
+
 async def test_confirmation_read_noop_without_pending(
     push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator
 ) -> None:

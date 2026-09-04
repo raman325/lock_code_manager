@@ -257,9 +257,11 @@ class MockLCMLock(BaseLock):
         self.service_calls["unload"].append((remove_permanently,))
         await super().async_unload(remove_permanently)
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Perform hard refresh of all codes."""
-        self.service_calls["hard_refresh_codes"].append(())
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """Perform hard refresh; records the scope it was asked for."""
+        self.service_calls["hard_refresh_codes"].append((slots,))
         return await self.async_get_usercodes()
 
     async def async_set_usercode(

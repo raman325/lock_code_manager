@@ -454,7 +454,11 @@ class LockUsercodeUpdateCoordinator(
             return
         try:
             if self._is_push:
-                raw = await self._lock.async_internal_hard_refresh_codes()
+                # Only the slots with a write pending need re-reading from the
+                # device; on a lossy link that is what lets the read complete.
+                raw = await self._lock.async_internal_hard_refresh_codes(
+                    {address.user_ref for address in self._pending}
+                )
             else:
                 raw = await self._lock.async_internal_get_usercodes(
                     self._lock.managed_slots

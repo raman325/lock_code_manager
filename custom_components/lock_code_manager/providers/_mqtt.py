@@ -103,7 +103,9 @@ class BaseMqttLock(BaseLock):
         """
         return timedelta(hours=1)
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """
         Perform hard refresh and return all codes.
 

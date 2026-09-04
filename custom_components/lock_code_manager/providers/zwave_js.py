@@ -1142,11 +1142,30 @@ class ZWaveJSLock(BaseLock):
             f"refusing the code."
         )
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Re-read users AND credentials fresh from the device, then project to slots."""
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """
+        Re-read from the device, then project to slots.
+
+        Unscoped, this re-reads every user and credential: a walk of the
+        whole lock, one command per slot on a User Code CC lock. Given
+        ``slots`` it re-reads only those, one command each. That is what the
+        coordinator's confirmation read needs, and on a lock dropping half
+        its responses it is the difference between a read that completes
+        about half the time and one that essentially never does (issues
+        #1397 and #1307). The projection is unscoped either way, so the
+        answer still names every managed slot.
+        """
         try:
-            await self.node.access_control.get_users()
-            await self.node.access_control.get_all_credentials()
+            if slots is None:
+                await self.node.access_control.get_users()
+                await self.node.access_control.get_all_credentials()
+            else:
+                for slot in slots:
+                    await self.node.access_control.get_credential(
+                        UserCredentialType.PIN_CODE, slot
+                    )
         except BaseZwaveJSServerError as err:
             raise _mapped_zwave_error(err, "hard refresh failed") from err
         except HomeAssistantError as err:

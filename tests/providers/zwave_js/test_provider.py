@@ -357,6 +357,53 @@ async def test_hard_refresh_codes_calls_access_control(
     assert 2 in codes
 
 
+async def test_hard_refresh_codes_scoped_reads_only_those_slots(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """Given slots, the refresh re-reads one credential per slot and nothing else.
+
+    The projection stays unscoped: every managed slot is still in the
+    answer, so the coordinator can replace its data with it (issue #1549).
+    Slot 99 is managed but the fixture device knows nothing about it, so
+    only the unscoped projection can put it there.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {CONF_NAME: "User 1"}, "99": {CONF_NAME: "User 99"}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+
+    codes = await zwave_js_lock.async_hard_refresh_codes({3, 5})
+
+    mock_access_control.get_users.assert_not_called()
+    mock_access_control.get_all_credentials.assert_not_called()
+    assert {
+        call.args for call in mock_access_control.get_credential.await_args_list
+    } == {(UserCredentialType.PIN_CODE, 3), (UserCredentialType.PIN_CODE, 5)}
+    assert 1 in codes
+    assert codes[99] == SlotCredential.empty()
+
+
+async def test_hard_refresh_codes_scoped_maps_transport_error_to_lock_disconnected(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A single-slot re-read that fails surfaces the same way as the walk."""
+    mock_access_control.get_credential.side_effect = FailedZWaveCommand(
+        "cmd", 1, "node gone"
+    )
+
+    with pytest.raises(LockDisconnected, match="hard refresh failed"):
+        await zwave_js_lock.async_hard_refresh_codes({3})
+
+
 async def test_hard_refresh_codes_maps_transport_error_to_lock_disconnected(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
