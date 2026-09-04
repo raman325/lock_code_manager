@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "6e8c963ca649",
+  "strategy": "manual-commit",
+  "branch": "fix/1536-allocation-progress",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/6e/8c963ca649/0/metadata.json",
+      "transcript": "/6e/8c963ca649/0/full.jsonl",
+      "compact_transcript": "/6e/8c963ca649/0/transcript.jsonl",
+      "content_hash": "/6e/8c963ca649/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 783793,
+    "cache_read_tokens": 12812846,
+    "output_tokens": 72583,
+    "api_call_count": 18
+  }
+}
