@@ -711,10 +711,11 @@ class LockUsercodeUpdateCoordinator(
             data = await self._lock.async_internal_get_usercodes()
         except LockBusy as err:
             # Another operation had the lock's turn for the whole wait. Not the
-            # lock's word: no backoff. Keep what we have; before anything has
-            # been read there is nothing to keep, and a false success would
-            # hide that (#1268).
-            if self.data:
+            # lock's word: no backoff either way. Keep what we have, unless
+            # nothing has ever been read (a false first success would hide
+            # that, #1268) or the lock is in backoff (a returned value would
+            # read as "recovered" while the breaker still says otherwise).
+            if self._reached_once and not self._lock_breaker.tripped:
                 return self.data
             raise UpdateFailed from err
         except LockCodeManagerError as err:

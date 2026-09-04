@@ -2992,26 +2992,36 @@ async def test_the_operation_deadline_starts_when_the_turn_comes(
     """
     Waiting one's turn does not eat into the budget for the call itself.
 
-    Holder takes 0.2 s, the waiter's call takes 0.2 s, the budget is 0.3 s:
-    one deadline over both would cut the waiter off; a deadline that starts
-    at acquire lets it finish.
+    The holder is released by the test after 0.6 s and the waiter's own call
+    takes 0.6 s, against a budget of 1.0 s: one deadline over both legs would
+    cut the waiter off at 1.2 s; a deadline that starts at acquire lets it
+    finish, and each leg sits 0.4 s inside the budget so loop jitter cannot
+    decide the outcome.
     """
     lock = _make_base_test_lock(hass, "deadline_at_acquire")
     lock._min_operation_delay = 0
+    let_go = asyncio.Event()
+
+    async def _holds_until_released(*_args, **_kwargs):
+        await let_go.wait()
+        return "held"
 
     async def _slow(*_args, **_kwargs):
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.6)
         return "done"
 
     with patch.object(
-        type(lock), "operation_timeout_seconds", property(lambda _s: 0.3)
+        type(lock), "operation_timeout_seconds", property(lambda _s: 1.0)
     ):
-        holder = asyncio.create_task(lock._execute_rate_limited("set", _slow))
+        holder = asyncio.create_task(
+            lock._execute_rate_limited("set", _holds_until_released)
+        )
         for _ in range(5):
             await asyncio.sleep(0)
-        result = await asyncio.wait_for(
-            lock._execute_rate_limited("get", _slow), timeout=5
-        )
-        await holder
+        waiter = asyncio.create_task(lock._execute_rate_limited("get", _slow))
+        await asyncio.sleep(0.6)
+        let_go.set()
+        assert await asyncio.wait_for(holder, timeout=5) == "held"
+        result = await asyncio.wait_for(waiter, timeout=5)
 
     assert result == "done"

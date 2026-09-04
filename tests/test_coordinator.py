@@ -2002,3 +2002,27 @@ async def test_drift_check_finding_the_lock_busy_applies_no_backoff(
         await push_coordinator._async_drift_check(dt_util.utcnow())
     assert push_coordinator._lock_breaker.failure_count == 0
     assert push_coordinator.unreachable is False
+
+
+async def test_poll_finding_the_lock_busy_during_backoff_is_not_a_recovery(
+    poll_lock: MockLCMLock, poll_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """While the breaker says the lock is in backoff, a busy poll changes nothing.
+
+    Returning data would flip the coordinator to "recovered" with the
+    breaker still tripped; failing without backoff keeps both honest.
+    """
+    await poll_coordinator.async_refresh()
+    for _ in range(BACKOFF_FAILURE_THRESHOLD):
+        poll_coordinator._apply_backoff()
+    assert poll_coordinator._lock_breaker.tripped
+    failures = poll_coordinator._lock_breaker.failure_count
+
+    with (
+        patch.object(
+            poll_lock, "async_get_usercodes", AsyncMock(side_effect=LockBusy("busy"))
+        ),
+        pytest.raises(UpdateFailed),
+    ):
+        await poll_coordinator.async_get_usercodes()
+    assert poll_coordinator._lock_breaker.failure_count == failures

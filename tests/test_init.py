@@ -67,6 +67,7 @@ from custom_components.lock_code_manager.domain.config import (
     build_slot_device_identifier,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
+    LockBusy,
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
@@ -2082,19 +2083,26 @@ async def test_update_listener_slot_removal_handles_missing_and_failing_coordina
     assert "slot 2 coordinator stop raised" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "release_error",
+    [LockDisconnected("simulated disconnect"), LockBusy("simulated busy")],
+    ids=["disconnected", "busy"],
+)
 async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     hass: HomeAssistant,
     mock_lock_config_entry,
     caplog: pytest.LogCaptureFixture,
+    release_error: Exception,
 ):
     """Slot removal releases lock-side state per (lock, slot) pair, tolerating failures.
 
     Covers two edge cases in the ``pairs_removed`` loop of
     ``async_update_listener``: a lock still listed in config but absent
     from ``runtime_data.locks`` (e.g. it failed setup) is skipped rather
-    than raising, and a ``LockDisconnected``/``LockOperationFailed`` from a
-    present lock's ``async_release_managed_slot`` is logged as a warning
-    without blocking the rest of the teardown.
+    than raising, and any provider error from a present lock's
+    ``async_release_managed_slot`` -- unreachable, or merely busy behind
+    another operation -- is logged as a warning without blocking the rest of
+    the teardown.
     """
     config = copy.deepcopy(BASE_CONFIG)
     entry = MockConfigEntry(
@@ -2121,7 +2129,7 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     with patch.object(
         lock_1,
         "async_release_managed_slot",
-        AsyncMock(side_effect=LockDisconnected("simulated disconnect")),
+        AsyncMock(side_effect=release_error),
     ):
         new_config = copy.deepcopy(config)
         new_config[CONF_SLOTS].pop(1)
