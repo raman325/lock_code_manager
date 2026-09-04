@@ -69,14 +69,15 @@ OPERATION_SOURCE_NAMES: dict[int, str] = {
 # confirmation and then `APS_REPLY_TIMEOUT_EXTENDED` (28s) for the reply --
 # every battery deadbolt is an end device -- and the confirmation wait is the
 # radio library's: 8s on bellows, 30s on zigpy-znp, 60s on zigpy-deconz, 120s
-# on zigpy-xbee. Three attempts on XBee is 3 x (120 + 28) = 444s. This sits
-# above every one of them with slack for zigpy's retry delays and its
-# per-device concurrency gate, so zigpy's own timeout is always the one to
+# on zigpy-xbee. Three attempts on XBee is 3 x (120 + 28) = 444s, and zigpy's
+# per-device concurrency gate (two in flight) can hold the command behind one
+# more attempt before it is even sent, so the honest worst case is nearer
+# 592s. This sits above that, so zigpy's own timeout is always the one to
 # claim a flaky slot and the bound here only ever claims a command nothing
-# answered at all. Slow to notice a wedged transport, then -- but wrong about
-# a flaky slot would suspend a working lock, and slow is still one exchange
-# rather than a walk of the whole lock.
-_WORST_CASE_ZCL_COMMAND = 480.0
+# answered at all. Slow to notice a wedged transport, then -- but being wrong
+# about a flaky slot would suspend a working lock, and slow is still one
+# exchange rather than a walk of the whole lock.
+_WORST_CASE_ZCL_COMMAND = 720.0
 
 
 @dataclass(repr=False, eq=False)

@@ -50,6 +50,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
     User,
+    WriteResult,
     pin_address,
 )
 from custom_components.lock_code_manager.domain.events import CredentialOperation
@@ -3106,6 +3107,36 @@ class TestOperationBudget:
             assert run.await_args.kwargs["exchanges"] == 3
             await lock.async_internal_hard_refresh_codes()
             assert run.await_args.kwargs["exchanges"] == 2
+
+    @pytest.mark.parametrize("native_users", [False, True], ids=["slots", "users"])
+    async def test_write_call_sites_say_how_many_exchanges_they_walk(
+        self, hass: HomeAssistant, native_users: bool
+    ):
+        """A native-user provider names the user and reads them back; that is a walk.
+
+        Inert while the providers that model users declare no per-exchange
+        budget, and declared anyway: the moment one does, an under-declared
+        write would be cut off partway through a walk the lock was answering.
+        """
+        lock = _make_base_test_lock(hass, f"budget_writes_{native_users}")
+        with (
+            patch.object(
+                type(lock), "supports_native_users", property(lambda _s: native_users)
+            ),
+            patch.object(
+                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
+            ),
+            patch.object(
+                lock,
+                "_execute_rate_limited",
+                AsyncMock(return_value=WriteResult.NO_CHANGE),
+            ) as run,
+        ):
+            await lock.async_internal_set_usercode(1, "1234")
+            assert run.await_args.kwargs["exchanges"] == (3 if native_users else 1)
+            run.return_value = False
+            await lock.async_internal_clear_usercode(1)
+            assert run.await_args.kwargs["exchanges"] == (4 if native_users else 1)
 
     async def test_the_operation_deadline_follows_the_walk(self, hass: HomeAssistant):
         """A three-slot read may take three exchanges; a one-slot write may not."""

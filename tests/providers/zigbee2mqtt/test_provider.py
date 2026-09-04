@@ -1248,3 +1248,29 @@ def test_mqtt_bridges_declare_per_exchange_budgets_above_their_own_bounds(
         assert (
             z2m_lock._operation_budget(199) == 199 * Zigbee2MQTTLock.per_exchange_budget
         )
+
+
+async def test_scoped_hard_refresh_on_a_bridge_still_names_every_managed_slot(
+    z2m_lock: Zigbee2MQTTLock,
+) -> None:
+    """A bridge has no cache to project from, so a scoped refresh walks managed too.
+
+    The coordinator replaces its data with the answer, so the answer has to
+    name every managed slot; and the deadline the base declares must be the
+    walk this actually makes (#1528).
+    """
+    asked: list[frozenset[int]] = []
+
+    async def _capture(self, code_slots, read_slot, *, transport_failure):
+        asked.append(frozenset(code_slots))
+        return []
+
+    with (
+        patch.object(
+            type(z2m_lock), "managed_slots", property(lambda _self: frozenset({1, 2}))
+        ),
+        patch.object(BaseMqttLock, "_async_read_slots", _capture),
+    ):
+        await z2m_lock.async_hard_refresh_codes({7})
+
+    assert asked == [frozenset({1, 2, 7})]

@@ -1444,6 +1444,9 @@ class BaseLock:
             code_slot,
             usercode,
             pre_execute=_pre_execute_checks,
+            # A native-user provider may name the user, write the credential
+            # and roll the user back again: three exchanges, not one.
+            exchanges=3 if self.supports_native_users else 1,
             name=name,
             source=source,
         )
@@ -1578,6 +1581,12 @@ class BaseLock:
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
+            # A native-user provider reads every user first to find whose
+            # credential this is; on a provider that walks the lock that is one
+            # exchange per managed slot on top of the clear itself.
+            exchanges=(
+                len(self.managed_slots) + 1 if self.supports_native_users else 1
+            ),
         )
         # A clear that ran supersedes any write pending on this slot. One that
         # raised superseded nothing: the write stays pending, so a believed
