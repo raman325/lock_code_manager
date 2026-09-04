@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "96782dc45e4e",
+  "strategy": "manual-commit",
+  "branch": "fix/1536-allocation-progress",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/domain/allocation.py",
+    "custom_components/lock_code_manager/domain/services.py",
+    "custom_components/lock_code_manager/domain/slot_assignment.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/common.py",
+    "tests/providers/virtual/test_e2e.py",
+    "tests/providers/zigbee2mqtt/test_e2e.py",
+    "tests/providers/zwave_js_ui/test_e2e.py",
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/96/782dc45e4e/0/metadata.json",
+      "transcript": "/96/782dc45e4e/0/full.jsonl",
+      "compact_transcript": "/96/782dc45e4e/0/transcript.jsonl",
+      "content_hash": "/96/782dc45e4e/0/content_hash.txt",
+      "prompt": "/96/782dc45e4e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 19303,
+    "cache_read_tokens": 3444830,
+    "output_tokens": 11267,
+    "api_call_count": 4
+  }
+}

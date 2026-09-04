@@ -1,0 +1,57 @@
+<task-notification>
+<task-id>aef6484a6e416e6c5</task-id>
+<tool-use-id>toolu_01NohkkzBz87gMusEYmh68Z2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/aef6484a6e416e6c5.output</output-file>
+<status>completed</status>
+<summary>Agent "Clean-room review of PR #1553" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. Everything below was verified in `/Users/raman/projects/lock_code_manager/.worktrees/budget-1528` (commits e27640b1 + d542635c); the permitted subset ran green (563 passed, 2 skipped) and the six timing tests passed 6/6 repeats.
+
+## Findings, most severe first
+
+### 1. HIGH — scoped hard refresh declares `len(slots)` but ZHA/MQTT walk every managed slot (constraint 3 recreated)
+
+`providers/_base.py:1354-1361`:
+```python
+return await self._execute_rate_limited(
+    "refresh", self.async_hard_refresh_codes, slots,
+    exchanges=len(self.managed_slots if slots is None else slots),
+)
+```
+But both scaled providers drop `slots`:
+- `providers/zha.py:492-496`: `return await self.async_get_usercodes()` (unscoped → `scope = self.managed_slots`, zha.py:377)
+- `providers/_mqtt.py:99-109` (inherited by zwave_js_ui and zigbee2mqtt): `return await self.async_get_usercodes()`
+
+The caller that exercises this is the write-confirmation read, `domain/coordinator.py:459-461`: `await self._lock.async_internal_hard_refresh_codes({address.user_ref for address in self._pending})` on every push provider (ZHA, z2m, zwave-js-ui). Scenario: 10-slot ZHA entry, one pending write → declared 1 exchange → budget `max(600, 90)` = 600 s, actual walk 10 × ~84 s = 840 s on a lock answering every command → `LockDisconnected` mid-walk. Before this PR the override gave 900 s; this is a regression and exactly the failure the PR body says is "arithmetically never" possible. Fix: forward the scope (`return await self.async_get_usercodes(slots)`) in both providers — which is also what the coordinator's comment "Only the slots with a write pending need re-reading" already assumes — or, minimally, declare `exchanges=len(self.managed_slots)` at that call site.
+
+### 2. HIGH — `_WORST_CASE_ZCL_COMMAND = 90` is not strictly above zigpy's worst case (constraint 1)
+
+`providers/zha.py:67-71` claims "ONE ZCL command ... can legitimately take ~84s" and zha.py:381-384 "raising its own TimeoutError inside ~84s". The 28 s × 3 arithmetic covers only the reply wait. In zigpy `device.py:669-706` each attempt is `_limit_concurrency` → `send_request` → `asyncio_timeout(timeout): await future`; the send and the concurrency gate sit outside the 28 s bound:
+- bellows `zigbee/application.py:51,1134`: send-confirm wait `MESSAGE_SEND_TIMEOUT_BATTERY = 8` → worst 3 × (8 + 28) = 108 s
+- zigpy_znp `zigbee/application.py:37`: `EXTENDED_DATA_CONFIRM_TIMEOUT = 30` → 3 × (30 + 28) = 174 s, and even the all-delivery-failed case is 3 × 30 = 90 s + 2 × 0.1 retry delay &gt; 90
+- `device.py:54,122`: `MAX_DEVICE_CONCURRENCY = 2`; the semaphore wait is unbounded, so two in-flight ZHA reads to the same sleepy lock delay LCM's command before it is even sent.
+
+When zigpy's ladder outruns 90 s, the wrapper's `exchange.expired()` is True and one flaky slot becomes a whole-walk `LockDisconnected` (zha.py:397-405) — the #1529 misclassification, now reachable on Z-Stack coordinators. Before the PR zigpy's `TimeoutError` fell into `except Exception` → unreadable. Fix: size the wrapper from the real ladder (retries × (confirm timeout + `APS_REPLY_TIMEOUT_EXTENDED`) + slack, ≈ 200 s) and state the components in the comment; keep `per_exchange_budget` equal to it so the walk arithmetic still holds.
+
+### 3. LOW — nested-timeout attribution is correct; `exchange` is always bound
+
+Verified empirically (`/tmp/lcm_r1553/nested.py`, Python 3.14): an inner `TimeoutError` leaves the outer `expired()` False; an outer expiry yields True; and the operation-level deadline propagates as `CancelledError` past the per-slot wrapper without being claimed. `asyncio.TimeoutError is TimeoutError` → True. In the `try` at zha.py:379-395 the only statement before the `except` clauses that can raise `TimeoutError` is inside `async with ... as exchange`, so no `NameError` path. Nothing to fix.
+
+### 4. LOW — wait budget can be shorter than the longest holder by the pending-unmanaged slots
+
+`_base.py:334`: `wait_budget = self._operation_budget(max(len(self.managed_slots), 1))`, while the scoped poll-provider confirmation read (`coordinator.py:463-465`) walks `managed | pending`, and (finding 1) the push-provider one walks all managed anyway. Overshoot bounded by the pending unmanaged slots × per-exchange; result is `LockBusy`, which per #1535 is not a recovery signal. Acceptable; worth one sentence in the comment. Allocation is not a concern: `domain/allocation.py:123` returns `lock_cls(hass, dev_reg, ent_reg, lock_config_entry, lock_entry)`, a fresh instance whose `_aio_lock` is an instance field (`_base.py:237`, `default_factory=asyncio.Lock`), so the 40-index scan never holds the live instance's mutex.
+
+### 5. LOW — timing-test margins are 50 ms
+
+`test_a_caller_may_wait_out_a_full_walk_ahead_of_it` (tests/providers/test_base.py:3140-3170): holder budget 0.15 vs hold 0.10; mutant kill (wait = floor 0.05 vs hold 0.10). `test_the_operation_deadline_follows_the_walk`: 0.15 vs 0.10. Under load the holder is cut off and `await holder` re-raises `LockDisconnected`, so the test fails loudly rather than passing for the wrong reason — flaky, not false-green. Suggest decoupling the two knobs: floor 0.05, `per_exchange_budget` 1.0 (holder/wait budget 3.0), hold 0.2 s — mutant still gets `LockBusy` (0.05 &lt; 0.2) with 2.8 s slack on the holder. `test_the_first_refresh...`: `f"{1.5:.0f}"` → `"2"` and `f"{0.5:.0f}"` → `"0"` confirmed, so the floor mutant produces "no answer within 0s" and is killed; the inner `_execute_rate_limited` deadline is also 1.5 s but starts later, so the refresh path's message is the one recorded.
+
+## Areas that yielded nothing
+
+- Item 1 read counts other than the hard refresh: ZHA `scope = slots` (zha.py:377), MQTT `_async_read_slots` iterates exactly `sorted(code_slots)` (`_mqtt.py:297`), zwave_js_ui passes `self.managed_slots if slots is None else slots` (zwave_js_ui.py:1251-1252) with no `managed | slots` widening; occupancy scan `len(wanted)` matches; zwave_js/Matter have `per_exchange_budget = None` → floor, unchanged from before.
+- Item 4 inner bounds: zwave_js_ui has only `API_CALL_TIMEOUT = 60` (`wait_for` at 1123) plus `SUBSCRIBE_SETTLE_DELAY = 1.0` (61 &lt; 70); the pre-walk `_async_ensure_node_subscription` does one subscribe, no API round trip; zigbee2mqtt has only the `wait_for(future, timeout=10.0)` at 650 (&lt; 15). No other `wait_for`/`asyncio.timeout` in `_mqtt.py`.
+- Item 5: no remaining reader of `_per_slot_read_budget`; the only `operation_timeout_seconds` references outside `_base.py` are tests asserting it equals the floor; AGENTS.md and docs/ have no mention of either symbol.
+- Item 6 ordering/arithmetics of `_operation_budget`: `max(floor, per × n)` with `n = 0` → floor; `ClassVar` patching in tests works on `MockLCMLock`.
+
+Nothing else above LOW. Scratch files: `/tmp/lcm_r1553/nested.py`, `/tmp/lcm_r1553/mutant_wait.py`. No worktree files modified.</result>
+<usage><subagent_tokens>111239</subagent_tokens><tool_uses>28</tool_uses><duration_ms>356368</duration_ms></usage>
+</task-notification>
