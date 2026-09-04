@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "58881c800439",
+  "strategy": "manual-commit",
+  "branch": "fix/1528-budget-per-exchange",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zha.py",
+    "tests/providers/test_base.py",
+    "tests/providers/zha/test_provider.py",
+    "tests/providers/zigbee2mqtt/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/58/881c800439/0/metadata.json",
+      "transcript": "/58/881c800439/0/full.jsonl",
+      "compact_transcript": "/58/881c800439/0/transcript.jsonl",
+      "content_hash": "/58/881c800439/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 16852,
+    "cache_read_tokens": 4009729,
+    "output_tokens": 13888,
+    "api_call_count": 5
+  }
+}
