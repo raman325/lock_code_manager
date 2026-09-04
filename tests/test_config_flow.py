@@ -13,10 +13,17 @@ from pytest_homeassistant_custom_component.common import (
     async_capture_events,
 )
 
-from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_USER,
+    OptionsFlowManager,
+)
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import EVENT_DATA_ENTRY_FLOW_PROGRESS_UPDATE
+from homeassistant.data_entry_flow import (
+    EVENT_DATA_ENTRY_FLOW_PROGRESS_UPDATE,
+    UnknownFlow,
+)
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.config_flow import _check_common_slots
@@ -2534,8 +2541,11 @@ async def test_ui_allocation_runs_as_a_progress_step(
 
     assert result["type"] == "form"
     assert result["step_id"] == "code_slot"
-    # One lock: reported before it is asked and once it has answered.
-    assert [event.data["progress"] for event in updates] == [0.0, 1.0]
+    # One lock, one pass: reported before the lock is asked, once it has
+    # answered -- a pass takes half of what is left, since how many passes
+    # there will be is not knowable in advance -- and once the whole
+    # allocation is done.
+    assert [event.data["progress"] for event in updates] == [0.0, 0.5, 1.0]
 
 
 async def test_options_allocation_reads_only_numbers_the_entry_does_not_hold(
@@ -2543,8 +2553,8 @@ async def test_options_allocation_reads_only_numbers_the_entry_does_not_hold(
 ) -> None:
     """Numbers this entry already holds are taken by tenure and are not read (#1536).
 
-    Adding one user to an entry holding 1-3 asks the lock about 4 only; the
-    newcomer is numbered 4 and nobody moves.
+    Adding one user to an entry holding 1-3 asks the lock about 4 and nothing
+    else; the newcomer is numbered 4 and nobody moves.
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -2583,8 +2593,7 @@ async def test_options_allocation_reads_only_numbers_the_entry_does_not_hold(
         )
 
     assert result["type"] == "create_entry"
-    assert asked and all(not scope & {1, 2, 3} for scope in asked)
-    assert 4 in set().union(*asked)
+    assert asked == [frozenset({4})]
     assert result["data"][CONF_SLOT_ASSIGNMENT] == {
         "user 1": 1,
         "user 2": 2,
@@ -2646,3 +2655,134 @@ async def test_reentering_the_step_while_the_read_runs_shows_progress_again(
     assert result["type"] == "form"
     assert result["step_id"] == "code_slot"
     assert len(reads) == 1
+
+
+async def test_an_entry_can_still_add_a_user_when_its_own_users_nearly_fill_the_lock(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Numbers this entry's own users hold must not push the window past the lock.
+
+    Ten users on a twelve-slot lock, adding an eleventh: the ten numbers are
+    theirs by tenure, so only slot 11 has to be free. Counting them as though
+    a stranger held them reached for twenty-one numbers to place eleven
+    people and refused an entry that was merely full of itself (#1536).
+    """
+    users = {
+        f"User {n}": {CONF_ENABLED: True, CONF_PIN: f"{n:04d}"} for n in range(1, 11)
+    }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_USERS: users,
+            CONF_SLOT_ASSIGNMENT: {f"user {n}": n for n in range(1, 11)},
+        },
+    )
+    entry.add_to_hass(hass)
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+
+    with _holding(), _capacity_probe(return_value=_capabilities_with_slots(12)):
+        result = await async_configure_options(
+            hass,
+            started["flow_id"],
+            {
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_USERS: {
+                    **users,
+                    "User 11": {CONF_ENABLED: True, CONF_PIN: "1111"},
+                },
+            },
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_SLOT_ASSIGNMENT]["user 11"] == 11
+
+
+async def test_progress_only_moves_forward_across_widening_passes(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A read that widens its window does not send the bar back to the start.
+
+    Slots 1 and 2 are taken, so placing two users reads 1-2, finds them
+    occupied and widens to 3-4. How many passes there will be is not knowable
+    in advance, so each takes half of what is left; a fraction that restarted
+    on every pass would read as a hang, which is the symptom the progress
+    exists to remove (#1536).
+    """
+    flow_id = await _start_config_flow(hass)
+    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+    updates = async_capture_events(hass, EVENT_DATA_ENTRY_FLOW_PROGRESS_UPDATE)
+
+    with _holding(1, 2):
+        result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+
+    assert result["step_id"] == "code_slot"
+    reported = [event.data["progress"] for event in updates]
+    assert len(reported) > 2  # more than one pass was read
+    assert reported == sorted(reported)
+    assert reported[-1] == 1.0
+
+
+async def test_a_second_request_for_an_answered_step_is_not_an_unknown_error(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A duplicated request reaches a step the first one already took.
+
+    The flow sits on the progress-done step for as long as answering it takes
+    -- saving the entry and setting the integration up -- so a second open
+    dialog or a client retry lands there. It gets the 404 Home Assistant
+    gives any request for a step that is gone, and the request busy saving is
+    left alone to finish (#1536).
+    """
+    flow_id, entry = await _start_options_flow(hass)
+    let_it_read = asyncio.Event()
+    saving = asyncio.Event()
+    let_it_save = asyncio.Event()
+    finish_flow = OptionsFlowManager.async_finish_flow
+
+    async def _slow_read(self, slots=None):
+        await let_it_read.wait()
+        scope = self.managed_slots if slots is None else slots
+        return {slot: SlotCredential.empty() for slot in scope}
+
+    async def _slow_save(self, flow, result):
+        saving.set()
+        await let_it_save.wait()
+        return await finish_flow(self, flow, result)
+
+    with (
+        patch.object(MockLCMLock, "async_get_usercodes", _slow_read),
+        patch.object(OptionsFlowManager, "async_finish_flow", _slow_save),
+    ):
+        result = await hass.config_entries.options.async_configure(
+            flow_id,
+            {
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_USERS: {
+                    # A newcomer, so there is a slot to read and the flow is
+                    # really left waiting on the lock.
+                    "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
+                    "User 2": {CONF_ENABLED: True, CONF_PIN: "5678"},
+                },
+            },
+        )
+        assert result["type"] == "progress"
+
+        # Once the read finishes Home Assistant parks the flow on the
+        # progress-done step; the next request is what runs it. Hold that one
+        # inside the save, with the flow still on that step, and send another.
+        let_it_read.set()
+        await hass.async_block_till_done()
+        saved = hass.async_create_task(
+            hass.config_entries.options.async_configure(flow_id)
+        )
+        await saving.wait()
+
+        with pytest.raises(UnknownFlow):
+            await hass.config_entries.options.async_configure(flow_id)
+
+        let_it_save.set()
+        assert (await saved)["type"] == "create_entry"
+
+    assert entry.options[CONF_SLOT_ASSIGNMENT] == {"user 1": 1, "user 2": 2}

@@ -424,6 +424,13 @@ async def async_allocate_for(
     releasing in the same edit is not held and is read like any other, so it
     is free for whoever comes next.
 
+    Held numbers are not returned either. ``reconcile`` keeps them for the
+    users holding them, so naming them again would only widen the window as
+    if a stranger held them -- which refuses an entry that is merely full of
+    its own users: ten users on a fifteen-slot lock could not take an
+    eleventh, because the window would reach for twenty-one numbers to place
+    eleven people.
+
     ``progress`` is passed to each read; see ``async_read_occupancy``.
     """
     try:
@@ -441,7 +448,18 @@ async def async_allocate_for(
         raise _too_far(num_users, max_slot, limiting_lock)
 
     held = frozenset(held)
-    unavailable: set[int] = set(held)
+    unavailable: set[int] = set()
+    # Each widening pass takes half of whatever fraction is left, so progress
+    # only ever moves forward: how many passes there will be is not knowable
+    # in advance, and a bar that restarts on each one reads as a hang -- the
+    # symptom this progress exists to remove. Within a pass it is per lock, so
+    # a single-lock entry sees the passes rather than the indices.
+    reported = [0.0, 0.5]
+
+    def _pass_progress(fraction: float) -> None:
+        if progress is not None:
+            progress(reported[0] + fraction * reported[1])
+
     read_up_to = 0
     window = num_users
     while True:
@@ -454,7 +472,7 @@ async def async_allocate_for(
         ]
         if indices:
             occupancy = await async_read_occupancy(
-                hass, config_entry, locks, indices, progress=progress
+                hass, config_entry, locks, indices, progress=_pass_progress
             )
             if not occupancy.is_known:
                 # Unreadable is not free: issuing a number could overwrite a
@@ -463,6 +481,8 @@ async def async_allocate_for(
                     "occupancy_unknown", {"locks": ", ".join(occupancy.unreadable)}
                 )
             unavailable |= occupancy.unavailable
+            reported[0] += reported[1]
+            reported[1] /= 2
         read_up_to = window
 
         taken_in_window = sum(1 for slot in unavailable if slot <= window)
@@ -492,6 +512,9 @@ async def async_allocate_for(
             # come back occupied, forever.
             raise _too_far(num_users, max_slot, limiting_lock, needed=wider)
         window = wider
+
+    if progress is not None:
+        progress(1.0)
 
     # No capacity check here: every window this loop accepted was checked
     # before it was accepted -- the first as the bare count, each wider

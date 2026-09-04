@@ -15,6 +15,7 @@ from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import UnknownFlow
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -342,9 +343,25 @@ class _AllocatesInProgress:
         return self.async_show_progress_done(next_step_id=f"{step_id}_allocated")
 
     def _take_allocation(self) -> tuple[dict[str, Any], _AllocationOutcome]:
-        """Return the submission and the finished allocation's outcome, once."""
+        """
+        Return the submission and the finished allocation's outcome, once.
+
+        A second request for a step the first one already answered gets the
+        same answer Home Assistant gives a request for any step that is no
+        longer there. That is reachable: the flow sits on the progress-done
+        step for as long as answering it takes -- creating the entry and
+        setting the integration up -- so a duplicated request or a second
+        open dialog lands here. ``UnknownFlow`` becomes a 404 at the view and
+        leaves the flow alone; raising anything else would reach the user as
+        "Unknown error", which is what this step exists to stop, and aborting
+        would pull the flow out from under the request busy finishing it.
+        """
         task, submission = self._allocation_task, self._allocation_submission
-        assert task is not None and submission is not None
+        if task is None or submission is None:
+            raise UnknownFlow(
+                "Slot numbers for this step were already allocated by another "
+                "request for the same flow"
+            )
         self._allocation_task = None
         self._allocation_submission = None
         return submission, task.result()
