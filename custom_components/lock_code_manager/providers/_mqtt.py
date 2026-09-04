@@ -106,7 +106,11 @@ class BaseMqttLock(BaseLock):
         ordinary read already puts a request on the bridge and waits for the
         lock's own answer, so the two are the same operation.
         """
-        return await self.async_get_usercodes()
+        # No cache to project from: a scoped refresh re-reads every managed slot
+        # plus ``slots``, so the coordinator's replace still names them all.
+        return await self.async_get_usercodes(
+            None if slots is None else self.managed_slots | frozenset(slots)
+        )
 
     async def async_is_device_available(self) -> bool:
         """

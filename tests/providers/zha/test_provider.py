@@ -1237,13 +1237,14 @@ async def test_zha_declares_a_per_exchange_budget_and_keeps_the_flat_floor(
     """
     One ZCL command per slot, each of them slow, is declared, not overridden.
 
-    zigpy forces a 28s reply timeout for battery end devices inside three
-    attempts, so one command can take ~84s; the declared budget sits strictly
-    above that so zigpy's own word about a slot always comes first. The
-    flat floor is unchanged: the walk scales it at the call site (#1528).
+    Each of zigpy's three attempts waits for the radio's send confirmation
+    (30s on zigpy-znp) and then 28s for the reply, so one command can take
+    174s before zigpy gives up on it; the declared budget sits strictly above
+    that so zigpy's own word about a slot always comes first. The flat floor
+    is unchanged: the walk scales it at the call site (#1528).
     """
     assert ZHALock.per_exchange_budget == zha_module._WORST_CASE_ZCL_COMMAND
-    assert zha_module._WORST_CASE_ZCL_COMMAND > 84
+    assert zha_module._WORST_CASE_ZCL_COMMAND > 3 * (30 + 28)
     with patch.object(
         type(zha_lock), "managed_slots", property(lambda _self: frozenset(range(1, 11)))
     ):
@@ -1299,3 +1300,31 @@ async def test_zigpys_own_timeout_marks_the_slot_unreadable_and_walks_on(
     by_slot = {u.user_id: u for u in users}
     assert by_slot[1].pin_credentials[0].state == SlotCredential.unreadable()
     assert by_slot[2].pin_credentials[0].state is SlotCredential.empty()
+
+
+async def test_scoped_hard_refresh_still_names_every_managed_slot(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A cacheless provider's scoped refresh walks managed slots plus the scope.
+
+    The coordinator replaces its data with the answer, so the answer must
+    name every managed slot; and the deadline the base declares must be the
+    walk this actually makes (#1528).
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    asked: list[int] = []
+
+    async def mock_get_pin_code(slot_num):
+        asked.append(slot_num)
+        return type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+    codes = await zha_lock.async_hard_refresh_codes({7})
+
+    assert set(asked) == set(zha_lock.managed_slots) | {7}
+    assert set(zha_lock.managed_slots) <= set(codes)

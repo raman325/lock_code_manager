@@ -3100,8 +3100,10 @@ class TestOperationBudget:
             assert run.await_args.kwargs["exchanges"] == 2
             await lock.async_internal_get_occupied_indices({4, 5, 6, 7})
             assert run.await_args.kwargs["exchanges"] == 4
+            # A scoped refresh is declared as the managed walk plus the scope: a
+            # provider with no cache has to re-read the managed slots to answer.
             await lock.async_internal_hard_refresh_codes({7})
-            assert run.await_args.kwargs["exchanges"] == 1
+            assert run.await_args.kwargs["exchanges"] == 3
             await lock.async_internal_hard_refresh_codes()
             assert run.await_args.kwargs["exchanges"] == 2
 
@@ -3111,14 +3113,17 @@ class TestOperationBudget:
         lock._min_operation_delay = 0
 
         async def _takes_a_while(*_args, **_kwargs):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.6)
             return "done"
 
+        # Exchange budget 0.3 s over a 0.05 s floor: the three-exchange read
+        # gets 0.9 s for a 0.6 s call and the one-slot write gets 0.3 s for the
+        # same call, each 0.3 s clear of the line.
         with (
             patch.object(
                 type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
             ),
-            patch.object(type(lock), "per_exchange_budget", 0.05),
+            patch.object(type(lock), "per_exchange_budget", 0.3),
         ):
             assert (
                 await asyncio.wait_for(
@@ -3145,14 +3150,17 @@ class TestOperationBudget:
         lock._min_operation_delay = 0
 
         async def _long_read(*_args, **_kwargs):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
             return "read"
 
+        # Floor 0.05 s, exchange budget 1.0 s: the holder and the wait get 3 s
+        # while a one-slot write's own budget stays 0.05 s -- well under the
+        # 0.2 s hold, so sizing the wait to the floor is LockBusy, not jitter.
         with (
             patch.object(
                 type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
             ),
-            patch.object(type(lock), "per_exchange_budget", 0.05),
+            patch.object(type(lock), "per_exchange_budget", 1.0),
             patch.object(
                 type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
             ),

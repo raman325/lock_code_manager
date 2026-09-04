@@ -330,7 +330,10 @@ class BaseLock:
         """
         probe_budget = self.operation_timeout_seconds
         # The longest holder there can be is a walk of every managed slot, so a
-        # caller queued behind one must be allowed to wait that long.
+        # caller queued behind one must be allowed to wait that long. A
+        # confirmation read adds the few pending unmanaged slots to that walk;
+        # the overshoot is bounded by them and ends in LockBusy, which is not
+        # a recovery signal.
         wait_budget = self._operation_budget(max(len(self.managed_slots), 1))
         budget = self._operation_budget(exchanges)
         what = f"{_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id}"
@@ -1336,12 +1339,13 @@ class BaseLock:
         means everything. The returned projection is never narrowed by it:
         the coordinator replaces its data with what comes back, so a read
         must still name every managed slot. A provider that reads the whole
-        device in one call may ignore ``slots``; one that walks the lock a
-        slot at a time should re-read only those, because the coordinator's
-        confirmation read asks about the one or two slots with a write
-        pending, and on a marginal radio link the difference between one
-        command and a walk of the lock is the difference between confirming
-        the write and never confirming it.
+        device in one call may ignore ``slots``. One that keeps a cache
+        re-reads only ``slots`` and projects the rest from the cache: the
+        coordinator's confirmation read asks about the one or two slots with
+        a write pending, and on a marginal radio link the difference between
+        one command and a walk of the lock is the difference between
+        confirming the write and never confirming it. One with no cache
+        re-reads every managed slot plus ``slots``.
         """
         self._raise_not_implemented(
             "async_hard_refresh_codes",
@@ -1353,11 +1357,17 @@ class BaseLock:
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
         """Rate-limited wrapper around async_hard_refresh_codes()."""
+        # A provider with no cache re-reads every managed slot plus ``slots``
+        # (the answer has to name them all); one with a cache re-reads only
+        # ``slots``. Declaring the union covers both without cutting either
+        # off partway.
         return await self._execute_rate_limited(
             "refresh",
             self.async_hard_refresh_codes,
             slots,
-            exchanges=len(self.managed_slots if slots is None else slots),
+            exchanges=len(
+                self.managed_slots if slots is None else self.managed_slots | set(slots)
+            ),
         )
 
     async def async_set_usercode(

@@ -64,11 +64,16 @@ OPERATION_SOURCE_NAMES: dict[int, str] = {
 }
 
 
-# zigpy forces `APS_REPLY_TIMEOUT_EXTENDED` (28s) for end devices -- which every
-# battery deadbolt is -- inside three attempts, so ONE ZCL command to a sleepy
-# lock can legitimately take ~84s, and `async_get_users` walks every managed
-# slot in turn.
-_WORST_CASE_ZCL_COMMAND = 90.0
+# What one ZCL command to a sleepy lock can legitimately take before zigpy
+# itself gives up. Each of zigpy's three attempts waits for the radio's send
+# confirmation and then `APS_REPLY_TIMEOUT_EXTENDED` (28s) for the reply --
+# every battery deadbolt is an end device -- and the confirmation wait is the
+# radio's: 8s on bellows, 30s on zigpy-znp. Three attempts on znp is
+# 3 x (30 + 28) = 174s. This sits above that with slack for zigpy's retry
+# delays and its per-device concurrency gate, so zigpy's own timeout is always
+# the one to claim a flaky slot and the bound here only ever claims a command
+# nothing answered at all.
+_WORST_CASE_ZCL_COMMAND = 200.0
 
 
 @dataclass(repr=False, eq=False)
@@ -379,9 +384,10 @@ class ZHALock(BaseLock):
         for slot_num in scope:
             try:
                 # zigpy bounds each attempt and gives up after three, raising
-                # its own TimeoutError inside ~84s; this bound is strictly
-                # above that, so zigpy's word about a slot always comes first
-                # and only a transport that answers nothing at all ends here.
+                # its own TimeoutError inside the ladder _WORST_CASE_ZCL_COMMAND
+                # describes; this bound is strictly above that, so zigpy's word
+                # about a slot always comes first and only a transport that
+                # answers nothing at all ends here.
                 async with asyncio.timeout(_WORST_CASE_ZCL_COMMAND) as exchange:
                     result = await cluster.get_pin_code(slot_num)
                 _LOGGER.debug(
@@ -492,8 +498,17 @@ class ZHALock(BaseLock):
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
-        """Re-read all codes from the lock (no cache to invalidate)."""
-        return await self.async_get_usercodes()
+        """
+        Re-read from the lock; there is no cache to invalidate.
+
+        A lock read one slot at a time has no cache to project from, so a
+        scoped refresh re-reads every managed slot plus ``slots``: the
+        coordinator replaces its data with the answer, which must still name
+        them all.
+        """
+        return await self.async_get_usercodes(
+            None if slots is None else self.managed_slots | frozenset(slots)
+        )
 
     # -- Response parsing ----------------------------------------------------
 
