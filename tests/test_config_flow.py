@@ -1,5 +1,6 @@
 """Config flow tests."""
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -2608,3 +2609,40 @@ async def test_allocation_failing_unexpectedly_comes_back_to_the_form(
     assert result["type"] == "form"
     assert result["step_id"] == "ui"
     assert result["errors"] == {"base": "allocation_failed"}
+
+
+async def test_reentering_the_step_while_the_read_runs_shows_progress_again(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A poll of the flow while the locks are still being read stays on progress.
+
+    Home Assistant re-enters the step itself when the task finishes; a client
+    asking earlier must not restart the read or fall through to the form.
+    """
+    flow_id = await _start_config_flow(hass)
+    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+    let_go = asyncio.Event()
+    reads: list[int] = []
+
+    async def _slow_read(self, slots=None):
+        reads.append(1)
+        await let_go.wait()
+        scope = self.managed_slots if slots is None else slots
+        return {slot: SlotCredential.empty() for slot in scope}
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _slow_read):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+        assert result["type"] == "progress"
+        result = await hass.config_entries.flow.async_configure(flow_id)
+        assert result["type"] == "progress"
+        assert result["progress_action"] == "allocating"
+
+        let_go.set()
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "code_slot"
+    assert len(reads) == 1
