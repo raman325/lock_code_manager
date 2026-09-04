@@ -1,0 +1,45 @@
+<task-notification>
+<task-id>ad00960d0085e3ce6</task-id>
+<tool-use-id>toolu_01FqcFe13ScKPMR6JdwKDRKF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/ad00960d0085e3ce6.output</output-file>
+<status>completed</status>
+<summary>Agent "Clean-room review of PR #1551" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Review of PR #1551 (`5913b6d9`, one commit)
+
+Three test files run: 284 passed in 7.16 s (`-q --no-cov -p no:randomly`).
+
+### Findings, most severe first
+
+**1. MEDIUM — `LockBusy` escapes the entry-update pass and aborts it.**
+`custom_components/lock_code_manager/__init__.py:2002-2003`:
+```python
+            await release_lock.async_release_managed_slot(slot_num)
+        except (LockDisconnected, LockOperationFailed) as err:
+```
+The default `async_release_managed_slot` (`providers/_base.py:1929`) is `await self.async_internal_clear_usercode(slot, adopt_untagged=False)`, which goes through `_execute_rate_limited` and can now raise `LockBusy`. It is a sibling of both caught types, so it propagates out of `_async_apply_entry_update` (`__init__.py:1875`); `async_update_listener` only `finally`-sets `settled`, so the rest of the pass (remaining `pairs_removed`, `async_release_locks`, new slot coordinators, new locks) is skipped. Scenario: the user deletes a user while a sync tick or hard refresh holds the mutex for its whole budget. On `main` the same wait expired as `LockDisconnected` and was caught. Fix: catch `LockCodeManagerProviderError` there (or add `LockBusy` to the tuple).
+
+**2. MEDIUM — the per-call bound is now 3 budgets, and the PR text understates it.**
+`_base.py:324-364`: three consecutive `asyncio.timeout(budget)` blocks (probe, wait, operation), `budget = self.operation_timeout_seconds` for all three. Worst case per queued caller = 3B: default `OPERATION_TIMEOUT = 600.0` (`_base.py:117`) gives 1800 s (30 min); ZHA `_WORST_CASE_ZCL_COMMAND * len(managed_slots)` (`zha.py:93-97`) on ten slots gives 2700 s (45 min). On `main` one `asyncio.timeout` covered all three, so the bound was B. Consequences: `sync.py:880` sets `SYNCING` before `_perform_sync` and `_async_tick` (`sync.py:716-721`) skips `SYNCING`, so a slot holds `SYNCING` for up to 3B; `async_stop`'s gather (`sync.py:332`) is therefore bounded by 3B, not B. The PR says "bounded only by the operation deadline" — that is now 3x too optimistic (1800 s / 2700 s). Drain of N wedged slots stays about N x B sequential, as the PR states. Not a correctness bug, but the follow-up issue for `async_stop` should carry the 3B number, or the probe/wait budgets should be sized separately from the operation budget.
+
+**3. LOW — a busy poll flips `last_update_success` to True while the breaker stays tripped.**
+`coordinator.py:716-718`: `if self.data: return self.data`. HA's `_async_refresh` (update_coordinator.py, `else:` branch) does `if not self.last_update_success: self.last_update_success = True; logger.info("Fetching %s data recovered")` and notifies listeners because `last_update_success != previous_update_success`. `_reset_backoff()` is not called, so `unreachable`/`update_interval` stay in backoff. Can busy coexist with tripped? Yes, in a window: the probes are HA-state/integration signals that pass while the device does not answer (that is how a tick comes to hold the mutex for a full B); after three such ticks trip the breaker, the recovery poll queues FIFO behind any waiter already past the tick gate (`sync.py:798`) or a confirmation look, each of which then runs a full B, so the poll's wait can expire. Effect is cosmetic: a misleading INFO "recovered" line and one no-change listener notification. Entity availability keys on the lock entity's state (`entity.py:366-370`), not `last_update_success`; the drift gate is still blocked by `tripped`; the websocket "suspended" flag reads `unreachable`. Also `if self.data` is falsy for a legitimately empty `{}` (zero managed slots), which would turn a healthy coordinator into `UpdateFailed` on a busy poll; `if self.data is not None` matches the stated intent ("before anything has been read").
+
+**4. LOW — `test_the_operation_deadline_starts_when_the_turn_comes` has 0.1 s margins on two hops** (`tests/providers/test_base.py`, holder 0.2 s, waiter op 0.2 s, budget 0.3 s). Under CI load, 100 ms of loop jitter on either the wait leg or the op leg turns a pass into `LockBusy`/`LockDisconnected`. Deterministic-ish alternative with the same shape: hold via an `asyncio.Event` the test sets after `sleep(0.6)`, op `sleep(0.6)`, budget 1.0 (each leg 0.4 s under budget, sum 0.2 s over). `test_a_waiter_whose_turn_never_comes_is_busy_not_disconnected` is fine: the holder captured `budget` at `_base.py:324` before `lock._budget` is flipped, and `assert not holder.done()` would catch a refactor that reads the property lazily.
+
+Nothing above LOW beyond items 1-2.
+
+### Verified, no issue
+
+- **asyncio.Lock (CPython 3.14.5, `asyncio/locks.py`)**: `acquire()` sets `self._locked = True` only after `await fut` returns normally (line 102 of the class); on `CancelledError` it removes its future and, `if not self._locked: self._wake_up_first()` (lines 97-98), so a release that raced the timeout hands the lock to the next waiter or leaves it unlocked — never locked with no owner. `asyncio.timeout.__aexit__` converts that `CancelledError` to `TimeoutError` -&gt; `LockBusy` (`_base.py:336-341`). The `finally: self._aio_lock.release()` (`_base.py:353`) belongs to the third `try`, entered only after `acquire()` returned; there is no `await` between `acquire()` returning and that `try`, so no path releases an unheld lock.
+- **Sibling ordering**: `LockBusy(LockCodeManagerProviderError)` (`exceptions.py:91`), `LockDisconnected(LockCodeManagerProviderError)`; order relative to `except LockDisconnected` is irrelevant. In the coordinator, `except LockBusy` correctly precedes `except LockCodeManagerError` (481&lt;489, 712&lt;720, 753&lt;760).
+- **Confirmation look re-arms**: `_async_confirmation_look` (`coordinator.py:384-392`) checks `if self._pending:` after the look returns, and the `LockBusy` path returns with `_pending` intact.
+- **Direct services** (`domain/services.py:90,98`, `__init__.py:514-529`): `LockBusy` is a `HomeAssistantError`; message "Cannot set usercode on lock.x - another operation on this lock has held it for 600s" is user-fit. The caller waits up to 2B before seeing it — pre-existing (was B).
+- **Allocation** (`_base.py:2162-2171` -&gt; `LockOccupancy(occupied=None)`): busy -&gt; occupancy unknown, conservative, acceptable.
+- **Other except sites (item 4)**: `LockBusy` can only originate at the five `_execute_rate_limited` call sites, all in `_base.py` (1324 hard refresh, 1396 set, 1532 clear, 2124/2125 get, 2165 occupied indices). `async_get_capabilities` is not wrapped. Every provider-internal site (zha.py:393, akuvox.py:281, schlage.py:139/245/259/272/410, _mqtt.py:213, zwave_js_ui.py:1045/1185/1243, matter.py:620/1142/1184/1448/1593, zigbee2mqtt.py:598, `_base.py` 717/844/853/1042/1054/1703/1765) runs inside the mutex or outside it entirely and never sees `LockBusy`. Downstream sites: sync.py:898 fine; coordinator x3 fine; repairs.py:69 (`LockCodeManagerError`) fine; services.py fine; `__init__.py:519` fine; `__init__.py:2003` wrong (finding 1); allocation.py:259 fine (caught inside the wrapper).
+- **Setup paths**: `_run_provider_setup_bounded` and provider `async_setup` tag passes do not call `async_internal_*`, so `_base.py:853/1054` ("failed validation" + persistent repair) cannot receive `LockBusy`.
+- **#1529 failure modes**: "refusal must not feed the breaker" is pinned by `TestLockBusy.test_busy_lock_is_retried_without_charging_any_breaker` and the three coordinator tests asserting `failure_count == 0`. "Recovery poll must not be refused" is pinned indirectly by `test_backoff_resets_on_success` / `test_unreachable_clears_on_recovery`, which run the real `async_internal_get_usercodes` -&gt; `_execute_rate_limited` path after a trip. "A lock that recovered mid-queue must not be refused" has no direct test, but the new code has no breaker reference at all; a test asserting a waiter with `_lock_breaker.tripped` and a free mutex proceeds would be cheap insurance.
+- **`_execute_bounded`**: zero references remain in `.py`/`.md` across the repo. `AGENTS.md:164-165` describes `_execute_rate_limited` generically and is still accurate.
+- **Pending-write bookkeeping**: `record_write` (`_base.py:1414/1425`) runs after `_execute_rate_limited` returns, so `LockBusy` leaves no phantom pending write.</result>
+<usage><subagent_tokens>129132</subagent_tokens><tool_uses>19</tool_uses><duration_ms>479275</duration_ms></usage>
+</task-notification>
