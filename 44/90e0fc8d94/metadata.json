@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "4490e0fc8d94",
+  "strategy": "manual-commit",
+  "branch": "fix/1535-wait-is-not-a-disconnect",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/44/90e0fc8d94/0/metadata.json",
+      "transcript": "/44/90e0fc8d94/0/full.jsonl",
+      "compact_transcript": "/44/90e0fc8d94/0/transcript.jsonl",
+      "content_hash": "/44/90e0fc8d94/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 37065,
+    "cache_creation_tokens": 6909282,
+    "cache_read_tokens": 194182085,
+    "output_tokens": 966950,
+    "api_call_count": 528
+  }
+}
