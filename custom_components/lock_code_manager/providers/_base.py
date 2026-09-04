@@ -1291,10 +1291,6 @@ class BaseLock:
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
         """Rate-limited wrapper around async_hard_refresh_codes()."""
-        if slots is None:
-            return await self._execute_rate_limited(
-                "refresh", self.async_hard_refresh_codes
-            )
         return await self._execute_rate_limited(
             "refresh", self.async_hard_refresh_codes, slots
         )
