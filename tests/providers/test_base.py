@@ -50,6 +50,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
     User,
+    WriteResult,
     pin_address,
 )
 from custom_components.lock_code_manager.domain.events import CredentialOperation
@@ -2948,6 +2949,44 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
     assert "no answer within" in str(lock.coordinator.last_exception)
 
 
+async def test_the_first_refresh_is_sized_to_a_walk_of_every_managed_slot(
+    hass: HomeAssistant,
+):
+    """
+    The initial read is a walk of the managed slots, and its deadline says so.
+
+    Three managed slots at 0.5 s each is a 1.5 s budget over a 0.5 s floor;
+    the recorded timeout names the budget that was actually applied (#1528).
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "first_refresh_walk", config_entry=config_entry
+    )
+    lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+    lock._min_operation_delay = 0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(type(lock), "operation_timeout_seconds", property(lambda _s: 0.5)),
+        patch.object(type(lock), "per_exchange_budget", 0.5),
+        patch.object(
+            type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
+        ),
+        patch.object(lock, "async_get_usercodes", _never_returns),
+    ):
+        await asyncio.wait_for(
+            lock.async_setup_internal(lock.lock_config_entry), timeout=10
+        )
+
+    assert lock.coordinator is not None
+    assert "no answer within 2s" in str(lock.coordinator.last_exception)
+    await lock.coordinator.async_shutdown()
+
+
 async def test_a_waiter_whose_turn_never_comes_is_busy_not_disconnected(
     hass: HomeAssistant,
 ):
@@ -3025,6 +3064,150 @@ async def test_the_operation_deadline_starts_when_the_turn_comes(
         result = await asyncio.wait_for(waiter, timeout=5)
 
     assert result == "done"
+
+
+class TestOperationBudget:
+    """The deadline is sized to the exchanges a call walks (issue #1528)."""
+
+    def test_no_declared_budget_means_the_flat_floor(self, hass: HomeAssistant):
+        lock = _make_base_test_lock(hass, "budget_flat")
+        assert lock.per_exchange_budget is None
+        assert lock._operation_budget(1) == base_module.OPERATION_TIMEOUT
+        assert lock._operation_budget(250) == base_module.OPERATION_TIMEOUT
+
+    def test_a_walk_scales_the_floor_and_never_narrows_it(self, hass: HomeAssistant):
+        lock = _make_base_test_lock(hass, "budget_scaled")
+        with patch.object(type(lock), "per_exchange_budget", 90.0):
+            floor = base_module.OPERATION_TIMEOUT
+            assert lock._operation_budget(1) == floor  # one exchange: the floor
+            assert lock._operation_budget(10) == 900.0  # ten slow slots
+            assert lock._operation_budget(0) == floor
+
+    async def test_read_call_sites_say_how_many_exchanges_they_walk(
+        self, hass: HomeAssistant
+    ):
+        lock = _make_base_test_lock(hass, "budget_call_sites")
+        with (
+            patch.object(
+                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2}))
+            ),
+            patch.object(
+                lock, "_execute_rate_limited", AsyncMock(return_value={})
+            ) as run,
+        ):
+            await lock.async_internal_get_usercodes({1, 2, 3})
+            assert run.await_args.kwargs["exchanges"] == 3
+            await lock.async_internal_get_usercodes()
+            assert run.await_args.kwargs["exchanges"] == 2
+            await lock.async_internal_get_occupied_indices({4, 5, 6, 7})
+            assert run.await_args.kwargs["exchanges"] == 4
+            # A scoped refresh is declared as the managed walk plus the scope: a
+            # provider with no cache has to re-read the managed slots to answer.
+            await lock.async_internal_hard_refresh_codes({7})
+            assert run.await_args.kwargs["exchanges"] == 3
+            await lock.async_internal_hard_refresh_codes()
+            assert run.await_args.kwargs["exchanges"] == 2
+
+    @pytest.mark.parametrize("native_users", [False, True], ids=["slots", "users"])
+    async def test_write_call_sites_say_how_many_exchanges_they_walk(
+        self, hass: HomeAssistant, native_users: bool
+    ):
+        """A native-user provider names the user and reads them back; that is a walk.
+
+        Inert while the providers that model users declare no per-exchange
+        budget, and declared anyway: the moment one does, an under-declared
+        write would be cut off partway through a walk the lock was answering.
+        """
+        lock = _make_base_test_lock(hass, f"budget_writes_{native_users}")
+        with (
+            patch.object(
+                type(lock), "supports_native_users", property(lambda _s: native_users)
+            ),
+            patch.object(
+                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
+            ),
+            patch.object(
+                lock,
+                "_execute_rate_limited",
+                AsyncMock(return_value=WriteResult.NO_CHANGE),
+            ) as run,
+        ):
+            await lock.async_internal_set_usercode(1, "1234")
+            assert run.await_args.kwargs["exchanges"] == (3 if native_users else 1)
+            run.return_value = False
+            await lock.async_internal_clear_usercode(1)
+            assert run.await_args.kwargs["exchanges"] == (4 if native_users else 1)
+
+    async def test_the_operation_deadline_follows_the_walk(self, hass: HomeAssistant):
+        """A three-slot read may take three exchanges; a one-slot write may not."""
+        lock = _make_base_test_lock(hass, "budget_follows_walk")
+        lock._min_operation_delay = 0
+
+        async def _takes_a_while(*_args, **_kwargs):
+            await asyncio.sleep(0.6)
+            return "done"
+
+        # Exchange budget 0.3 s over a 0.05 s floor: the three-exchange read
+        # gets 0.9 s for a 0.6 s call and the one-slot write gets 0.3 s for the
+        # same call, each 0.3 s clear of the line.
+        with (
+            patch.object(
+                type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+            ),
+            patch.object(type(lock), "per_exchange_budget", 0.3),
+        ):
+            assert (
+                await asyncio.wait_for(
+                    lock._execute_rate_limited("get", _takes_a_while, exchanges=3),
+                    timeout=5,
+                )
+                == "done"
+            )
+            with pytest.raises(LockDisconnected):
+                await asyncio.wait_for(
+                    lock._execute_rate_limited("set", _takes_a_while), timeout=5
+                )
+
+    async def test_a_caller_may_wait_out_a_full_walk_ahead_of_it(
+        self, hass: HomeAssistant
+    ):
+        """A one-slot write queued behind a full read is not cut off by its own small budget.
+
+        Round six of #1529 narrowed a write to the floor and cut it off behind a
+        poll that was still within its own budget; the wait is sized to the
+        longest holder there can be, a walk of every managed slot.
+        """
+        lock = _make_base_test_lock(hass, "budget_wait_full_walk")
+        lock._min_operation_delay = 0
+
+        async def _long_read(*_args, **_kwargs):
+            await asyncio.sleep(0.4)
+            return "read"
+
+        # Exchange budget 0.2 s over a 0.05 s floor, three managed slots: the
+        # holder's read and the wait get 0.6 s for a 0.4 s hold, while a
+        # one-slot write's own budget is 0.2 s -- under the hold, so a wait
+        # sized to the floor or to the caller's own budget is LockBusy.
+        with (
+            patch.object(
+                type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+            ),
+            patch.object(type(lock), "per_exchange_budget", 0.2),
+            patch.object(
+                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
+            ),
+        ):
+            holder = asyncio.create_task(
+                lock._execute_rate_limited("get", _long_read, exchanges=3)
+            )
+            for _ in range(5):
+                await asyncio.sleep(0)
+            result = await asyncio.wait_for(
+                lock._execute_rate_limited("set", AsyncMock(return_value="written")),
+                timeout=5,
+            )
+            await holder
+        assert result == "written"
 
 
 async def test_a_probe_that_never_answers_is_cut_off_before_the_queue(

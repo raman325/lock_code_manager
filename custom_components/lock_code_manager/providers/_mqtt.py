@@ -53,19 +53,12 @@ from .const import LOGGER
 class BaseMqttLock(BaseLock):
     """Base class for a lock addressed through an MQTT bridge."""
 
-    # What one slot's read costs on this transport. `_async_read_slots` walks
-    # the managed slots one at a time -- deliberately, so the bridge and the
+    # What one slot's read may cost on this transport. `_async_read_slots`
+    # walks the slots one at a time -- deliberately, so the bridge and the
     # lock's firmware answer each read before the next goes out -- so the
-    # stall budget is this times the number of slots, not a flat figure.
-    _per_slot_read_budget: ClassVar[float] = 60.0
-
-    @property
-    def operation_timeout_seconds(self) -> float:
-        """Scale with the slot walk rather than reporting a slow lock as dead."""
-        return max(
-            super().operation_timeout_seconds,
-            self._per_slot_read_budget * max(len(self.managed_slots), 1),
-        )
+    # deadline is this times the slots a call walks. Above zwave-js-ui's own
+    # 60s API bound, which must always be the one to claim a silent slot.
+    per_exchange_budget: ClassVar[float | None] = 70.0
 
     # Whether any slot read on this instance has ever come back with something
     # the lock said, rather than silence. Latched on, never cleared: what it
@@ -113,7 +106,11 @@ class BaseMqttLock(BaseLock):
         ordinary read already puts a request on the bridge and waits for the
         lock's own answer, so the two are the same operation.
         """
-        return await self.async_get_usercodes()
+        # No cache to project from: a scoped refresh re-reads every managed slot
+        # plus ``slots``, so the coordinator's replace still names them all.
+        return await self.async_get_usercodes(
+            None if slots is None else self.managed_slots | frozenset(slots)
+        )
 
     async def async_is_device_available(self) -> bool:
         """

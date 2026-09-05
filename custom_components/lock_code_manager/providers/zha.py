@@ -10,11 +10,12 @@ polling.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from zigpy.zcl.clusters.closures import DoorLock
 
@@ -63,11 +64,20 @@ OPERATION_SOURCE_NAMES: dict[int, str] = {
 }
 
 
-# zigpy forces `APS_REPLY_TIMEOUT_EXTENDED` (28s) for end devices -- which every
-# battery deadbolt is -- inside three attempts, so ONE ZCL command to a sleepy
-# lock can legitimately take ~84s, and `async_get_users` walks every managed
-# slot in turn.
-_WORST_CASE_ZCL_COMMAND = 90.0
+# What one ZCL command to a sleepy lock can legitimately take before zigpy
+# itself gives up. Each of zigpy's three attempts waits for the radio's send
+# confirmation and then `APS_REPLY_TIMEOUT_EXTENDED` (28s) for the reply --
+# every battery deadbolt is an end device -- and the confirmation wait is the
+# radio library's: 8s on bellows, 30s on zigpy-znp, 60s on zigpy-deconz, 120s
+# on zigpy-xbee. Three attempts on XBee is 3 x (120 + 28) = 444s, and zigpy's
+# per-device concurrency gate (two in flight) can hold the command behind one
+# more attempt before it is even sent, so the honest worst case is nearer
+# 592s. This sits above that, so zigpy's own timeout is always the one to
+# claim a flaky slot and the bound here only ever claims a command nothing
+# answered at all. Slow to notice a wedged transport, then -- but being wrong
+# about a flaky slot would suspend a working lock, and slow is still one
+# exchange rather than a walk of the whole lock.
+_WORST_CASE_ZCL_COMMAND = 720.0
 
 
 @dataclass(repr=False, eq=False)
@@ -87,15 +97,10 @@ class ZHALock(BaseLock):
     _endpoint_id: int | None = field(init=False, default=None)
     _supports_programming_events: bool | None = field(init=False, default=None)
 
-    # -- Properties ----------------------------------------------------------
+    # One ZCL command per slot, each of them slow; see _WORST_CASE_ZCL_COMMAND.
+    per_exchange_budget: ClassVar[float | None] = _WORST_CASE_ZCL_COMMAND
 
-    @property
-    def operation_timeout_seconds(self) -> float:
-        """Scale with the slot walk: one command per slot, each of them slow."""
-        return max(
-            super().operation_timeout_seconds,
-            _WORST_CASE_ZCL_COMMAND * max(len(self.managed_slots), 1),
-        )
+    # -- Properties ----------------------------------------------------------
 
     @property
     def domain(self) -> str:
@@ -382,7 +387,13 @@ class ZHALock(BaseLock):
         slot_states: dict[int, SlotCredential] = {}
         for slot_num in scope:
             try:
-                result = await cluster.get_pin_code(slot_num)
+                # zigpy bounds each attempt and gives up after three, raising
+                # its own TimeoutError inside the ladder _WORST_CASE_ZCL_COMMAND
+                # describes; this bound is strictly above that, so zigpy's word
+                # about a slot always comes first and only a transport that
+                # answers nothing at all ends here.
+                async with asyncio.timeout(_WORST_CASE_ZCL_COMMAND) as exchange:
+                    result = await cluster.get_pin_code(slot_num)
                 _LOGGER.debug(
                     "Lock %s slot %s get_pin_code: %s",
                     self.lock.entity_id,
@@ -392,6 +403,23 @@ class ZHALock(BaseLock):
                 parsed = self._parse_pin_response(result)
             except LockDisconnected:
                 raise
+            except TimeoutError:
+                if exchange.expired():
+                    # Not zigpy giving up on one flaky slot -- that is the
+                    # branch below -- but a command nothing ever answered: the
+                    # transport is wedged, and waiting out the rest of the
+                    # walk would only say so later.
+                    raise LockDisconnected(
+                        f"Lock {self.lock.entity_id}: no answer for slot {slot_num} "
+                        f"within {_WORST_CASE_ZCL_COMMAND:.0f}s"
+                    ) from None
+                _LOGGER.debug(
+                    "Lock %s: slot %s timed out on the mesh, marking unreadable",
+                    self.lock.entity_id,
+                    slot_num,
+                )
+                slot_states[slot_num] = SlotCredential.unreadable()
+                continue
             except Exception:
                 _LOGGER.debug(
                     "Lock %s: failed to read slot %s, marking unreadable",
@@ -474,8 +502,17 @@ class ZHALock(BaseLock):
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
-        """Re-read all codes from the lock (no cache to invalidate)."""
-        return await self.async_get_usercodes()
+        """
+        Re-read from the lock; there is no cache to invalidate.
+
+        A lock read one slot at a time has no cache to project from, so a
+        scoped refresh re-reads every managed slot plus ``slots``: the
+        coordinator replaces its data with the answer, which must still name
+        them all.
+        """
+        return await self.async_get_usercodes(
+            None if slots is None else self.managed_slots | frozenset(slots)
+        )
 
     # -- Response parsing ----------------------------------------------------
 

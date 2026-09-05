@@ -32,6 +32,7 @@ from custom_components.lock_code_manager.providers._mqtt import BaseMqttLock
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
+from custom_components.lock_code_manager.providers.zwave_js_ui import API_CALL_TIMEOUT
 from tests.providers.helpers import ProviderNativeTransportContractTests
 
 from .conftest import Z2M_FULL_TOPIC, _minimal_lock
@@ -1222,29 +1223,54 @@ async def test_max_slot_is_the_integrations_limit(
     assert await zigbee2mqtt_lock_connected.async_get_max_slot() is None
 
 
-async def test_the_stall_budget_scales_with_the_slot_walk(
-    hass: HomeAssistant, z2m_lock: Zigbee2MQTTLock
+def test_mqtt_bridges_declare_per_exchange_budgets_above_their_own_bounds(
+    z2m_lock: Zigbee2MQTTLock,
 ) -> None:
     """
-    An MQTT read walks the slots in turn, so its budget is per-slot.
+    Each bridge's exchange budget sits strictly above the bound it puts on a read itself.
 
-    zigbee2mqtt answers a single slot fast, which is why its own per-slot
-    figure is small -- but the walk is still linear, and the base's flat ten
-    minutes would call a slow-but-working lock dead once the slot count got
-    high enough. That is the misdiagnosis the watchdog exists to avoid.
+    zigbee2mqtt gives a slot read 10s and zwave-js-ui gives an API call 60s
+    before calling it silent. The outer deadline must never be the one to
+    claim that silence: an inner bound that fires first turns one silent slot
+    into an unreadable slot, the outer one would turn it into a whole-poll
+    disconnect. The flat floor is unchanged; the walk scales it at the call
+    site (#1528).
     """
-    flat = base_module.OPERATION_TIMEOUT
-    assert Zigbee2MQTTLock._per_slot_read_budget < BaseMqttLock._per_slot_read_budget
-
+    assert Zigbee2MQTTLock.per_exchange_budget > 10.0
+    assert BaseMqttLock.per_exchange_budget > API_CALL_TIMEOUT
+    assert Zigbee2MQTTLock.per_exchange_budget < BaseMqttLock.per_exchange_budget
     with patch.object(
         type(z2m_lock),
         "managed_slots",
         property(lambda _self: frozenset(range(1, 200))),
     ):
-        assert z2m_lock.operation_timeout_seconds > flat
+        assert z2m_lock.operation_timeout_seconds == base_module.OPERATION_TIMEOUT
+        assert (
+            z2m_lock._operation_budget(199) == 199 * Zigbee2MQTTLock.per_exchange_budget
+        )
 
-    with patch.object(
-        type(z2m_lock), "managed_slots", property(lambda _self: frozenset())
+
+async def test_scoped_hard_refresh_on_a_bridge_still_names_every_managed_slot(
+    z2m_lock: Zigbee2MQTTLock,
+) -> None:
+    """A bridge has no cache to project from, so a scoped refresh walks managed too.
+
+    The coordinator replaces its data with the answer, so the answer has to
+    name every managed slot; and the deadline the base declares must be the
+    walk this actually makes (#1528).
+    """
+    asked: list[frozenset[int]] = []
+
+    async def _capture(self, code_slots, read_slot, *, transport_failure):
+        asked.append(frozenset(code_slots))
+        return []
+
+    with (
+        patch.object(
+            type(z2m_lock), "managed_slots", property(lambda _self: frozenset({1, 2}))
+        ),
+        patch.object(BaseMqttLock, "_async_read_slots", _capture),
     ):
-        # No slots to walk, so no reason to be more patient than the default.
-        assert z2m_lock.operation_timeout_seconds == flat
+        await z2m_lock.async_hard_refresh_codes({7})
+
+    assert asked == [frozenset({1, 2, 7})]

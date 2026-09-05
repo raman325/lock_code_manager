@@ -15,7 +15,7 @@ from datetime import timedelta
 from functools import partial
 import logging
 import time
-from typing import Any, Literal, NoReturn, final
+from typing import Any, ClassVar, Literal, NoReturn, final
 
 from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -110,10 +110,13 @@ MIN_OPERATION_DELAY = 2.0
 #
 # A FLOOR, not the whole answer. One `_execute_rate_limited` call is one
 # provider call, but on several providers one provider call is a sequential
-# walk of every managed slot -- so the honest budget is per-slot, and those
-# providers raise it through `operation_timeout_seconds`. Ten flaky slots on
-# ZHA legitimately reach ~840s; cutting that off would be the misdiagnosis
-# this constant exists to avoid.
+# walk of slots, one exchange with the lock per slot -- so the honest budget
+# is per exchange, times the exchanges THAT call walks. Those providers
+# declare `per_exchange_budget`, and `_operation_budget` scales this floor by
+# the count each call site passes. Ten flaky slots on ZHA legitimately reach
+# ~840s; cutting that off would be the misdiagnosis this constant exists to
+# avoid, and giving a one-slot write those ten slots' patience is the other
+# half of issue #1528.
 OPERATION_TIMEOUT = 600.0
 
 _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
@@ -292,10 +295,14 @@ class BaseLock:
         func: Callable[..., Awaitable[Any]],
         *args: Any,
         pre_execute: Callable[[], None] | None = None,
+        exchanges: int = 1,
         **kwargs: Any,
     ) -> Any:
         """
         Execute operation with connection check, serialization, and delay.
+
+        ``exchanges`` is how many exchanges with the lock ``func`` walks; the
+        operation deadline is sized to it (``_operation_budget``).
 
         Three bounds, one per question, because one number cannot answer
         "how long may my call take" and "how long will I queue behind
@@ -321,24 +328,31 @@ class BaseLock:
         pre_execute runs inside the lock before the operation, for checks
         that must be atomic with the operation (e.g., duplicate detection).
         """
-        budget = self.operation_timeout_seconds
+        probe_budget = self.operation_timeout_seconds
+        # The longest holder there can be is a walk of every managed slot, so a
+        # caller queued behind one must be allowed to wait that long. A
+        # confirmation read adds the few pending unmanaged slots to that walk;
+        # the overshoot is bounded by them and ends in LockBusy, which is not
+        # a recovery signal.
+        wait_budget = self._operation_budget(max(len(self.managed_slots), 1))
+        budget = self._operation_budget(exchanges)
         what = f"{_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id}"
         try:
-            async with asyncio.timeout(budget):
+            async with asyncio.timeout(probe_budget):
                 await self._check_reachable(operation_type)
         except TimeoutError as err:
             raise LockDisconnected(
                 f"Cannot {what} - availability check gave no answer within "
-                f"{budget:.0f}s"
+                f"{probe_budget:.0f}s"
             ) from err
 
         try:
-            async with asyncio.timeout(budget):
+            async with asyncio.timeout(wait_budget):
                 await self._aio_lock.acquire()
         except TimeoutError as err:
             raise LockBusy(
                 f"Cannot {what} - another operation on this lock has held it for "
-                f"{budget:.0f}s"
+                f"{wait_budget:.0f}s"
             ) from err
 
         try:
@@ -492,16 +506,38 @@ class BaseLock:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
 
+    # What one exchange with the lock may cost on this transport, for providers
+    # whose reads walk the slots one exchange at a time. ``None`` for a provider
+    # that reads the whole device in one call: its budget is the flat floor.
+    # Strictly above any bound the provider puts on the exchange itself, so the
+    # provider's own timeout always claims a silent slot first and the outer
+    # deadline only ever claims a transport that has stopped answering.
+    per_exchange_budget: ClassVar[float | None] = None
+
     @property
     def operation_timeout_seconds(self) -> float:
         """
-        How long an operation may run before the lock is treated as gone.
+        The floor: how long a single exchange may run before the lock is treated as gone.
 
-        Overridden by providers whose single operation is a sequential walk of
-        every managed slot: their honest budget is per-slot, and the base's
-        flat one would report a slow-but-working lock as dead.
+        Providers do not override this to make a walk fit; they declare
+        ``per_exchange_budget`` and every call site says how many exchanges
+        it walks (see ``_operation_budget``).
         """
         return OPERATION_TIMEOUT
+
+    @final
+    def _operation_budget(self, exchanges: int) -> float:
+        """
+        Return the deadline for a call that walks ``exchanges`` exchanges.
+
+        The floor, or the declared per-exchange budget times the walk,
+        whichever is longer: a lock that answers every command must never be
+        cut off partway through a legitimate walk, and a one-slot write must
+        not inherit a thirty-slot entry's patience.
+        """
+        if self.per_exchange_budget is None:
+            return self.operation_timeout_seconds
+        return max(self.operation_timeout_seconds, self.per_exchange_budget * exchanges)
 
     @property
     def display_name(self) -> str:
@@ -884,11 +920,10 @@ class BaseLock:
                 # half-written sequence to leave behind. That is what makes a
                 # deadline right here and wrong around a write.
                 #
-                # Shares `operation_timeout_seconds` because it answers the same
-                # question -- what is longer than any legitimate operation on
-                # this lock -- and a second, smaller number would give up on a
-                # slow-but-working one.
-                refresh_budget = self.operation_timeout_seconds
+                # Sized to a walk of every managed slot because that is what
+                # the first read is, and a second, smaller number would give up
+                # on a slow-but-working lock.
+                refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
                 try:
                     async with asyncio.timeout(refresh_budget):
                         if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
@@ -1304,12 +1339,13 @@ class BaseLock:
         means everything. The returned projection is never narrowed by it:
         the coordinator replaces its data with what comes back, so a read
         must still name every managed slot. A provider that reads the whole
-        device in one call may ignore ``slots``; one that walks the lock a
-        slot at a time should re-read only those, because the coordinator's
-        confirmation read asks about the one or two slots with a write
-        pending, and on a marginal radio link the difference between one
-        command and a walk of the lock is the difference between confirming
-        the write and never confirming it.
+        device in one call may ignore ``slots``. One that keeps a cache
+        re-reads only ``slots`` and projects the rest from the cache: the
+        coordinator's confirmation read asks about the one or two slots with
+        a write pending, and on a marginal radio link the difference between
+        one command and a walk of the lock is the difference between
+        confirming the write and never confirming it. One with no cache
+        re-reads every managed slot plus ``slots``.
         """
         self._raise_not_implemented(
             "async_hard_refresh_codes",
@@ -1321,8 +1357,17 @@ class BaseLock:
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
         """Rate-limited wrapper around async_hard_refresh_codes()."""
+        # A provider with no cache re-reads every managed slot plus ``slots``
+        # (the answer has to name them all); one with a cache re-reads only
+        # ``slots``. Declaring the union covers both without cutting either
+        # off partway.
         return await self._execute_rate_limited(
-            "refresh", self.async_hard_refresh_codes, slots
+            "refresh",
+            self.async_hard_refresh_codes,
+            slots,
+            exchanges=len(
+                self.managed_slots if slots is None else self.managed_slots | set(slots)
+            ),
         )
 
     async def async_set_usercode(
@@ -1399,6 +1444,9 @@ class BaseLock:
             code_slot,
             usercode,
             pre_execute=_pre_execute_checks,
+            # A native-user provider may name the user, write the credential
+            # and roll the user back again: three exchanges, not one.
+            exchanges=3 if self.supports_native_users else 1,
             name=name,
             source=source,
         )
@@ -1533,6 +1581,12 @@ class BaseLock:
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
+            # A native-user provider reads every user first to find whose
+            # credential this is; on a provider that walks the lock that is one
+            # exchange per managed slot on top of the clear itself.
+            exchanges=(
+                len(self.managed_slots) + 1 if self.supports_native_users else 1
+            ),
         )
         # A clear that ran supersedes any write pending on this slot. One that
         # raised superseded nothing: the write stays pending, so a believed
@@ -2121,8 +2175,12 @@ class BaseLock:
         asked about.
         """
         if slots is None:
-            return await self._execute_rate_limited("get", self.async_get_usercodes)
-        return await self._execute_rate_limited("get", self.async_get_usercodes, slots)
+            return await self._execute_rate_limited(
+                "get", self.async_get_usercodes, exchanges=len(self.managed_slots)
+            )
+        return await self._execute_rate_limited(
+            "get", self.async_get_usercodes, slots, exchanges=len(slots)
+        )
 
     @final
     async def async_internal_get_occupied_indices(
@@ -2163,7 +2221,7 @@ class BaseLock:
             return frozenset()
         try:
             codes = await self._execute_rate_limited(
-                "get", partial(self.async_get_usercodes, wanted)
+                "get", partial(self.async_get_usercodes, wanted), exchanges=len(wanted)
             )
         except LockCodeManagerError as err:
             _LOGGER.debug(

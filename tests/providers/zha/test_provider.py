@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,7 +26,10 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.providers import _base as base_module
+from custom_components.lock_code_manager.providers import (
+    _base as base_module,
+    zha as zha_module,
+)
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
@@ -1227,29 +1231,102 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
     assert asked == {2}
 
 
-async def test_the_stall_budget_scales_with_the_slot_walk(
-    hass: HomeAssistant, zha_lock: ZHALock
+async def test_zha_declares_a_per_exchange_budget_and_keeps_the_flat_floor(
+    zha_lock: ZHALock,
 ) -> None:
     """
-    ZHA reads every managed slot inside one operation, so its budget is per-slot.
+    One ZCL command per slot, each of them slow, is declared, not overridden.
 
-    zigpy forces a 28s reply timeout for battery end devices inside three
-    attempts, so one ZCL command can legitimately take ~84s -- and
-    `async_get_users` walks the slots in turn. The base's flat ten minutes
-    would call a slow-but-working lock dead somewhere around eight slots,
-    which is the misdiagnosis the watchdog exists to avoid.
+    Each of zigpy's three attempts waits for the radio's send confirmation
+    (up to 120s on zigpy-xbee) and then 28s for the reply, so one command can
+    take 444s before zigpy gives up on it -- and its per-device concurrency
+    gate can hold the command behind one more attempt before it is sent. The
+    declared budget sits above that on every radio zigpy ships, so zigpy's own
+    word about a slot always comes first. The flat floor is unchanged: the
+    walk scales it at the call site (#1528).
     """
-    flat = base_module.OPERATION_TIMEOUT
-
+    assert ZHALock.per_exchange_budget == zha_module._WORST_CASE_ZCL_COMMAND
+    assert zha_module._WORST_CASE_ZCL_COMMAND > 4 * (120 + 28)
     with patch.object(
-        type(zha_lock),
-        "managed_slots",
-        property(lambda _self: frozenset(range(1, 11))),
+        type(zha_lock), "managed_slots", property(lambda _self: frozenset(range(1, 11)))
     ):
-        assert zha_lock.operation_timeout_seconds > flat
+        assert zha_lock.operation_timeout_seconds == base_module.OPERATION_TIMEOUT
+        assert zha_lock._operation_budget(10) == 10 * zha_module._WORST_CASE_ZCL_COMMAND
 
-    with patch.object(
-        type(zha_lock), "managed_slots", property(lambda _self: frozenset())
+
+async def test_a_slot_read_nobody_answers_is_a_disconnect_not_an_unreadable_slot(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A command nothing ever answers ends the walk as a disconnect at once.
+
+    zigpy gives up on a flaky slot by itself; a read that outlives even that
+    is a wedged transport, caught on the first silent slot rather than after
+    the whole walk (#1528).
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def _never_answers(_slot_num):
+        await asyncio.Event().wait()
+
+    cluster.get_pin_code = AsyncMock(side_effect=_never_answers)
+    with (
+        patch.object(zha_module, "_WORST_CASE_ZCL_COMMAND", 0.05),
+        pytest.raises(LockDisconnected, match="no answer for slot"),
     ):
-        # No slots to walk, so no reason to be more patient than the default.
-        assert zha_lock.operation_timeout_seconds == flat
+        await asyncio.wait_for(zha_lock.async_get_users(), timeout=5)
+
+
+async def test_zigpys_own_timeout_marks_the_slot_unreadable_and_walks_on(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """zigpy giving up on one slot is a flaky slot, not a dead transport."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        if slot_num == 1:
+            raise TimeoutError("zigpy gave up")
+        return type(
+            "Response",
+            (),
+            {"user_status": DoorLock.UserStatus.Available, "code": ""},
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+    users = await zha_lock.async_get_users()
+    by_slot = {u.user_id: u for u in users}
+    assert by_slot[1].pin_credentials[0].state == SlotCredential.unreadable()
+    assert by_slot[2].pin_credentials[0].state is SlotCredential.empty()
+
+
+async def test_scoped_hard_refresh_still_names_every_managed_slot(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A cacheless provider's scoped refresh walks managed slots plus the scope.
+
+    The coordinator replaces its data with the answer, so the answer must
+    name every managed slot; and the deadline the base declares must be the
+    walk this actually makes (#1528).
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    asked: list[int] = []
+
+    async def mock_get_pin_code(slot_num):
+        asked.append(slot_num)
+        return type(
+            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+    codes = await zha_lock.async_hard_refresh_codes({7})
+
+    assert set(asked) == set(zha_lock.managed_slots) | {7}
+    assert set(zha_lock.managed_slots) <= set(codes)
