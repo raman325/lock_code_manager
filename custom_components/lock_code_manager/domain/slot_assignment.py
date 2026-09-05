@@ -117,6 +117,19 @@ class SlotAssignment:
         """Return the slot ``name`` occupies, or None if they hold none."""
         return self.slots.get(identity(name))
 
+    def held_by(self, names: Iterable[str]) -> frozenset[int]:
+        """
+        Return the numbers the users in ``names`` already hold.
+
+        Tenure in one place: these are the numbers ``reconcile`` will keep,
+        so a caller that must not read them (allocation) and the one that
+        must not move them agree on which they are. A name that is not here
+        yet holds nothing; one that is here and absent from ``names`` is
+        being released, and its number is free for whoever comes next.
+        """
+        surviving = {identity(name) for name in names}
+        return frozenset(slot for name, slot in self.slots.items() if name in surviving)
+
     def reconcile(
         self,
         names: Iterable[str],
