@@ -33,7 +33,7 @@ from ..const import (
     POLL_FAILURE_ALERT_THRESHOLD,
 )
 from .credentials import CredentialAddress, CredentialType, pin_address
-from .exceptions import LockCodeManagerError
+from .exceptions import LockBusy, LockCodeManagerError
 from .models import SlotCredential
 from .queries import get_entry_config
 from .resilience import CircuitBreaker
@@ -449,6 +449,14 @@ class LockUsercodeUpdateCoordinator(
         fails once a pending write is past its deadline gives that write up
         all the same: the lock has had the time to live to be seen holding it,
         and was not.
+
+        Not getting a turn at the lock is the one exception. That is time
+        spent behind somebody else's operation rather than evidence about the
+        lock, and giving a write up for it would charge a slot for a lock
+        that was merely busy doing legitimate work -- the fault this
+        integration invented ``LockBusy`` to stop inventing. Turns are handed
+        out in the order they were asked for, so a look that keeps asking
+        gets one.
         """
         if not self._pending:
             return
@@ -478,6 +486,14 @@ class LockUsercodeUpdateCoordinator(
             self._fail_overdue(
                 [address for address in self._pending if address not in new_data]
             )
+        except LockBusy as err:
+            # Never reached the lock; the next look asks again.
+            _LOGGER.debug(
+                "Confirmation read for %s waits for its turn: %s",
+                self._lock.lock.entity_id,
+                err,
+            )
+            return
         except LockCodeManagerError as err:
             self._give_up_overdue(err)
             return
@@ -701,6 +717,21 @@ class LockUsercodeUpdateCoordinator(
         """Fetch usercodes from the provider, normalize slot keys, and apply backoff handling."""
         try:
             data = await self._lock.async_internal_get_usercodes()
+        except LockBusy as err:
+            # Another operation had the lock's turn for the whole wait. Not the
+            # lock's word: no backoff either way. Keep what we have, unless
+            # there is nothing to keep or keeping it would be read as news.
+            # Nothing has ever been read: a false first success would hide
+            # that (#1268). The last poll failed, or the breaker has the lock
+            # in backoff: returning data would report a recovery this read did
+            # nothing to earn.
+            if (
+                self.last_update_success
+                and self._reached_once
+                and not self._lock_breaker.tripped
+            ):
+                return self.data
+            raise UpdateFailed from err
         except LockCodeManagerError as err:
             self._apply_backoff()
             # Don't swallow into {}: DataUpdateCoordinator records any return as
@@ -734,6 +765,13 @@ class LockUsercodeUpdateCoordinator(
                     await self._lock.async_internal_hard_refresh_codes()
                 )
             )
+        except LockBusy as err:
+            _LOGGER.debug(
+                "Drift detection for %s waits for its turn: %s",
+                self._lock.lock.entity_id,
+                err,
+            )
+            return
         except LockCodeManagerError as err:
             self._apply_backoff()
             _LOGGER.warning(

@@ -57,6 +57,7 @@ from .config import build_slot_unique_id
 from .credentials import CredentialAddress, CredentialType
 from .exceptions import (
     CodeRejectedError,
+    LockBusy,
     LockDisconnected,
     LockOperationFailed,
     LockOperationUnsupported,
@@ -792,8 +793,9 @@ class SlotSyncManager:
         # pending check so an outage right after an accepted write suspends
         # as the outage it is while it lasts. If the lock is still unreadable
         # at that write's deadline the coordinator gives the write up all the
-        # same, and the re-sync after recovery costs the one strike that
-        # trade accepts: a landed write re-syncs as no change.
+        # same -- unless its looks never got a turn at the lock, which says
+        # nothing about the lock -- and the re-sync after recovery costs the
+        # one strike that trade accepts: a landed write re-syncs as no change.
         if self._coordinator.unreachable or not self._lock.provider_setup_succeeded:
             self._state = SyncState.SUSPENDED
             self._write_state()
@@ -892,6 +894,13 @@ class SlotSyncManager:
             # request_sync_check will see the slot as in-sync (no code
             # desired, no code on lock). Set to OUT_OF_SYNC so the next
             # tick resolves to IN_SYNC.
+            self._state = SyncState.OUT_OF_SYNC
+            return
+        except LockBusy as err:
+            # Another operation on this lock had the turn for the whole wait.
+            # Not the lock's word about anything, so nothing is charged; the
+            # next tick asks again.
+            _LOGGER.debug("%s: %s. Will retry on next tick.", self._log_prefix, err)
             self._state = SyncState.OUT_OF_SYNC
             return
         except LockDisconnected as err:

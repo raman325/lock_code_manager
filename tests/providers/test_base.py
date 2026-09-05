@@ -55,6 +55,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.events import CredentialOperation
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
+    LockBusy,
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
@@ -2945,3 +2946,114 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
     # a bare CancelledError that formats as the empty string -- which would
     # make the log line report the failure without naming it.
     assert "no answer within" in str(lock.coordinator.last_exception)
+
+
+async def test_a_waiter_whose_turn_never_comes_is_busy_not_disconnected(
+    hass: HomeAssistant,
+):
+    """
+    Queueing behind a long holder is not the lock failing to answer (issue #1535).
+
+    The waiter never reached the lock, so what it raises must not be the
+    disconnect that charges the lock breaker: three queued slots used to
+    mark a working lock unreachable with no device evidence at all.
+    """
+    lock = _make_base_test_lock(hass, "busy_not_disconnected")
+    lock._min_operation_delay = 0
+    lock._budget = 10.0
+
+    async def _never_returns(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda s: s._budget)
+    ):
+        holder = asyncio.create_task(lock._execute_rate_limited("set", _never_returns))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert lock._aio_lock.locked()
+
+        lock._budget = 0.05
+        with pytest.raises(LockBusy) as excinfo:
+            await asyncio.wait_for(
+                lock._execute_rate_limited("get", AsyncMock(return_value="x")),
+                timeout=5,
+            )
+        assert not isinstance(excinfo.value, LockDisconnected)
+        assert not holder.done()  # the holder is still the one being waited for
+        holder.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await holder
+
+
+async def test_the_operation_deadline_starts_when_the_turn_comes(
+    hass: HomeAssistant,
+):
+    """
+    Waiting one's turn does not eat into the budget for the call itself.
+
+    The holder is released by the test after 0.6 s and the waiter's own call
+    takes 0.6 s, against a budget of 1.0 s: one deadline over both legs would
+    cut the waiter off at 1.2 s; a deadline that starts at acquire lets it
+    finish, and each leg sits 0.4 s inside the budget so loop jitter cannot
+    decide the outcome.
+    """
+    lock = _make_base_test_lock(hass, "deadline_at_acquire")
+    lock._min_operation_delay = 0
+    let_go = asyncio.Event()
+
+    async def _holds_until_released(*_args, **_kwargs):
+        await let_go.wait()
+        return "held"
+
+    async def _slow(*_args, **_kwargs):
+        await asyncio.sleep(0.6)
+        return "done"
+
+    with patch.object(
+        type(lock), "operation_timeout_seconds", property(lambda _s: 1.0)
+    ):
+        holder = asyncio.create_task(
+            lock._execute_rate_limited("set", _holds_until_released)
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+        waiter = asyncio.create_task(lock._execute_rate_limited("get", _slow))
+        await asyncio.sleep(0.6)
+        let_go.set()
+        assert await asyncio.wait_for(holder, timeout=5) == "held"
+        result = await asyncio.wait_for(waiter, timeout=5)
+
+    assert result == "done"
+
+
+async def test_a_probe_that_never_answers_is_cut_off_before_the_queue(
+    hass: HomeAssistant,
+):
+    """The availability probes get their own bound, ahead of the wait for a turn.
+
+    They are device I/O on some providers -- Schlage's is a cloud round trip
+    -- so they are bounded; and they run before the mutex, so a lock that
+    cannot even be probed is reported as unreachable without first queueing
+    behind somebody else's operation. Collapsing the two bounds into one
+    would let a slow probe eat the budget meant for the call, holding the
+    mutex while it did.
+    """
+    lock = _make_base_test_lock(hass, "probe_before_queue")
+    lock._min_operation_delay = 0
+
+    async def _never_answers():
+        await asyncio.Event().wait()
+
+    with (
+        patch.object(
+            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        ),
+        patch.object(lock, "async_is_integration_connected", _never_answers),
+        pytest.raises(LockDisconnected, match="availability check gave no answer"),
+    ):
+        await asyncio.wait_for(
+            lock._execute_rate_limited("get", AsyncMock(return_value="x")), timeout=5
+        )
+
+    assert not lock._aio_lock.locked()

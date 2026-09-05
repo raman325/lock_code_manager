@@ -63,6 +63,7 @@ from ..domain.events import CredentialOperation, async_fire_credential_used
 from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
+    LockBusy,
     LockCodeManagerError,
     LockCodeManagerProviderError,
     LockDisconnected,
@@ -296,51 +297,71 @@ class BaseLock:
         """
         Execute operation with connection check, serialization, and delay.
 
+        Three bounds, one per question, because one number cannot answer
+        "how long may my call take" and "how long will I queue behind
+        someone else's" at once (issue #1535):
+
+        - The availability probes are device I/O on some providers --
+          Schlage's is a cloud round trip -- and get the operation budget.
+          A probe that never answers is ``LockDisconnected``.
+        - The wait for ``_aio_lock`` gets one holder's worth. A wait that
+          runs out is ``LockBusy``: the caller never reached the lock, so it
+          is not the lock's word about anything and charges no breaker.
+        - The operation gets the operation budget, starting at acquire, so a
+          caller that waited its turn still has its whole budget for real
+          I/O. A call that answers nothing in that long is ``LockDisconnected``:
+          a disconnection, not an operation failure, and the distinction
+          decides what happens. A failure charges the SLOT breaker, which is
+          windowed -- three strikes inside five minutes -- so at a budget
+          longer than that window it could never trip. A disconnection
+          charges the LOCK breaker, which counts consecutively: three trips
+          ``unreachable``, the tick gates on it, backoff stops the hammering,
+          and it self-heals on the next successful poll.
+
         pre_execute runs inside the lock before the operation, for checks
         that must be atomic with the operation (e.g., duplicate detection).
         """
+        budget = self.operation_timeout_seconds
+        what = f"{_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id}"
+        try:
+            async with asyncio.timeout(budget):
+                await self._check_reachable(operation_type)
+        except TimeoutError as err:
+            raise LockDisconnected(
+                f"Cannot {what} - availability check gave no answer within "
+                f"{budget:.0f}s"
+            ) from err
+
+        try:
+            async with asyncio.timeout(budget):
+                await self._aio_lock.acquire()
+        except TimeoutError as err:
+            raise LockBusy(
+                f"Cannot {what} - another operation on this lock has held it for "
+                f"{budget:.0f}s"
+            ) from err
+
+        try:
+            async with asyncio.timeout(budget):
+                return await self._execute_locked(
+                    operation_type, func, *args, pre_execute=pre_execute, **kwargs
+                )
+        except TimeoutError as err:
+            raise LockDisconnected(
+                f"Cannot {what} - no answer within {budget:.0f}s"
+            ) from err
+        finally:
+            self._aio_lock.release()
+
+    @final
+    async def _check_reachable(
+        self, operation_type: Literal["get", "set", "clear", "refresh"]
+    ) -> None:
+        """Run both availability probes; raise LockDisconnected if either fails."""
         # Evaluate both layers, feed the combined reachability to the
         # transition handler, then raise the layer-specific message. The two
         # checks are kept distinct for diagnostics; the transition only cares
         # whether the lock is reachable end-to-end.
-        # Inside the deadline, not before it. These are device I/O on some
-        # providers -- Schlage's availability check is a `get_codes` cloud
-        # round trip -- and waiting on `_aio_lock` behind another caller is
-        # the #1523 park itself. Bounding only `func` left both unbounded.
-        try:
-            async with asyncio.timeout(self.operation_timeout_seconds):
-                return await self._execute_bounded(
-                    operation_type, func, *args, pre_execute=pre_execute, **kwargs
-                )
-        except TimeoutError as err:
-            # A disconnection, not an operation failure, and the distinction
-            # decides whether anything happens at all. A failure charges the
-            # SLOT breaker, which is windowed -- three strikes inside five
-            # minutes -- so at a budget longer than that window the count
-            # resets on every retry and it can never trip. A disconnection
-            # charges the LOCK breaker, which counts consecutively: three
-            # trips `unreachable`, the tick gates on it, and backoff stops the
-            # hammering. It self-heals on the next successful poll too, where
-            # a suspended slot would wait for someone to edit the PIN.
-            #
-            # It is the honest word besides: a lock that has answered nothing
-            # in this long is not reachable.
-            raise LockDisconnected(
-                f"Cannot {_OPERATION_MESSAGES[operation_type]} "
-                f"{self.lock.entity_id} - no answer within "
-                f"{self.operation_timeout_seconds:.0f}s"
-            ) from err
-
-    @final
-    async def _execute_bounded(
-        self,
-        operation_type: Literal["get", "set", "clear", "refresh"],
-        func: Callable[..., Any],
-        *args: Any,
-        pre_execute: Callable[[], None] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Run one operation, with the caller holding the deadline."""
         integration_up = await self.async_is_integration_connected()
         device_up = await self.async_is_device_available()
         self._note_reachability(integration_up and device_up)
@@ -353,30 +374,39 @@ class BaseLock:
                 f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - device not available"
             )
 
-        async with self._aio_lock:
-            if pre_execute:
-                pre_execute()
+    @final
+    async def _execute_locked(
+        self,
+        operation_type: Literal["get", "set", "clear", "refresh"],
+        func: Callable[..., Any],
+        *args: Any,
+        pre_execute: Callable[[], None] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run one operation with ``_aio_lock`` held by the caller."""
+        if pre_execute:
+            pre_execute()
 
-            elapsed = time.monotonic() - self._last_operation_time
-            if elapsed < self._min_operation_delay:
-                delay = self._min_operation_delay - elapsed
-                LOGGER.debug(
-                    "Rate limiting %s operation on %s, waiting %.1f seconds",
-                    operation_type,
-                    self.lock.entity_id,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-
+        elapsed = time.monotonic() - self._last_operation_time
+        if elapsed < self._min_operation_delay:
+            delay = self._min_operation_delay - elapsed
             LOGGER.debug(
-                "Executing %s operation on %s",
+                "Rate limiting %s operation on %s, waiting %.1f seconds",
                 operation_type,
                 self.lock.entity_id,
+                delay,
             )
+            await asyncio.sleep(delay)
 
-            result = await func(*args, **kwargs)
-            self._last_operation_time = time.monotonic()
-            return result
+        LOGGER.debug(
+            "Executing %s operation on %s",
+            operation_type,
+            self.lock.entity_id,
+        )
+
+        result = await func(*args, **kwargs)
+        self._last_operation_time = time.monotonic()
+        return result
 
     @final
     def _serialize_sequence(self) -> contextlib.AbstractAsyncContextManager[None]:

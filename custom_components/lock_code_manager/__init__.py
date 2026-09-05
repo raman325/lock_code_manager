@@ -115,11 +115,7 @@ from .domain.config import (
     parse_slot_unique_id,
 )
 from .domain.credentials import CredentialType
-from .domain.exceptions import (
-    LockDisconnected,
-    LockOperationFailed,
-    UnclaimedLockError,
-)
+from .domain.exceptions import LockCodeManagerProviderError, UnclaimedLockError
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
@@ -2000,9 +1996,10 @@ async def _async_apply_entry_update(
             continue
         try:
             await release_lock.async_release_managed_slot(slot_num)
-        except (LockDisconnected, LockOperationFailed) as err:
+        except LockCodeManagerProviderError as err:
             # The slot is gone from LCM config either way; lock-side cleanup
-            # is best-effort and must not block the teardown.
+            # is best-effort and must not block the teardown -- whatever the
+            # provider had to say about it (unreachable, refused, or busy).
             _LOGGER.warning(
                 "%s (%s): could not release slot %s on lock %s: %s",
                 entry_id,
