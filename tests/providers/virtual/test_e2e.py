@@ -45,6 +45,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.sync import TICK_INTERVAL
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
+from tests.common import async_configure_flow
 
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
 
@@ -401,8 +402,8 @@ class TestReauthLockSwap:
         await hass.async_block_till_done()
         [flow] = lcm_config_entry.async_get_active_flows(hass, {SOURCE_REAUTH})
 
-        result = await hass.config_entries.flow.async_configure(
-            flow["flow_id"], {CONF_LOCKS: [replacement.entity_id]}
+        result = await async_configure_flow(
+            hass, flow["flow_id"], {CONF_LOCKS: [replacement.entity_id]}
         )
         assert result["type"] == "abort"
         assert result["reason"] == "locks_updated"

@@ -44,7 +44,12 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
-from tests.common import code_entity_id, in_sync_entity_id, slot_entity_id
+from tests.common import (
+    async_configure_flow,
+    code_entity_id,
+    in_sync_entity_id,
+    slot_entity_id,
+)
 from tests.conftest import async_advance_time
 
 from .conftest import (
@@ -829,16 +834,15 @@ class TestAddingThroughTheUserInterface:
             DOMAIN, context={"source": SOURCE_USER}
         )
         flow_id = result["flow_id"]
-        result = await hass.config_entries.flow.async_configure(
+        result = await async_configure_flow(
+            hass,
             flow_id,
             {CONF_NAME: "zui", CONF_LOCKS: [zui_lock_discovered.entity_id]},
         )
         assert result["step_id"] == "choose_path"
 
-        await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NUM_USERS: 2}
-        )
+        await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+        result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
 
         assert result["step_id"] == "code_slot"
         assert result["description_placeholders"]["user_num"] == 1
