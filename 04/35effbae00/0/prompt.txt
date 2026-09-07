@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bo090ovz6</task-id>
+<tool-use-id>toolu_01GSVkSRqTkwS451KS86hsjv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/2b303935-a964-4f53-8de1-3e2ef0a99d8f/tasks/bo090ovz6.output</output-file>
+<status>completed</status>
+<summary>Background command "Rebuild /tmp/ha29 venv from the requirements files" completed (exit code 0)</summary>
+</task-notification>
