@@ -68,16 +68,25 @@ def test_active_readable_credential_syncs_iff_pin_matches(
     assert manager.calculate_in_sync(state) is (pin == credential_pin)
 
 
-@given(pin=PINS, last_set_pin=LAST_SET)
-def test_active_empty_credential_trusts_recent_set_only(
-    pin: str, last_set_pin: str | None
+@given(pin=PINS, other=LAST_SET, same_as_last_set=st.booleans())
+def test_active_verified_empty_credential_is_never_in_sync(
+    pin: str, other: str | None, same_as_last_set: bool
 ) -> None:
-    """Active + lock reports empty: in sync only if we just set this exact PIN."""
+    """Active + a verified read that the slot is empty: never in sync.
+
+    The coordinator only reports an address verified when no write is pending
+    against it, so by the time this branch sees EMPTY the lock has had its say
+    and nothing we wrote is still in flight. Trusting our own write over that
+    is what let a deleted credential report as synchronized (issue #1538).
+
+    ``same_as_last_set`` is an explicit axis because two independent draws
+    almost never collide, and the case that matters is exactly the one where
+    the configured PIN equals the one last written.
+    """
+    last_set_pin = pin if same_as_last_set else other
     manager = _manager(verified=True, last_set_pin=last_set_pin)
     state = CredentialSyncState(STATE_ON, pin, None, "", SlotCredential.empty())
-    assert manager.calculate_in_sync(state) is (
-        last_set_pin is not None and pin == last_set_pin
-    )
+    assert manager.calculate_in_sync(state) is False
 
 
 @given(pin=PINS, last_set_pin=LAST_SET)

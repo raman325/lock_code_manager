@@ -9,7 +9,7 @@ from functools import wraps
 import logging
 from typing import Any
 
-import voluptuous as vol
+import probatio as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN

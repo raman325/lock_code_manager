@@ -10,7 +10,7 @@ would be the more dangerous disagreement.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 import logging
 from typing import Any
 
@@ -192,6 +192,8 @@ async def async_read_occupancy(
     config_entry: ConfigEntry | None,
     locks: Sequence[str],
     indices: Collection[int],
+    *,
+    progress: Callable[[float], None] | None = None,
 ) -> Occupancy:
     """
     Ask every lock in ``locks`` which of ``indices`` it holds.
@@ -207,11 +209,17 @@ async def async_read_occupancy(
     by tenure, released ones are free for whoever comes next. ``None`` is
     an entry still being created, which by the same rule holds nothing and
     so excludes nothing.
+
+    ``progress`` is told, as a fraction, how many of the locks have answered:
+    a lock that answers one index per round trip can take a minute or more,
+    and the flow showing this read should not look frozen while it waits.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
     lock_occupancies: list[LockOccupancy] = []
-    for lock_entity_id in locks:
+    for done, lock_entity_id in enumerate(locks):
+        if progress is not None:
+            progress(done / len(locks))
         try:
             lock_instance = build_lock_instance(
                 hass, dev_reg, ent_reg, config_entry, lock_entity_id
@@ -273,6 +281,8 @@ async def async_read_occupancy(
                 occupied=occupied,
             )
         )
+    if progress is not None:
+        progress(1.0)
     return Occupancy(
         locks=tuple(lock_occupancies),
         claimed_by_other_entries=frozenset(
@@ -383,6 +393,9 @@ async def async_allocate_for(
     config_entry: ConfigEntry | None,
     locks: Sequence[str],
     num_users: int,
+    *,
+    held: Collection[int] = (),
+    progress: Callable[[float], None] | None = None,
 ) -> frozenset[int]:
     """
     Find numbers for ``num_users``, reading only as far as it has to.
@@ -403,7 +416,22 @@ async def async_allocate_for(
     once they have names.
 
     ``config_entry`` is the entry the numbers are being allocated for, on the
-    terms ``build_lock_instance`` describes.
+    terms ``build_lock_instance`` describes. ``held`` names the numbers its
+    users keep through this edit (``SlotAssignment.held_by``): taken by
+    tenure, so they are not read -- reconcile keeps their users where they
+    are, newcomers avoid them, and a lock answering one index per round trip
+    is spared a read per existing user (issue #1536). A number the entry is
+    releasing in the same edit is not held and is read like any other, so it
+    is free for whoever comes next.
+
+    Held numbers are not returned either. ``reconcile`` keeps them for the
+    users holding them, so naming them again would only widen the window as
+    if a stranger held them -- which refuses an entry that is merely full of
+    its own users: ten users on a fifteen-slot lock could not take an
+    eleventh, because the window would reach for twenty-one numbers to place
+    eleven people.
+
+    ``progress`` is passed to each read; see ``async_read_occupancy``.
     """
     try:
         await async_check_slot_capacity(hass, config_entry, locks, [num_users])
@@ -419,23 +447,42 @@ async def async_allocate_for(
         # a lock reading past-end as free would hand back all of it.
         raise _too_far(num_users, max_slot, limiting_lock)
 
+    held = frozenset(held)
     unavailable: set[int] = set()
+    # Each widening pass takes half of whatever fraction is left, so progress
+    # only ever moves forward: how many passes there will be is not knowable
+    # in advance, and a bar that restarts on each one reads as a hang -- the
+    # symptom this progress exists to remove. Within a pass it is per lock, so
+    # a single-lock entry sees the passes rather than the indices.
+    reported = [0.0, 0.5]
+
+    def _pass_progress(fraction: float) -> None:
+        if progress is not None:
+            progress(reported[0] + fraction * reported[1])
+
     read_up_to = 0
     window = num_users
     while True:
         # Only the part nobody has asked about yet; re-reading from one
         # each pass would cost a nearly-full lock several times its own
-        # capacity to place a couple of users.
-        occupancy = await async_read_occupancy(
-            hass, config_entry, locks, range(read_up_to + 1, window + 1)
-        )
-        if not occupancy.is_known:
-            # Unreadable is not free: issuing a number could overwrite a
-            # credential programmed by hand on a lock that did not answer.
-            raise SlotAllocationError(
-                "occupancy_unknown", {"locks": ", ".join(occupancy.unreadable)}
+        # capacity to place a couple of users. Numbers this entry holds are
+        # known taken and need no round trip.
+        indices = [
+            index for index in range(read_up_to + 1, window + 1) if index not in held
+        ]
+        if indices:
+            occupancy = await async_read_occupancy(
+                hass, config_entry, locks, indices, progress=_pass_progress
             )
-        unavailable |= occupancy.unavailable
+            if not occupancy.is_known:
+                # Unreadable is not free: issuing a number could overwrite a
+                # credential programmed by hand on a lock that did not answer.
+                raise SlotAllocationError(
+                    "occupancy_unknown", {"locks": ", ".join(occupancy.unreadable)}
+                )
+            unavailable |= occupancy.unavailable
+            reported[0] += reported[1]
+            reported[1] /= 2
         read_up_to = window
 
         taken_in_window = sum(1 for slot in unavailable if slot <= window)
@@ -465,6 +512,9 @@ async def async_allocate_for(
             # come back occupied, forever.
             raise _too_far(num_users, max_slot, limiting_lock, needed=wider)
         window = wider
+
+    if progress is not None:
+        progress(1.0)
 
     # No capacity check here: every window this loop accepted was checked
     # before it was accepted -- the first as the bare count, each wider

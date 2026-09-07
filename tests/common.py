@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import patch
 
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
@@ -20,6 +20,7 @@ from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigSubentryData
 from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.util import slugify
@@ -264,9 +265,11 @@ class MockLCMLock(BaseLock):
         self.service_calls["unload"].append((remove_permanently,))
         await super().async_unload(remove_permanently)
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Perform hard refresh of all codes."""
-        self.service_calls["hard_refresh_codes"].append(())
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """Perform hard refresh; records the scope it was asked for."""
+        self.service_calls["hard_refresh_codes"].append((slots,))
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
@@ -313,19 +316,29 @@ class MockLCMLock(BaseLock):
         self.service_calls["get_usercodes"].append(snapshot)
         codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
         codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
-        if slots is None:
-            return codes
         # Mirrors the base projection, including the part that matters: a slot
-        # in the scope that holds nothing is empty, and a slot the lock holds
-        # OUTSIDE the scope is still reported. Answering with exactly the
-        # scope would model the one shape where a caller's own bounds check
-        # is a no-op.
-        return {**dict.fromkeys(slots, SlotCredential.empty()), **codes}
+        # in the scope -- the managed slots, when the caller names none -- that
+        # holds nothing is empty, and a slot the lock holds OUTSIDE the scope
+        # is still reported. Answering with exactly the scope would model the
+        # one shape where a caller's own bounds check is a no-op; omitting an
+        # empty managed slot would hide the read the pending-write machinery
+        # waits on.
+        scope = self.managed_slots if slots is None else slots
+        return {**dict.fromkeys(scope, SlotCredential.empty()), **codes}
 
 
 @dataclass(repr=False, eq=False)
 class MockLCMPushLock(MockLCMLock):
     """Mock lock that supports push-based updates."""
+
+    async def async_set_usercode(
+        self, code_slot: int, usercode: str, *args: Any, **kwargs: Any
+    ) -> WriteResult:
+        """Set a code and push it, as every push provider does before CONFIRMED."""
+        result = await super().async_set_usercode(code_slot, usercode, *args, **kwargs)
+        if result is WriteResult.CONFIRMED:
+            self._push_credential_update(code_slot, SlotCredential.known(usercode))
+        return result
 
     def __init__(self, *args, **kwargs):
         """Initialize mock push lock."""
@@ -508,3 +521,31 @@ def unnumbered_user_subentry(name: str, **fields) -> ConfigSubentryData:
         title=name,
         unique_id=None,
     )
+
+
+async def async_configure_flow(
+    hass: HomeAssistant, flow_id: str, user_input: dict[str, Any] | None = None
+) -> Any:
+    """
+    Submit to a config flow, waiting out any progress step it shows.
+
+    Allocation runs as a progress task (#1536): the step that takes the
+    submission shows progress, Home Assistant re-enters it when the task is
+    done, and the next result is what the user would see.
+    """
+    result = await hass.config_entries.flow.async_configure(flow_id, user_input)
+    while result["type"] == FlowResultType.SHOW_PROGRESS:
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
+    return result
+
+
+async def async_configure_options(
+    hass: HomeAssistant, flow_id: str, user_input: dict[str, Any] | None = None
+) -> Any:
+    """Submit to an options flow, waiting out any progress step it shows."""
+    result = await hass.config_entries.options.async_configure(flow_id, user_input)
+    while result["type"] == FlowResultType.SHOW_PROGRESS:
+        await hass.async_block_till_done()
+        result = await hass.config_entries.options.async_configure(flow_id)
+    return result

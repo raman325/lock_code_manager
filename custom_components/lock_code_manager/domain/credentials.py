@@ -236,14 +236,15 @@ class WriteResult(StrEnum):
 
     - ``NO_CHANGE`` -- the value was already set; nothing was written. The
       coordinator is not refreshed.
-    - ``CONFIRMED`` -- the lock acknowledged the write. The slot is marked
-      verified; non-push providers refresh to read it back.
+    - ``CONFIRMED`` -- the write was accepted. On a push provider that is the
+      lock's word: the provider pushes the value (or the driver's event does)
+      and nothing is left pending. On a polled lock it is the cloud service's
+      word only, so the coordinator records the write pending -- unverified
+      until a read shows the slot hold it, given up on if none does in time.
     - ``OPTIMISTIC`` -- the write returned an ambiguous result we treat as
       completed but have NOT confirmed (e.g. a Z-Wave driver
-      ``ERROR_UNKNOWN`` from a masked read-back). The slot is marked
-      unverified and awaits confirmation via a push event or hard refresh;
-      if none arrives, it re-syncs rather than silently reporting success.
-      See the Phase 2 push-as-commit spec.
+      ``ERROR_UNKNOWN`` from a masked read-back). Recorded pending with the
+      value believed, and settled the same way.
     """
 
     NO_CHANGE = "no_change"

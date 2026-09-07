@@ -70,7 +70,9 @@ async def test_device_diagnostics_slot_device(
     dev_reg = dr.async_get(hass)
     entry_id = lock_code_manager_config_entry.entry_id
 
-    slot_device = dev_reg.async_get_device(identifiers={(DOMAIN, f"{entry_id}|1")})
+    slot_device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, f"{entry_id}|1"), entry_id
+    )
     assert slot_device is not None
 
     result = await async_get_device_diagnostics(
@@ -107,7 +109,7 @@ async def test_device_diagnostics_lock_device(
         # No device entry — device diagnostics falls through to config entry
         dev_reg = dr.async_get(hass)
         entry_id = lock_code_manager_config_entry.entry_id
-        ce_device = dev_reg.async_get_device(identifiers={(DOMAIN, entry_id)})
+        ce_device = dev_reg.async_get_device_by_identifier((DOMAIN, entry_id), entry_id)
         assert ce_device is not None
         result = await async_get_device_diagnostics(
             hass, lock_code_manager_config_entry, ce_device

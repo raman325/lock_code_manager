@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
@@ -127,8 +128,8 @@ class TestUserCodeValues:
         fire_node_value(hass, f"{property_path}/3", payload)
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {3: SlotCredential.known("1234")}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.known("1234")
         )
 
     @pytest.mark.parametrize(
@@ -163,8 +164,8 @@ class TestUserCodeValues:
         fire_node_value(hass, f"{USER_CODE_VALUEID}/3", payload)
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {3: SlotCredential.known(expected_code)}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.known(expected_code)
         )
 
     @pytest.mark.parametrize(
@@ -186,8 +187,8 @@ class TestUserCodeValues:
         fire_node_value(hass, f"{property_path}/4", payload)
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {4: SlotCredential.empty()}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(4), SlotCredential.empty()
         )
 
     @pytest.mark.parametrize(
@@ -219,7 +220,7 @@ class TestUserCodeValues:
         fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/5", payload)
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.observe_push.assert_not_called()
 
     @pytest.mark.parametrize(
         "payload",
@@ -257,7 +258,7 @@ class TestUserCodeValues:
         fire_node_value(hass, f"{USER_CODE_VALUEID}/6", payload)
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.observe_push.assert_not_called()
 
 
 class TestStaleAvailable:
@@ -280,7 +281,7 @@ class TestStaleAvailable:
         fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.observe_push.assert_not_called()
 
     async def test_available_confirms_empty_when_no_pin_is_expected(
         self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
@@ -292,8 +293,8 @@ class TestStaleAvailable:
         fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {4: SlotCredential.empty()}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(4), SlotCredential.empty()
         )
 
     async def test_available_confirms_empty_without_a_coordinator(
@@ -337,7 +338,7 @@ class TestStatusGatedCodes:
         fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.observe_push.assert_not_called()
 
     async def test_a_code_before_any_status_confirms_the_slot(
         self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
@@ -354,8 +355,8 @@ class TestStatusGatedCodes:
         fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {3: SlotCredential.known("1234")}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.known("1234")
         )
 
     async def test_a_disabled_slot_does_not_gate_another_slot(
@@ -368,8 +369,8 @@ class TestStatusGatedCodes:
         fire_node_value(hass, f"{USER_CODE_VALUEID}/4", wrapped("5678"))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {4: SlotCredential.known("5678")}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(4), SlotCredential.known("5678")
         )
 
     async def test_re_enabling_a_slot_re_admits_its_code(
@@ -383,8 +384,8 @@ class TestStatusGatedCodes:
         fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {3: SlotCredential.known("1234")}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.known("1234")
         )
 
     async def test_an_uninterpretable_status_does_not_gate(
@@ -403,8 +404,8 @@ class TestStatusGatedCodes:
         fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {3: SlotCredential.known("1234")}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.known("1234")
         )
 
     async def test_teardown_forgets_the_tracked_statuses(
@@ -427,8 +428,8 @@ class TestStatusGatedCodes:
         fire_node_value(hass, f"{USER_CODE_VALUEID}/3", wrapped("1234"))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_called_once_with(
-            {3: SlotCredential.known("1234")}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.known("1234")
         )
 
 
@@ -562,7 +563,7 @@ class TestForeignNodeTraffic:
         fire_node_value(hass, suffix, keypad_payload(3))
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.observe_push.assert_not_called()
         fired.assert_not_called()
         assert [record for record in caplog.records if record.levelno >= ERROR] == []
 
@@ -589,7 +590,7 @@ class TestForeignNodeTraffic:
         lock._process_node_message("zwave/nodeID_200/99/0/userCode/3", b"1234")
         await hass.async_block_till_done()
 
-        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.observe_push.assert_not_called()
 
     async def test_nothing_is_classified_before_the_subscription_exists(
         self,
@@ -602,7 +603,7 @@ class TestForeignNodeTraffic:
 
         lock._process_node_message(f"{ZUI_NODE_TOPIC}/99/0/userCode/3", b"1234")
 
-        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.observe_push.assert_not_called()
 
 
 class TestNodeSubscriptionLifecycle:
@@ -665,8 +666,8 @@ class TestNodeSubscriptionLifecycle:
 
         async_fire_mqtt_message(hass, f"{renamed_node_topic}/99/0/userCode/3", "1234")
         await hass.async_block_till_done()
-        lock.coordinator.push_update.assert_called_once_with(
-            {3: SlotCredential.known("1234")}
+        lock.coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.known("1234")
         )
 
     async def test_a_transiently_unresolvable_topic_keeps_the_subscription(
@@ -820,7 +821,7 @@ class TestNodeSubscriptionLifecycle:
         # Nothing arrives after teardown, and a second call is a no-op.
         fire_node_value(hass, f"{USER_CODE_VALUEID}/3", "1234")
         await hass.async_block_till_done()
-        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.observe_push.assert_not_called()
         lock.teardown_push_subscription()
 
     async def test_unload_releases_the_node_subscription_once(
@@ -922,7 +923,7 @@ async def test_a_second_lock_on_the_same_node_is_addressed_separately(
     fire_node_value(hass, f"{USER_CODE_VALUEID}/3", "1234")
     await hass.async_block_till_done()
 
-    zui_lock_subscribed.coordinator.push_update.assert_called_once_with(
-        {3: SlotCredential.known("1234")}
+    zui_lock_subscribed.coordinator.observe_push.assert_called_once_with(
+        pin_address(3), SlotCredential.known("1234")
     )
-    other_lock.coordinator.push_update.assert_not_called()
+    other_lock.coordinator.observe_push.assert_not_called()

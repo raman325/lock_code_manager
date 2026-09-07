@@ -111,7 +111,9 @@ class VirtualLock(BaseLock):
         else:
             await self._store.async_save(self._data)
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """Reload from store and return all codes."""
         self._data = data if (data := await self._store.async_load()) else {}
         return await self.async_get_usercodes()

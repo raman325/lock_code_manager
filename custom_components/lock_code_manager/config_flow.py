@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Container, Iterable, Mapping, Sequence
+import asyncio
+from collections.abc import Callable, Collection, Container, Iterable, Mapping, Sequence
 import logging
 from typing import Any
 
-import voluptuous as vol
+import probatio as vol
 
 from homeassistant import config_entries
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
@@ -19,6 +20,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import UnknownFlow
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -250,12 +252,18 @@ async def _async_validate_users_yaml(
     return parsed_users, {}, {}
 
 
+_AllocationOutcome = tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]
+
+
 async def _allocate_for(
     hass: HomeAssistant,
     config_entry: ConfigEntry | None,
     locks: Sequence[str],
     num_users: int,
-) -> tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]:
+    *,
+    held: Collection[int] = (),
+    progress: Callable[[float], None] | None = None,
+) -> _AllocationOutcome:
     """
     Find numbers for ``num_users``, or say why it could not.
 
@@ -268,9 +276,16 @@ async def _allocate_for(
     ``None``, which by the same rule holds nothing.
     """
     try:
-        unavailable = await async_allocate_for(hass, config_entry, locks, num_users)
+        unavailable = await async_allocate_for(
+            hass, config_entry, locks, num_users, held=held, progress=progress
+        )
     except SlotAllocationError as err:
         return None, {"base": err.translation_key}, err.placeholders
+    except Exception:
+        # Runs as a flow progress task: an exception escaping here would
+        # reach the user as "Unknown error" with nothing in the form.
+        _LOGGER.exception("Allocating slot numbers on %s failed", ", ".join(locks))
+        return None, {"base": "allocation_failed"}, {}
     return unavailable, {}, {}
 
 
@@ -324,7 +339,94 @@ def _validate_user_form(
     return name, fields, errors, placeholders
 
 
-class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
+class _AllocatesInProgress:
+    """
+    Run allocation as a progress task, so a long lock read is visible.
+
+    A lock that answers one index per round trip can take a minute or more
+    per lock, and both flows that allocate are interactive (issue #1536). The
+    step that takes the submission starts the task and shows progress; Home
+    Assistant re-enters the step when the task finishes, the step hands off
+    to its ``<step>_allocated`` sibling, and that one either proceeds or
+    re-shows the same form with the refusal.
+    """
+
+    # Provided by the FlowHandler this is mixed into.
+    hass: HomeAssistant
+    async_show_progress: Callable[..., Any]
+    async_show_progress_done: Callable[..., Any]
+    async_update_progress: Callable[[float], None]
+
+    _allocation_task: asyncio.Task[_AllocationOutcome] | None = None
+    _allocation_submission: dict[str, Any] | None = None
+
+    def _start_allocation(
+        self,
+        step_id: str,
+        config_entry: ConfigEntry | None,
+        locks: Sequence[str],
+        num_users: int,
+        submission: dict[str, Any],
+        *,
+        held: Collection[int] = (),
+    ) -> Any:
+        """Start allocating for ``submission`` and show progress for it."""
+        self._allocation_submission = submission
+        self._allocation_task = self.hass.async_create_task(
+            _allocate_for(
+                self.hass,
+                config_entry,
+                locks,
+                num_users,
+                held=held,
+                progress=self.async_update_progress,
+            )
+        )
+        return self.async_show_progress(
+            step_id=step_id,
+            progress_action="allocating",
+            progress_task=self._allocation_task,
+        )
+
+    def _allocation_progress(self, step_id: str) -> Any | None:
+        """Return the progress result while allocating; None when nothing is."""
+        task = self._allocation_task
+        if task is None:
+            return None
+        if not task.done():
+            return self.async_show_progress(
+                step_id=step_id, progress_action="allocating", progress_task=task
+            )
+        return self.async_show_progress_done(next_step_id=f"{step_id}_allocated")
+
+    def _take_allocation(self) -> tuple[dict[str, Any], _AllocationOutcome]:
+        """
+        Return the submission and the finished allocation's outcome, once.
+
+        A second request for a step the first one already answered gets the
+        same answer Home Assistant gives a request for any step that is no
+        longer there. That is reachable: the flow sits on the progress-done
+        step for as long as answering it takes -- creating the entry and
+        setting the integration up -- so a duplicated request or a second
+        open dialog lands here. ``UnknownFlow`` becomes a 404 at the view and
+        leaves the flow alone; raising anything else would reach the user as
+        "Unknown error", which is what this step exists to stop, and aborting
+        would pull the flow out from under the request busy finishing it.
+        """
+        task, submission = self._allocation_task, self._allocation_submission
+        if task is None or submission is None:
+            raise UnknownFlow(
+                "Slot numbers for this step were already allocated by another "
+                "request for the same flow"
+            )
+        self._allocation_task = None
+        self._allocation_submission = None
+        return submission, task.result()
+
+
+class LockCodeManagerFlowHandler(
+    _AllocatesInProgress, config_entries.ConfigFlow, domain=DOMAIN
+):
     """Config flow for Lock Code Manager."""
 
     VERSION = 5
@@ -392,25 +494,41 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Ask how many users to configure."""
-        errors: dict[str, str] = {}
-        description_placeholders: dict[str, Any] = {}
+        if (progress := self._allocation_progress("ui")) is not None:
+            return progress
         if user_input is not None:
-            num_users = user_input[CONF_NUM_USERS]
             # Settled before a single name is collected. Which users get
             # configured does not change which numbers allocation issues, so
             # the count alone decides whether they fit -- and a refusal here
             # is one the user can still act on. The ``None`` is the entry the
             # lock reads are made for: this flow is what creates it.
-            (
-                unavailable,
-                errors,
-                description_placeholders,
-            ) = await _allocate_for(self.hass, None, self.data[CONF_LOCKS], num_users)
-            if unavailable is not None:
-                self._users_to_configure = num_users
-                self._unavailable = unavailable
-                return await self.async_step_code_slot()
+            return self._start_allocation(
+                "ui",
+                None,
+                self.data[CONF_LOCKS],
+                user_input[CONF_NUM_USERS],
+                user_input,
+            )
+        return self._show_ui_form(None, {}, {})
 
+    async def async_step_ui_allocated(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Take the finished allocation: on to the users, or back to the count."""
+        submission, (unavailable, errors, placeholders) = self._take_allocation()
+        if unavailable is None:
+            return self._show_ui_form(submission, errors, placeholders)
+        self._users_to_configure = submission[CONF_NUM_USERS]
+        self._unavailable = unavailable
+        return await self.async_step_code_slot()
+
+    def _show_ui_form(
+        self,
+        user_input: dict[str, Any] | None,
+        errors: dict[str, str],
+        description_placeholders: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Render the count form, holding whatever was submitted."""
         return self.async_show_form(
             step_id="ui",
             data_schema=self.add_suggested_values_to_schema(
@@ -493,6 +611,8 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
         """Take a block of users, then allocate their numbers."""
+        if (progress := self._allocation_progress("yaml")) is not None:
+            return progress
         errors: dict[str, str] = {}
         description_placeholders: dict[str, Any] = {}
         if not user_input:
@@ -515,26 +635,13 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 # neither can land on one a lock already holds. The ``None``
                 # is the entry the lock reads are made for, which this flow
                 # has not created yet.
-                (
-                    unavailable,
-                    allocation_errors,
-                    allocation_placeholders,
-                ) = await _allocate_for(
-                    self.hass, None, self.data[CONF_LOCKS], len(users)
+                return self._start_allocation(
+                    "yaml",
+                    None,
+                    self.data[CONF_LOCKS],
+                    len(users),
+                    {CONF_USERS: users, "raw": user_input},
                 )
-                if unavailable is None:
-                    return self.async_show_form(
-                        step_id="yaml",
-                        data_schema=self._users_schema(user_input),
-                        errors=allocation_errors,
-                        description_placeholders=allocation_placeholders,
-                        last_step=True,
-                    )
-                self.data[CONF_USERS] = users
-                assignment = SlotAssignment.empty().reconcile(
-                    users, start=1, unavailable=unavailable
-                )
-                return self._async_create_entry(assignment)
 
         return self.async_show_form(
             step_id="yaml",
@@ -543,6 +650,24 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders=description_placeholders,
             last_step=True,
         )
+
+    async def async_step_yaml_allocated(self, user_input: dict[str, Any] | None = None):
+        """Take the finished allocation: create the entry, or back to the editor."""
+        submission, (unavailable, errors, placeholders) = self._take_allocation()
+        if unavailable is None:
+            return self.async_show_form(
+                step_id="yaml",
+                data_schema=self._users_schema(submission["raw"]),
+                errors=errors,
+                description_placeholders=placeholders,
+                last_step=True,
+            )
+        users = submission[CONF_USERS]
+        self.data[CONF_USERS] = users
+        assignment = SlotAssignment.empty().reconcile(
+            users, start=1, unavailable=unavailable
+        )
+        return self._async_create_entry(assignment)
 
     @staticmethod
     def _users_schema(user_input: dict[str, Any]) -> vol.Schema:
@@ -765,13 +890,18 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 # Asked for room for everyone the entry will hold, not for one
                 # more: allocation answers about a whole configuration, and a
                 # lock too full for the result must refuse before anything is
-                # written.
+                # written. Everybody already here keeps their number by tenure
+                # and needs no read; only the newcomer's is looked for.
                 (
                     unavailable,
                     allocation_errors,
                     allocation_placeholders,
                 ) = await _allocate_for(
-                    self.hass, entry, config.locks, len(config.users) + 1
+                    self.hass,
+                    entry,
+                    config.locks,
+                    len(config.users) + 1,
+                    held=config.assignment.held_by(config.users),
                 )
                 if unavailable is None:
                     errors.update(allocation_errors)
@@ -843,7 +973,11 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                         allocation_errors,
                         allocation_placeholders,
                     ) = await _allocate_for(
-                        self.hass, entry, config.locks, len(others) + 1
+                        self.hass,
+                        entry,
+                        config.locks,
+                        len(others) + 1,
+                        held=config.assignment.held_by(others),
                     )
                     if unavailable is None:
                         errors.update(allocation_errors)

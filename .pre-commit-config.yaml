@@ -8,7 +8,7 @@ default_language_version:
   python: python3.14
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.4
+    rev: v0.16.5
     hooks:
       - id: ruff-check
         files: ^(scripts|tests|custom_components)/.+\.py$

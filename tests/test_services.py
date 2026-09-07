@@ -7,12 +7,12 @@ import json
 import logging
 from unittest.mock import AsyncMock, patch
 
+import probatio as vol
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_capture_events,
 )
-import voluptuous as vol
 
 from homeassistant.components.event import (
     ATTR_EVENT_TYPE,
@@ -2187,7 +2187,7 @@ async def test_the_batch_is_allocated_for_everyone_it_will_add(
     existing = len(get_entry_config(entry).users)
     asked_for: list[int] = []
 
-    async def _spy(hass, config_entry, locks, num_users, config=None):
+    async def _spy(hass, config_entry, locks, num_users, config=None, **kwargs):
         asked_for.append(num_users)
         return frozenset()
 

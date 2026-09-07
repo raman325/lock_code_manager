@@ -18,7 +18,8 @@
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
       "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
-      "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true"
+      "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true",
+      "allocation_failed": "Reading the locks failed unexpectedly. Check the Home Assistant logs, then try again."
     },
     "step": {
       "choose_path": {
@@ -68,6 +69,9 @@
         "description": "The lock `{lock}`, in the configuration for `{name}`, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
         "title": "Update locks for {name}"
       }
+    },
+    "progress": {
+      "allocating": "Reading which slots your locks already hold, so no user is given a number that is taken. A lock that answers one slot at a time can take a minute or more per lock."
     }
   },
   "entity": {
@@ -513,7 +517,8 @@
         "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
         "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
         "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
-        "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity."
+        "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+        "allocation_failed": "Reading the locks failed unexpectedly. Check the Home Assistant logs, then try again."
       },
       "abort": {
         "reconfigure_successful": "The user was updated."

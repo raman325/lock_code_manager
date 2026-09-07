@@ -170,7 +170,9 @@ def _slot_diagnostic(
         DOMAIN,
         build_slot_device_identifier(config_entry.entry_id, slot_num),
     )
-    device = dev_reg.async_get_device(identifiers={slot_identifier})
+    device = dev_reg.async_get_device_by_identifier(
+        slot_identifier, config_entry.entry_id
+    )
     if device:
         result["entities"] = _entity_states_for_device(hass, ent_reg, device.id)
 

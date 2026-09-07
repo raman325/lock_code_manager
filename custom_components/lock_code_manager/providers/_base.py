@@ -15,7 +15,7 @@ from datetime import timedelta
 from functools import partial
 import logging
 import time
-from typing import Any, Literal, NoReturn, final
+from typing import Any, ClassVar, Literal, NoReturn, final
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
@@ -34,7 +34,6 @@ from ..const import (
 from ..domain.coordinator import LockUsercodeUpdateCoordinator
 from ..domain.credentials import (
     Credential,
-    CredentialAddress,
     CredentialRef,
     CredentialType,
     LockCapabilities,
@@ -49,6 +48,7 @@ from ..domain.events import CredentialOperation, async_fire_credential_used
 from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
+    LockBusy,
     LockCodeManagerError,
     LockCodeManagerProviderError,
     LockDisconnected,
@@ -95,17 +95,15 @@ MIN_OPERATION_DELAY = 2.0
 #
 # A FLOOR, not the whole answer. One `_execute_rate_limited` call is one
 # provider call, but on several providers one provider call is a sequential
-# walk of every managed slot -- so the honest budget is per-slot, and those
-# providers raise it through `operation_timeout_seconds`. Ten flaky slots on
-# ZHA legitimately reach ~840s; cutting that off would be the misdiagnosis
-# this constant exists to avoid.
+# walk of slots, one exchange with the lock per slot -- so the honest budget
+# is per exchange, times the exchanges THAT call walks. Those providers
+# declare `per_exchange_budget`, and `_operation_budget` scales this floor by
+# the count each call site passes. Ten flaky slots on ZHA legitimately reach
+# ~840s; cutting that off would be the misdiagnosis this constant exists to
+# avoid, and giving a one-slot write those ten slots' patience is the other
+# half of issue #1528.
 OPERATION_TIMEOUT = 600.0
 
-
-# How long an optimistic write waits for confirmation (push event or hard-refresh
-# presence) before the sync layer gives up waiting and re-syncs. See the Phase 2
-# push-as-commit spec.
-PENDING_WRITE_TTL = 60.0
 _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
     "get": "get from",
     "set": "set on",
@@ -234,15 +232,6 @@ class BaseLock:
     # A confirmation -- a push event or a hard-refresh read observing the slot
     # present -- clears the entry and re-pushes the believed value as verified;
     # if none arrives before the deadline, the sync layer re-syncs. See the
-    # Phase 2 push-as-commit spec.
-    # Keyed by CredentialAddress, NOT by device slot. One slot can hold a
-    # credential of each type, so a slot-keyed map would let two addresses
-    # sharing a slot collide: the first read processed would consume the
-    # other's pending entry, apply its believed value to the wrong
-    # credential, and leave the second silently marked verified.
-    _pending_writes: dict[CredentialAddress, tuple[str, float]] = field(
-        default_factory=dict, init=False
-    )
     # Reconnect task spawned by the config-entry state listener when the lock
     # integration transitions to LOADED. Tracked so async_unload can cancel it
     # before teardown -- otherwise a late reconnect can call
@@ -263,56 +252,87 @@ class BaseLock:
         func: Callable[..., Awaitable[Any]],
         *args: Any,
         pre_execute: Callable[[], None] | None = None,
+        exchanges: int = 1,
         **kwargs: Any,
     ) -> Any:
         """
         Execute operation with connection check, serialization, and delay.
 
+        ``exchanges`` is how many exchanges with the lock ``func`` walks; the
+        operation deadline is sized to it (``_operation_budget``).
+
+        Three bounds, one per question, because one number cannot answer
+        "how long may my call take" and "how long will I queue behind
+        someone else's" at once (issue #1535):
+
+        - The availability probes are device I/O on some providers --
+          Schlage's is a cloud round trip -- and get the operation budget.
+          A probe that never answers is ``LockDisconnected``.
+        - The wait for ``_aio_lock`` gets one holder's worth. A wait that
+          runs out is ``LockBusy``: the caller never reached the lock, so it
+          is not the lock's word about anything and charges no breaker.
+        - The operation gets the operation budget, starting at acquire, so a
+          caller that waited its turn still has its whole budget for real
+          I/O. A call that answers nothing in that long is ``LockDisconnected``:
+          a disconnection, not an operation failure, and the distinction
+          decides what happens. A failure charges the SLOT breaker, which is
+          windowed -- three strikes inside five minutes -- so at a budget
+          longer than that window it could never trip. A disconnection
+          charges the LOCK breaker, which counts consecutively: three trips
+          ``unreachable``, the tick gates on it, backoff stops the hammering,
+          and it self-heals on the next successful poll.
+
         pre_execute runs inside the lock before the operation, for checks
         that must be atomic with the operation (e.g., duplicate detection).
         """
+        probe_budget = self.operation_timeout_seconds
+        # The longest holder there can be is a walk of every managed slot, so a
+        # caller queued behind one must be allowed to wait that long. A
+        # confirmation read adds the few pending unmanaged slots to that walk;
+        # the overshoot is bounded by them and ends in LockBusy, which is not
+        # a recovery signal.
+        wait_budget = self._operation_budget(max(len(self.managed_slots), 1))
+        budget = self._operation_budget(exchanges)
+        what = f"{_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id}"
+        try:
+            async with asyncio.timeout(probe_budget):
+                await self._check_reachable(operation_type)
+        except TimeoutError as err:
+            raise LockDisconnected(
+                f"Cannot {what} - availability check gave no answer within "
+                f"{probe_budget:.0f}s"
+            ) from err
+
+        try:
+            async with asyncio.timeout(wait_budget):
+                await self._aio_lock.acquire()
+        except TimeoutError as err:
+            raise LockBusy(
+                f"Cannot {what} - another operation on this lock has held it for "
+                f"{wait_budget:.0f}s"
+            ) from err
+
+        try:
+            async with asyncio.timeout(budget):
+                return await self._execute_locked(
+                    operation_type, func, *args, pre_execute=pre_execute, **kwargs
+                )
+        except TimeoutError as err:
+            raise LockDisconnected(
+                f"Cannot {what} - no answer within {budget:.0f}s"
+            ) from err
+        finally:
+            self._aio_lock.release()
+
+    @final
+    async def _check_reachable(
+        self, operation_type: Literal["get", "set", "clear", "refresh"]
+    ) -> None:
+        """Run both availability probes; raise LockDisconnected if either fails."""
         # Evaluate both layers, feed the combined reachability to the
         # transition handler, then raise the layer-specific message. The two
         # checks are kept distinct for diagnostics; the transition only cares
         # whether the lock is reachable end-to-end.
-        # Inside the deadline, not before it. These are device I/O on some
-        # providers -- Schlage's availability check is a `get_codes` cloud
-        # round trip -- and waiting on `_aio_lock` behind another caller is
-        # the #1523 park itself. Bounding only `func` left both unbounded.
-        try:
-            async with asyncio.timeout(self.operation_timeout_seconds):
-                return await self._execute_bounded(
-                    operation_type, func, *args, pre_execute=pre_execute, **kwargs
-                )
-        except TimeoutError as err:
-            # A disconnection, not an operation failure, and the distinction
-            # decides whether anything happens at all. A failure charges the
-            # SLOT breaker, which is windowed -- three strikes inside five
-            # minutes -- so at a budget longer than that window the count
-            # resets on every retry and it can never trip. A disconnection
-            # charges the LOCK breaker, which counts consecutively: three
-            # trips `unreachable`, the tick gates on it, and backoff stops the
-            # hammering. It self-heals on the next successful poll too, where
-            # a suspended slot would wait for someone to edit the PIN.
-            #
-            # It is the honest word besides: a lock that has answered nothing
-            # in this long is not reachable.
-            raise LockDisconnected(
-                f"Cannot {_OPERATION_MESSAGES[operation_type]} "
-                f"{self.lock.entity_id} - no answer within "
-                f"{self.operation_timeout_seconds:.0f}s"
-            ) from err
-
-    @final
-    async def _execute_bounded(
-        self,
-        operation_type: Literal["get", "set", "clear", "refresh"],
-        func: Callable[..., Any],
-        *args: Any,
-        pre_execute: Callable[[], None] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Run one operation, with the caller holding the deadline."""
         integration_up = await self.async_is_integration_connected()
         device_up = await self.async_is_device_available()
         self._note_reachability(integration_up and device_up)
@@ -325,30 +345,39 @@ class BaseLock:
                 f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - device not available"
             )
 
-        async with self._aio_lock:
-            if pre_execute:
-                pre_execute()
+    @final
+    async def _execute_locked(
+        self,
+        operation_type: Literal["get", "set", "clear", "refresh"],
+        func: Callable[..., Any],
+        *args: Any,
+        pre_execute: Callable[[], None] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run one operation with ``_aio_lock`` held by the caller."""
+        if pre_execute:
+            pre_execute()
 
-            elapsed = time.monotonic() - self._last_operation_time
-            if elapsed < self._min_operation_delay:
-                delay = self._min_operation_delay - elapsed
-                LOGGER.debug(
-                    "Rate limiting %s operation on %s, waiting %.1f seconds",
-                    operation_type,
-                    self.lock.entity_id,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-
+        elapsed = time.monotonic() - self._last_operation_time
+        if elapsed < self._min_operation_delay:
+            delay = self._min_operation_delay - elapsed
             LOGGER.debug(
-                "Executing %s operation on %s",
+                "Rate limiting %s operation on %s, waiting %.1f seconds",
                 operation_type,
                 self.lock.entity_id,
+                delay,
             )
+            await asyncio.sleep(delay)
 
-            result = await func(*args, **kwargs)
-            self._last_operation_time = time.monotonic()
-            return result
+        LOGGER.debug(
+            "Executing %s operation on %s",
+            operation_type,
+            self.lock.entity_id,
+        )
+
+        result = await func(*args, **kwargs)
+        self._last_operation_time = time.monotonic()
+        return result
 
     @final
     def _serialize_sequence(self) -> contextlib.AbstractAsyncContextManager[None]:
@@ -434,16 +463,38 @@ class BaseLock:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
 
+    # What one exchange with the lock may cost on this transport, for providers
+    # whose reads walk the slots one exchange at a time. ``None`` for a provider
+    # that reads the whole device in one call: its budget is the flat floor.
+    # Strictly above any bound the provider puts on the exchange itself, so the
+    # provider's own timeout always claims a silent slot first and the outer
+    # deadline only ever claims a transport that has stopped answering.
+    per_exchange_budget: ClassVar[float | None] = None
+
     @property
     def operation_timeout_seconds(self) -> float:
         """
-        How long an operation may run before the lock is treated as gone.
+        The floor: how long a single exchange may run before the lock is treated as gone.
 
-        Overridden by providers whose single operation is a sequential walk of
-        every managed slot: their honest budget is per-slot, and the base's
-        flat one would report a slow-but-working lock as dead.
+        Providers do not override this to make a walk fit; they declare
+        ``per_exchange_budget`` and every call site says how many exchanges
+        it walks (see ``_operation_budget``).
         """
         return OPERATION_TIMEOUT
+
+    @final
+    def _operation_budget(self, exchanges: int) -> float:
+        """
+        Return the deadline for a call that walks ``exchanges`` exchanges.
+
+        The floor, or the declared per-exchange budget times the walk,
+        whichever is longer: a lock that answers every command must never be
+        cut off partway through a legitimate walk, and a one-slot write must
+        not inherit a thirty-slot entry's patience.
+        """
+        if self.per_exchange_budget is None:
+            return self.operation_timeout_seconds
+        return max(self.operation_timeout_seconds, self.per_exchange_budget * exchanges)
 
     @property
     def display_name(self) -> str:
@@ -461,66 +512,25 @@ class BaseLock:
     @final
     @callback
     def _push_credential_update(
-        self, code_slot: int, credential: SlotCredential, *, optimistic: bool = False
+        self, code_slot: int, credential: SlotCredential
     ) -> None:
-        """
-        Push a coordinator credential update; no-op when no coordinator is attached.
-
-        ``optimistic=True`` marks the slot unverified (an ambiguous write we are
-        treating as completed but have not confirmed). The default keeps the
-        slot verified.
-        """
+        """Push a coordinator credential update; no-op when no coordinator is attached."""
         if self.coordinator is None:
             return
-        # Only pass the kwarg when optimistic, so the common verified push keeps
-        # its plain call shape (and existing call-shape assertions hold).
-        if optimistic:
-            self.coordinator.push_update({code_slot: credential}, optimistic=True)
-        else:
-            self.coordinator.push_update({code_slot: credential})
-
-    @callback
-    def _record_optimistic_write(self, code_slot: int, pin: str) -> None:
-        """
-        Record an outstanding optimistic write and push its believed value.
-
-        Called by the seam when ``async_set_credential`` returns OPTIMISTIC.
-        The slot is pushed as ``known(pin)`` but marked unverified; it awaits
-        a confirmation (push event or hard-refresh presence) via
-        ``_confirm_slot``, or re-syncs once the deadline passes.
-        """
-        self._pending_writes[pin_address(code_slot)] = (
-            pin,
-            time.monotonic() + PENDING_WRITE_TTL,
-        )
-        self._push_credential_update(
-            code_slot, SlotCredential.known(pin), optimistic=True
-        )
+        self.coordinator.push_update({code_slot: credential})
 
     @callback
     def _confirm_slot(self, code_slot: int, observed: SlotCredential) -> None:
         """
-        Resolve an observation (push event or hard-refresh read) for a slot.
+        Resolve a push event for a slot against any write pending on it.
 
-        When an optimistic write for the slot is outstanding and the observed
-        state shows a code present, the observation confirms our write: keep
-        the believed value (even if the observation itself is masked/unreadable)
-        and mark it verified. The one exception is a *readable* observation of a
-        different code -- that is an external change racing our write, so we take
-        the observation rather than masking it with our believed value.
-        Otherwise -- no pending write, or the slot is now empty -- take the
-        observation as the verified state. Either way the pending entry is
-        cleared.
+        The coordinator owns pending writes and their resolution; this is the
+        provider-facing name for handing it an observation. No-op without a
+        coordinator, when there is nothing to resolve against or update.
         """
-        pending = self._pending_writes.pop(pin_address(code_slot), None)
-        if pending is not None and observed.is_present:
-            pin, _deadline = pending
-            if observed.is_readable and observed.readable_pin != pin:
-                self._push_credential_update(code_slot, observed)
-            else:
-                self._push_credential_update(code_slot, SlotCredential.known(pin))
+        if self.coordinator is None:
             return
-        self._push_credential_update(code_slot, observed)
+        self.coordinator.observe_push(pin_address(code_slot), observed)
 
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
@@ -867,11 +877,10 @@ class BaseLock:
                 # half-written sequence to leave behind. That is what makes a
                 # deadline right here and wrong around a write.
                 #
-                # Shares `operation_timeout_seconds` because it answers the same
-                # question -- what is longer than any legitimate operation on
-                # this lock -- and a second, smaller number would give up on a
-                # slow-but-working one.
-                refresh_budget = self.operation_timeout_seconds
+                # Sized to a walk of every managed slot because that is what
+                # the first read is, and a second, smaller number would give up
+                # on a slow-but-working lock.
+                refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
                 try:
                     async with asyncio.timeout(refresh_budget):
                         if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
@@ -1277,18 +1286,45 @@ class BaseLock:
         elif self._last_connection_up is True and not is_up:
             self.unsubscribe_push_updates()
 
-    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Re-fetch all codes from the lock and return them in the same shape as async_get_usercodes()."""
+    async def async_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """
+        Re-read from the lock device and return the same shape as async_get_usercodes().
+
+        ``slots`` names the slots whose device state must be re-read; ``None``
+        means everything. The returned projection is never narrowed by it:
+        the coordinator replaces its data with what comes back, so a read
+        must still name every managed slot. A provider that reads the whole
+        device in one call may ignore ``slots``. One that keeps a cache
+        re-reads only ``slots`` and projects the rest from the cache: the
+        coordinator's confirmation read asks about the one or two slots with
+        a write pending, and on a marginal radio link the difference between
+        one command and a walk of the lock is the difference between
+        confirming the write and never confirming it. One with no cache
+        re-reads every managed slot plus ``slots``.
+        """
         self._raise_not_implemented(
             "async_hard_refresh_codes",
             "Override this method to re-fetch codes from the lock device.",
         )
 
     @final
-    async def async_internal_hard_refresh_codes(self) -> dict[int, SlotCredential]:
+    async def async_internal_hard_refresh_codes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
         """Rate-limited wrapper around async_hard_refresh_codes()."""
+        # A provider with no cache re-reads every managed slot plus ``slots``
+        # (the answer has to name them all); one with a cache re-reads only
+        # ``slots``. Declaring the union covers both without cutting either
+        # off partway.
         return await self._execute_rate_limited(
-            "refresh", self.async_hard_refresh_codes
+            "refresh",
+            self.async_hard_refresh_codes,
+            slots,
+            exchanges=len(
+                self.managed_slots if slots is None else self.managed_slots | set(slots)
+            ),
         )
 
     async def async_set_usercode(
@@ -1365,33 +1401,33 @@ class BaseLock:
             code_slot,
             usercode,
             pre_execute=_pre_execute_checks,
+            # A native-user provider may name the user, write the credential
+            # and roll the user back again: three exchanges, not one.
+            exchanges=3 if self.supports_native_users else 1,
             name=name,
             source=source,
         )
+        if self.coordinator is None or not result.changed:
+            return
+        address = pin_address(code_slot)
         if result is WriteResult.OPTIMISTIC:
-            # Ambiguous write: record it pending and push the believed value as
-            # unverified, then actively read the lock back to confirm it. Some
-            # stacks send no confirming push for an ambiguous write (node-zwave-js
-            # emits no credential event when its post-write verify fails on a
-            # masked lock), so waiting passively would let the breaker suspend a
-            # slot whose code actually landed. The active read confirms a
-            # present-but-masked slot; a genuinely-absent slot stays pending and
-            # the sync tick re-syncs after the TTL.
-            self._record_optimistic_write(code_slot, str(usercode))
-            if self.coordinator is not None:
-                await self.coordinator.async_confirm_pending_writes()
-        elif result is WriteResult.CONFIRMED:
-            # The lock acknowledged the write: supersede any pending optimistic
-            # state and drop the slot from the unverified set left by a prior
-            # optimistic write, so it can converge instead of churning to a suspend.
-            self._pending_writes.pop(pin_address(code_slot), None)
-            if self.coordinator is not None:
-                self.coordinator.mark_verified(pin_address(code_slot))
-        # Skip coordinator refresh for push providers — they update optimistically
-        # via push_update(), and refreshing from cache could overwrite with stale
-        # data when the driver defers cache updates until device confirmation.
-        if result.changed and self.coordinator and not self.supports_push:
-            await self.coordinator.async_request_refresh()
+            # Ambiguous: the driver most likely stored it but could not say.
+            # Record it pending with the value believed, and let the
+            # coordinator read the lock back -- some stacks send no confirming
+            # push for an ambiguous write, so waiting passively would let the
+            # breaker suspend a slot whose code actually landed.
+            self.coordinator.record_write(address, str(usercode), believed=True)
+        elif self.supports_push:
+            # The provider's own push (or the driver's event) is the lock's
+            # word for the write. Any older pending write to the slot is
+            # superseded by it.
+            self.coordinator.drop_pending(address)
+        else:
+            # A polled lock has nothing to vouch for the write but a later
+            # read: "confirmed" here is the cloud service accepting it, not
+            # the lock reporting it. Record it pending; the coordinator reads
+            # the lock back and settles it -- for any slot, managed or not.
+            self.coordinator.record_write(address, str(usercode), believed=False)
 
     async def async_clear_usercode(
         self, code_slot: int, *, adopt_untagged: bool = True
@@ -1498,15 +1534,23 @@ class BaseLock:
             code_slot,
             source,
         )
-        # A clear supersedes any outstanding optimistic set on this slot, so the
-        # stale pending entry must not keep gating reconciliation (the sync tick
-        # keys PENDING_CONFIRMATION on this dict).
-        self._pending_writes.pop(pin_address(code_slot), None)
         changed = await self._execute_rate_limited(
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
+            # A native-user provider reads every user first to find whose
+            # credential this is; on a provider that walks the lock that is one
+            # exchange per managed slot on top of the clear itself.
+            exchanges=(
+                len(self.managed_slots) + 1 if self.supports_native_users else 1
+            ),
         )
+        # A clear that ran supersedes any write pending on this slot. One that
+        # raised superseded nothing: the write stays pending, so a believed
+        # value it pushed is not taken as verified on the strength of a clear
+        # that never reached the lock.
+        if self.coordinator is not None:
+            self.coordinator.drop_pending(pin_address(code_slot))
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
         # there.
@@ -2076,9 +2120,24 @@ class BaseLock:
         )
 
     @final
-    async def async_internal_get_usercodes(self) -> dict[int, SlotCredential]:
-        """Rate-limited wrapper around async_get_usercodes()."""
-        return await self._execute_rate_limited("get", self.async_get_usercodes)
+    async def async_internal_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """
+        Rate-limited wrapper around async_get_usercodes().
+
+        ``slots`` widens or narrows the read's scope; left unset, the provider
+        reads its managed slots. The coordinator's confirmation read names the
+        pending addresses too, so a write to a slot nothing manages is still
+        asked about.
+        """
+        if slots is None:
+            return await self._execute_rate_limited(
+                "get", self.async_get_usercodes, exchanges=len(self.managed_slots)
+            )
+        return await self._execute_rate_limited(
+            "get", self.async_get_usercodes, slots, exchanges=len(slots)
+        )
 
     @final
     async def async_internal_get_occupied_indices(
@@ -2119,7 +2178,7 @@ class BaseLock:
             return frozenset()
         try:
             codes = await self._execute_rate_limited(
-                "get", partial(self.async_get_usercodes, wanted)
+                "get", partial(self.async_get_usercodes, wanted), exchanges=len(wanted)
             )
         except LockCodeManagerError as err:
             _LOGGER.debug(

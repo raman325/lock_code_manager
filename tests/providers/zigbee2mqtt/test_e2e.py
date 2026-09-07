@@ -23,6 +23,7 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
+from tests.common import async_configure_flow
 
 from .conftest import Z2M_FULL_TOPIC, Z2M_GET_TOPIC, Z2M_SET_TOPIC, get_z2m_lock
 
@@ -309,16 +310,15 @@ class TestAddingThroughTheUserInterface:
             DOMAIN, context={"source": SOURCE_USER}
         )
         flow_id = result["flow_id"]
-        result = await hass.config_entries.flow.async_configure(
+        result = await async_configure_flow(
+            hass,
             flow_id,
             {CONF_NAME: "z2m", CONF_LOCKS: [mqtt_lock_discovered.entity_id]},
         )
         assert result["step_id"] == "choose_path"
 
-        await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NUM_USERS: 2}
-        )
+        await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+        result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
 
         assert result["step_id"] == "code_slot"
         assert result["description_placeholders"]["user_num"] == 1

@@ -511,7 +511,12 @@ async def async_add_users(
         # One read of the locks for the whole batch, sized to what the entry
         # will hold once it lands.
         unavailable = await async_allocate_for(
-            hass, config_entry, config.locks, len(config.users) + len(additions)
+            hass,
+            config_entry,
+            config.locks,
+            len(config.users) + len(additions),
+            # Everyone already here stays, so their numbers need no read.
+            held=config.assignment.held_by(config.users),
         )
     except SlotAllocationError as err:
         raise ServiceValidationError(

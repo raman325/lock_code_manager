@@ -118,7 +118,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
     """Class to represent Zigbee2MQTT lock."""
 
     # `_async_read_slot` waits 10s per slot before giving up on that slot.
-    _per_slot_read_budget: ClassVar[float] = 10.0
+    # Above the 10s this provider itself allows a slot read before calling it
+    # silent, so that bound always speaks first.
+    per_exchange_budget: ClassVar[float | None] = 15.0
 
     _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
         init=False, default_factory=dict

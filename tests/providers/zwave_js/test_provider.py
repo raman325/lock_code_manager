@@ -362,6 +362,53 @@ async def test_hard_refresh_codes_calls_access_control(
     assert 2 in codes
 
 
+async def test_hard_refresh_codes_scoped_reads_only_those_slots(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """Given slots, the refresh re-reads one credential per slot and nothing else.
+
+    The projection stays unscoped: every managed slot is still in the
+    answer, so the coordinator can replace its data with it (issue #1549).
+    Slot 99 is managed but the fixture device knows nothing about it, so
+    only the unscoped projection can put it there.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
+        subentries_data=user_subentries(
+            {"1": {CONF_NAME: "User 1"}, "99": {CONF_NAME: "User 99"}}
+        ),
+    )
+    lcm_entry.add_to_hass(hass)
+
+    codes = await zwave_js_lock.async_hard_refresh_codes({3, 5})
+
+    mock_access_control.get_users.assert_not_called()
+    mock_access_control.get_all_credentials.assert_not_called()
+    assert {
+        call.args for call in mock_access_control.get_credential.await_args_list
+    } == {(UserCredentialType.PIN_CODE, 3), (UserCredentialType.PIN_CODE, 5)}
+    assert 1 in codes
+    assert codes[99] == SlotCredential.empty()
+
+
+async def test_hard_refresh_codes_scoped_maps_transport_error_to_lock_disconnected(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A single-slot re-read that fails surfaces the same way as the walk."""
+    mock_access_control.get_credential.side_effect = FailedZWaveCommand(
+        "cmd", 1, "node gone"
+    )
+
+    with pytest.raises(LockDisconnected, match="hard refresh failed"):
+        await zwave_js_lock.async_hard_refresh_codes({3})
+
+
 async def test_hard_refresh_codes_maps_transport_error_to_lock_disconnected(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
@@ -1385,6 +1432,37 @@ async def test_async_set_credential_raises_duplicate_code_error(
 
     assert exc_info.value.code_slot == 3
     assert exc_info.value.lock_entity_id == zwave_js_lock.lock.entity_id
+
+
+async def test_set_credential_confirmed_pushes_the_value_like_every_push_provider(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A confirmed set leaves the value on the coordinator before it returns.
+
+    Every push provider pushes what it just wrote before returning CONFIRMED,
+    and the seam records nothing pending for a push provider on exactly that
+    strength; a driver event may follow, but none is guaranteed to.
+    """
+    mock_coordinator = MagicMock()
+    zwave_js_lock.coordinator = mock_coordinator
+    mock_lock_helpers["async_set_credential"].return_value = {
+        "credential_slot": 2,
+        "user_id": 1,
+    }
+    credential = Credential(
+        type=CredentialType.PIN, slot=2, state=SlotCredential.known("5678")
+    )
+
+    result = await zwave_js_lock.async_set_credential(
+        user_id=1, credential=credential, pin="5678", name="alice", source="sync"
+    )
+
+    assert result is WriteResult.CONFIRMED
+    mock_coordinator.push_update.assert_called_once_with(
+        {2: SlotCredential.known("5678")}
+    )
 
 
 async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error(
