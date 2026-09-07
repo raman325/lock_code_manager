@@ -488,6 +488,14 @@
       "entry_type": "User",
       "step": {
         "user": {
+          "title": "Add users",
+          "description": "Add one user at a time, or paste a block of them.",
+          "menu_options": {
+            "one": "One user",
+            "several": "Several users"
+          }
+        },
+        "one": {
           "title": "Add user",
           "description": "A user is active when their condition entity (if configured) is 'on'. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
           "data": {
@@ -495,6 +503,13 @@
             "enabled": "Enabled",
             "name": "Name",
             "pin": "PIN Code"
+          }
+        },
+        "several": {
+          "title": "Add several users",
+          "description": "The config is expected to be a dictionary where the key is the user's name. Lock Code Manager picks the code slot each user occupies. Users already in this configuration are not listed here; to change one of them, edit that user.",
+          "data": {
+            "users": "Users YAML"
           }
         },
         "reconfigure": {
@@ -518,10 +533,13 @@
         "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
         "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
         "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
-        "allocation_failed": "Reading the locks failed unexpectedly. Check the Home Assistant logs, then try again."
+        "allocation_failed": "Reading the locks failed unexpectedly. Check the Home Assistant logs, then try again.",
+        "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
+        "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true"
       },
       "abort": {
-        "reconfigure_successful": "The user was updated."
+        "reconfigure_successful": "The user was updated.",
+        "users_added": "Added {num_users} users."
       }
     }
   }

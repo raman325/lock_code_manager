@@ -174,7 +174,7 @@ async def _init_flow_to_user_step(hass: HomeAssistant) -> str:
     return result["flow_id"]
 
 
-def _assert_fields_are_labelled(result, category: str) -> None:
+def _assert_fields_are_labelled(result, *category: str) -> None:
     """
     Assert a form's fields and its labels name the same set of keys.
 
@@ -192,10 +192,13 @@ def _assert_fields_are_labelled(result, category: str) -> None:
         Path("custom_components/lock_code_manager/strings.json").read_text()
     )
     step_id = result["step_id"]
-    labelled = set(strings[category]["step"][step_id].get("data", {}))
+    section = strings
+    for key in category:
+        section = section[key]
+    labelled = set(section["step"][step_id].get("data", {}))
     fields = {str(key.schema) for key in result["data_schema"].schema}
     assert fields == labelled, (
-        f"{category} step {step_id}: fields {sorted(fields)} "
+        f"{'.'.join(category)} step {step_id}: fields {sorted(fields)} "
         f"but labels {sorted(labelled)}"
     )
 
@@ -734,12 +737,25 @@ def _entry_with_users(
     return entry
 
 
-async def _start_user_subentry_flow(hass: HomeAssistant, entry: MockConfigEntry) -> str:
-    """Open the flow that adds a user to an entry, and return its flow id."""
+async def _start_user_subentry_flow(
+    hass: HomeAssistant, entry: MockConfigEntry, *, path: str = "one"
+) -> str:
+    """Open the flow that adds users to an entry, and return its flow id.
+
+    Adding opens on a choice of one user or a block of them, so a test that
+    wants a form says which it came for.
+    """
     result = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
     )
+    assert result["type"] == "menu"
     assert result["step_id"] == "user"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"next_step_id": path}
+    )
+    assert result["type"] == "form"
+    assert result["step_id"] == path
     return result["flow_id"]
 
 
@@ -2886,3 +2902,182 @@ async def test_a_second_request_for_an_answered_step_is_not_an_unknown_error(
 
     assert result["type"] == "create_entry"
     assert flow_users(result) == {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+
+
+async def test_every_user_subentry_field_has_a_label(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Every field either way of adding a user shows is named by the strings."""
+    entry = _entry_with_users(
+        hass, [LOCK_1_ENTITY_ID], {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+    )
+
+    for path in ("one", "several"):
+        result = await hass.config_entries.subentries.async_init(
+            (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+        )
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {"next_step_id": path}
+        )
+        _assert_fields_are_labelled(result, "config_subentries", "user")
+
+
+async def test_adding_several_users_creates_one_subentry_each(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A pasted block lands as one subentry per user, numbered around the entry.
+
+    The same shape the setup flow's yaml path takes. One lock read covers the
+    whole block, and it asks only about the numbers nobody holds: adding
+    these one at a time would read once per arrival and settle the entry
+    once per arrival.
+    """
+    entry = _entry_with_users(
+        hass, [LOCK_1_ENTITY_ID], {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+    )
+    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+    asked: list[frozenset[int]] = []
+
+    async def _read(self, slots=None):
+        asked.append(frozenset(self.managed_slots if slots is None else slots))
+        return {slot: SlotCredential.empty() for slot in asked[-1]}
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _read):
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id,
+            {
+                CONF_USERS: {
+                    "Raman": {CONF_ENABLED: True, CONF_PIN: "5678"},
+                    "Zed": {CONF_ENABLED: False},
+                }
+            },
+        )
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "users_added"
+    assert result["description_placeholders"] == {"num_users": "2"}
+    assert entry_users(entry) == {
+        "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
+        "Raman": {CONF_ENABLED: True, CONF_PIN: "5678"},
+        "Zed": {CONF_ENABLED: False},
+    }
+    assert {
+        subentry.title: subentry.data[CONF_SLOT]
+        for subentry in entry.subentries.values()
+    } == {"User 1": 1, "Raman": 2, "Zed": 3}
+    # One read for the block, and only the numbers nobody holds.
+    assert asked == [frozenset({2, 3})]
+
+
+async def test_adding_several_users_refuses_a_name_the_entry_already_holds(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A block naming somebody already here is refused, not merged into them.
+
+    Adding is the only thing this step does. Two keys meaning one person
+    collapse into a single key on the way into storage, taking one of their
+    credentials with it, whether they arrived together or a week apart.
+    """
+    entry = _entry_with_users(
+        hass, [LOCK_1_ENTITY_ID], {"Raman": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+    )
+    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id,
+            # Same person: identity is whitespace-normalized and casefolded.
+            {CONF_USERS: {"raman ": {CONF_ENABLED: True, CONF_PIN: "9999"}}},
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "several"
+    assert result["errors"] == {"base": "name_not_unique"}
+    assert result["description_placeholders"]["name"] == "raman "
+    # Refused, so nobody was rewritten and nobody was added.
+    assert entry_users(entry) == {"Raman": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+
+
+async def test_adding_several_users_counts_the_users_already_here(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Capacity is about what the entry will hold, not about the block alone.
+
+    Two users here and two pasted needs room for four. Checking the block on
+    its own would accept a lock that cannot hold the result, and the refusal
+    would arrive slot by slot at write time as a connectivity warning.
+    """
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "User 1": {CONF_ENABLED: True, CONF_PIN: "1111"},
+            "User 2": {CONF_ENABLED: True, CONF_PIN: "2222"},
+        },
+    )
+    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+
+    with _holding(), _capacity_probe(return_value=_capabilities_with_slots(3)):
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id,
+            {
+                CONF_USERS: {
+                    "Raman": {CONF_ENABLED: True, CONF_PIN: "3333"},
+                    "Zed": {CONF_ENABLED: True, CONF_PIN: "4444"},
+                }
+            },
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "several"
+    assert result["errors"] == {"base": "too_many_users"}
+    assert result["description_placeholders"]["num_users"] == "4"
+    assert len(entry.subentries) == 2
+
+
+async def test_adding_several_users_rejects_a_slot_keyed_block(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The old slot-numbered shape is refused here the way setup refuses it."""
+    entry = _entry_with_users(
+        hass, [LOCK_1_ENTITY_ID], {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+    )
+    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_USERS: {2: {CONF_NAME: "Raman", CONF_PIN: "5678"}}}
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "several"
+    assert result["errors"] == {"base": "users_keyed_by_slot"}
+    assert len(entry.subentries) == 1
+
+
+async def test_adding_several_users_refuses_when_the_lock_cannot_be_read(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Numbers for the block need an occupancy read, which can refuse like any other.
+
+    The names and the count were fine; the lock was not reachable. Nothing is
+    written, because a number issued without checking may already hold a code.
+    """
+    entry = _entry_with_users(
+        hass, [LOCK_1_ENTITY_ID], {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+    )
+    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+
+    async def _unreadable(self, slots=None):
+        raise LockCodeManagerError("lock is asleep")
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _unreadable):
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_USERS: {"Raman": {CONF_ENABLED: True, CONF_PIN: "5678"}}}
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "several"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+    # Refused, so nothing was half-written.
+    assert len(entry.subentries) == 1

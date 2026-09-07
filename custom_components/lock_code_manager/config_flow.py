@@ -46,8 +46,13 @@ from .domain.allocation import (
     async_allocate_for,
     async_check_slot_capacity,
 )
-from .domain.config import EntryConfig
-from .domain.names import name_error, normalize_name, validate_user_names
+from .domain.config import EntryConfig, async_write_entry_config
+from .domain.names import (
+    identity,
+    name_error,
+    normalize_name,
+    validate_user_names,
+)
 from .domain.queries import get_entry_config
 from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
@@ -114,6 +119,17 @@ SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
 
 
 POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
+
+
+def _users_schema(user_input: dict[str, Any] | None) -> vol.Schema:
+    """Return the users editor, redisplaying whatever was submitted."""
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_USERS, default=(user_input or {}).get(CONF_USERS, {})
+            ): SLOTS_YAML_SELECTOR,
+        }
+    )
 
 
 def _check_unclaimed_mqtt_locks(
@@ -187,6 +203,8 @@ async def _async_validate_users_yaml(
     config_entry: ConfigEntry | None,
     raw_users: dict[Any, Any],
     locks: Iterable[str],
+    *,
+    taken: Collection[str] = (),
 ) -> tuple[dict | None, dict, dict]:
     """
     Validate a users submission for the editor and the yaml setup path.
@@ -199,6 +217,12 @@ async def _async_validate_users_yaml(
     ``config_entry`` is the entry the submission is for, or ``None`` from
     the flow that is still creating one; it is what the lock reads this
     performs are made on behalf of.
+
+    ``taken`` is whichever names the block is being added alongside, empty
+    when it IS the whole configuration. A block added to an entry has to
+    clear the users already there as well as its own: two keys meaning one
+    person collapse into a single key on the way into storage whether they
+    arrived together or a week apart.
 
     Returns the parsed users -- or ``None`` when validation failed -- with the
     accumulated errors and description placeholders.
@@ -217,6 +241,11 @@ async def _async_validate_users_yaml(
     if problem := validate_user_names(parsed_users):
         name, error = problem
         return None, {"base": error}, {"name": name}
+
+    spoken_for = {identity(name) for name in taken}
+    for name in parsed_users:
+        if identity(name) in spoken_for:
+            return None, {"base": "name_not_unique"}, {"name": name}
 
     # The same refusal the guided path gives. Both write the one field, so a
     # condition entity this integration cannot read must fail on both routes
@@ -240,14 +269,16 @@ async def _async_validate_users_yaml(
                 },
             )
 
-    # The count is what a lock has to hold, now that nobody picks a number.
+    # The count is what a lock has to hold, now that nobody picks a number --
+    # everyone the entry will hold once this block lands, not just the block.
+    wanted = len(taken) + len(parsed_users)
     try:
-        await async_check_slot_capacity(hass, config_entry, locks, [len(parsed_users)])
+        await async_check_slot_capacity(hass, config_entry, locks, [wanted])
     except SlotAllocationError as err:
         return (
             None,
             {"base": "too_many_users"},
-            {**err.placeholders, "num_users": str(len(parsed_users))},
+            {**err.placeholders, "num_users": str(wanted)},
         )
     return parsed_users, {}, {}
 
@@ -645,7 +676,7 @@ class LockCodeManagerFlowHandler(
 
         return self.async_show_form(
             step_id="yaml",
-            data_schema=self._users_schema(user_input),
+            data_schema=_users_schema(user_input),
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=True,
@@ -657,7 +688,7 @@ class LockCodeManagerFlowHandler(
         if unavailable is None:
             return self.async_show_form(
                 step_id="yaml",
-                data_schema=self._users_schema(submission["raw"]),
+                data_schema=_users_schema(submission["raw"]),
                 errors=errors,
                 description_placeholders=placeholders,
                 last_step=True,
@@ -668,17 +699,6 @@ class LockCodeManagerFlowHandler(
             users, start=1, unavailable=unavailable
         )
         return self._async_create_entry(assignment)
-
-    @staticmethod
-    def _users_schema(user_input: dict[str, Any]) -> vol.Schema:
-        """Return the users editor, redisplaying whatever was submitted."""
-        return vol.Schema(
-            {
-                vol.Required(
-                    CONF_USERS, default=user_input.get(CONF_USERS, {})
-                ): SLOTS_YAML_SELECTOR,
-            }
-        )
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any] | None = None):
         """
@@ -873,6 +893,12 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
+        """Offer to add one user or a block of them."""
+        return self.async_show_menu(step_id="user", menu_options=["one", "several"])
+
+    async def async_step_one(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
         """Add a user, issuing them a credential position."""
         entry = self._get_entry()
         config = get_entry_config(entry)
@@ -921,10 +947,98 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                     )
 
         return self.async_show_form(
-            step_id="user",
+            step_id="one",
             data_schema=self.add_suggested_values_to_schema(
                 CODE_SLOT_SCHEMA, user_input or {}
             ),
+            errors=errors,
+            description_placeholders=description_placeholders,
+        )
+
+    async def async_step_several(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """
+        Add a block of users at once, one subentry each.
+
+        The same shape and the same validator the setup flow's yaml path
+        uses, so what a person pastes to set the entry up is what they paste
+        to add to it. Adding them one at a time is the same work spread over
+        one dialog and one lock read each; here it is one read and one write,
+        which on a lock that answers an index per round trip is the
+        difference between usable and not, and which settles the entry once
+        rather than once per arrival.
+
+        This does not touch anybody already here: a block that names one of
+        them is refused rather than merged. Editing and removing stay where
+        they were, one user at a time, so there is still exactly one way to
+        change a user who exists.
+        """
+        entry = self._get_entry()
+        config = get_entry_config(entry)
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, Any] = {}
+
+        if user_input:
+            (
+                users,
+                validation_errors,
+                validation_placeholders,
+            ) = await _async_validate_users_yaml(
+                self.hass,
+                entry,
+                user_input[CONF_USERS],
+                config.locks,
+                taken=config.users,
+            )
+            errors.update(validation_errors)
+            description_placeholders.update(validation_placeholders)
+
+            if not errors:
+                assert users is not None
+                # One allocation for the whole block, sized to what the entry
+                # will hold once it lands. Everybody already here keeps their
+                # number by tenure and is not read for.
+                (
+                    unavailable,
+                    allocation_errors,
+                    allocation_placeholders,
+                ) = await _allocate_for(
+                    self.hass,
+                    entry,
+                    config.locks,
+                    len(config.users) + len(users),
+                    held=config.assignment.held_by(config.users),
+                )
+                if unavailable is None:
+                    errors.update(allocation_errors)
+                    description_placeholders.update(allocation_placeholders)
+                else:
+                    arrived = {**config.users, **users}
+                    # Written through the one write path rather than by
+                    # completing the flow: a finished subentry flow creates
+                    # exactly one subentry, and this creates as many as were
+                    # pasted.
+                    async_write_entry_config(
+                        self.hass,
+                        entry,
+                        EntryConfig(
+                            locks=config.locks,
+                            users=arrived,
+                            assignment=config.assignment.reconcile(
+                                arrived, start=1, unavailable=unavailable
+                            ),
+                            extra=config.extra,
+                        ),
+                    )
+                    return self.async_abort(
+                        reason="users_added",
+                        description_placeholders={"num_users": str(len(users))},
+                    )
+
+        return self.async_show_form(
+            step_id="several",
+            data_schema=_users_schema(user_input),
             errors=errors,
             description_placeholders=description_placeholders,
         )
