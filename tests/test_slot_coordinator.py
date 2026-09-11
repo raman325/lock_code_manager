@@ -40,7 +40,6 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.config import EntryConfig
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     CredentialTypeCapability,
@@ -61,6 +60,7 @@ from .common import (
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_ENABLED_ENTITY,
     SLOT_2_PIN_ENTITY,
+    write_entry_config,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -489,9 +489,7 @@ async def test_coordinator_removed_on_slot_removal(
             1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
         },
     }
-    hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=new_options
-    )
+    write_entry_config(hass, lock_code_manager_config_entry, new_options)
     await hass.async_block_till_done()
 
     assert 2 not in runtime_data.slot_coordinators
@@ -530,7 +528,7 @@ async def test_request_pin_update_auto_disables_in_single_write(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Empty-PIN auto-disable coalesces PIN and ENABLED into one async_update_entry call.
+    """Empty-PIN auto-disable coalesces PIN and ENABLED into one subentry write.
 
     Two consecutive writes would let the second read a stale
     ``runtime_data.config`` and silently drop the first; one write keys
@@ -539,21 +537,22 @@ async def test_request_pin_update_auto_disables_in_single_write(
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
 
     captured: list[dict[str, Any]] = []
-    original = hass.config_entries.async_update_entry
+    original = hass.config_entries.async_update_subentry
 
-    def capture(entry, **kwargs):
+    def capture(entry, subentry, **kwargs):
         if entry is lock_code_manager_config_entry and "data" in kwargs:
-            captured.append(kwargs["data"])
-        return original(entry, **kwargs)
+            captured.append(dict(kwargs["data"]))
+        return original(entry, subentry, **kwargs)
 
-    with patch.object(hass.config_entries, "async_update_entry", side_effect=capture):
+    with patch.object(
+        hass.config_entries, "async_update_subentry", side_effect=capture
+    ):
         await coordinator.async_request_pin_update("")
         await hass.async_block_till_done()
 
     assert len(captured) == 1
-    slot_1 = EntryConfig.from_mapping(captured[0]).slot(1)
-    assert slot_1[CONF_PIN] == ""
-    assert slot_1[CONF_ENABLED] is False
+    assert captured[0][CONF_PIN] == ""
+    assert captured[0][CONF_ENABLED] is False
 
 
 async def test_condition_entity_swap_resubscribes(
@@ -595,7 +594,7 @@ async def test_condition_entity_swap_resubscribes(
             },
         },
     }
-    hass.config_entries.async_update_entry(entry, options=new_options)
+    write_entry_config(hass, entry, new_options)
     await hass.async_block_till_done()
 
     # gate_b is OFF, so the slot is now inactive.
@@ -635,9 +634,7 @@ async def test_slot_remove_then_readd_creates_fresh_coordinator(
             1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
         },
     }
-    hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=options_without_2
-    )
+    write_entry_config(hass, lock_code_manager_config_entry, options_without_2)
     await hass.async_block_till_done()
     assert 2 not in runtime_data.slot_coordinators
 
@@ -649,9 +646,7 @@ async def test_slot_remove_then_readd_creates_fresh_coordinator(
             2: {CONF_NAME: "fresh2", CONF_PIN: "9999", CONF_ENABLED: False},
         },
     }
-    hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=options_with_2
-    )
+    write_entry_config(hass, lock_code_manager_config_entry, options_with_2)
     await hass.async_block_till_done()
 
     assert 2 in runtime_data.slot_coordinators

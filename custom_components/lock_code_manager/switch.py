@@ -12,6 +12,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .domain.models import LockCodeManagerConfigEntry
+from .domain.queries import subentry_id_for_slot
 from .domain.slot_coordinator import PinRequiredError
 from .entity import BaseLockCodeManagerEntity
 
@@ -35,6 +36,7 @@ async def async_setup_entry(
                 )
             ],
             True,
+            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 
     config_entry.async_on_unload(

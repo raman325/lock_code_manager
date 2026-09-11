@@ -37,15 +37,11 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
-    ATTR_CODE_SLOT,
-    ATTR_LOCK_ENTITY_ID,
-    ATTR_USERCODE,
     CONF_LOCKS,
     CONF_SLOTS,
     CONFIRM_READ_INTERVAL,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
-    SERVICE_SET_USERCODE,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
@@ -61,6 +57,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
 )
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.services import async_set_usercode
 
 from .common import (
     BASE_CONFIG,
@@ -77,6 +74,7 @@ from .common import (
     MockLCMLock,
     in_sync_entity_id,
     slot_entity_id,
+    write_entry_config,
 )
 from .conftest import (
     async_advance_time,
@@ -186,9 +184,7 @@ async def test_binary_sensor_entity(
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][2][CONF_CONDITION] = "calendar.test_2"
 
-    hass.config_entries.async_update_entry(
-        lock_code_manager_config_entry, options=new_config
-    )
+    write_entry_config(hass, lock_code_manager_config_entry, new_config)
     await hass.async_block_till_done()
 
     # Changing to a different calendar should deactivate the slot
@@ -758,7 +754,7 @@ async def test_condition_entity_subscription_updates_on_config_change(
     new_config = copy.deepcopy(config)
     new_config[CONF_SLOTS][1][CONF_CONDITION] = "input_boolean.access_2"
 
-    hass.config_entries.async_update_entry(config_entry, data=new_config)
+    write_entry_config(hass, config_entry, new_config)
     await hass.async_block_till_done()
 
     # Now the slot should be inactive because access_2 is OFF
@@ -2326,16 +2322,9 @@ async def test_a_code_written_by_service_invalidates_the_clear(
     await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
     assert lock_provider.last_write_was_clear(1) is True
 
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_SET_USERCODE,
-        {
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_CODE_SLOT: 1,
-            ATTR_USERCODE: "9999",
-        },
-        blocking=True,
-    )
+    # The device-level write is no longer an action; the websocket command the
+    # unmanaged-slot editor uses calls this same function.
+    await async_set_usercode(hass, LOCK_1_ENTITY_ID, 1, "9999")
     await hass.async_block_till_done()
 
     assert lock_provider.last_write_was_clear(1) is False

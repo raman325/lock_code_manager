@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import slugify
 
-from ..const import DOMAIN
+from ..const import CONF_SLOT, DOMAIN, SUBENTRY_TYPE_USER
 from .config import EntryConfig
 
 
@@ -28,6 +28,28 @@ def get_entry_config(entry: ConfigEntry) -> EntryConfig:
     if isinstance(cached, EntryConfig):
         return cached
     return EntryConfig.from_entry(entry)
+
+
+def subentry_id_for_slot(entry: ConfigEntry, slot_num: int) -> str | None:
+    """
+    Return the id of the subentry holding the user at this slot.
+
+    What binds a slot's entities and its device to the user they belong to,
+    so Home Assistant renders them under that user on the entry's page rather
+    than in one undifferentiated list.
+
+    ``None`` when nobody holds the number, which is not an error: a lock read
+    can name a slot the configuration does not.
+    """
+    return next(
+        (
+            subentry.subentry_id
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_USER
+            and subentry.data.get(CONF_SLOT) == slot_num
+        ),
+        None,
+    )
 
 
 def get_managed_slots(

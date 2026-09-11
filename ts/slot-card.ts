@@ -1177,7 +1177,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         if (!this._hass || !this._config) return;
         const msg: MessageBase & Record<string, unknown> = {
             entity_id,
-            type: 'lock_code_manager/set_slot_condition',
+            type: 'lock_code_manager/set_condition',
             ...this._addressee()
         };
         if (this._config.config_entry_id) {
@@ -1191,7 +1191,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     private async _clearSlotCondition(): Promise<void> {
         if (!this._hass || !this._config) return;
         const msg: MessageBase & Record<string, unknown> = {
-            type: 'lock_code_manager/clear_slot_condition',
+            type: 'lock_code_manager/clear_condition',
             ...this._addressee()
         };
         if (this._config.config_entry_id) {

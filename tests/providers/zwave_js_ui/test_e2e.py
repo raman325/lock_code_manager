@@ -30,15 +30,14 @@ from homeassistant.const import (
 from homeassistant.core import Event, HomeAssistant
 
 from custom_components.lock_code_manager.const import (
-    ATTR_ACTION_TEXT,
     ATTR_CODE_SLOT,
     ATTR_TARGET,
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
-    EVENT_LOCK_STATE_CHANGED,
     TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
@@ -52,6 +51,7 @@ from tests.common import (
 )
 from tests.conftest import async_advance_time
 
+from ...common import user_subentries
 from .conftest import (
     ZUI_API_BASE,
     ZUI_NODE_ID,
@@ -177,7 +177,12 @@ async def lcm_config_entry(
             for slot_num, pin in E2E_SLOT_PINS.items()
         },
     }
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_e2e")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zui_e2e",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -438,7 +443,7 @@ class TestKeypadEvents:
         )
         assert hass.states.get(event_entity_id).state == STATE_UNKNOWN
         events: list[Event] = []
-        hass.bus.async_listen(EVENT_LOCK_STATE_CHANGED, events.append)
+        hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, events.append)
 
         fire_zui_node_value(
             hass,
@@ -447,10 +452,7 @@ class TestKeypadEvents:
         )
         await hass.async_block_till_done()
 
-        assert [event.data[ATTR_CODE_SLOT] for event in events] == [1]
-        assert [event.data[ATTR_ACTION_TEXT] for event in events] == [
-            "Keypad_unlock_operation"
-        ]
+        assert len(events) == 1
         state = hass.states.get(event_entity_id)
         assert state.state != STATE_UNKNOWN
         assert state.attributes[ATTR_CODE_SLOT] == 1
@@ -491,7 +493,12 @@ class TestApiOnlyManualGateway:
                 for slot_num, pin in E2E_SLOT_PINS.items()
             },
         }
-        entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_manual")
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=config,
+            unique_id="test_zui_manual",
+            subentries_data=user_subentries(config[CONF_SLOTS]),
+        )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -630,7 +637,12 @@ class TestMixedPushAndApiOnlyEntry:
                 for slot_num, pin in E2E_SLOT_PINS.items()
             },
         }
-        entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_zui_mixed")
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=config,
+            unique_id="test_zui_mixed",
+            subentries_data=user_subentries(config[CONF_SLOTS]),
+        )
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()

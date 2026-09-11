@@ -778,7 +778,6 @@ class TestLockOperationEvent:
         assert len(fired) == 1
         assert fired[0]["code_slot"] == 2
         assert fired[0]["to_locked"] is False
-        assert fired[0]["action_text"] == "unlocked"
 
     async def test_lock_with_pin_credential(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -813,7 +812,6 @@ class TestLockOperationEvent:
         assert len(fired) == 1
         assert fired[0]["code_slot"] == 5
         assert fired[0]["to_locked"] is True
-        assert fired[0]["action_text"] == "locked"
 
     async def test_projects_lcm_slot_from_tag_when_credential_index_differs(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -1185,7 +1183,7 @@ class TestLockOperationEvent:
         """Event without ``lockOperationType`` fires with ``to_locked=None``.
 
         Matter spec permits unknown / vendor-specific operation types; the
-        handler falls through to ``to_locked=None`` and ``action_text="operated"``
+        handler falls through to ``to_locked=None``
         rather than dropping the event so downstream automations still see
         the PIN use.
         """
@@ -1217,7 +1215,6 @@ class TestLockOperationEvent:
         assert len(fired) == 1
         assert fired[0]["code_slot"] == 3
         assert fired[0]["to_locked"] is None
-        assert fired[0]["action_text"] == "operated"
 
     async def test_none_data_ignored(
         self, hass: HomeAssistant, matter_lock: MatterLock

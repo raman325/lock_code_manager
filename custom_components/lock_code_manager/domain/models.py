@@ -162,6 +162,14 @@ class LockCodeManagerConfigEntryRuntimeData:
     # entities for a user it just added exist. Anything that must not return
     # early clears this, writes, and waits for it.
     settled: asyncio.Event = field(default_factory=asyncio.Event)
+    # How many listener passes are currently in flight. Writing one user is
+    # several entry writes -- a subentry each, then the entry -- and Home
+    # Assistant schedules a listener task per write. Only the first finds a
+    # diff to act on; the rest see the config it already cached and return
+    # straight away. Without this count the first of those to finish sets
+    # ``settled`` while the pass that is building the entities is still
+    # awaiting, which is precisely what waiting was supposed to prevent.
+    passes_in_flight: int = 0
     # (lock, slot) pairs whose credential is to be left on the lock when the
     # slot leaves the configuration, set by the delete-user service and drained
     # by the update listener. A hand-off cannot be expressed in the new

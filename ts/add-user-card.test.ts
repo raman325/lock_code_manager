@@ -85,6 +85,47 @@ describe('lcm-add-user', () => {
         });
     });
 
+    describe('managing users in settings', () => {
+        it('sends the browser to the entry that hosts the native user dialogs', () => {
+            const pushState = vi.spyOn(history, 'pushState');
+            const manage = card.shadowRoot!.querySelector<HTMLButtonElement>('button.manage');
+            expect(manage).not.toBeNull();
+
+            manage!.click();
+
+            expect(pushState).toHaveBeenCalledWith(
+                null,
+                '',
+                '/config/integrations/integration/lock_code_manager#config_entry=entry-1'
+            );
+            pushState.mockRestore();
+        });
+
+        it('opens no dialog of its own', () => {
+            card.shadowRoot!.querySelector<HTMLButtonElement>('button.manage')!.click();
+
+            expect(card.shadowRoot!.querySelector('ha-dialog')).toBeNull();
+        });
+
+        it('goes to the integration page unanchored when only a title is configured', async () => {
+            const byTitle = document.createElement('lcm-add-user') as unknown as AddUserCardElement;
+            byTitle.setConfig({ config_entry_title: 'All Locks', type: 'custom:lcm-add-user' });
+            byTitle.hass = createMockHassWithConnection();
+            container.appendChild(byTitle);
+            await flush();
+            const pushState = vi.spyOn(history, 'pushState');
+
+            byTitle.shadowRoot!.querySelector<HTMLButtonElement>('button.manage')!.click();
+
+            expect(pushState).toHaveBeenCalledWith(
+                null,
+                '',
+                '/config/integrations/integration/lock_code_manager'
+            );
+            pushState.mockRestore();
+        });
+    });
+
     describe('the card API Home Assistant calls', () => {
         it('offers a stub config the card editor accepts', () => {
             const stub = (
@@ -464,9 +505,7 @@ describe('lcm-add-user', () => {
                 {
                     data: {
                         config_entry_id: 'entry-1',
-                        enabled: true,
-                        name: 'Raman',
-                        pin: '1234'
+                        users: [{ enabled: true, name: 'Raman', pin: '1234' }]
                     },
                     domain: 'lock_code_manager',
                     service: 'add_user'
@@ -479,14 +518,14 @@ describe('lcm-add-user', () => {
             card._name = 'Raman';
             await card._commit();
 
-            expect(calls[0].data).not.toHaveProperty('pin');
+            expect(calls[0].data.users[0]).not.toHaveProperty('pin');
         });
 
         it('trims the name', async () => {
             card._name = '  Raman  ';
             await card._commit();
 
-            expect(calls[0].data.name).toBe('Raman');
+            expect(calls[0].data.users[0].name).toBe('Raman');
         });
 
         it('passes an unticked Enabled through', async () => {
@@ -494,7 +533,7 @@ describe('lcm-add-user', () => {
             card._enabled = false;
             await card._commit();
 
-            expect(calls[0].data.enabled).toBe(false);
+            expect(calls[0].data.users[0].enabled).toBe(false);
         });
 
         it('addresses the entry by title when configured that way', async () => {
@@ -526,14 +565,14 @@ describe('lcm-add-user', () => {
             card._condition = 'calendar.guests';
             await card._commit();
 
-            expect(calls[0].data).toMatchObject({ condition: 'calendar.guests' });
+            expect(calls[0].data.users[0]).toMatchObject({ condition: 'calendar.guests' });
         });
 
         it('omits the condition when none was picked', async () => {
             card._name = 'Raman';
             await card._commit();
 
-            expect(calls[0].data).not.toHaveProperty('condition');
+            expect(calls[0].data.users[0]).not.toHaveProperty('condition');
         });
 
         it('asks for a name instead of adding a blank user', async () => {

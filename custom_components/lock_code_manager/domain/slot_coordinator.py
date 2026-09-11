@@ -42,7 +42,7 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
-from .config import EntryConfig
+from .config import EntryConfig, async_write_entry_config
 from .credentials import CredentialType
 from .names import name_error, normalize_name
 from .queries import get_entry_config
@@ -390,9 +390,7 @@ class SlotEntityCoordinator:
         config = get_entry_config(self._config_entry)
         for key, value in fields.items():
             config = config.with_slot_field_set(self._slot_num, key, value)
-        self._hass.config_entries.async_update_entry(
-            self._config_entry, data=config.to_dict()
-        )
+        async_write_entry_config(self._hass, self._config_entry, config)
         self._config_entry.runtime_data.config = EntryConfig.from_entry(
             self._config_entry
         )

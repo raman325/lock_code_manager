@@ -616,7 +616,7 @@ describe('LockCodesCard integration', () => {
                 expect.objectContaining({
                     code_slot: 1,
                     lock_entity_id: 'lock.front_door',
-                    type: 'lock_code_manager/set_usercode',
+                    type: 'lock_code_manager/write_unmanaged_code',
                     usercode: '5678'
                 })
             );
@@ -630,7 +630,7 @@ describe('LockCodesCard integration', () => {
                 expect.objectContaining({
                     code_slot: 2,
                     lock_entity_id: 'lock.front_door',
-                    type: 'lock_code_manager/clear_usercode'
+                    type: 'lock_code_manager/clear_unmanaged_code'
                 })
             );
         });
@@ -642,7 +642,7 @@ describe('LockCodesCard integration', () => {
             expect(sendMessagePromiseMock).toHaveBeenCalledWith(
                 expect.objectContaining({
                     code_slot: 3,
-                    type: 'lock_code_manager/clear_usercode'
+                    type: 'lock_code_manager/clear_unmanaged_code'
                 })
             );
         });
@@ -654,7 +654,7 @@ describe('LockCodesCard integration', () => {
             expect(sendMessagePromiseMock).toHaveBeenCalledWith(
                 expect.objectContaining({
                     code_slot: 5,
-                    type: 'lock_code_manager/set_usercode'
+                    type: 'lock_code_manager/write_unmanaged_code'
                 })
             );
         });

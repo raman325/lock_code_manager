@@ -15,6 +15,7 @@ from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
 from .domain.coordinator import LockUsercodeUpdateCoordinator
 from .domain.credentials import pin_address
 from .domain.models import LockCodeManagerConfigEntry
+from .domain.queries import subentry_id_for_slot
 from .domain.sync import SlotSyncManager
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .providers import BaseLock
@@ -39,6 +40,7 @@ async def async_setup_entry(
                 )
             ],
             True,
+            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 
     @callback
@@ -56,6 +58,7 @@ async def async_setup_entry(
                 )
             ],
             True,
+            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 
     callbacks = config_entry.runtime_data.callbacks

@@ -7,6 +7,7 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from homeassistant.components.calendar import (
@@ -24,7 +25,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
@@ -71,8 +72,8 @@ from custom_components.lock_code_manager.const import (
     CONF_ENTITIES,
     CONF_LOCKS,
     CONF_PIN,
+    CONF_SLOT,
     CONF_SLOTS,
-    CONF_USERS,
     DOMAIN,
     SERVICE_DELETE_USER,
     SERVICE_USE_CREDENTIAL,
@@ -81,9 +82,6 @@ from custom_components.lock_code_manager.domain.config import build_slot_unique_
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.slot_assignment import (
-    CONF_SLOT_ASSIGNMENT,
-)
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
@@ -108,6 +106,8 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_EVENT_ENTITY,
+    unnumbered_user_subentry,
+    user_subentries,
 )
 from .conftest import async_initial_tick, async_trigger_sync_tick
 
@@ -528,6 +528,46 @@ async def test_subscribe_code_slot_says_so_when_the_user_is_deleted(
     assert (await ws_client.receive_json())["id"] == 2
 
 
+async def test_subscribe_code_slot_ends_when_the_subentry_is_removed(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    Home Assistant's own delete closes the subscription too.
+
+    A user can be removed straight from the entry's page, which never touches
+    this integration's actions. That path is exactly what the add-user card's
+    "Manage users in settings" link sends people to, so it is the one most
+    likely to be used from a browser other than the one holding the card.
+    """
+    entry = lock_code_manager_config_entry
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: entry.entry_id,
+            ATTR_SLOT: 1,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    assert (await ws_client.receive_json())["event"][CONF_NAME] == "test1"
+
+    subentry = next(
+        subentry
+        for subentry in entry.subentries.values()
+        if subentry.data[CONF_SLOT] == 1
+    )
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+    await hass.async_block_till_done()
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    assert event["event"] == {ATTR_SLOT_NUM: 1, ATTR_REMOVED: True}
+
+
 async def test_subscribe_code_slot_includes_sync_status_once_determined(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -629,7 +669,7 @@ async def test_set_usercode(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/set_usercode",
+            "type": "lock_code_manager/write_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "9999",
@@ -652,7 +692,7 @@ async def test_clear_usercode(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/clear_usercode",
+            "type": "lock_code_manager/clear_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
         }
@@ -674,7 +714,7 @@ async def test_set_usercode_lock_not_found(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/set_usercode",
+            "type": "lock_code_manager/write_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "1234",
@@ -697,7 +737,7 @@ async def test_clear_usercode_lock_not_found(
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/clear_usercode",
+            "type": "lock_code_manager/clear_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
             ATTR_CODE_SLOT: 3,
         }
@@ -1027,7 +1067,7 @@ async def test_subscribe_code_slot_names_what_the_credential_was_used_on(
     assert data.get(ATTR_LAST_USED_LOCK) is None
 
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
+    lock.async_fire_code_slot_event(2, False)
     await hass.async_block_till_done()
 
     event_state = hass.states.get(SLOT_2_EVENT_ENTITY)
@@ -1144,7 +1184,7 @@ async def test_set_usercode_operation_failure(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_usercode",
+                "type": "lock_code_manager/write_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
                 ATTR_USERCODE: "1234",
@@ -1174,7 +1214,7 @@ async def test_clear_usercode_operation_failure(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/clear_usercode",
+                "type": "lock_code_manager/clear_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
             }
@@ -1210,7 +1250,7 @@ async def test_set_usercode_duplicate_code_error(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_usercode",
+                "type": "lock_code_manager/write_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
                 ATTR_USERCODE: "1234",
@@ -1465,7 +1505,7 @@ async def test_set_usercode_reflects_in_subscribe_lock_codes(
     await ws_client.send_json(
         {
             "id": 2,
-            "type": "lock_code_manager/set_usercode",
+            "type": "lock_code_manager/write_unmanaged_code",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "7777",
@@ -1533,7 +1573,7 @@ async def test_set_slot_condition_reflects_in_subscribe_code_slot(
     await ws_client.send_json(
         {
             "id": 2,
-            "type": "lock_code_manager/set_slot_condition",
+            "type": "lock_code_manager/set_condition",
             ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "entity_id": condition_entity_id,
@@ -2345,7 +2385,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2379,7 +2419,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 999,
                 "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2406,7 +2446,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "sensor.temperature",
@@ -2429,7 +2469,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "binary_sensor.nonexistent",
@@ -2458,7 +2498,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
                 "slot": 1,
                 "entity_id": INPUT_BOOLEAN_TEST_ENTITY_ID,
@@ -2504,7 +2544,7 @@ class TestSetSlotCondition:
             await ws_client.send_json(
                 {
                     "id": i + 1,
-                    "type": "lock_code_manager/set_slot_condition",
+                    "type": "lock_code_manager/set_condition",
                     ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                     "slot": 1,
                     "entity_id": entity_id,
@@ -2537,7 +2577,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "switch.my_schedule",
@@ -2573,7 +2613,7 @@ class TestSetSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "schedule.work_hours",
@@ -2605,7 +2645,7 @@ class TestSetSlotCondition:
             await ws_client.send_json(
                 {
                     "id": 1,
-                    "type": "lock_code_manager/set_slot_condition",
+                    "type": "lock_code_manager/set_condition",
                     ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                     "slot": 1,
                     "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2638,7 +2678,7 @@ class TestSetSlotCondition:
             await ws_client.send_json(
                 {
                     "id": 1,
-                    "type": "lock_code_manager/set_slot_condition",
+                    "type": "lock_code_manager/set_condition",
                     ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                     "slot": 1,
                     "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2671,7 +2711,7 @@ class TestClearSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 2,
             }
@@ -2702,7 +2742,7 @@ class TestClearSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
             }
@@ -2723,7 +2763,7 @@ class TestClearSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 999,
             }
@@ -3432,7 +3472,7 @@ class TestAddressingASlotByUser:
         client = await hass_ws_client(hass)
         await client.send_json_auto_id(
             {
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 "config_entry_id": lock_code_manager_config_entry.entry_id,
                 CONF_NAME: "test1",
                 CONF_ENTITY_ID: "binary_sensor.by_name",
@@ -3446,7 +3486,7 @@ class TestAddressingASlotByUser:
 
         await client.send_json_auto_id(
             {
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 "config_entry_id": lock_code_manager_config_entry.entry_id,
                 CONF_NAME: "test1",
             }
@@ -3465,19 +3505,22 @@ class TestAddressingASlotByUser:
         on the wrong person.
         """
 
-        class _Entry:
-            runtime_data = None
-            data = {
-                CONF_USERS: {
-                    "Ada-Lovelace": {CONF_ENABLED: True},
-                    "Ada Lovelace": {CONF_ENABLED: True},
-                },
-                CONF_SLOT_ASSIGNMENT: {"ada-lovelace": 1, "ada lovelace": 2},
-            }
-            options: dict = {}
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: []},
+            subentries_data=user_subentries(
+                {
+                    1: {CONF_NAME: "Ada-Lovelace", CONF_ENABLED: True},
+                    2: {CONF_NAME: "Ada Lovelace", CONF_ENABLED: True},
+                }
+            ),
+            unique_id="ambiguous-slug",
+            version=5,
+        )
+        entry.add_to_hass(hass)
 
         with pytest.raises(ServiceValidationError, match="more than one user"):
-            _slot_from(hass, _Entry(), {CONF_NAME: "ada lovelace"})
+            _slot_from(hass, entry, {CONF_NAME: "ada lovelace"})
 
     async def test_clearing_a_condition_for_an_unknown_user_is_refused(
         self,
@@ -3490,7 +3533,7 @@ class TestAddressingASlotByUser:
         client = await hass_ws_client(hass)
         await client.send_json_auto_id(
             {
-                "type": "lock_code_manager/clear_slot_condition",
+                "type": "lock_code_manager/clear_condition",
                 "config_entry_id": lock_code_manager_config_entry.entry_id,
                 CONF_NAME: "nobody",
             }
@@ -3502,13 +3545,19 @@ class TestAddressingASlotByUser:
     def test_a_user_with_no_slot_yet_is_refused(self, hass: HomeAssistant) -> None:
         """A user allocation has not numbered has nothing to address."""
 
-        class _Entry:
-            runtime_data = None
-            data = {CONF_USERS: {"Pending": {CONF_ENABLED: False}}}
-            options: dict = {}
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: []},
+            subentries_data=[
+                unnumbered_user_subentry("Pending", **{CONF_ENABLED: False})
+            ],
+            unique_id="unnumbered",
+            version=5,
+        )
+        entry.add_to_hass(hass)
 
         with pytest.raises(ServiceValidationError, match="not been given a slot"):
-            _slot_from(hass, _Entry(), {CONF_NAME: "pending"})
+            _slot_from(hass, entry, {CONF_NAME: "pending"})
 
     async def test_setting_a_condition_for_an_unknown_user_is_refused(
         self,
@@ -3529,7 +3578,7 @@ class TestAddressingASlotByUser:
         client = await hass_ws_client(hass)
         await client.send_json_auto_id(
             {
-                "type": "lock_code_manager/set_slot_condition",
+                "type": "lock_code_manager/set_condition",
                 "config_entry_id": lock_code_manager_config_entry.entry_id,
                 CONF_NAME: "nobody",
                 CONF_ENTITY_ID: "binary_sensor.somewhere",
