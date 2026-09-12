@@ -1680,28 +1680,20 @@ async def test_pin_change_during_sync_uses_snapshot(
     mgr._state = SyncState.OUT_OF_SYNC
 
     set_pins_recorded = []
-    mid_sync_event = asyncio.Event()
-    resume_event = asyncio.Event()
-    original_set = lock_provider.async_set_usercode
+    paused_set, mid_sync_event, resume_event = async_blocking_stub(
+        lock_provider.async_set_usercode
+    )
 
     async def recording_set_with_pause(code_slot, usercode, name=None, **kwargs):
-        """Record the PIN and pause mid-operation on first call."""
+        """Record the PIN, then pause mid-operation."""
         set_pins_recorded.append(usercode)
-        if not mid_sync_event.is_set():
-            mid_sync_event.set()
-            await resume_event.wait()
-        return await original_set(code_slot, usercode, name, **kwargs)
+        return await paused_set(code_slot, usercode, name, **kwargs)
 
     with patch.object(lock_provider, "async_set_usercode", recording_set_with_pause):
         # Start the tick
         tick_task = hass.async_create_task(mgr._async_tick())
-        # Yield control repeatedly until the mock signals it has been entered
-        for _ in range(20):
-            await asyncio.sleep(0)
-            if mid_sync_event.is_set():
-                break
-
-        assert mid_sync_event.is_set(), "Mock set_usercode was never entered"
+        # Wait deterministically until the mock signals it has been entered
+        await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
         # The sync captured PIN "1234" at tick start. Verify the
         # recorded PIN matches the snapshot value.

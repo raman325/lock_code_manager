@@ -304,7 +304,14 @@ class SlotSyncManager:
         # The first tick gets its own task so ``_tick_tasks`` only ever holds
         # tasks this manager may cancel; awaited inline it would register the
         # caller's, which is Home Assistant's entity-add task.
-        await self._hass.async_create_task(self._async_tick())
+        try:
+            await self._hass.async_create_task(self._async_tick())
+        except asyncio.CancelledError:
+            # A stop that cancelled the first tick is this manager's business,
+            # not the caller's: it must not read as the entity add being
+            # cancelled.
+            if self._started:
+                raise
 
     async def async_stop(self) -> None:
         """
@@ -315,19 +322,11 @@ class SlotSyncManager:
         and cancels whatever is still running, so nothing of this manager's
         runs after stop returns.
 
-        The grace is what keeps a healthy write whole: several providers
-        write a credential as a delete followed by an add, others roll back
-        a half-made user or repair a driver cache only after the call
-        returns, and a cancel landing inside any of those leaves the door
-        worse than the wait would. It is measured from when the call took
-        the lock's turn, not from the stop: a tick queued behind a long read
-        may get its turn late in the window, and a grace counted from the
-        stop would cut it mid-sequence. A call that has held the turn a whole
-        grace without answering is presumed wedged, and waiting out its full
-        budget is exactly the unload that shows nothing on screen for
-        minutes. The tick unwinds through the write path's ``finally``,
-        which gives the lock's turn back; a reload builds a fresh manager
-        that reads the slot before it writes.
+        The grace is measured from when the tick took the lock's turn, not
+        from the stop, so a tick queued behind a long read still gets a
+        whole window once it has the lock; see STOP_GRACE_SECONDS for why
+        the window exists. A cancelled tick unwinds through the write path's
+        ``finally``, which gives the lock's turn back.
         """
         if not self._started:
             return
@@ -346,49 +345,54 @@ class SlotSyncManager:
         }
         if pending:
             try:
-                still_running = await self._grace(pending)
-            except asyncio.CancelledError:
-                # ``asyncio.wait`` leaves its tasks alone when the waiter is
-                # cancelled; the ticks must not outlive a stop that was.
+                for _ in await self._grace(pending):
+                    _LOGGER.info(
+                        "%s: In-flight tick still running %ss after stop; "
+                        "cancelling it",
+                        self._log_prefix,
+                        STOP_GRACE_SECONDS,
+                    )
+            finally:
+                # Also on a cancelled stop: ``asyncio.wait`` leaves its tasks
+                # alone when the waiter is cancelled, and the ticks must not
+                # outlive a stop that was. Cancelling a finished task is a
+                # no-op.
                 for task in pending:
                     task.cancel()
-                raise
-            if still_running:
-                _LOGGER.info(
-                    "%s: In-flight tick still running %ss after stop; cancelling it",
-                    self._log_prefix,
-                    STOP_GRACE_SECONDS,
-                )
-            for task in still_running:
-                task.cancel()
-            tick_results = await asyncio.gather(*pending, return_exceptions=True)
-            for result in tick_results:
-                if isinstance(result, Exception):
-                    _LOGGER.warning(
-                        "%s: In-flight tick raised during stop: %s",
-                        self._log_prefix,
-                        result,
-                        exc_info=result,
-                    )
+                tick_results = await asyncio.gather(*pending, return_exceptions=True)
+                for result in tick_results:
+                    if isinstance(result, Exception):
+                        _LOGGER.warning(
+                            "%s: In-flight tick raised during stop: %s",
+                            self._log_prefix,
+                            result,
+                            exc_info=result,
+                        )
 
     async def _grace(self, pending: set[asyncio.Task[None]]) -> set[asyncio.Task[None]]:
         """
         Wait out the stop grace and return the ticks still running after it.
 
-        One window from the stop, then, if the lock's turn was taken inside
-        that window, a second one from the taking. Whoever holds the turn
-        gets a whole grace; a tick still queued for it is cancelled without
-        harm, since it has not touched the lock.
+        The deadline moves whenever one of these ticks holds the lock's turn
+        and took it after the deadline was set, so the holder always gets a
+        whole window. A tick still queued for the turn has not touched the
+        lock and is cancelled without harm when the deadline passes.
         """
-        _, still_running = await asyncio.wait(pending, timeout=STOP_GRACE_SECONDS)
-        taken = self._lock.turn_taken_at
-        if not still_running or taken is None:
-            return still_running
-        remaining = taken + STOP_GRACE_SECONDS - time.monotonic()
-        if remaining <= 0:
-            return still_running
-        _, still_running = await asyncio.wait(still_running, timeout=remaining)
-        return still_running
+        deadline = time.monotonic() + STOP_GRACE_SECONDS
+        while pending:
+            _, pending = await asyncio.wait(
+                pending, timeout=deadline - time.monotonic()
+            )
+            taken = self._lock.turn_taken_at
+            if (
+                not pending
+                or taken is None
+                or self._lock.turn_holder not in pending
+                or taken + STOP_GRACE_SECONDS <= deadline
+            ):
+                break
+            deadline = taken + STOP_GRACE_SECONDS
+        return pending
 
     # -- State resolution ----------------------------------------------------
 

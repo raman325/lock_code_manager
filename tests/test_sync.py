@@ -1495,6 +1495,64 @@ class TestAsyncStopCancelsInFlightTick:
         assert not tick_task.cancelled()
         assert len(lock_provider.service_calls["set_usercode"]) == writes_before + 1
 
+    async def test_stop_during_start_does_not_cancel_the_caller(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A stop that cancels the first tick returns start normally to its caller."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await manager.async_stop()
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        wedged_set, entered, _ = async_blocking_stub()
+
+        with (
+            patch.object(lock_provider, "async_set_usercode", wedged_set),
+            short_stop_grace(),
+        ):
+            start_task = hass.async_create_task(manager.async_start())
+            await asyncio.wait_for(entered.wait(), timeout=5)
+
+            await manager.async_stop()
+            await asyncio.wait_for(start_task, timeout=5)
+
+        assert not start_task.cancelled()
+        assert start_task.exception() is None
+
+    async def test_cancelled_start_stays_cancelled(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A start cancelled by its caller propagates, since no stop absorbed it."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await manager.async_stop()
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        wedged_set, entered, _ = async_blocking_stub()
+
+        with patch.object(lock_provider, "async_set_usercode", wedged_set):
+            start_task = hass.async_create_task(manager.async_start())
+            await asyncio.wait_for(entered.wait(), timeout=5)
+
+            start_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await start_task
+
+        assert start_task.cancelled()
+        assert not lock_provider._aio_lock.locked()
+
     async def test_cancelled_stop_cancels_its_ticks(
         self,
         hass: HomeAssistant,
@@ -1525,14 +1583,11 @@ class TestAsyncStopCancelsInFlightTick:
             stop_task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await stop_task
-            await asyncio.wait({tick_task}, timeout=1)
-            tick_cancelled = tick_task.cancelled()
-            # Cleanup for the failing case, so a surviving tick cannot hold
-            # the fixture teardown on the wedged call.
-            tick_task.cancel()
-            await hass.async_block_till_done()
+            # A surviving tick fails this with TimeoutError, and wait_for
+            # cancels it so it cannot hold the fixture teardown.
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(tick_task, timeout=1)
 
-        assert tick_cancelled
         assert not lock_provider._aio_lock.locked()
 
     async def test_async_start_only_tracks_its_own_task(

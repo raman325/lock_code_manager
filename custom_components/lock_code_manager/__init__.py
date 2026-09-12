@@ -1204,9 +1204,7 @@ async def async_unload_entry(
 
     # Stop tick managers FIRST so no in-flight tick can keep calling
     # _perform_sync, coordinator.async_refresh, or _write_state once
-    # downstream teardown begins. Stop cancels a tick rather than waiting
-    # it out, so this returns promptly even with a lock that has stopped
-    # answering. SlotSyncManager.async_stop is idempotent,
+    # downstream teardown begins. SlotSyncManager.async_stop is idempotent,
     # so the binary sensor's later async_will_remove_from_hass call into the
     # same manager is a cheap no-op.
     if runtime_data.sync_managers:
