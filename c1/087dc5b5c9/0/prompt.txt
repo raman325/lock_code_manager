@@ -1,0 +1,379 @@
+<task-notification>
+<task-id>aed208b6686babed0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/aed208b6686babed0.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle Reuse finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings (Reuse angle), PR #1562, worktree `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager`.
+
+Note: my `uv run` probe accidentally created an empty, gitignored `.venv/` in the worktree; I removed it. The installed HA package I checked is `/Users/raman/projects/lock_code_manager/.venv/lib/python3.14/site-packages/homeassistant`.
+
+## Candidates
+
+**1. tests/test_binary_sensor.py:1554** — hand-rolled pause stub in a test this PR already edits
+- Summary: `test_push_update_during_sync_operation_does_not_corrupt_state` still builds `mid_sync_event` / `resume_event` / `original_set` / `set_usercode_with_pause` by hand (lines 1554-1561). The diff edits this very test's assertions (lines 1588-1593) and imports `async_blocking_stub` into the file, but left this instance unmigrated.
+- Failure scenario: two copies of the same stub semantics now live in one file; the next change to how a paused provider call must behave (e.g. positional/keyword forwarding) gets applied to the helper and misses this one. Replace with `set_usercode_with_pause, mid_sync_event = async_blocking_stub(lock_provider.async_set_usercode, resume_event)` from `tests/common.py`.
+
+**2. tests/test_sync.py:1597** — same hand-rolled stub, same file the PR migrates
+- Summary: the breaker test at 1597-1606 (`mid_sync`, `resume`, `original_set`, `paused_set`) is byte-for-byte the pattern the PR replaced three times elsewhere in `test_sync.py` (1383, 1422, 1511). `async_blocking_stub` is already imported into this file by the diff.
+- Failure scenario: same as #1; the migration is half done in the file that introduced the helper. Use `paused_set, mid_sync = async_blocking_stub(lock_provider.async_set_usercode, resume)`.
+
+## Checked and not flagged (helper does not exist)
+
+**`_outlive_tick` (custom_components/lock_code_manager/domain/sync.py:521).** Home Assistant has no shield/detach helper. `homeassistant/core.py` offers `async_create_task` (eager by default, tracked, waited by `async_block_till_done`) and `async_create_background_task` (not waited by `block_till_done`, cancelled on shutdown), and `homeassistant/util/async_.py` has `create_eager_task`; none shield. HA's own idiom for this is exactly what the PR wrote: `asyncio.shield(create_eager_task(...))` in `helpers/script.py:1998` and `:2023`. No prior `shield` use anywhere in `custom_components/`. `async_create_task` is the right primitive here, not `async_create_background_task`, because the tests rely on `hass.async_block_till_done()` to let the shielded write land. Nothing to reuse.
+
+**Cancel-then-gather loop (sync.py:345).** No cancel-and-wait helper in HA `core.py`, `util/`, or `helpers/` (`async_cancel` hits are timer/debouncer unsubscribes, not task drainers), and none in the repo. The pre-existing `gather(*pending, return_exceptions=True)` plus result logging was already there; the PR only adds `task.cancel()` ahead of it. Nothing to reuse.
+
+**`_state` reset on cancel (sync.py:770).** There is no `_set_state` / `_transition` method; `sync.py` assigns `self._state = SyncState.X` directly at 20+ sites (612, 687, 711, 720, 813, 824, 847, 867, 871, 887, 893, 928, 944, ...), so the raw assignment matches the file's convention. The cancel branch omits the `_write_state()` that usually follows a transition, but `_write_state` (line 661-663) is a no-op once `_started` is False, and the only cancel source is `async_stop`, so calling it would change nothing. Not a reuse finding.
+
+**`async_blocking_stub` itself (tests/common.py:65).** No prior equivalent in `tests/common.py` or `tests/conftest.py`. The closest existing shape is `tests/providers/test_base.py:2724-2728` (`entered` + `_never_returns`), a local closure, not a helper; that file is outside the diff so not flagged. Two other hand-rolled stubs in touched files were deliberately left alone and correctly so: `tests/test_binary_sensor.py:1693` (`recording_set_with_pause` records PINs and pauses only on first call) and `tests/test_sync.py:1546` (`failing_tick_impl` must raise on cancel); neither fits the helper's contract.</result>
+<usage><subagent_tokens>87153</subagent_tokens><tool_uses>6</tool_uses><duration_ms>85452</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac087efb313c94e1a</task-id>
+<tool-use-id>toolu_01LtPSwqvwk8hDgSsYno99KW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ac087efb313c94e1a.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle Conventions finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need; no further lookups are required. Both borderline items resolved against the rule text and the codebase, so I'll give the verdict.
+
+## Result: none
+
+No line in the diff clearly breaks a rule stated in a governing instruction file.
+
+**Governing files read** (the only ones that exist for this worktree):
+- `/Users/raman/.claude/CLAUDE.md` (user-level; Python/import/style rules)
+- `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/CLAUDE.md` (delegates to AGENTS.md)
+- `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/AGENTS.md` (read fully, incl. "Code Style" and "Test conventions")
+- Project `.claude/CLAUDE.md` (contents provided in context; the worktree has no `.claude/` directory of its own)
+- No `CLAUDE.md`/`CLAUDE.local.md`/`AGENTS.md` exists under `custom_components/`, `custom_components/lock_code_manager/`, `domain/`, or `tests/` (verified with `find`).
+
+**Rules checked against the diff, and why each passes:**
+
+| Rule (source) | Finding |
+|---|---|
+| "No inline/local imports" (AGENTS.md Code Style; user CLAUDE.md) | All new imports (`asyncio`, `Awaitable`, `Callable`, `Coroutine`, `Any`) are at module top. |
+| "No `nonlocal`/`global`" (AGENTS.md) | None introduced; the new `async_blocking_stub` closes over `entered`/`release` without rebinding. |
+| Import order future → stdlib → … (AGENTS.md; `force-sort-within-sections`) | `asyncio` before `collections`; `typing` between `logging` and `unittest.mock`; `Awaitable, Callable, Coroutine, Mapping` sorted. All correct. |
+| "Do NOT add Google-style `Args:`/`Returns:`" (AGENTS.md) | All new docstrings (`_outlive_tick`, `async_stop`, `_perform_sync`, `async_blocking_stub`) are prose. |
+| "Docstrings required for all public functions" (AGENTS.md) | `async_blocking_stub` has one; `stub`/`record_task` are nested, not public. |
+| "Spell out acronyms" (AGENTS.md) | Only candidate is "PIN" in the `_perform_sync` docstring (`sync.py`). It is an established domain term, already used in existing `sync.py` comments (lines 4, 224, 225) and in AGENTS.md itself. Not a violation. |
+| PEP 695 `def _outlive_tick[T]` (`sync.py:521`) | First use in the codebase, but nothing forbids it: `pyproject.toml` pins `requires-python = "&gt;=3.14"` and `target-version = "py314"`; ruff's `UP` ruleset at that target favours this syntax. AGENTS.md's "older style" note concerns `X \| None` unions, not generics. |
+| "Minimize caplog text assertions" (AGENTS.md) | No new text assertions added; `test_async_stop_logs_tick_exception_at_warning` retains its pre-existing `caplog.at_level` only. |
+| "Don't manually inject `hass.data`" / real fixtures (AGENTS.md; memory) | All modified tests use `mock_lock_config_entry` / `lock_code_manager_config_entry`; no `hass.data` writes. |
+| "Don't use `MagicMock()` for coordinators" (AGENTS.md) | `test_async_stop_during_verification_read_lets_it_finish` patches `async_refresh` on the real coordinator. |
+| Helper location (AGENTS.md: `tests/common.py` = mock provider, mock entities, constants) | `async_blocking_stub` in `tests/common.py` is consistent with that file's stated purpose; conftest is reserved for fixtures. |
+| "Prefer idiomatic Python" (AGENTS.md) | `for task in pending: task.cancel()` is a side-effect loop, where a comprehension would be less idiomatic. |
+
+**One note outside the strict scope:** the auto-memory file `feedback_comments_state_intent_not_history.md` (not a CLAUDE.md/AGENTS.md rule, so not flagged) is also satisfied. The reworded comments in `__init__.py:1207-1209` and the `async_stop`/`_perform_sync` docstrings state current intent and rationale rather than "this used to await."</result>
+<usage><subagent_tokens>85458</subagent_tokens><tool_uses>8</tool_uses><duration_ms>87427</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adb19191a92ffcc68</task-id>
+<tool-use-id>toolu_01RjgqWjbvhJ63ZfZtcioLRY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/adb19191a92ffcc68.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle Simplification finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings (Simplification angle), all verified against the worktree; every trial edit was reverted and `git status` shows only the pre-existing `.entire/.gitignore` change.
+
+**1. custom_components/lock_code_manager/domain/sync.py:762-771 — CancelledError handler duplicates what `finally` already gives you**
+Summary: The new `except asyncio.CancelledError: reset-if-SYNCING; raise` sits beside an existing `finally:`. Every normal exit from `_async_tick_impl` leaves `_state` as something other than SYNCING (all five `except` branches plus both tails at 1054-1065 assign a state), so "SYNCING at tick exit" is wrong for *any* exit, not just cancel. The PR's handler also misses a non-cancel exception escaping after SYNCING was set (e.g. `_disable_slot` at 935 or `_resolve_credential_snapshot` at 1052 raising) -- that path would still leave the slot parked on SYNCING forever, the exact bug the handler was added for.
+Simpler form (tested: 221 passed across test_sync/test_binary_sensor/test_init):
+```python
+        finally:
+            if self._state is SyncState.SYNCING:
+                self._state = SyncState.OUT_OF_SYNC
+            self._tick_tasks.discard(task)
+```
+Drops the `except`/`raise` block and the five-line comment; the one-line comment becomes "a tick never exits with SYNCING; a cancel or an escaped error would otherwise park the slot for good."
+
+**2. custom_components/lock_code_manager/domain/sync.py:348-350 — dead `not isinstance(result, asyncio.CancelledError)` clause**
+Summary: `CancelledError` is a `BaseException` (3.8+), so `isinstance(result, Exception)` is already False for it; the second clause can never change the outcome. It was pre-existing on main, but this PR is the change that makes cancelled results the *common* case in `tick_results`, and it left the reader believing the clause is what filters them. Simpler: `if isinstance(result, Exception):`. (Verified: tests pass with the clause removed.)
+
+**3. custom_components/lock_code_manager/domain/sync.py:16, 521 — `Awaitable` import exists only to under-type `asyncio.shield`**
+Summary: `asyncio.shield(...)` returns `asyncio.Future[T]`; annotating the return as `Awaitable[T]` adds an import (`Awaitable`) for a looser type than the value already has. `-&gt; asyncio.Future[T]` is exact and drops the import; `Coroutine` is still needed for the parameter. Verified mypy reports nothing new for sync.py either way. Keeping `_outlive_tick` as a method is fine -- three call sites and the name carries the intent.
+
+**4. tests/test_binary_sensor.py:1588-1593 — widened assertion hides a deterministic outcome**
+Summary: `assert mgr._state in (PENDING_CONFIRMATION, IN_SYNC)` plus a five-line comment explaining "either way". I ran the test six times: with the PR as-is 3/3 pass; with the narrow `is SyncState.PENDING_CONFIRMATION` 3/3 fail with `IN_SYNC`. It is not nondeterministic -- `_outlive_tick` adds one scheduling hop (inner task done -&gt; shield future -&gt; tick resumes), so the coordinator's confirmation re-read now always lands before the tick checks `has_pending_write`, and the tick verifies the slot itself. Simpler: `assert mgr._state is SyncState.IN_SYNC`, drop the hedging comment, and the trailing `await mgr._async_tick(); assert IN_SYNC` pair becomes redundant. (Whether that extra hop *should* change which code path confirms the write is a correctness question for another reviewer; from this angle the test should state the one outcome it produces.)
+
+**5. tests/common.py:65-85 — `async_blocking_stub` allocates a throwaway Event per call and branches on two Optionals**
+Summary: `await (release or asyncio.Event()).wait()` builds a fresh Event on every invocation to mean "never", and `return await original(...) if original is not None else None` folds two concerns into one expression. Simpler: have the helper own both events and return them -- `entered, release = asyncio.Event(), asyncio.Event()` ... `return stub, entered, release`. Callers become `stub, entered, release = async_blocking_stub(original)`; the one caller that never releases (test_init.py:1680) just ignores the third element, and the `release` parameter, the `or`, and the per-call allocation all disappear. Also: test_binary_sensor.py:1555-1561 (`set_usercode_with_pause` in `test_push_update...`) is a byte-for-byte copy of the pattern this helper was introduced to replace and was left unmigrated in the same file.
+
+**6. tests/test_sync.py:1440-1459 — `test_async_start_only_tracks_its_own_task` asserts one level from the invariant**
+Summary: It patches `_try_upgrade_state_tracking` to record `asyncio.current_task()` and asserts that is not the caller. The property under test is "`_tick_tasks` never contains the caller's task", so assert that directly: in the hook, `seen.append(set(manager._tick_tasks))`, then `assert asyncio.current_task() not in seen[0]` (and optionally `assert seen[0]`, proving the tick *did* register something). That also removes the `from typing import Any` added at test_sync.py:8 solely for `list[asyncio.Task[Any] | None]`.
+
+Not flagged: the `_LOGGER.debug` on cancel, the `__init__.py` comment, and the `_perform_sync`/`async_stop` docstrings -- they explain a deviation (shielding, cancelling) rather than narrate history, which matches the repo's comment rule. No leftover `resume_event` names in the migrated tests; the remaining ones in test_binary_sensor.py belong to tests the PR did not touch.</result>
+<usage><subagent_tokens>95763</subagent_tokens><tool_uses>12</tool_uses><duration_ms>187698</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>byp7m7vl9</task-id>
+<tool-use-id>toolu_015vrPR3c2CKwv2vE475ko2j</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/byp7m7vl9.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the CI pytest job to finish" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae3953e4d0cc2c5e9</task-id>
+<tool-use-id>toolu_01X8GQ2hJxuFxjMccNeHGkEc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ae3953e4d0cc2c5e9.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle Altitude finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict
+
+The PR fixes the reported symptom (unload/reload no longer blocks) at the right *layer* — the tick is the thing that should be cancellable, and the provider call is the thing that should not be — but the shield is an ad-hoc detachment: it makes the write outlive the tick without making it outlive anything else that dies at unload. Every owner the outliving write reports to (the provider instance, its `_aio_lock`, the coordinator's pending-write table, the tick's error handlers) is torn down by the same unload that cancelled the tick. The design already has the right owner for a detached write (the coordinator, per #1545), but the shield bypasses it on the reload path. Candidates below, strongest first.
+
+---
+
+**1. The outliving write escapes the lock's mutex on reload: two provider instances write the same physical lock concurrently**
+
+file: `custom_components/lock_code_manager/domain/sync.py`, line 521 (`_outlive_tick`); root at `custom_components/lock_code_manager/providers/_base.py` line 237 (`_aio_lock` is a per-instance dataclass field)
+
+Summary: The shielded task keeps holding the *old* `BaseLock` instance's `_aio_lock`. A single-entry reload pops that instance (`async_unload_lock`) and `_setup_one_lock` (`__init__.py` ~1767) builds a fresh one with a fresh `asyncio.Lock`. The new manager's initial tick, and the new coordinator's first refresh, go straight to the device with no serialization against the orphaned write.
+
+Failure scenario: Slow-but-answering lock (the #1397 profile, ~49% response loss, not a total wedge). Reload mid-write. Orphan is sitting inside Matter/Schlage's delete-then-add sequence (`_sequence_lock` is also per-instance). New instance reads the slot, sees the old code (or empty, between the delete and the add), goes OUT_OF_SYNC, issues its own delete+add. Two interleaved delete/add sequences on one credential index — exactly the "door with no working PIN" the shield's docstring says it exists to prevent. The shield trades a *cancellation* hazard for a *concurrency* hazard with the same blast radius.
+
+Deeper change: The mutex must be keyed by the physical lock, not by the provider instance. Move `_aio_lock`/`_sequence_lock` (or the whole in-flight-operation slot) into a domain-level registry in `hass.data[DOMAIN]` keyed by `lock_entity_id`, looked up in `async_create_lock_instance`. This is the same shape as `_find_shared_lock_instance` already uses for multi-entry sharing — extend the "shared instance" idea to the mutex so a rebuilt instance queues behind the orphan (and gets a clean `LockBusy` if it waits too long, which the #1535 machinery already handles correctly). With that in place the shield becomes safe by construction rather than by hope.
+
+---
+
+**2. The write's outcome is discarded entirely; `CodeRejectedError` after a cancel never disables the slot or raises a repair**
+
+file: `custom_components/lock_code_manager/domain/sync.py`, line 521 (`_outlive_tick`), with the handlers at lines ~937-1010 unreachable for a detached write
+
+Summary: After the outer future is cancelled, CPython 3.14's `shield._inner_done_callback` returns early without calling `inner.exception()` (verified from the installed stdlib). The exception is neither routed through the tick's `except CodeRejectedError/LockBusy/LockDisconnected/LockOperationUnsupported/...` ladder nor retrieved — it surfaces only as asyncio's GC-time "Task exception was never retrieved" with no slot context. Breaker accounting, `note_connectivity_failure`, `_disable_slot`, `_suspend_slot`, and the repair issue all silently don't happen. On the success side, `record_write` is a no-op once the coordinator has `_shutdown_requested`, so a polled lock's landed write is also unrecorded.
+
+Failure scenario: User changes a PIN to one the firmware rejects, then reloads (or HA restarts) while the write is in flight. The rejection arrives after the cancel. No repair issue, no slot disable. The new manager's LOADING tick reads the lock, sees the old code, OUT_OF_SYNC, re-writes, rejected again, *now* handled — one full extra rejection cycle and, on a delete-then-add provider, the old code was already deleted by the orphan so the slot is briefly empty. Worse on `LockDisconnected`: the lock breaker is never fed, so the new instance starts at zero strikes against a lock that just proved it isn't answering.
+
+Deeper change: The coordinator already "owns pending writes" (#1545). Make `_outlive_tick` hand the task to it: `coordinator.adopt_write(address, task)` that attaches a done-callback which (a) logs the exception with the slot prefix at the same level the tick would, (b) feeds `note_connectivity_failure` / `_rejected_code_slots` as appropriate, and (c) is itself cancelled-and-awaited in `coordinator.async_shutdown` *with a short bound* rather than left to drift. At minimum, the shield helper needs `task.add_done_callback` that retrieves and logs the exception — the current form is a silent-failure regression relative to main, where the tick's handlers always ran.
+
+---
+
+**3. `SYNCING -&gt; OUT_OF_SYNC` on cancel is a lie about a write that may land, and its only beneficiary is a same-instance restart that production never does**
+
+file: `custom_components/lock_code_manager/domain/sync.py`, line 769
+
+Summary: In production the manager is constructed in `LockCodeManagerCodeSlotInSyncEntity.__init__` and stopped in `async_will_remove_from_hass`; a reload creates a new manager (state `LOADING`). No prod path calls `async_start` on a stopped manager. So the reset's stated purpose ("a restarted manager would never look at the slot again") only holds in tests (`test_async_start_only_tracks_its_own_task` does exactly this). Meanwhile the reset encodes the wrong truth: the write went out; the correct state for "a write went out, confirm by read" is `PENDING_CONFIRMATION`, which the machinery already supports via `coordinator.pending_write`.
+
+Failure scenario: Same-instance restart (the only case where this matters). Write lands after cancel → `record_write` runs in the shielded task (coordinator still alive in this scenario) → next tick after LOADING sees `pending_write` and correctly goes PENDING_CONFIRMATION. So the `OUT_OF_SYNC` reset is redundant with the coordinator path for the landed case, and for the not-yet-landed case the tick would re-issue the write while the orphan still holds `_aio_lock` — which now becomes `LockBusy` after `wait_budget` rather than a clean wait. Not catastrophic, but it is a third place restating the "what is the slot's state after a write" rule (see memory note "release must invert acquire" / drift).
+
+Deeper change: Either drop the reset and let the coordinator's pending table be the single source of truth (the tick already derives PENDING_CONFIRMATION from it), or make the transition a named method on the state machine (`_abandon_in_flight_write()`) that consults `coordinator.has_pending_write(self._address)` and picks PENDING_CONFIRMATION vs OUT_OF_SYNC. Placing it at the tick boundary is fine; placing the *decision* inline in an `except` is what will drift.
+
+---
+
+**4. `_last_set_pin`, the "Set usercode" debug log, and the `return True` now run in the cancellable frame while the write they describe is uncancellable**
+
+file: `custom_components/lock_code_manager/domain/sync.py`, lines 549-561
+
+Summary: `_perform_sync` shields only the provider call. `self._last_set_pin = snapshot.credential_state` and `return True` (which drives `was_set` and the verification branch) sit after the `await` in the cancelled task. The outliving unit is therefore "the device write" but not "the write plus the manager's memory of it."
+
+Failure scenario: Cost is small today only because of finding 3 (no same-instance restart in prod). But on a masked/write-only lock where `_last_set_pin` is the *only* in-sync evidence, a same-instance restart after a cancelled-but-landed write re-sets the PIN unconditionally. And the `was_set=True → record_failure` path is skipped, so an unverified set costs no strike. This is the "one bug hides another" shape: harmless now, wrong the moment anyone adds a restart path.
+
+Deeper change: Move the post-write bookkeeping *into* the shielded coroutine, i.e. shield a small `_write_and_record(snapshot)` that does the provider call, sets `_last_set_pin`, and returns `was_set`. Or, per finding 2, have the coordinator own that memory. Either way the shield boundary should coincide with the unit-of-work boundary, not with the syscall.
+
+---
+
+**5. The unbounded wait isn't gone, it moved to Home Assistant shutdown, where it is now invisible**
+
+file: `custom_components/lock_code_manager/domain/sync.py`, line 528 (`self._hass.async_create_task`, tracked, non-background)
+
+Summary: `hass.async_create_task` puts the write in `hass._tasks`, which `_await_and_log_pending` waits on at each shutdown stage (`STOP_STAGE_SHUTDOWN_TIMEOUT=100`, `FINAL_WRITE_STAGE=60`, `CLOSE_STAGE=30`). A wedged write with a 600 s floor (or ~840 s on ZHA with ten slots per the `_base.py` notes) will blow every stage timeout. Entry unload is fast now; HA restart is not, and the "Timed out waiting for..." log is HA's, not LCM's — nobody will trace it back. Also: within unload, `async_unload_lock` still awaits `lock.async_unload()` → `reconnect_task` cancel-and-await, and `coordinator.async_shutdown()` cancels `_confirm_task` but does not await it; both are fine. The remaining blocker is the shielded write itself at HA-stop time.
+
+Failure scenario: User hits Restart in HA with a wedged Z-Wave lock. Stop stage hangs 100 s, final-write stage 60 s, close 30 s — ~3 minutes of "Home Assistant is shutting down" with HA-level timeout warnings. #1552's complaint was "nothing on screen for all of it"; this is the same experience relocated.
+
+Deeper change: The write should not be tracked as a task HA waits on to completion; it should be a task with an explicit owner that bounds it at shutdown. `hass.async_create_background_task` (excluded from the stage waits) plus an `EVENT_HOMEASSISTANT_STOP` listener owned by the coordinator/registry from finding 1 that cancels it — accepting the mid-sequence risk *only* at process exit, where the alternative is the watchdog killing the process anyway. The `_base.py` comment already argues cancellation is acceptable at the 600 s budget; process exit is the one case where a shorter bound is also acceptable.
+
+---
+
+**6. `await self._hass.async_create_task(self._async_tick())` in `async_start` papers over `_tick_tasks` self-registration via `asyncio.current_task()`**
+
+file: `custom_components/lock_code_manager/domain/sync.py`, line 305 (and the registration at ~747-751)
+
+Summary: The tick registers *whatever task called it*. That was harmless when stop only awaited; it is dangerous now that stop cancels. The PR guards the one production caller (start) by interposing a task, plus `task is not current` in stop. But the invariant "`_tick_tasks` holds only tasks this manager may cancel" is enforced at the call sites, not at the registration site, and the test suite's direct `manager._async_tick()` calls (conftest `async_trigger_sync_tick`, and many tests) register the pytest task — any test that then calls `async_stop` from a different task would have its test task cancelled. That is exactly the hazard the new `test_async_start_only_tracks_its_own_task` exists to detect for start; it doesn't cover the other callers because they happen to run stop from the same task.
+
+Failure scenario: A future caller (e.g. a service handler or the slot coordinator wanting to force a tick) does `await manager._async_tick()` inline; an unrelated unload cancels the service call's task. No test catches it because the guard is per-call-site.
+
+Deeper change: Invert the ownership. Give the manager a `_spawn_tick()` that creates the task via `hass.async_create_task`, adds it to `_tick_tasks`, and attaches `discard` as a done-callback; make `_async_tick` a plain coroutine with no `current_task()` lookup; have the timer callback and `async_start` both call `_spawn_tick()`. Then `_tick_tasks` cannot contain a foreign task by construction, `async_stop`'s `task is not current` filter goes away, and the `await hass.async_create_task(...)` in start reads as intent instead of as a workaround.</result>
+<usage><subagent_tokens>120104</subagent_tokens><tool_uses>20</tool_uses><duration_ms>212035</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae9ef70c9a830632a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ae9ef70c9a830632a.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle A: line-by-line scan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Angle A findings (line-by-line scan of `/tmp/rev1562/full.diff` plus the enclosing functions). Everything below was checked against the actual code paths; two claims were verified empirically (shield behaviour per Python version; a mutation run on the `has_pending_write` branch).
+
+**1. custom_components/lock_code_manager/domain/sync.py:529 — a shielded operation that fails after its tick is gone bypasses every handler the tick had and lands in the event loop's exception handler as an unhandled error.**
+Failure scenario: entry reload while a `_perform_sync` write is queued behind a long slot walk. Stop cancels the tick; the shielded write later raises `LockBusy` (an expected condition the tick would log at DEBUG). Nobody awaits it: HA logs `Error doing job: Task exception was never retrieved` with a full traceback (3.12/3.13) or `exception in shielded future` (3.14) — I ran a probe on all three interpreters, it fires on each. Same shape for `CodeRejectedError` (slot never disabled, no repair created), `LockDisconnected` (`note_connectivity_failure` never called, lock breaker never fed), `LockOperationFailed` (slot breaker never charged). The `_outlive_tick` docstring's "cannot linger unseen" is true only in the sense that HA prints an unclassified traceback with no lock/slot prefix. Fix shape: attach a done-callback in `_outlive_tick` that retrieves the exception and logs it with `self._log_prefix` at the level the tick would have (and drops `CancelledError`).
+
+**2. custom_components/lock_code_manager/__init__.py:1204 (and sync.py:551/562) — unload no longer waits for the write, so a reload starts a new provider/coordinator/manager while the old provider's write is still running against the same physical lock.**
+Failure scenario: Matter or Schlage (delete-then-add) write in flight; user saves options → reload. Old task has deleted the credential and is awaiting the add. `async_unload_lock` shuts the old coordinator down (`record_write` is now a no-op via `_shutdown_requested`, coordinator.py:287), the new `BaseLock` instance gets fresh `_aio_lock`/`_sequence_lock`, its first refresh reads the slot empty, the new manager writes → the old add and the new add race on the device: duplicate credential / rejection, and the new coordinator never learns the old write existed. Pre-PR, unload awaited the tick and this overlap was impossible; the PR trades a hang for an overlap and nothing serializes across the instance boundary. Worth at least a note in the docstring, or holding the old provider's in-flight task somewhere the new setup can await.
+
+**3. sync.py:935 (`await self._disable_slot(...)`) with the handler at :763 — a cancel can now land inside `_disable_slot`, which turns the switch off first (domain/util.py:191 `hass.services.async_call`) and creates the repair only after.**
+Failure scenario: lock rejects the code, tick enters `_disable_slot`, stop cancels it during the service call. Switch is (or may be) off, no repair issue, `_state` reset to OUT_OF_SYNC. After reload the slot is inactive → trivially IN_SYNC; the user never learns the code was rejected. Window is one service call wide, but it did not exist before this PR. Either shield `_disable_slot` too, or reorder to create the issue before the switch call.
+
+**4. sync.py:305 — `await self._hass.async_create_task(self._async_tick())` propagates a *child* cancellation into an uncancelled caller.**
+If `async_stop` cancels that first-tick task while `async_start` is awaiting it, the `await` raises `CancelledError` into HA's entity-add task, which was never cancelled; asyncio then marks that task cancelled. Reachability caveat: on a fresh manager the state is LOADING and that whole path (`_try_upgrade_state_tracking`, `_resolve_credential_snapshot`, LOADING branch, `_write_state`) is synchronous, so the eager task completes before the await and is never in `_tick_tasks`. Only a same-instance stop→start with a non-LOADING state (what `test_async_start_only_tracks_its_own_task` does) can hit it. Low; flagging because it's a latent trap if the first tick ever gains an await.
+
+**5. sync.py:349 — the `not isinstance(result, asyncio.CancelledError)` clause is dead** (`CancelledError` is a `BaseException`, so `isinstance(result, Exception)` is already False for it). Harmless; same pattern already exists in `__init__.py:1226`. No failure scenario, mentioned only so nobody "fixes" the loop by relying on that clause.
+
+**6. tests/test_binary_sensor.py:1593 — the assertion now accepts two states because `shield` adds loop hops between the write landing and the tick's `has_pending_write` check, letting the coordinator's confirmation look win the race.**
+I mutated `if self._coordinator.has_pending_write(...)` to `if False and ...` and ran `tests/test_sync.py tests/test_binary_sensor.py`: still killed by `TestBreakerTickSoleMutatorInvariant::test_tick_records_failure_on_set_verification_miss`, so no coverage was lost. Residual concern is only that this test now documents a scheduling-dependent outcome rather than pinning one; low.
+
+Not a finding (checked and cleared): eager-start synchronous raise in `_outlive_tick` (done task → `shield` returns it unchanged → exception re-raised in the tick); `_last_set_pin` set after the shielded await (the stopped manager instance is always discarded, and a fresh instance starts at `None` anyway); `async_blocking_stub` arg forwarding matches what `_execute_rate_limited` passes; second concurrent `async_stop` (unload awaits the gather before entity removal, so the idempotent early return is correct).</result>
+<usage><subagent_tokens>121762</subagent_tokens><tool_uses>21</tool_uses><duration_ms>343156</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af63a774a629d7584</task-id>
+<tool-use-id>toolu_01Ku2x51U4Z55sZq2iLWLB2r</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/af63a774a629d7584.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle C: cross-file tracer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings from the cross-file trace. Verified facts first, then candidates.
+
+**Verified environment facts**
+- HA 2026.9.0b4, Python 3.14.5. `hass.async_create_task` is eager by default, adds the task to `hass._tasks` (unless it finished inline), and `async_block_till_done` waits on those tasks. HA shutdown (`hass.async_stop`) does not unload entries; the tick is a *background* task (`_TrackTimeInterval` runs jobs with `background=True`) and is cancelled at stage 2, while the shielded write is a foreground task in `running_tasks` that gets the stop/final-write stages and is only force-cancelled at stage 4 with a WARNING. That is an improvement over main, not a regression.
+- CPython 3.14 `asyncio.shield`: when the outer is cancelled, `_outer_done_callback` swaps in `_log_on_exception`, which calls `inner.exception()` (so no "never retrieved") but then calls `loop.call_exception_handler(...)` with message `"&lt;Exc&gt; exception in shielded future"`. HA's handler logs that at ERROR with traceback; the pytest `hass` fixture re-raises it at teardown.
+- `_execute_rate_limited` (providers/_base.py:349-368) acquires `_aio_lock` and releases in `finally`; the deadline/mutex-wait machinery raises `LockBusy`/`LockDisconnected`/`LockOperationFailed` *inside* the shielded task. `_aio_lock` is per provider instance (_base.py:237); reload creates a new instance (`__init__.py:1767`).
+- The initial tick's LOADING branch (sync.py ~771-822) has no await, so the eager task in `async_start` completes inline in production.
+- Callers: `binary_sensor.py:175` (`async_added_to_hass` → start), `binary_sensor.py:192` (`async_will_remove_from_hass` → stop), `__init__.py:1218` (unload → gather of stops, `return_exceptions=True`). No caller runs under a timeout that would cancel `async_stop` mid-gather; if it were, ticks are already `.cancel()`ed and unwind on their own, and `_started=False` makes a re-stop a no-op without leaving live ticks.
+
+**Candidates**
+
+1. custom_components/lock_code_manager/domain/sync.py:529 (`_outlive_tick`) — A provider error raised by the shielded write after the tick was cancelled is routed to HA's loop exception handler instead of the tick's classifier.
+   failure_scenario: Exactly the PR's motivating case. Lock has stopped answering; a set is in flight; user reloads the entry. `async_stop` cancels the tick; the write keeps running and, when its operation budget expires, raises `LockDisconnected`. Nothing awaits it any more, so shield's `_log_on_exception` fires and HA logs `Error doing job: LockDisconnected exception in shielded future` at ERROR with a full traceback — for a condition the tick logs at info/warning and charges to a breaker. Same for `LockBusy`, `LockOperationFailed`, `CodeRejectedError`. Reproduced with a throwaway test (stub raises `LockDisconnected` after `async_stop`): handler message `['LockDisconnected exception in shielded future']`, and the `hass` fixture re-raises it, so any future test that releases a stub with a raise after stop fails at teardown. The PR's tests only pass because every stub succeeds after release. Fix direction: have `_outlive_tick` run a wrapper coroutine that catches `LockCodeManagerProviderError` and logs at the tick's level when the outer was cancelled, or attach a done callback in the `CancelledError` handler that consumes and classifies the result.
+
+2. custom_components/lock_code_manager/domain/sync.py:551 with custom_components/lock_code_manager/__init__.py:1218 → 1281 — The per-lock mutex no longer covers a reload: the orphaned write holds the old provider instance's `_aio_lock`, the reloaded entry gets a new instance with a fresh lock, so two writes to the same physical lock can be in flight. On main this could not happen because unload awaited the tick before `async_unload_lock` popped the instance.
+   failure_scenario: User changes a slot's PIN in the options flow → entry reloads → old set (Matter/Schlage: delete then add, per the OPERATION_TIMEOUT comment in _base.py:103-107) is still between its delete and its add. New entry's coordinator does its first read, sees the slot empty, manager goes OUT_OF_SYNC and issues its own set 2s later (TICK_INTERVAL). Both adds land; on Matter the second is a duplicate PIN → `DuplicateCodeError` (matter.py:1024/1079), which subclasses `CodeRejectedError` (exceptions.py:62) → the tick disables the slot and raises a repair issue for the PIN the user just entered. Even the benign ordering (old PIN landing after the new one) costs a spurious "lock did not keep the write" strike. Fix direction: `async_stop` returns its orphaned shielded tasks and unload gathers them (bounded) before `async_unload_lock`, or key the mutex on the lock entity in `hass.data[DOMAIN]` so it survives instance replacement.
+
+3. custom_components/lock_code_manager/__init__.py:1281 with custom_components/lock_code_manager/providers/zwave_js_ui.py:1359-1374 — Unload pulls the transport out from under the write the docstring promises will "finish on its own timeouts". `async_unload_lock` runs three steps after the ticks are cancelled; zwave_js_ui's `_release_api_subscription` drops the response subscription and cancels every `_pending_api_calls` future, so the shielded task ends cancelled, not finished.
+   failure_scenario: zwave_js_ui lock, reload mid-set. The write's api future is cancelled by unload; the shielded task exits via `CancelledError`, `_aio_lock` is released, no verification happens, and the reloaded entry re-syncs the slot (one extra write round-trip). Not data loss, but the `_perform_sync` docstring's guarantee (sync.py:541-549) does not hold for this provider, and a future provider whose unload tears down a client mid delete-then-add would get exactly the half-written door the shield was added to prevent. Low severity; at minimum the docstring should scope its claim.
+
+4. custom_components/lock_code_manager/domain/sync.py:305 (`async_start`) — The initial tick is now a task `async_stop` may cancel, and `await task` on a cancelled task raises `CancelledError` in the awaiter. If `async_stop` runs while `async_start` is still awaiting, the caller (`async_added_to_hass`, HA's entity-add task) receives `CancelledError` and asyncio marks that task cancelled even though nobody cancelled it.
+   failure_scenario: Only reachable when a manager is restarted in a non-LOADING state (LOADING has no await, so the eager task finishes inline in production). The PR's own `test_async_start_only_tracks_its_own_task` pattern (stop then start) is the seam; a stop arriving during that start would surface as a cancelled test task with no message. Low; worth a comment or a `try/except CancelledError` around the await that re-raises only if `current_task().cancelling()`.
+
+5. custom_components/lock_code_manager/domain/sync.py:946 (`_disable_slot` call inside the tick's `CodeRejectedError` handler) — This await is newly cancellable by stop. `_disable_slot` (sync.py:569-601) only falls back to creating the repair issue on `except Exception`, which does not catch `CancelledError`.
+   failure_scenario: Lock rejects a code; the tick is inside `async_disable_slot`'s blocking service call turning off the active switch when unload cancels it. The switch stays on, no repair issue exists, and the reloaded entry re-sends the rejected code to the lock before disabling again. Self-healing, one wasted rejection round-trip; low.
+
+6. custom_components/lock_code_manager/domain/sync.py:559 and :763-771 — On cancel, `_last_set_pin` is never updated even when the shielded set lands, and the `CancelledError` handler resets `_state` without `_write_state()` (correctly skipped since `_started=False`).
+   failure_scenario: I could not name a production one. Both stop callers (`async_will_remove_from_hass`, `async_unload_entry`) end with the entity gone, and no production path restarts the same manager, so the binary sensor never shows the stale `syncing` attribute and the stale `_last_set_pin` is never read. Reporting as a non-finding for item 5 of the brief; the only consumer is the test seam.
+
+**Non-findings from the brief**
+- Orphaned `coordinator.async_refresh()` after unload: `_async_refresh` checks `_shutdown_requested` only at entry, but by then entities have unsubscribed, `async_update_listeners` has nobody to call, and `_schedule_refresh` is gated on `self._listeners`. `record_write` is guarded by `_shutdown_requested` (coordinator.py:287). `_note_reachability` → `_handle_connection_transition` returns early once the lock entry is not LOADED. No listener touches a removed entity.
+- `async_stop` re-entrancy: `current` is excluded, `_started=False` set before the gather; a cancelled stop leaves already-cancelled ticks that unwind on their own.</result>
+<usage><subagent_tokens>139108</subagent_tokens><tool_uses>31</tool_uses><duration_ms>397221</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1c646e60b53b4f5e</task-id>
+<tool-use-id>toolu_01Svx8KNn5YxFdnxYijagAdp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a1c646e60b53b4f5e.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle Efficiency finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings (Efficiency angle), PR #1562 worktree `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager`.
+
+**Candidate 1**
+- file: `custom_components/lock_code_manager/domain/sync.py`
+- line: 529 (`return asyncio.shield(self._hass.async_create_task(operation))`)
+- summary: The shield is taken before the operation has the lock's turn, so cancelled writes that have done nothing yet are still carried to completion.
+- failure_scenario: `async_internal_set_usercode` walks `_check_reachable` (probe, up to `operation_timeout_seconds`) and then `await self._aio_lock.acquire()` (up to `wait_budget`) before any device I/O (`providers/_base.py` 341-360). The docstring's justification (delete-then-add cut mid-sequence, rollback of a half-made user) only applies after acquire. A cancel landing in the probe or the queue wait is atomic and safe. Cost: on a reload with K out-of-sync slots on one lock, K ticks are cancelled and K writes outlive them, executing serially on the old instance for up to K × budget while the new instance already runs its own reads and re-syncs (see 2). Cheaper: shield only the locked section — move the shield into `_execute_rate_limited` so the task wraps `try: async with timeout(budget): _execute_locked(...) finally: release()` and the probe and acquire stay cancellable; `_outlive_tick` in sync.py then becomes a plain await. Trade to state: a cancel arriving while the shielded section runs skips the `record_write`/`drop_pending` bookkeeping after it (sync code at `_base.py` 1455-1473), which only matters when the coordinator survives the stop (shared lock or slot removal).
+
+**Candidate 2**
+- file: `custom_components/lock_code_manager/domain/sync.py`
+- line: 551 (`await self._outlive_tick(self._lock.async_internal_set_usercode(...))`), with `__init__.py` 1767 (`async_create_lock_instance` on setup)
+- summary: A same-entry reload issues the same PIN write a second time, unserialized against the one still in flight.
+- failure_scenario: `_find_shared_lock_instance` (`__init__.py` 1094-1105) only reuses instances from *other* loaded entries, so reload builds a new `BaseLock` with a fresh `_aio_lock` and a fresh coordinator; `async_unload_lock` shuts the old coordinator down (`__init__.py` 1155). The outlived write then (a) is not serialized against the new instance's setup read, and (b) records its `PendingWrite` into the shut-down coordinator's `_pending`, which nothing reads. If the write has not landed when the new setup read runs (exactly the slow/wedged case this PR targets), the new manager's first tick sees OUT_OF_SYNC and writes the same PIN again. Before the PR the reload blocked until the write finished, so one write. The "leave PENDING_CONFIRMATION" alternative is unreachable: manager and coordinator are both new objects after reload; `async_start` after `async_stop` on one instance exists only in `test_async_start_only_tracks_its_own_task`. Cheaper: key the per-device `asyncio.Lock` by lock entity_id in `hass.data[DOMAIN]` so the new instance's setup read queues behind the old write and then sees the landed value (no second write). With Candidate 1 applied the exposure shrinks to the one write already mid-exchange.
+
+**Candidate 3**
+- file: `custom_components/lock_code_manager/domain/sync.py`
+- line: 529
+- summary: The result of an outlived operation is computed and then silently discarded, including failures.
+- failure_scenario: CPython's `shield` inner done-callback, when the outer future is cancelled, calls `inner.exception()` to mark it retrieved and returns. So a `CodeRejectedError`, `LockOperationFailed`, or the 600 s `LockDisconnected` a wedged write ends in is never logged by anyone (HA's "task exception was never retrieved" handler is defeated by the retrieval), no repair is raised, nothing is charged. The whole budget was spent waiting for an answer nobody reads. Cheaper: in `_outlive_tick`, `task.add_done_callback(...)` that logs `task.exception()` at warning when the task finished with one; zero cost on the success path and no change to the tick.
+
+**Candidate 4**
+- file: `custom_components/lock_code_manager/domain/sync.py`
+- line: 319-322 (async_stop docstring: "finish on their own timeouts")
+- summary: The docstring implies the write survives any stop; it only survives reload and removal, not a Home Assistant restart.
+- failure_scenario: HA's `ConfigEntry.async_shutdown` only cancels retry setup (checked in installed 2026.9.0b4) and LCM registers no `EVENT_HOMEASSISTANT_STOP` listener, so `async_unload_entry` and therefore `async_stop` never run at shutdown; the runner cancels every task 5 s after the loop stops (`runner._cancel_all_tasks_with_timeout`, `TASK_CANCELATION_TIMEOUT=5`). That is unchanged by this PR (old and new both get cut), so not a regression, but the docstring and the `__init__.py` comment at 1207 should not read as restart-safe. No code cost; doc accuracy only.
+
+**Checked and found no cost (for the record)**
+- `_outlive_tick` overhead: only reached on a write or the post-write refresh; IN_SYNC/SYNCING/SUSPENDED ticks return at line 759 before any await, so the common tick creates no task. Per write it is one Task + one shield Future + two callbacks, microseconds against seconds of radio/HTTP.
+- `hass.async_create_task` has `eager_start=True` by default in the installed HA; `create_eager_task` runs the coroutine inline to its first suspension and, if it finishes there, returns without touching `hass._tasks`. So the initial tick in `async_start` (line 305) costs nothing when it completes synchronously, and one done-callback hop otherwise — no extra scheduler turn per slot.
+- `hass._tasks` membership of a wedged write is bounded by the provider's own deadlines (`OPERATION_TIMEOUT = 600` × exchanges), and the task self-removes on done; no leak. The task pins only the old `BaseLock` (bound method) and the PIN/name strings, not the manager or the tick's snapshot; the shield's outer future is released when the inner finishes.
+- `async_stop` unwinds promptly: cancel lands at the `await shield(...)`; `sync.py` has no `except BaseException` or bare `except:`; the only other awaits in `_async_tick_impl` (`_disable_slot`) are registry calls. `gather(return_exceptions=True)` returns the next loop turn.
+- Tests: the 10 changed/new tests run in 0.62 s total (slowest call phase 0.02 s); `wait_for` timeouts are upper bounds only. The no-release `async_blocking_stub()` in `tests/test_init.py:1681` is awaited directly by the tick, so cancelling the tick cancels it; nothing lingers for `verify_cleanup` (which would `pytest.fail` on a lingering task). Every test that stops mid-write sets `release` before `hass.async_block_till_done()`, so block-till-done does not wait on a wedged stub.</result>
+<usage><subagent_tokens>121506</subagent_tokens><tool_uses>29</tool_uses><duration_ms>379463</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad9ca9cd44c11a24e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ad9ca9cd44c11a24e.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle B: removed-behavior audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Audit complete. Here is what each deleted/replaced line enforced, where (or whether) it is re-established, and the candidates that fall out.
+
+**Invariant map for the removed lines**
+
+- `async_stop` docstring "await in-flight ticks so they cannot continue to call `_perform_sync` / `async_refresh` / `_write_state` after stop returns": `_write_state` is still guarded by `_started` (sync.py:661-666) and directly tested (`test_write_state_after_stop_is_suppressed`, tests/test_sync.py:1477). `_perform_sync` and `async_refresh`, however, are *intended* to keep running after stop returns (via `_outlive_tick`), so that half of the invariant is deliberately gone. The `__init__.py:1204-1211` comment still claims teardown begins with no in-flight lock call; that is no longer true.
+- "a tick mid `_perform_sync` should be allowed to finish so the lock operation completes": re-established only for the lock call itself (sync.py:551, 562, 1034). Everything after the call inside the tick (`_last_set_pin`, breaker accounting, typed exception handling, state transitions) is skipped on cancel. The success-side bookkeeping is consumed inside the provider (`record_write` at providers/_base.py:1462/1473 has a shutdown guard; `drop_pending` for clears; the clear path's `async_request_refresh` is a debouncer no-op after shutdown). The failure side is consumed by nobody, see candidate 2.
+- `writes_after_stop == []`: still guaranteed and tested (above). The cancel path cannot reach `_write_state`; the `CancelledError` handler (sync.py:763-771) sets `_state` without writing. Cleared.
+- `tick_task.exception() is None`: replaced by `tick_task.cancelled()`, consistent with the new contract. Cleared.
+- Q4 unshielded awaits in `_async_tick_impl`: only `_disable_slot` (a service call, not a lock op). A cancel mid-way leaves the switch on with no repair, but `finally` sets the breaker reset and the next instance re-hits the rejection. Cleared.
+- Q5 `await hass.async_create_task(self._async_tick())`: the first tick is always LOADING and that branch has no awaits, so the eager task completes inline and `await task` never suspends; no `CancelledError` can reach `async_added_to_hass` in prod, exception propagation is identical, and `_try_upgrade_state_tracking` ordering is unchanged. Only a stop→start on the same manager (test-only) could race. Cleared.
+
+**Candidates**
+
+1. file: custom_components/lock_code_manager/domain/sync.py, line: 546-548 (docstring claim "letting it finish costs nothing"), mechanism at 529
+   summary: On zwave_js_ui the "outliving" write does not outlive the unload. `async_unload_entry` stops the manager (returns at once now), then proceeds to `async_unload_lock` → `teardown_push_subscription` → `_release_api_subscription`, which cancels every future in `_pending_api_calls` (providers/zwave_js_ui.py:1374-1377). The shielded task's own `cancelling()` is 0, so `_async_api_call_at` converts that into `LockDisconnected` (zwave_js_ui.py:1131-1147), which then surfaces through the loop exception handler as an ERROR because the outer shield was already cancelled (Python 3.14 asyncio/tasks.py:921 "exception in shielded future"; HA runner logs "Error doing job: ..." with traceback). The same happens to a shielded `coordinator.async_refresh` in flight (HA additionally logs "Error fetching ... data").
+   failure_scenario: user edits a PIN on a zwave-js-ui lock, then reloads the entry within the API round-trip. Pre-PR the reload waited for the write to land on a live transport. Post-PR the reload tears the transport out from under it: the write is lost, an ERROR traceback is logged for an entry mid-reload, and the new instance has to re-sync. Deterministic, not a race.
+
+2. file: custom_components/lock_code_manager/domain/sync.py, line: 529
+   summary: Once the tick is cancelled, no code consumes the outliving call's exception. `CodeRejectedError` no longer reaches `_disable_slot`; `LockDisconnected`/`LockOperationFailed` no longer reach their info-level handlers; all of them become HA loop-level ERROR tracebacks ("&lt;Type&gt; exception in shielded future"). Cross-checked with a standalone script: the loop exception handler does receive it, so it is not silent, but it is mis-levelled and unhandled.
+   failure_scenario: the PR's own motivating case. A lock has stopped answering, the tick is behind a wedged provider call, the user reloads or removes the entry. Stop now returns promptly, but ~600s later (OPERATION_TIMEOUT, or 3x for a native-user provider) the outliving call raises `LockDisconnected` and HA logs an ERROR traceback against an entry that may already be deleted. Pre-PR this was one info line from the tick.
+
+3. file: custom_components/lock_code_manager/domain/sync.py, line: 544-548
+   summary: "releases the lock's turn in its own finally" is per provider *instance*. A reload builds a fresh instance (`__init__.py:1767` via `async_create_lock_instance`; `_find_shared_lock_instance` only reuses across other loaded entries) with its own `_aio_lock`, `_sequence_lock`, and rate limiter. The outliving write from the old instance and the new instance's operations are now unserialized against the same physical lock. Pre-PR the unload awaited the tick, which awaited the write, which waited its turn behind any in-flight walk on the old instance, so nothing from the new instance could start until the old write had landed.
+   failure_scenario: PIN A→B; the write is queued on `_aio_lock` behind the old coordinator's poll walk (wait_budget is managed_slots × per-exchange budget, minutes on ZHA). User reloads and sets PIN C. The new instance writes C immediately (its lock is free). The old walk finishes, the old B write lands afterwards. The lock now holds B while LCM believes C, until the next poll notices and rewrites. For Schlage/Matter, whose set is delete-then-add, the two sequences can interleave on the same slot, which is precisely the state the shield docstring says must never occur.
+
+4. file: tests/test_binary_sensor.py, line: 1593 (comment 1586-1592)
+   summary: The widening masks a deterministic change, not a race. I ran the test pinned to each branch via a temporary copy (removed afterwards; tree clean): `is PENDING_CONFIRMATION` fails 3/3, `is IN_SYNC` passes. The extra completion hop from `shield(create_task(...))` lets the coordinator's non-eager confirmation look run and drop the pending write before the tick resumes, so the tick's `has_pending_write` early return (sync.py:1022-1025) is never exercised here anymore. The comment "whether that read had already landed ... decides" is false. Coverage of that branch survives elsewhere (tests/test_sync.py:1834, 2031 assert `is PENDING_CONFIRMATION` via `_async_tick_impl` directly), so no mutation escapes, but the test's own claim is wrong and its assertion weaker than the pinned `is IN_SYNC` it could honestly make. Not a production behaviour change: real reads cannot finish in one loop hop.
+   failure_scenario: someone later regresses the ordering so the tick again sees the pending write (or deletes the early return); this test passes either way and its comment tells the reader the flip is expected.
+
+5. file: custom_components/lock_code_manager/__init__.py, line: 1204-1211
+   summary: The unload comment still says stopping managers first guarantees "no in-flight tick can keep calling `_perform_sync`, `coordinator.async_refresh` ... once downstream teardown begins". With `_outlive_tick`, both a write and a coordinator refresh are now expected to still be running when `async_unload_platforms` and `coordinator.async_shutdown()` execute. HA's `async_shutdown` does not cancel an in-flight `_async_refresh`, so the refresh completes against a shut-down coordinator; it is harmless today only because entities remove their listeners on removal, LCM's `_pending` is cleared at shutdown, and `record_write` has a shutdown guard. None of that is stated here.
+   failure_scenario: a future change adds post-read work to `_async_update_data` (or a listener that survives entity removal) on the assumption this comment gives, and it runs against a torn-down coordinator/lock on every reload that lands mid-write.
+
+No sixth candidate with a nameable failure. Items 1 and 3 are the ones that regress a behaviour the deleted docstring was explicitly protecting.</result>
+<usage><subagent_tokens>151573</subagent_tokens><tool_uses>45</tool_uses><duration_ms>503010</duration_ms></usage>
+</task-notification>
