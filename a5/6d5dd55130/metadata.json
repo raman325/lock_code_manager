@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "a56d5dd55130",
+  "strategy": "manual-commit",
+  "branch": "fix/stop-sync-manager-1552",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/test_binary_sensor.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a5/6d5dd55130/0/metadata.json",
+      "transcript": "/a5/6d5dd55130/0/full.jsonl",
+      "compact_transcript": "/a5/6d5dd55130/0/transcript.jsonl",
+      "content_hash": "/a5/6d5dd55130/0/content_hash.txt",
+      "prompt": "/a5/6d5dd55130/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 186,
+    "cache_creation_tokens": 44469,
+    "cache_read_tokens": 4667437,
+    "output_tokens": 16007,
+    "api_call_count": 14
+  }
+}
