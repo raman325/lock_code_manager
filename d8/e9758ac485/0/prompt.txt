@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b124inu5o</task-id>
+<tool-use-id>toolu_01CGx7Zn77NDf7wJNgcNC2Fy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/b124inu5o.output</output-file>
+<status>failed</status>
+<summary>Background command "Run three mutations against the new tests, restoring the file after each" failed with exit code 144</summary>
+</task-notification>
