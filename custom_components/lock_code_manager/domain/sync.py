@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import logging
+import time
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -310,22 +311,23 @@ class SlotSyncManager:
         Stop the sync manager, giving in-flight ticks a bounded grace.
 
         Idempotent. Unsubscribes the timer and state listeners first so no
-        new ticks can start, then waits up to STOP_GRACE_SECONDS for
-        in-flight ticks and cancels whatever is still running, so nothing
-        of this manager's runs after stop returns.
+        new ticks can start, then gives in-flight ticks STOP_GRACE_SECONDS
+        and cancels whatever is still running, so nothing of this manager's
+        runs after stop returns.
 
         The grace is what keeps a healthy write whole: several providers
         write a credential as a delete followed by an add, others roll back
         a half-made user or repair a driver cache only after the call
         returns, and a cancel landing inside any of those leaves the door
-        worse than the wait would. A call that has not answered within the
-        grace is presumed wedged, and waiting out its full budget -- three
-        of them in sequence behind the probe and the lock's turn -- is
-        exactly the unload that shows nothing on screen for minutes. The
-        cancel then costs nothing the wedge had not already taken, and the
-        tick unwinds through the write path's ``finally``, which gives the
-        lock's turn back. The next start reconciles the slot from a fresh
-        read.
+        worse than the wait would. It is measured from when the call took
+        the lock's turn, not from the stop: a tick queued behind a long read
+        may get its turn late in the window, and a grace counted from the
+        stop would cut it mid-sequence. A call that has held the turn a whole
+        grace without answering is presumed wedged, and waiting out its full
+        budget is exactly the unload that shows nothing on screen for
+        minutes. The tick unwinds through the write path's ``finally``,
+        which gives the lock's turn back; a reload builds a fresh manager
+        that reads the slot before it writes.
         """
         if not self._started:
             return
@@ -343,10 +345,17 @@ class SlotSyncManager:
             task for task in self._tick_tasks if task is not current and not task.done()
         }
         if pending:
-            _, still_running = await asyncio.wait(pending, timeout=STOP_GRACE_SECONDS)
+            try:
+                still_running = await self._grace(pending)
+            except asyncio.CancelledError:
+                # ``asyncio.wait`` leaves its tasks alone when the waiter is
+                # cancelled; the ticks must not outlive a stop that was.
+                for task in pending:
+                    task.cancel()
+                raise
             if still_running:
                 _LOGGER.info(
-                    "%s: Lock call still running %ss after stop; cancelling it",
+                    "%s: In-flight tick still running %ss after stop; cancelling it",
                     self._log_prefix,
                     STOP_GRACE_SECONDS,
                 )
@@ -361,6 +370,25 @@ class SlotSyncManager:
                         result,
                         exc_info=result,
                     )
+
+    async def _grace(self, pending: set[asyncio.Task[None]]) -> set[asyncio.Task[None]]:
+        """
+        Wait out the stop grace and return the ticks still running after it.
+
+        One window from the stop, then, if the lock's turn was taken inside
+        that window, a second one from the taking. Whoever holds the turn
+        gets a whole grace; a tick still queued for it is cancelled without
+        harm, since it has not touched the lock.
+        """
+        _, still_running = await asyncio.wait(pending, timeout=STOP_GRACE_SECONDS)
+        taken = self._lock.turn_taken_at
+        if not still_running or taken is None:
+            return still_running
+        remaining = taken + STOP_GRACE_SECONDS - time.monotonic()
+        if remaining <= 0:
+            return still_running
+        _, still_running = await asyncio.wait(still_running, timeout=remaining)
+        return still_running
 
     # -- State resolution ----------------------------------------------------
 
@@ -743,15 +771,6 @@ class SlotSyncManager:
                 return
 
             await self._async_tick_impl()
-        except asyncio.CancelledError:
-            # ``_state`` must not describe a write this tick is no longer
-            # watching: ticks skip SYNCING, so a restarted manager would
-            # never look at the slot again. The cancel can land on any await
-            # after SYNCING was set, which is why the reset sits at the tick
-            # boundary rather than beside the write.
-            if self._state is SyncState.SYNCING:
-                self._state = SyncState.OUT_OF_SYNC
-            raise
         finally:
             self._tick_tasks.discard(task)
 

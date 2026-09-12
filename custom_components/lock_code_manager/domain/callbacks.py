@@ -7,6 +7,7 @@ their own removal callbacks.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 import logging
@@ -182,16 +183,26 @@ class EntityCallbackRegistry:
                 )
 
     async def invoke_entity_removers_for_slot(self, slot_num: int) -> None:
-        """Invoke entity removal callbacks for an entire slot."""
+        """
+        Invoke entity removal callbacks for an entire slot.
+
+        Concurrently: each remover may stop a sync manager, and a manager on
+        a lock that has stopped answering holds its stop for a whole grace.
+        Run in sequence, a slot on several such locks would pay one grace
+        per lock.
+        """
         prefix = f"{slot_num}|"
         to_remove = [uid for uid in self.remove_entity if uid.startswith(prefix)]
-        for uid in to_remove:
-            try:
-                await self.remove_entity[uid]()
-            except Exception:
-                _LOGGER.exception("Error removing entity with uid %s", uid)
-            finally:
-                self.remove_entity.pop(uid, None)
+        await asyncio.gather(*(self._remove_entity(uid) for uid in to_remove))
+
+    async def _remove_entity(self, uid: str) -> None:
+        """Run one entity remover, logging rather than raising."""
+        try:
+            await self.remove_entity[uid]()
+        except Exception:
+            _LOGGER.exception("Error removing entity with uid %s", uid)
+        finally:
+            self.remove_entity.pop(uid, None)
 
     @callback
     def invoke_lock_added_handlers(self, locks: list[BaseLock]) -> None:

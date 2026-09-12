@@ -221,9 +221,11 @@ CONFIRM_READ_INTERVAL: float = PENDING_WRITE_TTL / 4
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=2)
 # How long ``SlotSyncManager.async_stop`` lets an in-flight tick finish before
-# cancelling it. A healthy lock call is back well inside this; the window
-# covers one ZHA reply timeout to a battery lock (see the budget notes in
-# providers/_base.py). A call still running past it is presumed wedged.
+# cancelling it, measured from when the call took the lock's turn. The window
+# exists for the providers whose write is a sequence (Schlage and Matter delete
+# a credential before writing its replacement) or that clean up only after the
+# call returns; a cancel inside those leaves the lock worse than the wait. A
+# call still running past it is presumed wedged.
 STOP_GRACE_SECONDS: float = 30.0
 MAX_SYNC_ATTEMPTS = 3
 SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)

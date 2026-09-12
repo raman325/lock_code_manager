@@ -99,14 +99,17 @@ MIN_OPERATION_DELAY = 2.0
 # devices, inside three attempts). Anything near those misreports a
 # healthy-but-slow lock as broken and preempts a real recovery path.
 #
-# Cancelling is safe at THIS budget and would not be at a shorter one. Schlage
-# and Matter both delete a credential before writing its replacement, so a
-# cancel mid-sequence can leave a door with no working PIN -- but only if the
-# call was going to finish. Ten minutes in, the credential is already gone
-# whichever half is stuck, and the wedge, not the cancel, is what took it. What
-# the cancel buys back is `_aio_lock`, so the slot leaves SYNCING and the next
-# tick retries the whole sequence. Issue #1523 had three PIN changes sit
-# unsynced for seven hours behind one such call.
+# Cancelling is safe at THIS budget and would not be at a shorter one while
+# the slot is still managed. Schlage and Matter both delete a credential
+# before writing its replacement, so a cancel mid-sequence can leave a door
+# with no working PIN -- but only if the call was going to finish. Ten minutes
+# in, the credential is already gone whichever half is stuck, and the wedge,
+# not the cancel, is what took it. What the cancel buys back is `_aio_lock`,
+# so the slot leaves SYNCING and the next tick retries the whole sequence.
+# Issue #1523 had three PIN changes sit unsynced for seven hours behind one
+# such call. The one shorter cut is a stop: `SlotSyncManager.async_stop`
+# gives a call STOP_GRACE_SECONDS from taking the lock's turn, because the
+# alternative is an unload that waits out this whole budget.
 #
 # A FLOOR, not the whole answer. One `_execute_rate_limited` call is one
 # provider call, but on several providers one provider call is a sequential
@@ -235,6 +238,9 @@ class BaseLock:
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
     coordinator: LockUsercodeUpdateCoordinator | None = field(default=None, init=False)
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    # Monotonic time the current holder took ``_aio_lock``, None between
+    # holders. ``SlotSyncManager.async_stop`` measures its grace from here.
+    _turn_taken_at: float | None = field(default=None, init=False, repr=False)
     # Sequence lock for read-modify-write operations that need atomicity
     # across multiple service calls. Outer lock so each leaf call can
     # still acquire _aio_lock for rate limiting without deadlocking.
@@ -355,6 +361,7 @@ class BaseLock:
                 f"{wait_budget:.0f}s"
             ) from err
 
+        self._turn_taken_at = time.monotonic()
         try:
             async with asyncio.timeout(budget):
                 return await self._execute_locked(
@@ -365,7 +372,13 @@ class BaseLock:
                 f"Cannot {what} - no answer within {budget:.0f}s"
             ) from err
         finally:
+            self._turn_taken_at = None
             self._aio_lock.release()
+
+    @property
+    def turn_taken_at(self) -> float | None:
+        """Return when the current holder took the lock's turn, if anyone has it."""
+        return self._turn_taken_at
 
     @final
     async def _check_reachable(
@@ -1926,7 +1939,10 @@ class BaseLock:
             return await self.async_set_credential(
                 credential_user_id, credential, pin, name=name, source=source
             )
-        except Exception:
+        except BaseException:
+            # BaseException so a cancelled tick still owes the lock the
+            # rollback: a user created for a credential that never landed is
+            # not one the lock should keep.
             if rollback_user_id is not None:
                 try:
                     await self.async_delete_user(rollback_user_id)
