@@ -90,6 +90,7 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_NAME_ENTITY,
     MockLCMLock,
+    async_blocking_stub,
     async_discover_unclaimed_mqtt_lock,
     in_sync_entity_id,
 )
@@ -1673,15 +1674,11 @@ async def test_unload_cancels_in_flight_sync_tick(
     assert runtime_data.sync_managers
 
     # Pick a manager and stall its tick mid-flight by patching its
-    # _async_tick_impl to wait on an event we control.
+    # _async_tick_impl to never return.
     manager = next(iter(runtime_data.sync_managers))
     manager._state = SyncState.OUT_OF_SYNC
 
-    mid_tick = asyncio.Event()
-
-    async def stalled_tick_impl() -> None:
-        mid_tick.set()
-        await asyncio.Event().wait()
+    stalled_tick_impl, mid_tick = async_blocking_stub()
 
     with patch.object(manager, "_async_tick_impl", stalled_tick_impl):
         tick_task = hass.async_create_task(manager._async_tick())

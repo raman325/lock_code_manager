@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -59,6 +60,28 @@ BASE_CONFIG = {
 
 UNCLAIMED_IDENTIFIER = "somebridge_1"
 UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
+
+
+def async_blocking_stub(
+    original: Callable[..., Awaitable[Any]] | None = None,
+    release: asyncio.Event | None = None,
+) -> tuple[Callable[..., Awaitable[Any]], asyncio.Event]:
+    """
+    Return ``(stub, entered)`` for patching an awaited call mid-flight.
+
+    ``stub`` accepts any arguments, sets ``entered``, then waits on
+    ``release``; with no ``release`` it never returns, standing in for a
+    device that has stopped answering. Once released it forwards its
+    arguments to ``original`` when one is given.
+    """
+    entered = asyncio.Event()
+
+    async def stub(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        await (release or asyncio.Event()).wait()
+        return await original(*args, **kwargs) if original is not None else None
+
+    return stub, entered
 
 
 @contextmanager

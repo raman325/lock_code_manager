@@ -13,7 +13,7 @@ Circuit breaker: 3 attempts within 5 minutes (MAX_SYNC_ATTEMPTS, SYNC_ATTEMPT_WI
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import logging
@@ -299,7 +299,10 @@ class SlotSyncManager:
         self._tick_unsub = async_track_time_interval(
             self._hass, self._async_tick, TICK_INTERVAL
         )
-        await self._async_tick()
+        # The first tick gets its own task so ``_tick_tasks`` only ever holds
+        # tasks this manager may cancel; awaited inline it would register the
+        # caller's, which is Home Assistant's entity-add task.
+        await self._hass.async_create_task(self._async_tick())
 
     async def async_stop(self) -> None:
         """
@@ -307,15 +310,16 @@ class SlotSyncManager:
 
         Idempotent. Unsubscribes the timer and state listeners first so no
         new ticks can start, then cancels in-flight ticks and waits for them
-        to unwind so they cannot continue to call ``_perform_sync``,
-        ``coordinator.async_refresh``, or ``_write_state()`` after stop
-        returns. A tick is not allowed to finish on its own: one wedged in a
-        provider call holds the SYNCING state for up to three operation
-        budgets, and the entry unload or reload that called stop would show
-        nothing on screen for all of it. Cancelling mid-write is safe -- the
-        lock's turn is released in the write path's ``finally``, and the
-        coordinator records a pending write only once the call has returned,
-        so nothing is left half-applied for the next start to misread.
+        to unwind so nothing of this manager's runs after stop returns. A
+        tick is not waited out: one behind a provider call that never
+        answers holds SYNCING for up to three operation budgets, and the
+        entry unload or reload that called stop would show nothing on screen
+        for all of it.
+
+        Cancelling the tick does not cancel the lock operation. The write
+        and the verification read run under ``asyncio.shield`` and finish on
+        their own timeouts; see ``_perform_sync`` for why the write must not
+        be cut short.
         """
         if not self._started:
             return
@@ -514,6 +518,16 @@ class SlotSyncManager:
 
     # -- Sync execution ------------------------------------------------------
 
+    def _outlive_tick[T](self, operation: Coroutine[Any, Any, T]) -> Awaitable[T]:
+        """
+        Run a lock operation so that cancelling the tick does not cancel it.
+
+        The operation gets its own eager task: it runs inline up to its
+        first real wait, exactly as an unshielded await would, and Home
+        Assistant tracks it so it cannot linger unseen.
+        """
+        return asyncio.shield(self._hass.async_create_task(operation))
+
     async def _perform_sync(self, snapshot: CredentialSyncState) -> bool:
         """
         Execute sync operation (set or clear usercode).
@@ -523,18 +537,31 @@ class SlotSyncManager:
         CodeRejectedError, LockDisconnected, LockOperationFailed, or
         propagates any other exception. Error handling and breaker accounting
         live in the caller (``_async_tick_impl``).
+
+        The lock call is shielded from the tick's cancellation. Several
+        providers write a credential as a delete followed by an add, and a
+        cancel landing between the two leaves the door with no working PIN;
+        others roll back a half-made user or repair a driver cache only
+        after the write returns. The call carries its own timeouts (see the
+        budget notes in ``providers/_base.py``) and releases the lock's turn
+        in its own ``finally``, so letting it finish costs nothing the stop
+        was waiting for.
         """
         if snapshot.active_state == STATE_ON:
-            await self._lock.async_internal_set_usercode(
-                self._slot_num,
-                snapshot.credential_state,
-                snapshot.name_state,
-                source="sync",
+            await self._outlive_tick(
+                self._lock.async_internal_set_usercode(
+                    self._slot_num,
+                    snapshot.credential_state,
+                    snapshot.name_state,
+                    source="sync",
+                )
             )
             self._last_set_pin = snapshot.credential_state
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
             return True
-        await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
+        await self._outlive_tick(
+            self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
+        )
         self._last_set_pin = None
         _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
         return False
@@ -734,10 +761,11 @@ class SlotSyncManager:
 
             await self._async_tick_impl()
         except asyncio.CancelledError:
-            # Cancelled by ``async_stop`` or by Home Assistant shutting down.
-            # SYNCING describes a write that is no longer running, and a
-            # restarted manager would sit on it forever because ticks skip
-            # that state.
+            # ``_state`` must not describe a write this tick is no longer
+            # watching: ticks skip SYNCING, so a restarted manager would
+            # never look at the slot again. The cancel can land on any await
+            # after SYNCING was set, which is why the reset sits at the tick
+            # boundary rather than beside the write.
             if self._state is SyncState.SYNCING:
                 self._state = SyncState.OUT_OF_SYNC
             raise
@@ -1000,7 +1028,10 @@ class SlotSyncManager:
             # via push_update() and refreshing from cache could read stale data.
             if not self._lock.supports_push:
                 try:
-                    await self._coordinator.async_refresh()
+                    # Shielded for the same reason as the write: a refresh
+                    # cut short marks the coordinator failed and throws away
+                    # the slots it had already read.
+                    await self._outlive_tick(self._coordinator.async_refresh())
                 except Exception:
                     _LOGGER.exception(
                         "%s: Coordinator refresh failed after sync operation. "

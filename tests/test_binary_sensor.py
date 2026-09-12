@@ -75,6 +75,7 @@ from .common import (
     SLOT_2_IN_SYNC_ENTITY,
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
+    async_blocking_stub,
     in_sync_entity_id,
     slot_entity_id,
 )
@@ -1584,10 +1585,12 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
         await tick_task
         await hass.async_block_till_done()
 
-    # The set went out, so on a polled lock it is pending until the
-    # coordinator's own read sees it; block_till_done ran that read, and the
-    # next tick finds the slot settled. The mid-sync push corrupted nothing.
-    assert mgr._state is SyncState.PENDING_CONFIRMATION
+    # The set went out. On a polled lock the coordinator's own read settles
+    # it; whether that read had already landed when the tick resumed decides
+    # only whether the tick parked on PENDING_CONFIRMATION or verified the
+    # slot itself. Either way the mid-sync push corrupted nothing, and the
+    # next tick finds the slot settled.
+    assert mgr._state in (SyncState.PENDING_CONFIRMATION, SyncState.IN_SYNC)
     await mgr._async_tick()
     assert mgr._state is SyncState.IN_SYNC
 
@@ -1627,12 +1630,10 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     lock_provider.codes[1] = "1234"
     mgr._state = SyncState.OUT_OF_SYNC
 
-    mid_sync_event = asyncio.Event()
-
-    async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
-        """Enter the write and never return."""
-        mid_sync_event.set()
-        await asyncio.Event().wait()
+    resume_event = asyncio.Event()
+    set_usercode_with_pause, mid_sync_event = async_blocking_stub(
+        lock_provider.async_set_usercode, resume_event
+    )
 
     with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
         # Start the tick
@@ -1641,14 +1642,18 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
         await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
         # Stop the sync manager while sync is in progress. Stop must not raise
-        # even though it cancels the write out from under the tick.
+        # even though it cancels the tick out from under the write.
         await mgr.async_stop()
+        assert tick_task.cancelled()
+
+        # The write outlives the tick and lands once the lock answers.
+        resume_event.set()
         await hass.async_block_till_done()
 
-    # Verify clean shutdown -- _started should be False, the tick gone, and
-    # the lock's turn handed back.
+    # Verify clean shutdown -- _started should be False, the write landed,
+    # and the lock's turn handed back.
     assert not mgr._started
-    assert tick_task.cancelled()
+    assert lock_provider.codes[1] == "9999"
     assert not lock_provider._aio_lock.locked()
 
     # Clean up
