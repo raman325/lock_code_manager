@@ -263,7 +263,7 @@ class SlotSyncManager:
         # All currently-executing _async_tick tasks. A new tick can fire from
         # the interval timer while a prior tick is still awaiting
         # ``_perform_sync`` or ``coordinator.async_refresh``; tracking every
-        # in-flight tick lets async_stop await them all before tearing down
+        # in-flight tick lets async_stop cancel them all before tearing down
         # state. Tasks self-register on entry and self-discard on exit.
         self._tick_tasks: set[asyncio.Task[None]] = set()
 
@@ -303,15 +303,19 @@ class SlotSyncManager:
 
     async def async_stop(self) -> None:
         """
-        Stop the sync manager, awaiting any in-flight ticks.
+        Stop the sync manager, cancelling any in-flight ticks.
 
         Idempotent. Unsubscribes the timer and state listeners first so no
-        new ticks can start, then awaits any in-flight ticks so they cannot
-        continue to call ``_perform_sync``, ``coordinator.async_refresh``,
-        or ``_write_state()`` after stop returns. We do not cancel them --
-        a tick mid ``_perform_sync`` should be allowed to finish so the lock
-        operation completes; ``_started=False`` keeps it from scheduling
-        more work.
+        new ticks can start, then cancels in-flight ticks and waits for them
+        to unwind so they cannot continue to call ``_perform_sync``,
+        ``coordinator.async_refresh``, or ``_write_state()`` after stop
+        returns. A tick is not allowed to finish on its own: one wedged in a
+        provider call holds the SYNCING state for up to three operation
+        budgets, and the entry unload or reload that called stop would show
+        nothing on screen for all of it. Cancelling mid-write is safe -- the
+        lock's turn is released in the write path's ``finally``, and the
+        coordinator records a pending write only once the call has returned,
+        so nothing is left half-applied for the next start to misread.
         """
         if not self._started:
             return
@@ -329,6 +333,13 @@ class SlotSyncManager:
             task for task in self._tick_tasks if task is not current and not task.done()
         }
         if pending:
+            _LOGGER.debug(
+                "%s: Cancelling %d in-flight tick(s) on stop",
+                self._log_prefix,
+                len(pending),
+            )
+            for task in pending:
+                task.cancel()
             tick_results = await asyncio.gather(*pending, return_exceptions=True)
             for result in tick_results:
                 if isinstance(result, Exception) and not isinstance(
@@ -722,6 +733,14 @@ class SlotSyncManager:
                 return
 
             await self._async_tick_impl()
+        except asyncio.CancelledError:
+            # Cancelled by ``async_stop`` or by Home Assistant shutting down.
+            # SYNCING describes a write that is no longer running, and a
+            # restarted manager would sit on it forever because ticks skip
+            # that state.
+            if self._state is SyncState.SYNCING:
+                self._state = SyncState.OUT_OF_SYNC
+            raise
         finally:
             self._tick_tasks.discard(task)
 

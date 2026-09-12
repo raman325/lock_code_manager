@@ -1600,7 +1600,7 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     Stopping the sync manager while a sync tick is in progress does not raise.
 
     Scenario: sync manager is SYNCING. Config entry unloads, calling async_stop()
-    which sets _started = False. The tick should gracefully finish or bail out.
+    which sets _started = False and cancels the tick mid-write.
     """
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
@@ -1628,14 +1628,11 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     mgr._state = SyncState.OUT_OF_SYNC
 
     mid_sync_event = asyncio.Event()
-    resume_event = asyncio.Event()
-    original_set = lock_provider.async_set_usercode
 
     async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
-        """Set usercode, but pause mid-operation."""
+        """Enter the write and never return."""
         mid_sync_event.set()
-        await resume_event.wait()
-        return await original_set(code_slot, usercode, name, **kwargs)
+        await asyncio.Event().wait()
 
     with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
         # Start the tick
@@ -1643,21 +1640,16 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
         # Wait deterministically until the mock signals it has been entered
         await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
-        # Stop the sync manager while sync is in progress. async_stop awaits
-        # the in-flight tick, so schedule it as a task and let the tick
-        # finish naturally below.
-        stop_task = hass.async_create_task(mgr.async_stop())
-
-        # Let the set_usercode complete
-        resume_event.set()
-
-        # Both tasks should complete without raising
-        await tick_task
-        await stop_task
+        # Stop the sync manager while sync is in progress. Stop must not raise
+        # even though it cancels the write out from under the tick.
+        await mgr.async_stop()
         await hass.async_block_till_done()
 
-    # Verify clean shutdown -- _started should be False
+    # Verify clean shutdown -- _started should be False, the tick gone, and
+    # the lock's turn handed back.
     assert not mgr._started
+    assert tick_task.cancelled()
+    assert not lock_provider._aio_lock.locked()
 
     # Clean up
     await hass.config_entries.async_unload(config_entry.entry_id)
