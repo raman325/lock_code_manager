@@ -1,0 +1,330 @@
+<task-notification>
+<task-id>aeaf4089f6df5a72b</task-id>
+<tool-use-id>toolu_01SjKLxyQXYGLYdBqxjDY1G4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/aeaf4089f6df5a72b.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: simplification finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings (simplification angle), ordered by cost.
+
+**1. `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/custom_components/lock_code_manager/domain/sync.py:746` — the `except asyncio.CancelledError` SYNCING reset is unreachable in production; delete it (and the test assertions that exist only to observe it).**
+`failure_scenario`: The comment justifies the reset with "a restarted manager would never look at the slot again", but no `SlotSyncManager` is ever restarted. `async_start` has exactly one caller, `binary_sensor.py:175` (`async_added_to_hass`), and every entity constructs a fresh manager in `__init__` (`binary_sensor.py:144`) which begins in `LOADING`. `async_stop` runs only from `async_unload_entry` and `async_will_remove_from_hass`, after which the object is dropped. Nothing reads `_state` between the cancel and garbage collection. The block is nine lines of code plus a six-line comment whose stated rationale is false, and it also breaks the file's otherwise universal pairing of `_state = ...` with `_write_state()` (every other assignment on lines 595–1044 is followed by a write), which invites a future "fix" adding a write to an entity that is mid-removal. Simpler form: remove the `except` clause entirely, leaving `try: ... finally: self._tick_tasks.discard(task)`, and drop `assert manager._state is SyncState.OUT_OF_SYNC` from `test_async_stop_does_not_wait_out_a_wedged_provider_call` (`tests/test_sync.py:1397`). The docstring line "The next start reconciles the slot from a fresh read" (`sync.py:327`) makes the same non-existent-restart claim and should go with it. If the author has a real restart path in mind, the comment must name it.
+
+**2. `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/custom_components/lock_code_manager/domain/sync.py:316` — third paragraph of the `async_stop` docstring is justification narrative, not a trap.**
+`failure_scenario`: Twelve lines explain why grace-then-cancel beats wait-forever ("exactly the unload that shows nothing on screen for minutes", "costs nothing the wedge had not already taken"). That is the PR description, not a maintenance aid; the repo memory rule is comment the deviation/trap, not the justification. The one thing a future editor needs is the trap: a cancel inside a provider's delete-then-add or rollback leaves the lock half-written, which is why the grace exists and why it must not be shortened casually. Simpler form: keep paragraphs 1–2 and replace paragraph 3 with two sentences: "Do not shorten the grace lightly: several providers write a credential as delete-then-add or roll back a half-made user only after the call returns, and a cancel inside that window leaves the lock worse than the wait. Cancellation unwinds through the write path's `finally`, which releases the lock's turn."
+
+**3. `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/tests/test_binary_sensor.py:1594` — `test_sync_manager_stop_during_active_sync_does_not_raise` is now a strict subset of `test_async_stop_does_not_wait_out_a_wedged_provider_call`.**
+`failure_scenario`: After the rewrite both tests do the identical sequence: `async_blocking_stub()` on `async_set_usercode`, `short_stop_grace()`, create tick task, wait for `entered`, `await manager.async_stop()`, then assert `tick_task.cancelled()` and `not lock_provider._aio_lock.locked()`. The binary_sensor copy only adds `assert not mgr._started` (already covered by `test_async_stop_is_idempotent`) and builds its own config entry by hand instead of using the fixtures. Two copies means the next change to stop semantics is edited twice. Simpler form: delete the binary_sensor test; the sync-level test plus `test_unload_cancels_in_flight_sync_tick` (which exercises the same path through `async_unload`, a genuinely different layer) cover it. `test_async_stop_cancels_tick_when_concurrent_tick_returned_early` is distinct (it asserts `in_flight_tick in manager._tick_tasks` after a second tick) and should stay.
+
+**4. `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/tests/test_sync.py:1454` — `seen: list[set[asyncio.Task[None]]]` snapshots the whole set to answer a yes/no question.**
+`failure_scenario`: The test copies `_tick_tasks` into a list of sets, then asserts `seen[0] and asyncio.current_task() not in seen[0]`; the reader has to work out that `seen[0]` non-empty is a guard against the patch never firing and that the membership check is the real point. Simpler form: capture the boolean directly:
+```python
+caller = asyncio.current_task()
+tracked: list[bool] = []
+with patch.object(manager, "_try_upgrade_state_tracking", lambda: tracked.append(caller in manager._tick_tasks)):
+    await manager.async_start()
+assert tracked == [False]
+```
+One list, one assertion that also fails if the hook never ran.
+
+**5. `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/tests/common.py:88` — `short_stop_grace` lacks a return annotation while its new sibling `async_blocking_stub` is fully annotated.**
+`failure_scenario`: Inconsistent within the same diff; pyright infers `_patch[float]` fine but the file's convention (every other helper on lines 65–211 is annotated) is broken by the one function most likely to be copied next time a constant needs patching. Simpler form: `def short_stop_grace(seconds: float = 0.05) -&gt; _patch[float]:` (import `_patch` from `unittest.mock`), or annotate as `AbstractContextManager[float]`.
+
+Checked and not flagged: the `isinstance(result, Exception)` loop after `gather` is still needed — `CancelledError` is a `BaseException` so cancelled ticks are already excluded, but a tick that raises a real exception during the grace or while unwinding (`test_async_stop_logs_tick_exception_at_warning`) must still be logged; the diff's removal of the redundant `not isinstance(..., CancelledError)` clause is the correct simplification. The `wait` + cancel + `gather` sequence has no shorter equivalent that still reaps results. The `_ =` third-tuple discard and the `const.py` comment are fine as written (the latter names a concrete trap: the window is one ZHA reply timeout). `writes_before + 1` is acceptable given the fixture may already have written slot 1 during setup.</result>
+<usage><subagent_tokens>84521</subagent_tokens><tool_uses>3</tool_uses><duration_ms>91126</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwbec29ca</task-id>
+<tool-use-id>toolu_01MQaobYbckANrnaxMXXW4LW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/bwbec29ca.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for CI on the latest commit" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a96860f45c9ac234f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a96860f45c9ac234f.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: reuse finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No more lookups needed; the second tick at line 1732 runs outside the `with`, so the first-call-only guard in that stub is dead in practice. Here's the report.
+
+## Reuse findings for PR #1562
+
+Worktree: `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager`
+
+### Candidates
+
+**1. `tests/test_binary_sensor.py:1683` — hand-rolled pause stub left unconverted in a file the PR touched**
+- summary: `recording_set_with_pause` is `mid_sync_event.set(); await resume_event.wait(); return await original_set(...)` — the exact shape `async_blocking_stub(lock_provider.async_set_usercode)` now encapsulates, and the PR converted its two siblings in the same file (1555, 1627) but not this one.
+- failure_scenario: Three copies of the same stub in one file, two using the helper and one not. The `if not mid_sync_event.is_set()` guard is dead: the only other `set_usercode` call (line 1732) happens after the `with` block exits and the patch is gone. The `set_pins_recorded` capture is also redundant — `MockLCMLock` already records args in `lock_provider.service_calls["set_usercode"]`, which this same test reads at line 1735 (`set_calls[0][1]`). Use `paused_set, mid_sync_event, resume_event = async_blocking_stub(lock_provider.async_set_usercode)` and assert `lock_provider.service_calls["set_usercode"][0][1] == "1234"` after `resume_event.set()`. While there, the `for _ in range(20): await asyncio.sleep(0)` poll at 1698 should become `await asyncio.wait_for(mid_sync_event.wait(), timeout=5)`, which is what the converted siblings at 1566/1636 use.
+
+**2. `tests/test_config_flow.py:2749` — `_slow_save` is `async_blocking_stub(finish_flow)` verbatim**
+- summary: `saving.set(); await let_it_save.wait(); return await finish_flow(self, flow, result)` — signal entry, block on release, forward args to the original.
+- failure_scenario: Duplicates the helper one file over. `async_blocking_stub` takes `*args, **kwargs` so it works for a `self`-taking method patched on `OptionsFlowManager`. Replace with `_slow_save, saving, let_it_save = async_blocking_stub(finish_flow)`. (The two `_slow_read` stubs in the same tests at 2636/2745 are *not* candidates — they compute a return value from `self.managed_slots`, so they are gate stubs, not pass-through.)
+
+**3. `tests/providers/test_base.py:2726` (and siblings) — `_never_returns` is `async_blocking_stub()` with `release` never set**
+- summary: `entered.set(); await asyncio.Event().wait()` is exactly `wedged, entered, _ = async_blocking_stub()`, the same "wedged provider" idiom the PR introduces in test_sync.py/test_init.py.
+- failure_scenario: Ten more copies of the same wedge stub without an entry signal at test_base.py 1490, 2754, 2783, 2817, 2850, 2879, 2930, 2970, 3004, 3228 and `tests/providers/zha/test_provider.py:1272` — each is `stub, _, _ = async_blocking_stub()`. Lower priority since these files aren't in the diff, but the helper's docstring ("a device that has stopped answering") describes precisely these tests; leaving eleven local re-implementations undercuts the point of hoisting it to `tests/common.py`.
+
+**4. `custom_components/lock_code_manager/__init__.py:1226` — twin log-and-filter of `gather(return_exceptions=True)` now diverged from `sync.py:357`**
+- summary: The PR deletes `and not isinstance(result, asyncio.CancelledError)` from `sync.py` `async_stop` but leaves the identical clause in `async_unload_entry`, twenty lines into the path that calls it.
+- failure_scenario: Both sites do `await asyncio.gather(..., return_exceptions=True)` then `for result in ...: if isinstance(result, Exception) [and not CancelledError]: _LOGGER.warning(..., exc_info=result)`. `asyncio.CancelledError` is a `BaseException` (3.8+), so the clause is dead in both — the PR fixed one copy and left the other, so the two now read as if they had different semantics when they don't. Delete the clause at `__init__.py:1226-1228` too. (Note `__init__.py:1793` shows the *correct* handling of a cancelled child from `return_exceptions=True` — re-raise it — which neither of these sites does; not a reuse issue, but the three sites are the codebase's whole population of this pattern and none share a helper.)
+
+### Checked, nothing to flag
+
+- **Angle 2 (grace-then-cancel helper):** None exists in `custom_components/` or the HA helpers used here. The closest are `providers/_base.py:1152-1170` (`_reconnect_task` teardown: immediate cancel, await, own-cancel guard via `current.cancelling()`, warn on `Exception`) and `providers/_base.py:1235` `_drain_superseded_reconnect`; `domain/coordinator.py:815` just cancels `_confirm_task` without awaiting. `sync.py` `async_stop` is the first bounded-grace variant, so there is nothing to call — only a note that this is now the third "cancel then warn with exc_info" shape.
+- **Angle 3 (`get_in_sync_entity_obj` / `async_trigger_sync_tick`):** Not a miss. `async_trigger_sync_tick_for_manager` (`tests/conftest.py:343`) awaits `_async_tick()` inline and then `async_block_till_done()`; on a stalled tick it would hang and returns no `Task`, so the new tests' `hass.async_create_task(manager._async_tick())` is the correct primitive for asserting `tick_task.cancelled()`. The new tests do already use `get_in_sync_entity_obj` for the manager lookup.
+- **`short_stop_grace`:** No prior constant-patching helper or fixture in `tests/common.py`/`tests/conftest.py`; `main:tests/common.py` had no blocking-stub helper either, so `async_blocking_stub` is new rather than a re-implementation.</result>
+<usage><subagent_tokens>94279</subagent_tokens><tool_uses>8</tool_uses><duration_ms>147089</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab334d8d90db01cef</task-id>
+<tool-use-id>toolu_015EGPgpHTiygXQaE3uFupyS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ab334d8d90db01cef.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: CLAUDE.md conventions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have what I need; the only gap is a wall-clock timing of the modified tests, which I can't get because the worktree's `.venv` is bare (no `pytest` module) and I'm confined to this worktree. The bound is derivable from the diff by inspection, so I'll state it that way.
+
+## Conventions review — PR #1562
+
+Rule sources read in full: `/Users/raman/.claude/CLAUDE.md`, `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/CLAUDE.md`, `.../.claude/CLAUDE.md`, `.../AGENTS.md` (592 lines). No `CLAUDE.md`/`CLAUDE.local.md` exists under `custom_components/`, `custom_components/lock_code_manager/`, `.../domain/`, or `tests/`.
+
+### Candidates
+
+**1. `custom_components/lock_code_manager/const.py:225` — acronym in a comment (low confidence)**
+- Summary: new comment reads `# covers one ZHA reply timeout to a battery lock`.
+- failure_scenario: `AGENTS.md` › Code Style: "**Spell out acronyms** in code comments instead of using abbreviations." "ZHA" is literally an acronym (Zigbee Home Automation). Mitigating: `providers/_base.py:97` and `:116` already say "ZHA" in comments, and AGENTS.md itself uses "ZHA" as the provider/domain name, so the project arguably treats it as a proper noun. Flagging because the rule is quoted verbatim and the line is new; the maintainer may reasonably wave it through.
+
+That is the only line I can tie to a quoted rule. **No other rule in those files is clearly broken.** Specifically checked and cleared:
+
+- **Docstrings** (AGENTS.md: "Do NOT add Google-style `Args:`/`Returns:` sections"): none added. `async_blocking_stub` / `short_stop_grace` / `async_stop` docstrings are prose.
+- **Inline imports / `nonlocal` / `global`**: none in the diff. `asyncio`, `Awaitable`, `Callable` are top-of-file in `tests/common.py`.
+- **Idiomatic Python**: nothing loop-shaped that should be a comprehension; the `for task in still_running: task.cancel()` loop is side-effecting, so a comprehension would be the wrong idiom.
+- **Test setup** (AGENTS.md: "Don't manually inject `hass.data`"): no `hass.data` writes. The `manager._state = ...`, `manager._coordinator.data[...] = ...`, and `lock_provider._aio_lock.locked()` accesses are private-attribute pokes, but the stated rule is about `hass.data`; 63 such occurrences already exist in `tests/`.
+- **caplog** (AGENTS.md: "Minimize caplog text assertions"): the touched caplog test (`test_sync.py:1567-1572`) asserts on `record.exc_info[1] is boom`, structured, not text; and that assertion is pre-existing.
+- **PR template** (AGENTS.md: "ALWAYS use the .github/PULL_REQUEST_TEMPLATE.md"): PR body follows it; Breaking-change section removed, exactly one box checked, "fixes #1552" filled.
+- **Tests with code** (AGENTS.md Git conventions): code and tests in one PR.
+- **Ruff** (AGENTS.md linting): `ruff check` on all seven changed files passes.
+- **Suite speed** (`.claude/CLAUDE.md`: "If tests are taking more than several seconds to run the entire test suite, there is likely an issue"): the diff introduces real wall-clock waits: `short_stop_grace()` = 0.05 s in four tests, `asyncio.sleep(0.1)` at `tests/test_sync.py:1433`, and the 1.0 s grace in `test_async_stop_lets_a_write_finish_inside_the_grace` is released after ~0.1 s. Upper bound ≈ 0.4 s added across the suite; not "several seconds", so not a violation. Noting it because these are the first real-time waits in these tests and they'd become a rule issue if the grace values ever grow. I could not measure: the worktree `.venv` has no `pytest` installed (relatedly, AGENTS.md says "run pytest in the venv" — whoever ran the suite for this PR did it from a different environment).
+- **Type annotations** (AGENTS.md "keep older style"): `Callable[..., Awaitable[Any]] | None = None` needs the `| None` because the default is `None`. `short_stop_grace` has no return annotation, but no rule requires one.
+
+### Out of scope but adjacent (memory files, not CLAUDE.md/AGENTS.md — do not count as violations)
+- `domain/sync.py:317-328` (`async_stop` docstring) carries justification narrative ("is exactly the unload that shows nothing on screen for minutes", "costs nothing the wedge had not already taken"). Your auto-memory `feedback_comment_deviations_not_defaults.md` / `feedback_comments_state_intent_not_history.md` would push back on this, but neither rule is written in any CLAUDE.md/AGENTS.md, so I have not listed it as a finding.
+- `domain/sync.py:348` logs the cancel at `info`. Memory `feedback_log_levels_expected_conditions.md` says warn only when user action may be needed; a lock that has wedged for 30 s is arguably such a case. Again memory-only, not a documented rule.</result>
+<usage><subagent_tokens>94823</subagent_tokens><tool_uses>12</tool_uses><duration_ms>122153</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a88961b1ed1f7d8fd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a88961b1ed1f7d8fd.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: efficiency finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything needed. Findings below.
+
+## Efficiency review, PR #1562
+
+### 1. Slot removal via options update serialises the 30 s grace per lock (medium)
+
+- `file`: `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/custom_components/lock_code_manager/domain/callbacks.py`, `line`: 188-190 (called from `__init__.py:1950`)
+- `summary`: `invoke_entity_removers_for_slot` awaits each entity's remover in a `for` loop, and the options-update path has no upfront `gather(async_stop)` like unload does, so each wedged lock in a removed slot pays its own full grace in sequence.
+- `failure_scenario`: Unload is bounded at ~30 s because `async_unload_entry` gathers every manager's `async_stop` first (`__init__.py:1216-1220`), so the `async_will_remove_from_hass` stops that follow are no-ops. The slot-removal path at `__init__.py:1950` skips that step: the first `async_stop` a slot's binary sensors see is inside `async_will_remove_from_hass`, reached through the serial loop at `callbacks.py:188`. Slots are gathered against each other, but within one slot L wedged locks cost L x 30 s (two unresponsive Z-Wave locks removed from a slot = 60 s options save). Cheaper: before the gather at `__init__.py:1950`, gather `async_stop` over the managers whose address matches the slots being removed (mirroring unload), or make `invoke_entity_removers_for_slot` gather its removers. Either way the removal path becomes bounded at one grace like unload.
+
+### 2. One "still running" info line per manager, at the same instant, for one wedged lock (low)
+
+- `file`: `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/custom_components/lock_code_manager/domain/sync.py`, `line`: 346-351
+- `summary`: On unload every manager on a wedged lock hits the grace simultaneously and logs "Lock call still running", though only one of them holds the lock's turn; the rest were queued on `_aio_lock`.
+- `failure_scenario`: A 20-slot entry on one unresponsive lock emits 20 identical info lines at T+30 s, and 19 of them describe a task that never started a device call (it was waiting to acquire `_aio_lock` and its cancel is free). Cheaper: log once per lock (e.g. only when the task holds the lock's turn, or aggregate at the unload site where `stop_results` are already collected), and keep the per-manager line at debug.
+
+### 3. Tests wait out a real grace timeout instead of advancing the timer (low)
+
+- `file`: `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/tests/common.py`, `line`: 88 (`short_stop_grace`), plus `tests/test_sync.py:1433` (`asyncio.sleep(0.1)`)
+- `summary`: Five wedged-provider tests each burn the real 0.05 s grace, and the finish-inside-grace test sleeps a real 0.1 s under a 1.0 s patched grace; ~0.35 s of pure wall-clock added (measured: 0.05-0.07 s call time each, 0.10 s for the sleep test).
+- `failure_scenario`: `asyncio.wait(..., timeout=...)` schedules a `TimerHandle` via `loop.call_later`, and the installed `pytest_homeassistant_custom_component._async_fire_time_changed` (common.py:539-563) runs any `TimerHandle` whose `when()` falls inside the jump. So `stop_task = hass.async_create_task(manager.async_stop()); await asyncio.sleep(0); async_fire_time_changed(hass, utcnow() + timedelta(seconds=STOP_GRACE_SECONDS + 1))` fires the cancel with no wall-clock and no patched constant, and it exercises the real 30 s value. For the 0.1 s sleep at test_sync.py:1433: with the timer unable to fire without time passing, `await asyncio.sleep(0)` (or a few) proves "stop did not cancel at once" just as well. Total is small today, but it is the one place this PR adds real-time waits to a suite the project CLAUDE.md wants kept fast.
+
+### Checked and not flagged
+
+- `async_start` task per manager (`sync.py:306`): installed HA `core.py:755-759` defaults `eager_start=True`, so the first tick runs synchronously up to its first real await; the LOADING path in `_async_tick_impl` (`sync.py:760-800`) resolves the snapshot and sets state with no awaits, so the task is already done when `await`ed. Cost is one Task object plus a `hass._tasks` add/remove per (lock x slot) manager; not meaningful.
+- `asyncio.gather(*pending)` after `asyncio.wait` (`sync.py:354`): re-wraps already-done tasks; trivial.
+- `async_blocking_stub` and `record_tracked_tasks` closures: test-scoped, not long-lived.
+- Unload path itself: grace waits are concurrent via the gather at `__init__.py:1217`, bounded at one `STOP_GRACE_SECONDS`.</result>
+<usage><subagent_tokens>91754</subagent_tokens><tool_uses>6</tool_uses><duration_ms>243389</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aaf6871b4617d8a13</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/aaf6871b4617d8a13.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle B: removed-behavior auditor" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have what I need. Verification results that shape the findings: HA's coordinator re-raises `CancelledError` when `task.cancelling() &gt; 0` (so a cancelled tick inside `coordinator.async_refresh` unwinds), HA's `entity_service_call` fans out with `asyncio.gather` (cancel propagates to children), `zwave_js_ui` re-raises on `cancelling() &gt; 0`, `zigbee2mqtt` catches only `Exception`, and `asyncio.timeout` only calls `uncancel()` when its own deadline fired. I found no path that swallows the stop's cancel, so the post-cancel `gather` cannot hang on anything in this repo. The real gaps are elsewhere.
+
+## Findings
+
+**1. `custom_components/lock_code_manager/domain/sync.py:346` — the grace is measured from stop, not from when the tick gets the lock's turn, so a cancel can land inside a write that started seconds ago on a healthy lock.**
+Removed invariant: "a tick mid `_perform_sync` is allowed to finish so the lock operation completes." Replacement premise (docstring L322-329): "a call that has not answered within the grace is presumed wedged." That premise assumes the call *started* at stop. `_execute_rate_limited` (`providers/_base.py:332-337, 349-356`) queues a tick on `_aio_lock` with `wait_budget = _operation_budget(len(managed_slots))`, i.e. minutes behind a coordinator walk or confirmation read. Nothing in `async_stop` distinguishes "waiting for the turn" from "holding the turn".
+Failure scenario: Schlage lock, 8 managed slots. Coordinator read holds `_aio_lock`; slot 3's tick is queued. Entry unload starts. At t=29s the read finishes, slot 3 acquires, `async_set_credential` (`providers/schlage.py:404-409`) deletes the existing code. At t=30s `task.cancel()` lands before `_async_add_code`. HA's Schlage `delete_code` is `hass.async_add_executor_job(codes[id].delete)` (`components/schlage/lock.py:157`), so the delete completes in its thread regardless. `finally` releases `_aio_lock`, stop returns "cleanly", door has no PIN for that slot. If the unload was `remove_permanently=True` (lock removed from LCM), nothing ever restores it. Fix direction: cancel freely while the tick is still waiting on acquire (the cancel is benign there), and start the grace clock only once `_execute_locked` is entered.
+
+**2. `custom_components/lock_code_manager/const.py:227` (and the comment above it) — 30s is not "well inside" a healthy call for two providers the diff's own citation names.**
+The new comment says "A healthy lock call is back well inside this; the window covers one ZHA reply timeout … (see the budget notes in providers/_base.py)". Those budget notes (`_base.py:98-100`) say ZHA "can legitimately spend ~84s on a single ZCL command to a battery lock (zigpy forces a 28s reply timeout … inside three attempts)". One reply timeout is not one call. Schlage's write is probe (cloud round trip, `_base.py:313`), `get_codes`, delete, add — four sequential cloud calls, each an executor job.
+Failure scenario: Schlage on a slow cloud day, no queueing needed: probe 9s, get 8s, delete 8s → cancel lands at 30s before the add. Same door-without-PIN outcome as finding 1, but the tick was never queued and never wedged. For ZHA the outcome is a lost write reconciled at next start (single command, no delete-then-add), so the number is wrong but the damage is bounded there.
+
+**3. `custom_components/lock_code_manager/providers/_base.py:1929` — `_set_credential`'s rollback is `except Exception:`, so a cancel skips the user rollback the docstring says protects the lock.**
+Removed invariant protected: the old "never cancel" rule meant this `except Exception` never had to handle `CancelledError`. The new `async_stop` docstring names this exact hazard ("others roll back a half-made user … only after the call returns") and relies on the grace alone; findings 1 and 2 show the grace does not guarantee it.
+Failure scenario: Matter lock, `async_set_user` creates user index 7 (`created=True`), cancel lands inside `_send_set_credential`. Rollback skipped; user 7 exists on the lock, tagged `lcm:3:…`, holding no credential, and `_slot_by_user_index` still maps it. Mitigation I verified: `async_set_user` (`matter.py:597-660`) finds by tag and re-adopts it on the next write to slot 3, so on a reload this heals. On a permanent removal it leaves a tagged ghost user consuming one of the lock's user indices forever. Severity low, but nameable, and a `finally`-style rollback (or `except BaseException` that re-raises) closes it regardless of the grace.
+
+**4. `custom_components/lock_code_manager/domain/sync.py:322-329` — "nothing of this manager's runs after stop returns" is true for the task and false for the lock I/O it started; the old invariant covered both.**
+Removed behavior: awaiting the tick meant that when `async_stop` returned, the provider call had returned too, so `_aio_lock` release coincided with the device being idle. Now `finally` releases `_aio_lock` while the Schlage executor thread is still mid-HTTP (`lock.py:126,157`), and for Matter/Z-Wave the command has already been sent and the device will execute it.
+Failure scenario: reload immediately after a cancelled Schlage `add_code`. The new manager's first tick sees `get_codes` without the code (eventual consistency), issues `add_code`, gets "already exists" once the orphaned thread's add lands; `schlage.py:411-420` treats that as success. That branch existed before, so the outcome is correct here, but the ordering guarantee `_aio_lock` was providing across a stop/start is gone and nothing in the diff replaces it. Worth a sentence in the docstring at minimum so the next reader does not rely on "the lock's turn is back" meaning the lock is idle.
+
+**5. `tests/test_sync.py:1414-1454` (`test_async_stop_lets_a_write_finish_inside_the_grace`) — the deleted `writes_after_stop == []` assertion had an integration-level case the survivor does not cover.**
+Old test: a tick completing *after* `_started=False` (SYNCING → IN_SYNC path at `sync.py:1044-1048` calls `_write_state()`) must not reach `_state_writer`. Survivor `test_write_state_after_stop_is_suppressed` (`test_sync.py:1481-1494`) calls `_write_state()` directly — one level from the truth. The guard at `sync.py:648` is intact, so this is a coverage regression, not a bug; the new grace test already has the exact setup (tick finishes inside the grace after stop began) and only needs the `_state_writer` patch and assertion restored.
+
+**Not a finding, recorded so the verifier can skip it:** the dropped `not isinstance(result, asyncio.CancelledError)` filter in `async_stop` (`sync.py:355`) is a no-op removal; `CancelledError` is a `BaseException`, so `isinstance(result, Exception)` already excluded it. The `async_start` inline → task change is sound: the initial tick runs in `LOADING` with no awaits, `hass.async_create_task` eager-starts so `asyncio.current_task()` inside `_async_tick` is the new task, and an exception still propagates through `await`.</result>
+<usage><subagent_tokens>142914</subagent_tokens><tool_uses>38</tool_uses><duration_ms>405139</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab06ee32c21d5662f</task-id>
+<tool-use-id>toolu_01J9oapei8fiBgEL8hWSgJ8c</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ab06ee32c21d5662f.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle A: line-by-line diff scan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Angle A scan complete. I read every hunk, then the enclosing functions in `domain/sync.py` (`async_start`, `async_stop`, `_async_tick`, `_async_tick_impl`, `_perform_sync`), `providers/_base.py` (`_execute_rate_limited`, `_execute_locked`, `async_internal_set_usercode`, `async_internal_clear_usercode`), `__init__.py` unload, `binary_sensor.py` hooks, `tests/common.py`, and the three test files. I also checked the installed HA core (2026.9.0b4) for `async_create_task` eager-start, `DataUpdateCoordinator._async_refresh`, and shutdown handling, and the providers for cancel-sensitive handlers (`zwave_js_ui` re-raises when `cancelling() &gt; 0`; z2m/zwave_js_ui pop pending futures in `finally`; `_serialize_sequence` is an `async with` so releases on cancel; `Lock.acquire` cancel semantics are correct; `asyncio.timeout` + external cancel correctly yields CancelledError, not TimeoutError).
+
+Things I verified and am NOT reporting: `current_task()` inside the eager-started initial tick works (Python 3.14 eager tasks swap current task); `STOP_GRACE_SECONDS` patch works because the module reads it as a global at call time; `isinstance(result, Exception)` correctly excludes `CancelledError` (BaseException) from the warning; the `_state` reset covers cancels landing in `_perform_sync`, `_disable_slot`, and the post-write refresh (all still SYNCING); the `_aio_lock` release lives in a separate `try/finally` from acquire so a cancel during acquire cannot double-release; the initial tick in LOADING does no I/O so `async_stop` cannot cancel it in production.
+
+## Candidate findings
+
+**1. `custom_components/lock_code_manager/domain/sync.py:1014` — cancelling a tick inside `coordinator.async_refresh()` marks the shared per-lock coordinator failed**
+Failure scenario: polled (non-push) provider; a tick clears a slot (`async_internal_clear_usercode` records no pending write, so the tick proceeds to `await self._coordinator.async_refresh()` at L1014 while still SYNCING). A slot is removed via the options flow, so `async_will_remove_from_hass` -&gt; `async_stop` runs for that one manager while the rest of the lock stays live. The cloud read hangs past 30s, the tick is cancelled, and HA's `DataUpdateCoordinator._async_refresh` (`update_coordinator.py:560`) catches the `CancelledError`, sets `last_update_success = False` and `last_exception = CancelledError` *before* re-raising. Effect on the unrelated, still-live slots on that lock: every `CoordinatorEntity` flips unavailable, `_async_drift_check` (coordinator.py:747) returns early, and `async_get_usercodes`'s `LockBusy` keep-data branch (coordinator.py:729) is disabled, until the next successful poll. The docstring says "nothing of this manager's runs after stop returns" but the cancel reaches shared state the manager does not own.
+
+**2. `custom_components/lock_code_manager/domain/sync.py:346` — a cancelled `async_stop` no longer cancels its ticks during the grace window (regression vs. previous `gather`)**
+Failure scenario: `async_stop` is itself cancelled while parked in `asyncio.wait(pending, timeout=...)`. `asyncio.wait` does not propagate cancellation to the awaited tasks, so stop unwinds with `_started=False`, timer and listeners unsubscribed, but the in-flight tick keeps running `_perform_sync`/`async_refresh` against a coordinator that unload is about to shut down. Previously `gather(*pending)` was the wait, and cancelling a gather cancels its children, so this hole is new. Reachable from any caller that cancels the unload/remove path (`async_unload_entry` runs the stops under `asyncio.gather`, so cancelling the unload cancels each stop coroutine). Half-convinced on real-world reach: HA's stage timeouts log and continue rather than cancel, so in production this mostly bites at loop teardown; still a nameable semantic gap.
+
+**3. `custom_components/lock_code_manager/domain/sync.py:306` — `await self._hass.async_create_task(...)` turns an external cancel of the initial tick into a `CancelledError` in the caller**
+Failure scenario: `async_stop` (or anything else) cancels the initial tick task while `async_start` is awaiting it. Awaiting a task that is cancelled raises `CancelledError` in the awaiter even though the awaiter was not cancelled, so `async_start` -&gt; `async_added_to_hass` -&gt; HA's entity-add machinery sees a cancellation and the entity add is treated as aborted. Not reachable today from the LOADING first tick (no awaits before it returns), but the test `test_async_start_only_tracks_its_own_task` deliberately restarts a manager in OUT_OF_SYNC, and any future restart path (or a slow `_async_tick_impl` on first tick) hits it. Low confidence; flagging because the comment implies "tasks this manager may cancel" without noting the awaiter is still coupled.
+
+**4. `tests/test_sync.py:1426-1440` — `test_async_stop_lets_a_write_finish_inside_the_grace` is wall-clock dependent**
+Failure scenario: grace is 1.0s real time; the test sleeps 0.1s then releases. On a loaded CI runner, if more than ~0.9s elapses between the eager `async_stop` entering `asyncio.wait` and `release.set()`, the tick is cancelled and `assert not tick_task.cancelled()` (L1440) fails. Also `assert not stop_task.done()` after `sleep(0.1)` is a timing assertion, not a causal one. Flake risk rather than a code bug.
+
+**5. `custom_components/lock_code_manager/domain/sync.py:349` — log message asserts "Lock call still running" for whatever the tick is awaiting**
+Failure scenario: the wedged await is `coordinator.async_refresh()` (L1014), `_disable_slot`'s service call, or the `_aio_lock` wait behind another slot's operation (`LockBusy` path), not a lock call. The line logs a diagnosis the code has not established, and with several `still_running` tasks it logs the singular once. Cosmetic/diagnostic accuracy only.
+
+**6. `custom_components/lock_code_manager/__init__.py:1228-1230` — dead `CancelledError` exclusion**
+`isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError)` — `CancelledError` is a `BaseException` subclass, so the second clause can never be true when the first is; the same PR removed the identical dead clause from `async_stop` but left this one. No runtime effect; consistency only.
+
+Findings 1 and 2 are the ones I'd want the verifier to spend time on; 3-6 are lower confidence or cosmetic.</result>
+<usage><subagent_tokens>131218</subagent_tokens><tool_uses>31</tool_uses><duration_ms>415508</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3541a3827b175eb5</task-id>
+<tool-use-id>toolu_0182szUNKuR7XzT1ojrmyW1a</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a3541a3827b175eb5.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: altitude / root cause" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have what I need; nothing else to fetch. Findings below, ordered by how much of the fix's depth they bear on.
+
+## Altitude review — PR #1562
+
+### Question (d) first, because it frames the rest: does the cancel actually solve #1552?
+
+Yes. I traced every await after the manager stop in `/Users/raman/projects/lock_code_manager/.worktrees/stop-sync-manager/custom_components/lock_code_manager/__init__.py` L1211-1291: `invoke_entity_removers_for_slot` → entity removal (`async_stop` again, now a no-op); slot coordinator `async_stop()` is sync; `async_unload_lock` (L1127-1156) calls provider `async_unload` (`providers/_base.py` L1152-1172 — cancels and awaits only its own `_reconnect_task`) and `coordinator.async_shutdown` (`domain/coordinator.py` L814-816 cancels `_confirm_task` without awaiting; HA's base at `update_coordinator.py` L210-215 only unsubscribes). HA's own `_async_process_on_unload` (`config_entries.py` L1256-1262) then cancels entry background tasks and waits at most 10 s. Nothing left awaits the wedged `_aio_lock`. A wedged call inside an HA-scheduled poll or the cancelled-but-unawaited confirm task keeps running against the dead coordinator, but a reload builds a new provider with a new `_aio_lock`, so it cannot block anything.
+
+Also relevant to (e): the first tick from LOADING never writes (`domain/sync.py` L782-815, "detect initial sync state without performing operations"), so `async_start` awaiting it is cheap; the initial-tick change is purely about task identity.
+
+### Candidates
+
+**1. `custom_components/lock_code_manager/const.py:227` (and `domain/sync.py:346`) — the grace is a second "how long is a healthy call" number, kept outside the layer that already declares that per provider, and justified by the wrong provider.**
+`_base.py` L515-540 already puts this knowledge in providers (`per_exchange_budget`, `_operation_budget`, `OPERATION_TIMEOUT`); `STOP_GRACE_SECONDS` is a parallel, provider-agnostic guess in the sync layer. Worse, the comment justifies 30 s with ZHA, but ZHA's write is one `cluster.set_pin_code` (`providers/zha.py` L312) — atomic on the lock, cancel-safe at any instant. The providers where a mid-write cancel is unsafe are Schlage's get/delete/add sequence (`providers/schlage.py` L376-411) and Matter's clear-and-retry corner (`providers/matter.py` L989-991), both cloud/IP fast when healthy.
+*Failure scenario:* zwave-js-ui gives one API call 60 s (`providers/_mqtt.py` L60-61, `per_exchange_budget = 70`); a set in its 31st second on a slow gateway is cancelled while the gateway still executes it, so the manager forgets a write the lock will apply. It self-heals at next start, but it is exactly the healthy-but-slow cutoff the `_base.py` comment exists to prevent.
+*Deeper change:* let the provider answer — `BaseLock.stop_grace_seconds` (default 0 for single-command providers; Schlage overrides with its sequence budget), read by `async_stop` as `self._lock.stop_grace_seconds`. The number then sits beside the sequence it protects, the way `per_exchange_budget` already does.
+
+**2. `custom_components/lock_code_manager/providers/_base.py:101-109` — the codebase now gives two contradictory answers to "when is cancel safe", and the PR amends neither.**
+L101 still reads "Cancelling is safe at THIS budget and would not be at a shorter one" (600 s), while `const.py` L221-227 cancels at 30 s and calls that "one ZHA reply timeout" — yet `_base.py` L97-99 and `zha.py` L69-79 put a legitimate ZHA command at 84 s (three attempts) up to 592 s. The `sync.py` docstring (L317-328) argues the shutdown case separately but does not touch the paragraph it contradicts.
+*Cost:* the next reader of `_base.py` will either "fix" the grace up to 600 s or believe the 30 s is a bug.
+*Fix:* rewrite the `_base.py` paragraph to distinguish operational cancel (no reconcile follows; needs the full budget) from shutdown cancel (a fresh read at next start is what makes it safe), and drop the ZHA justification from `const.py` — ZHA is the cancel-safe case; the constraint comes from Schlage.
+
+**3. `custom_components/lock_code_manager/domain/sync.py:746-753` — the SYNCING→OUT_OF_SYNC reset on CancelledError is reachable only by restarting a stopped instance, which production never does.**
+`async_start` has one caller, `binary_sensor.py` L175 in `async_added_to_hass`; the manager is built per entity object at `binary_sensor.py` L144; HA never re-adds a removed entity object. After stop, `_state` has no reader: `_write_state` is gated on `_started`, and `sync_managers.discard` (L191) runs before the stop. The branch exists for the test contract (`test_async_start_only_tracks_its_own_task` restarts; `assert manager._state is SyncState.OUT_OF_SYNC`).
+*Cost:* a handler that reads as production semantics but is dead there; and its semantics are subtly off — the docstring promises "the next start reconciles the slot from a fresh read", but OUT_OF_SYNC goes straight to a write (L913-916), while LOADING is the read-without-writing state (L782-815).
+*Deeper change:* if restartability is a real contract, `async_stop` owns it — set `_state = SyncState.LOADING` after the gather. If not, delete the branch and the restart test.
+
+**4. `custom_components/lock_code_manager/domain/sync.py:722-728` (+ the workaround at L303-306) — `_tick_tasks` registers whatever task happens to run the tick, so the trap is patched at one call site instead of removed.**
+Any inline `await _async_tick()` enlists the caller's task for cancellation. The PR wraps the one production caller and documents the trap. `tests/conftest.py` L324, L339, L357 still await `_async_tick()` inline from the test task; the `task is not current` guard at L341-343 protects only a stop reached from the same task. A stop reached from a different task while an inline tick is suspended cancels the test's own task — the same bug class the PR fixed for the entity-add task.
+*Deeper change:* the manager creates its own tick tasks — a `@callback _schedule_tick()` that does `task = self._hass.async_create_background_task(self._run_tick(), ...)`, adds *that* task, and is what the timer invokes; `async_start` awaits the task it created. `_tick_tasks` then cannot hold a foreign task by construction, the current-task guard goes away, and both tick paths get one HA task class (today timer ticks are HA background tasks — `helpers/event.py` L1620 `background=True` — while the initial tick is a foreground `hass.async_create_task`).
+
+**5. `custom_components/lock_code_manager/domain/sync.py:1010-1014` — a cancel landing inside `coordinator.async_refresh()` poisons the shared per-lock coordinator. Low severity; narrow path.**
+The tick runs the shared coordinator's read in its own task. HA's coordinator (`update_coordinator.py` L560-564) sets `last_update_success = False` before re-raising the cancel. On unload the coordinator is shut down next, so this is moot — but `async_stop` also runs from `async_will_remove_from_hass` (`binary_sensor.py` L186-192; slot removal via options at `__init__.py` L1952) where the coordinator survives: `_async_drift_check` (`coordinator.py` L747) then skips until the next scheduled poll succeeds, and a `LockBusy` read (L728-734) will not serve cached data. Reachable only when the post-write refresh is — polled provider with `result.changed` False, since a changed write records pending and returns at L1004-1007 first.
+*Deeper change:* the tick should not run the shared read in its task; request it, or let the coordinator's own confirmation look own it, as #1550 already did for the pending path.
+
+Not flagged: I looked for a shutdown-aware budget inside `_execute_rate_limited` (question a) and it is not the better mechanism — the tick task owns the awaiting chain, and asyncio task cancellation is the general tool; a "stopping" flag would only gate new calls, not the wedged one. The provider-declared grace in candidate 1 is the version of that idea the code supports.</result>
+<usage><subagent_tokens>140708</subagent_tokens><tool_uses>31</tool_uses><duration_ms>415178</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aaf4026069ee1f143</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/aaf4026069ee1f143.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle C: cross-file tracer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything I set out to trace is now checked. Findings below.
+
+## Findings (Angle C, cross-file)
+
+### 1. `async_stop` cancelled mid-grace no longer cancels the ticks it was waiting on (behavioral regression vs. the old `gather`)
+- **file**: `custom_components/lock_code_manager/domain/sync.py`
+- **line**: 346 (`_, still_running = await asyncio.wait(pending, timeout=STOP_GRACE_SECONDS)`)
+- **summary**: The old code awaited the ticks via `asyncio.gather`, which cancels its children when the awaiting task is cancelled. The new code sits in `asyncio.wait` for up to 30 s first, and `asyncio.wait` does *not* cancel the awaited tasks when the waiter is cancelled.
+- **failure_scenario**: `async_unload_entry` (or the entity-remove task on the options path) is itself cancelled while a manager is inside the grace window, e.g. Home Assistant's shutdown sequence cancelling lingering tasks, or any zone timeout around unload. `_started` is already `False`, so the orphaned tick keeps running `_perform_sync` and then `coordinator.async_refresh()` after teardown continued past it. Previously that same cancel propagated into the tick through `gather`. A `try/except CancelledError: for t in pending: t.cancel(); raise` around the wait restores the old guarantee.
+
+### 2. A cancel landing inside the tick's verification `coordinator.async_refresh()` marks the lock coordinator failed without notifying anyone (options-path slot removal only)
+- **file**: `custom_components/lock_code_manager/domain/sync.py`
+- **line**: 1014 (`await self._coordinator.async_refresh()`)
+- **summary**: Installed HA 2026.9.0b4 `_async_refresh` (`update_coordinator.py`) has `except asyncio.CancelledError: self.last_exception = err; self.last_update_success = False; if task.cancelling() &gt; 0: raise`. Because it re-raises, it never reaches `_async_refresh_finished()` or `async_update_listeners()`; only the `finally` (`_schedule_refresh()`) runs.
+- **failure_scenario**: A slot is removed via the options listener (`__init__.py:1946-1953` -&gt; `invoke_entity_removers_for_slot` -&gt; `entity.py:130 async_remove` -&gt; `binary_sensor.py:192 async_stop`) while its tick is in the post-write read of a polled provider that takes &gt;30 s (a ZHA walk of many slots legitimately does). The lock coordinator, which keeps serving every other slot, is left with `last_update_success=False` and `last_exception=CancelledError()` (formats as `""` in diagnostics, `diagnostics.py:113`). Until the next scheduled poll succeeds: `_async_drift_check` returns early (`domain/coordinator.py:747`), and a `LockBusy` poll raises `UpdateFailed` instead of returning cached data (`domain/coordinator.py:728-733`). Entity availability is unaffected (all three `available` overrides bypass `CoordinatorEntity.available`), and `unreachable` is breaker-based, so severity is low and self-healing after one poll interval. The unload path is unaffected because the coordinator is shut down right after.
+
+### 3. `CancelledError` escaping into `binary_sensor.async_added_to_hass` — checked, not reachable in production
+- **file**: `custom_components/lock_code_manager/domain/sync.py`
+- **line**: 306 (`await self._hass.async_create_task(self._async_tick())`)
+- **summary**: Reported for the verifier as a non-finding with the reasoning. `_state` is initialised to `LOADING` (line 221); the `LOADING` branch of `_async_tick_impl` never awaits (`_resolve_credential_snapshot` line 428, `_try_upgrade_state_tracking` line 1063, `calculate_in_sync` line 470 and `_write_state` are plain `def`s). `hass.async_create_task` defaults to `eager_start=True` (`core.py async_create_task_internal`), so the first tick runs to completion synchronously inside `create_eager_task`; `_tick_tasks` is empty again before the `await` even suspends, and `async_stop` can never find it to cancel. Verified on the venv's Python 3.14.5 that `asyncio.current_task()` inside an eagerly-started task returns that task (both mid-await and for a task that completes synchronously), so the `task is None` guard at line 730 is not hit.
+- **failure_scenario**: Only reachable via `async_stop()` then `async_start()` on the *same* manager instance with `_state` already `OUT_OF_SYNC` — which only tests do (`tests/test_sync.py:2230-2236`). If it were reached, HA's `EntityPlatform._async_add_entities` catches only `Exception` (`entity_platform.py:728`), so the `CancelledError` would abort the platform's entire add loop, not just this entity.
+
+### Checked and clean (no finding)
+- **`_aio_lock` under cancellation** (`providers/_base.py:349-368`): `acquire()` is in its own `try/except TimeoutError`; the `finally: release()` belongs only to the second block, so a cancel while queued never releases a lock the task doesn't hold. Verified `Lock.release()` in `finally` after a cancel of a held operation leaves the lock unlocked.
+- **`asyncio.timeout` inside the write path**: an external cancel with the timeout in `ENTERED` state passes through as `CancelledError` (not converted to `TimeoutError`), so `_async_tick`'s new `except CancelledError` sees it and resets `SYNCING -&gt; OUT_OF_SYNC`.
+- **Cancel swallowing on the awaited path**: the only two `except asyncio.CancelledError` outside `sync.py` (`_base.py:1159` in `async_unload`, `zwave_js_ui.py:1131` in `_async_api_call_at`) re-raise when `current_task().cancelling() &gt; 0`, which is exactly what `task.cancel()` from `async_stop` produces. Installed `matter_server`, `zwave_js_server` (only `dump.py`, off-path) and `pyschlage` contain no `asyncio.shield` / `CancelledError` swallowing, so a cancelled tick cannot outlive the post-cancel `gather`.
+- **`_set_credential` rollback** (`_base.py:1928`): `except Exception` skips rollback on cancel, leaving a tagged user without a credential; the next set finds it by tag, so it's reused not leaked, and the PR docstring accepts this after the grace.
+- **`_disable_slot`**: `except Exception` doesn't catch the cancel, `finally` still sets `_breaker_reset_requested`; a blocking switch service call is far shorter than the 30 s grace.
+- **`async_unload_entry` ordering** (`__init__.py:1217-1235`): `gather` awaits the cancelled ticks to full unwind before `sync_managers.clear()`, slot-coordinator stop, and platform unload; `binary_sensor.async_will_remove_from_hass` -&gt; `async_stop` is a no-op afterwards; `slot_coordinator.register_sync_manager` only pokes `request_sync_check`, which no-ops via `_write_state`'s `_started` guard.
+- **Test helper**: `sync.py` binds `STOP_GRACE_SECONDS` via `from ..const import ...` (line 53) and `async_stop` reads the bare name, so `short_stop_grace` patching `custom_components.lock_code_manager.domain.sync.STOP_GRACE_SECONDS` targets the correct name; `patch` is imported in `tests/common.py:13`.
+- Interval-timer ticks run as their own eager tasks (`core.py _async_add_hass_job` -&gt; `create_eager_task`), so `current_task()` there is the tick task, unchanged.</result>
+<usage><subagent_tokens>151198</subagent_tokens><tool_uses>38</tool_uses><duration_ms>538708</duration_ms></usage>
+</task-notification>

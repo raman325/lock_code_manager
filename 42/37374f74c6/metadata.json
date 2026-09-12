@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "4237374f74c6",
+  "strategy": "manual-commit",
+  "branch": "fix/stop-sync-manager-1552",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/callbacks.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/test_callbacks.py",
+    "tests/test_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/42/37374f74c6/0/metadata.json",
+      "transcript": "/42/37374f74c6/0/full.jsonl",
+      "compact_transcript": "/42/37374f74c6/0/transcript.jsonl",
+      "content_hash": "/42/37374f74c6/0/content_hash.txt",
+      "prompt": "/42/37374f74c6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2516,
+    "cache_creation_tokens": 575643,
+    "cache_read_tokens": 18592514,
+    "output_tokens": 124266,
+    "api_call_count": 102
+  }
+}
