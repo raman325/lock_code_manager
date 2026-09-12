@@ -93,6 +93,7 @@ from .common import (
     async_blocking_stub,
     async_discover_unclaimed_mqtt_lock,
     in_sync_entity_id,
+    short_stop_grace,
 )
 from .conftest import (
     async_initial_tick,
@@ -1678,9 +1679,12 @@ async def test_unload_cancels_in_flight_sync_tick(
     manager = next(iter(runtime_data.sync_managers))
     manager._state = SyncState.OUT_OF_SYNC
 
-    stalled_tick_impl, mid_tick = async_blocking_stub()
+    stalled_tick_impl, mid_tick, _ = async_blocking_stub()
 
-    with patch.object(manager, "_async_tick_impl", stalled_tick_impl):
+    with (
+        patch.object(manager, "_async_tick_impl", stalled_tick_impl),
+        short_stop_grace(),
+    ):
         tick_task = hass.async_create_task(manager._async_tick())
         await asyncio.wait_for(mid_tick.wait(), timeout=5)
 

@@ -64,24 +64,32 @@ UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
 
 def async_blocking_stub(
     original: Callable[..., Awaitable[Any]] | None = None,
-    release: asyncio.Event | None = None,
-) -> tuple[Callable[..., Awaitable[Any]], asyncio.Event]:
+) -> tuple[Callable[..., Awaitable[Any]], asyncio.Event, asyncio.Event]:
     """
-    Return ``(stub, entered)`` for patching an awaited call mid-flight.
+    Return ``(stub, entered, release)`` for patching an awaited call mid-flight.
 
     ``stub`` accepts any arguments, sets ``entered``, then waits on
-    ``release``; with no ``release`` it never returns, standing in for a
-    device that has stopped answering. Once released it forwards its
-    arguments to ``original`` when one is given.
+    ``release``. A caller that never releases it has a device that has
+    stopped answering. Once released it forwards its arguments to
+    ``original`` when one is given.
     """
-    entered = asyncio.Event()
+    entered, release = asyncio.Event(), asyncio.Event()
 
     async def stub(*args: Any, **kwargs: Any) -> Any:
         entered.set()
-        await (release or asyncio.Event()).wait()
-        return await original(*args, **kwargs) if original is not None else None
+        await release.wait()
+        if original is None:
+            return None
+        return await original(*args, **kwargs)
 
-    return stub, entered
+    return stub, entered, release
+
+
+def short_stop_grace(seconds: float = 0.05):
+    """Shrink the grace ``async_stop`` gives in-flight ticks before cancelling."""
+    return patch(
+        "custom_components.lock_code_manager.domain.sync.STOP_GRACE_SECONDS", seconds
+    )
 
 
 @contextmanager

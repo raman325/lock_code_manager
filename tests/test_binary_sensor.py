@@ -77,6 +77,7 @@ from .common import (
     MockLCMLock,
     async_blocking_stub,
     in_sync_entity_id,
+    short_stop_grace,
     slot_entity_id,
 )
 from .conftest import (
@@ -1551,15 +1552,9 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
     )
     await hass.async_block_till_done()
 
-    mid_sync_event = asyncio.Event()
-    resume_event = asyncio.Event()
-    original_set = lock_provider.async_set_usercode
-
-    async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
-        """Set usercode but pause mid-operation so the test can push an update."""
-        mid_sync_event.set()
-        await resume_event.wait()
-        return await original_set(code_slot, usercode, name, **kwargs)
+    set_usercode_with_pause, mid_sync_event, resume_event = async_blocking_stub(
+        lock_provider.async_set_usercode
+    )
 
     with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
         # Force to OUT_OF_SYNC so tick will attempt sync
@@ -1585,12 +1580,10 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
         await tick_task
         await hass.async_block_till_done()
 
-    # The set went out. On a polled lock the coordinator's own read settles
-    # it; whether that read had already landed when the tick resumed decides
-    # only whether the tick parked on PENDING_CONFIRMATION or verified the
-    # slot itself. Either way the mid-sync push corrupted nothing, and the
-    # next tick finds the slot settled.
-    assert mgr._state in (SyncState.PENDING_CONFIRMATION, SyncState.IN_SYNC)
+    # The set went out, so on a polled lock it is pending until the
+    # coordinator's own read sees it; block_till_done ran that read, and the
+    # next tick finds the slot settled. The mid-sync push corrupted nothing.
+    assert mgr._state is SyncState.PENDING_CONFIRMATION
     await mgr._async_tick()
     assert mgr._state is SyncState.IN_SYNC
 
@@ -1602,8 +1595,9 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     """
     Stopping the sync manager while a sync tick is in progress does not raise.
 
-    Scenario: sync manager is SYNCING. Config entry unloads, calling async_stop()
-    which sets _started = False and cancels the tick mid-write.
+    Scenario: sync manager is SYNCING behind a write that never answers. Config
+    entry unloads, calling async_stop(), which sets _started = False and cancels
+    the tick once the grace runs out.
     """
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
@@ -1630,30 +1624,26 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     lock_provider.codes[1] = "1234"
     mgr._state = SyncState.OUT_OF_SYNC
 
-    resume_event = asyncio.Event()
-    set_usercode_with_pause, mid_sync_event = async_blocking_stub(
-        lock_provider.async_set_usercode, resume_event
-    )
+    wedged_set, mid_sync_event, _ = async_blocking_stub()
 
-    with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
+    with (
+        patch.object(lock_provider, "async_set_usercode", wedged_set),
+        short_stop_grace(),
+    ):
         # Start the tick
         tick_task = hass.async_create_task(mgr._async_tick())
         # Wait deterministically until the mock signals it has been entered
         await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
         # Stop the sync manager while sync is in progress. Stop must not raise
-        # even though it cancels the tick out from under the write.
+        # even though it ends up cancelling the tick.
         await mgr.async_stop()
-        assert tick_task.cancelled()
-
-        # The write outlives the tick and lands once the lock answers.
-        resume_event.set()
         await hass.async_block_till_done()
 
-    # Verify clean shutdown -- _started should be False, the write landed,
-    # and the lock's turn handed back.
+    # Verify clean shutdown -- _started should be False, the tick gone, and
+    # the lock's turn handed back.
     assert not mgr._started
-    assert lock_provider.codes[1] == "9999"
+    assert tick_task.cancelled()
     assert not lock_provider._aio_lock.locked()
 
     # Clean up

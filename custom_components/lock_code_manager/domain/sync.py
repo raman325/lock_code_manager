@@ -13,7 +13,7 @@ Circuit breaker: 3 attempts within 5 minutes (MAX_SYNC_ATTEMPTS, SYNC_ATTEMPT_WI
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import logging
@@ -50,6 +50,7 @@ from ..const import (
     ATTR_CODE,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    STOP_GRACE_SECONDS,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
@@ -306,20 +307,25 @@ class SlotSyncManager:
 
     async def async_stop(self) -> None:
         """
-        Stop the sync manager, cancelling any in-flight ticks.
+        Stop the sync manager, giving in-flight ticks a bounded grace.
 
         Idempotent. Unsubscribes the timer and state listeners first so no
-        new ticks can start, then cancels in-flight ticks and waits for them
-        to unwind so nothing of this manager's runs after stop returns. A
-        tick is not waited out: one behind a provider call that never
-        answers holds SYNCING for up to three operation budgets, and the
-        entry unload or reload that called stop would show nothing on screen
-        for all of it.
+        new ticks can start, then waits up to STOP_GRACE_SECONDS for
+        in-flight ticks and cancels whatever is still running, so nothing
+        of this manager's runs after stop returns.
 
-        Cancelling the tick does not cancel the lock operation. The write
-        and the verification read run under ``asyncio.shield`` and finish on
-        their own timeouts; see ``_perform_sync`` for why the write must not
-        be cut short.
+        The grace is what keeps a healthy write whole: several providers
+        write a credential as a delete followed by an add, others roll back
+        a half-made user or repair a driver cache only after the call
+        returns, and a cancel landing inside any of those leaves the door
+        worse than the wait would. A call that has not answered within the
+        grace is presumed wedged, and waiting out its full budget -- three
+        of them in sequence behind the probe and the lock's turn -- is
+        exactly the unload that shows nothing on screen for minutes. The
+        cancel then costs nothing the wedge had not already taken, and the
+        tick unwinds through the write path's ``finally``, which gives the
+        lock's turn back. The next start reconciles the slot from a fresh
+        read.
         """
         if not self._started:
             return
@@ -337,18 +343,18 @@ class SlotSyncManager:
             task for task in self._tick_tasks if task is not current and not task.done()
         }
         if pending:
-            _LOGGER.debug(
-                "%s: Cancelling %d in-flight tick(s) on stop",
-                self._log_prefix,
-                len(pending),
-            )
-            for task in pending:
+            _, still_running = await asyncio.wait(pending, timeout=STOP_GRACE_SECONDS)
+            if still_running:
+                _LOGGER.info(
+                    "%s: Lock call still running %ss after stop; cancelling it",
+                    self._log_prefix,
+                    STOP_GRACE_SECONDS,
+                )
+            for task in still_running:
                 task.cancel()
             tick_results = await asyncio.gather(*pending, return_exceptions=True)
             for result in tick_results:
-                if isinstance(result, Exception) and not isinstance(
-                    result, asyncio.CancelledError
-                ):
+                if isinstance(result, Exception):
                     _LOGGER.warning(
                         "%s: In-flight tick raised during stop: %s",
                         self._log_prefix,
@@ -518,16 +524,6 @@ class SlotSyncManager:
 
     # -- Sync execution ------------------------------------------------------
 
-    def _outlive_tick[T](self, operation: Coroutine[Any, Any, T]) -> Awaitable[T]:
-        """
-        Run a lock operation so that cancelling the tick does not cancel it.
-
-        The operation gets its own eager task: it runs inline up to its
-        first real wait, exactly as an unshielded await would, and Home
-        Assistant tracks it so it cannot linger unseen.
-        """
-        return asyncio.shield(self._hass.async_create_task(operation))
-
     async def _perform_sync(self, snapshot: CredentialSyncState) -> bool:
         """
         Execute sync operation (set or clear usercode).
@@ -537,31 +533,18 @@ class SlotSyncManager:
         CodeRejectedError, LockDisconnected, LockOperationFailed, or
         propagates any other exception. Error handling and breaker accounting
         live in the caller (``_async_tick_impl``).
-
-        The lock call is shielded from the tick's cancellation. Several
-        providers write a credential as a delete followed by an add, and a
-        cancel landing between the two leaves the door with no working PIN;
-        others roll back a half-made user or repair a driver cache only
-        after the write returns. The call carries its own timeouts (see the
-        budget notes in ``providers/_base.py``) and releases the lock's turn
-        in its own ``finally``, so letting it finish costs nothing the stop
-        was waiting for.
         """
         if snapshot.active_state == STATE_ON:
-            await self._outlive_tick(
-                self._lock.async_internal_set_usercode(
-                    self._slot_num,
-                    snapshot.credential_state,
-                    snapshot.name_state,
-                    source="sync",
-                )
+            await self._lock.async_internal_set_usercode(
+                self._slot_num,
+                snapshot.credential_state,
+                snapshot.name_state,
+                source="sync",
             )
             self._last_set_pin = snapshot.credential_state
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
             return True
-        await self._outlive_tick(
-            self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
-        )
+        await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
         self._last_set_pin = None
         _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
         return False
@@ -1028,10 +1011,7 @@ class SlotSyncManager:
             # via push_update() and refreshing from cache could read stale data.
             if not self._lock.supports_push:
                 try:
-                    # Shielded for the same reason as the write: a refresh
-                    # cut short marks the coordinator failed and throws away
-                    # the slots it had already read.
-                    await self._outlive_tick(self._coordinator.async_refresh())
+                    await self._coordinator.async_refresh()
                 except Exception:
                     _LOGGER.exception(
                         "%s: Coordinator refresh failed after sync operation. "
