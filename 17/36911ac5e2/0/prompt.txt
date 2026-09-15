@@ -1,0 +1,25 @@
+open a PR to address https://github.com/raman325/lock_code_manager/issues/1552
+
+---
+
+including a test that fails first
+
+---
+
+Status?
+
+---
+
+Run npx skills add stablyai/orca@computer-use -g -y locally
+
+---
+
+Should Claude code use this? I thought this was specifically for orca
+
+---
+
+figure out why property tests are failing
+
+---
+
+1
