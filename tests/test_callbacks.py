@@ -1,5 +1,6 @@
 """Tests for callback registry exception handling."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -78,6 +79,37 @@ def test_invoke_lock_slot_adders_exception_handling(
         "Error in lock-slot entity callback for lock lock.test_lock slot 2"
         in caplog.text
     )
+
+
+async def test_invoke_entity_removers_for_slot_runs_removers_concurrently(
+    registry: EntityCallbackRegistry,
+) -> None:
+    """Removers in one slot run together, so slow ones do not queue behind each other."""
+    entered: list[str] = []
+    both_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    def slow_remover(uid: str):
+        async def remover() -> None:
+            entered.append(uid)
+            if len(entered) == 2:
+                both_entered.set()
+            await release.wait()
+
+        return remover
+
+    registry.register_entity_remover("1|first", slow_remover("1|first"))
+    registry.register_entity_remover("1|second", slow_remover("1|second"))
+
+    removal = asyncio.create_task(registry.invoke_entity_removers_for_slot(1))
+    try:
+        # Sequential removal would never enter the second before the first
+        # is released.
+        await asyncio.wait_for(both_entered.wait(), timeout=1)
+    finally:
+        release.set()
+    await removal
+    assert not registry.remove_entity
 
 
 async def test_invoke_entity_removers_for_slot_exception_handling(

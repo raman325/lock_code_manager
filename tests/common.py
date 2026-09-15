@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -59,6 +60,36 @@ BASE_CONFIG = {
 
 UNCLAIMED_IDENTIFIER = "somebridge_1"
 UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
+
+
+def async_blocking_stub(
+    original: Callable[..., Awaitable[Any]] | None = None,
+) -> tuple[Callable[..., Awaitable[Any]], asyncio.Event, asyncio.Event]:
+    """
+    Return ``(stub, entered, release)`` for patching an awaited call mid-flight.
+
+    ``stub`` accepts any arguments, sets ``entered``, then waits on
+    ``release``. A caller that never releases it has a device that has
+    stopped answering. Once released it forwards its arguments to
+    ``original`` when one is given.
+    """
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def stub(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        await release.wait()
+        if original is None:
+            return None
+        return await original(*args, **kwargs)
+
+    return stub, entered, release
+
+
+def short_stop_grace(seconds: float = 0.05):
+    """Shrink the grace ``async_stop`` gives in-flight ticks before cancelling."""
+    return patch(
+        "custom_components.lock_code_manager.domain.sync.STOP_GRACE_SECONDS", seconds
+    )
 
 
 @contextmanager

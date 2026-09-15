@@ -1223,9 +1223,7 @@ async def async_unload_entry(
         # which it may not when config has been migrated to options.
         runtime_data.sync_managers.clear()
         for mgr, result in zip(mgrs_to_stop, stop_results, strict=True):
-            if isinstance(result, Exception) and not isinstance(
-                result, asyncio.CancelledError
-            ):
+            if isinstance(result, Exception):
                 _LOGGER.warning(
                     "%s: Sync manager stop raised during unload: %s",
                     mgr.log_prefix,

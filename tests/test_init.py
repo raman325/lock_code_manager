@@ -90,8 +90,10 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_NAME_ENTITY,
     MockLCMLock,
+    async_blocking_stub,
     async_discover_unclaimed_mqtt_lock,
     in_sync_entity_id,
+    short_stop_grace,
 )
 from .conftest import (
     async_initial_tick,
@@ -1663,42 +1665,36 @@ async def test_unload_stops_sync_managers_before_callbacks_and_platforms(
     assert initial_manager_count >= 1
 
 
-async def test_unload_awaits_in_flight_sync_tick(
+async def test_unload_cancels_in_flight_sync_tick(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Unload waits for an in-flight sync tick before returning."""
+    """Unload cancels an in-flight sync tick instead of waiting it out."""
     runtime_data = lock_code_manager_config_entry.runtime_data
     assert runtime_data.sync_managers
 
     # Pick a manager and stall its tick mid-flight by patching its
-    # _async_tick_impl to wait on an event we control.
+    # _async_tick_impl to never return.
     manager = next(iter(runtime_data.sync_managers))
     manager._state = SyncState.OUT_OF_SYNC
 
-    mid_tick = asyncio.Event()
-    release = asyncio.Event()
+    stalled_tick_impl, mid_tick, _ = async_blocking_stub()
 
-    async def stalled_tick_impl() -> None:
-        mid_tick.set()
-        await release.wait()
-
-    with patch.object(manager, "_async_tick_impl", stalled_tick_impl):
+    with (
+        patch.object(manager, "_async_tick_impl", stalled_tick_impl),
+        short_stop_grace(),
+    ):
         tick_task = hass.async_create_task(manager._async_tick())
         await asyncio.wait_for(mid_tick.wait(), timeout=5)
 
-        # Begin unload; it should not return while the tick is in flight.
-        unload_task = hass.async_create_task(
-            hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+        # The tick never releases on its own, so unload must not depend on it.
+        await asyncio.wait_for(
+            hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id),
+            timeout=5,
         )
-        await asyncio.sleep(0)
-        assert not unload_task.done()
 
-        # Release the tick; unload should now complete.
-        release.set()
-        await tick_task
-        await unload_task
+    assert tick_task.cancelled()
 
 
 async def test_unload_logs_sync_manager_stop_exceptions(
