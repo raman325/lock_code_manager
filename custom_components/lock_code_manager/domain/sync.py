@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import logging
+import time
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -50,6 +51,7 @@ from ..const import (
     ATTR_CODE,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    STOP_GRACE_SECONDS,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
@@ -263,7 +265,7 @@ class SlotSyncManager:
         # All currently-executing _async_tick tasks. A new tick can fire from
         # the interval timer while a prior tick is still awaiting
         # ``_perform_sync`` or ``coordinator.async_refresh``; tracking every
-        # in-flight tick lets async_stop await them all before tearing down
+        # in-flight tick lets async_stop cancel them all before tearing down
         # state. Tasks self-register on entry and self-discard on exit.
         self._tick_tasks: set[asyncio.Task[None]] = set()
 
@@ -299,19 +301,32 @@ class SlotSyncManager:
         self._tick_unsub = async_track_time_interval(
             self._hass, self._async_tick, TICK_INTERVAL
         )
-        await self._async_tick()
+        # The first tick gets its own task so ``_tick_tasks`` only ever holds
+        # tasks this manager may cancel; awaited inline it would register the
+        # caller's, which is Home Assistant's entity-add task.
+        try:
+            await self._hass.async_create_task(self._async_tick())
+        except asyncio.CancelledError:
+            # A stop that cancelled the first tick is this manager's business,
+            # not the caller's: it must not read as the entity add being
+            # cancelled.
+            if self._started:
+                raise
 
     async def async_stop(self) -> None:
         """
-        Stop the sync manager, awaiting any in-flight ticks.
+        Stop the sync manager, giving in-flight ticks a bounded grace.
 
         Idempotent. Unsubscribes the timer and state listeners first so no
-        new ticks can start, then awaits any in-flight ticks so they cannot
-        continue to call ``_perform_sync``, ``coordinator.async_refresh``,
-        or ``_write_state()`` after stop returns. We do not cancel them --
-        a tick mid ``_perform_sync`` should be allowed to finish so the lock
-        operation completes; ``_started=False`` keeps it from scheduling
-        more work.
+        new ticks can start, then gives in-flight ticks STOP_GRACE_SECONDS
+        and cancels whatever is still running, so nothing of this manager's
+        runs after stop returns.
+
+        The grace is measured from when the tick took the lock's turn, not
+        from the stop, so a tick queued behind a long read still gets a
+        whole window once it has the lock; see STOP_GRACE_SECONDS for why
+        the window exists. A cancelled tick unwinds through the write path's
+        ``finally``, which gives the lock's turn back.
         """
         if not self._started:
             return
@@ -329,17 +344,55 @@ class SlotSyncManager:
             task for task in self._tick_tasks if task is not current and not task.done()
         }
         if pending:
-            tick_results = await asyncio.gather(*pending, return_exceptions=True)
-            for result in tick_results:
-                if isinstance(result, Exception) and not isinstance(
-                    result, asyncio.CancelledError
-                ):
-                    _LOGGER.warning(
-                        "%s: In-flight tick raised during stop: %s",
+            try:
+                for _ in await self._grace(pending):
+                    _LOGGER.info(
+                        "%s: In-flight tick still running %ss after stop; "
+                        "cancelling it",
                         self._log_prefix,
-                        result,
-                        exc_info=result,
+                        STOP_GRACE_SECONDS,
                     )
+            finally:
+                # Also on a cancelled stop: ``asyncio.wait`` leaves its tasks
+                # alone when the waiter is cancelled, and the ticks must not
+                # outlive a stop that was. Cancelling a finished task is a
+                # no-op.
+                for task in pending:
+                    task.cancel()
+                tick_results = await asyncio.gather(*pending, return_exceptions=True)
+                for result in tick_results:
+                    if isinstance(result, Exception):
+                        _LOGGER.warning(
+                            "%s: In-flight tick raised during stop: %s",
+                            self._log_prefix,
+                            result,
+                            exc_info=result,
+                        )
+
+    async def _grace(self, pending: set[asyncio.Task[None]]) -> set[asyncio.Task[None]]:
+        """
+        Wait out the stop grace and return the ticks still running after it.
+
+        The deadline moves whenever one of these ticks holds the lock's turn
+        and took it after the deadline was set, so the holder always gets a
+        whole window. A tick still queued for the turn has not touched the
+        lock and is cancelled without harm when the deadline passes.
+        """
+        deadline = time.monotonic() + STOP_GRACE_SECONDS
+        while pending:
+            _, pending = await asyncio.wait(
+                pending, timeout=deadline - time.monotonic()
+            )
+            taken = self._lock.turn_taken_at
+            if (
+                not pending
+                or taken is None
+                or self._lock.turn_holder not in pending
+                or taken + STOP_GRACE_SECONDS <= deadline
+            ):
+                break
+            deadline = taken + STOP_GRACE_SECONDS
+        return pending
 
     # -- State resolution ----------------------------------------------------
 

@@ -49,6 +49,8 @@ from .common import (
     SLOT_1_PIN_ENTITY,
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_IN_SYNC_ENTITY,
+    async_blocking_stub,
+    short_stop_grace,
 )
 from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj
 
@@ -1359,62 +1361,254 @@ class TestSyncStatusAttribute:
         assert "sync_status" not in state.attributes
 
 
-class TestAsyncStopAwaitsInFlightTick:
-    """Tests that SlotSyncManager.async_stop blocks until the in-flight tick completes."""
+class TestAsyncStopCancelsInFlightTick:
+    """Tests that SlotSyncManager.async_stop cancels in-flight ticks instead of waiting."""
 
-    async def test_async_stop_awaits_in_flight_tick(
+    async def test_async_stop_does_not_wait_out_a_wedged_provider_call(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """async_stop blocks until the running tick finishes and suppresses post-stop writes."""
+        """A provider call that outlasts the grace is cancelled, not waited out."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        # Force an out-of-sync state so the next tick performs work.
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
 
-        mid_sync = asyncio.Event()
-        resume = asyncio.Event()
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID
         ]
-        original_set = lock_provider.async_set_usercode
+        wedged_set, entered, _ = async_blocking_stub()
 
-        async def paused_set(code_slot, usercode, name=None, **kwargs):
-            mid_sync.set()
-            await resume.wait()
-            return await original_set(code_slot, usercode, name, **kwargs)
-
-        with patch.object(lock_provider, "async_set_usercode", paused_set):
+        with (
+            patch.object(lock_provider, "async_set_usercode", wedged_set),
+            short_stop_grace(),
+        ):
             tick_task = hass.async_create_task(manager._async_tick())
-            await asyncio.wait_for(mid_sync.wait(), timeout=5)
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            assert manager._state is SyncState.SYNCING
 
-            # Start async_stop while the tick is suspended inside set_usercode.
+            # The provider never answers, so stop must return on its own.
+            await asyncio.wait_for(manager.async_stop(), timeout=1)
+
+        assert tick_task.cancelled()
+        # The tick was cancelled while holding the lock's turn; it must
+        # have given it back on the way out.
+        assert not lock_provider._aio_lock.locked()
+
+    async def test_async_stop_lets_a_write_finish_inside_the_grace(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A write that answers within the grace lands, and its tick is not cancelled."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        lock_provider.codes[1] = "9999"
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+        writes_before = len(lock_provider.service_calls["set_usercode"])
+
+        paused_set, entered, release = async_blocking_stub(
+            lock_provider.async_set_usercode
+        )
+
+        writes_after_stop: list[bool | None] = []
+        with (
+            patch.object(lock_provider, "async_set_usercode", paused_set),
+            short_stop_grace(5.0),
+        ):
+            tick_task = hass.async_create_task(manager._async_tick())
+            await asyncio.wait_for(entered.wait(), timeout=5)
+
             stop_task = hass.async_create_task(manager.async_stop())
-
-            # stop_task should not complete before the tick releases.
-            await asyncio.sleep(0)
-            assert not stop_task.done()
-
-            # _started should already be False even though the tick is still
-            # in flight -- new ticks must not start.
-            assert not manager._started
-
-            # Capture state-writer calls during the post-stop window so we can
-            # confirm _write_state suppresses them.
-            writes_after_stop: list[bool | None] = []
             with patch.object(manager, "_state_writer", writes_after_stop.append):
-                resume.set()
-                await tick_task
-                await stop_task
+                # Long enough that a stop which cancelled at once would be done.
+                await asyncio.sleep(0.1)
+                assert not stop_task.done()
+                assert not tick_task.done()
 
-            assert writes_after_stop == []
+                release.set()
+                await asyncio.wait_for(stop_task, timeout=5)
 
-        # Tick task should not have raised
+        assert not tick_task.cancelled()
         assert tick_task.exception() is None
+        assert len(lock_provider.service_calls["set_usercode"]) == writes_before + 1
+        # The tick finished after stop began; its state changes stay off
+        # the entity.
+        assert writes_after_stop == []
+
+    async def test_grace_is_counted_from_taking_the_locks_turn(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A tick that gets the turn late in the window still gets a whole grace."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        lock_provider.codes[1] = "9999"
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+        writes_before = len(lock_provider.service_calls["set_usercode"])
+
+        paused_set, entered, release = async_blocking_stub(
+            lock_provider.async_set_usercode
+        )
+        # Another operation holds the lock's turn, so the tick queues for it.
+        await lock_provider._aio_lock.acquire()
+
+        with (
+            patch.object(lock_provider, "async_set_usercode", paused_set),
+            short_stop_grace(0.5),
+        ):
+            tick_task = hass.async_create_task(manager._async_tick())
+            await asyncio.sleep(0)
+            assert not entered.is_set()
+
+            stop_task = hass.async_create_task(manager.async_stop())
+            # The turn comes late in the stop's window.
+            await asyncio.sleep(0.4)
+            lock_provider._aio_lock.release()
+            await asyncio.wait_for(entered.wait(), timeout=5)
+
+            # Past the window counted from the stop, inside the one counted
+            # from taking the turn: still waiting.
+            await asyncio.sleep(0.2)
+            assert not stop_task.done()
+            assert not tick_task.cancelled()
+
+            release.set()
+            await asyncio.wait_for(stop_task, timeout=5)
+
+        assert not tick_task.cancelled()
+        assert len(lock_provider.service_calls["set_usercode"]) == writes_before + 1
+
+    async def test_stop_during_start_does_not_cancel_the_caller(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A stop that cancels the first tick returns start normally to its caller."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await manager.async_stop()
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        wedged_set, entered, _ = async_blocking_stub()
+
+        with (
+            patch.object(lock_provider, "async_set_usercode", wedged_set),
+            short_stop_grace(),
+        ):
+            start_task = hass.async_create_task(manager.async_start())
+            await asyncio.wait_for(entered.wait(), timeout=5)
+
+            await manager.async_stop()
+            await asyncio.wait_for(start_task, timeout=5)
+
+        assert not start_task.cancelled()
+        assert start_task.exception() is None
+
+    async def test_cancelled_start_stays_cancelled(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A start cancelled by its caller propagates, since no stop absorbed it."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await manager.async_stop()
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        wedged_set, entered, _ = async_blocking_stub()
+
+        with patch.object(lock_provider, "async_set_usercode", wedged_set):
+            start_task = hass.async_create_task(manager.async_start())
+            await asyncio.wait_for(entered.wait(), timeout=5)
+
+            start_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await start_task
+
+        assert start_task.cancelled()
+        assert not lock_provider._aio_lock.locked()
+
+    async def test_cancelled_stop_cancels_its_ticks(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A stop cancelled during the grace takes its in-flight tick with it."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
+        manager._state = SyncState.OUT_OF_SYNC
+
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        wedged_set, entered, _ = async_blocking_stub()
+
+        with (
+            patch.object(lock_provider, "async_set_usercode", wedged_set),
+            short_stop_grace(5.0),
+        ):
+            tick_task = hass.async_create_task(manager._async_tick())
+            await asyncio.wait_for(entered.wait(), timeout=5)
+
+            stop_task = hass.async_create_task(manager.async_stop())
+            await asyncio.sleep(0)
+            stop_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await stop_task
+            # A surviving tick fails this with TimeoutError, and wait_for
+            # cancels it so it cannot hold the fixture teardown.
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(tick_task, timeout=1)
+
+        assert not lock_provider._aio_lock.locked()
+
+    async def test_async_start_only_tracks_its_own_task(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """The initial tick must not register the caller's task for cancellation."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        await manager.async_stop()
+
+        seen: list[set[asyncio.Task[None]]] = []
+
+        def record_tracked_tasks() -> None:
+            seen.append(set(manager._tick_tasks))
+
+        with patch.object(manager, "_try_upgrade_state_tracking", record_tracked_tasks):
+            await manager.async_start()
+
+        assert seen[0] and asyncio.current_task() not in seen[0]
 
     async def test_async_stop_is_idempotent(
         self,
@@ -1451,7 +1645,7 @@ class TestAsyncStopAwaitsInFlightTick:
 
         assert writes == []
 
-    async def test_async_stop_awaits_tick_when_concurrent_tick_returned_early(
+    async def test_async_stop_cancels_tick_when_concurrent_tick_returned_early(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
@@ -1464,36 +1658,26 @@ class TestAsyncStopAwaitsInFlightTick:
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
 
-        mid_sync = asyncio.Event()
-        resume = asyncio.Event()
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID
         ]
-        original_set = lock_provider.async_set_usercode
+        wedged_set, entered, _ = async_blocking_stub()
 
-        async def paused_set(code_slot, usercode, name=None, **kwargs):
-            mid_sync.set()
-            await resume.wait()
-            return await original_set(code_slot, usercode, name, **kwargs)
-
-        with patch.object(lock_provider, "async_set_usercode", paused_set):
+        with (
+            patch.object(lock_provider, "async_set_usercode", wedged_set),
+            short_stop_grace(),
+        ):
             in_flight_tick = hass.async_create_task(manager._async_tick())
-            await asyncio.wait_for(mid_sync.wait(), timeout=5)
+            await asyncio.wait_for(entered.wait(), timeout=5)
 
             # Fire a concurrent tick. It should see SYNCING and return early
             # without clobbering the in-flight tick's tracking.
             await manager._async_tick()
             assert in_flight_tick in manager._tick_tasks
 
-            stop_task = hass.async_create_task(manager.async_stop())
-            await asyncio.sleep(0)
-            assert not stop_task.done()
+            await manager.async_stop()
 
-            resume.set()
-            await in_flight_tick
-            await stop_task
-
-        assert in_flight_tick.exception() is None
+        assert in_flight_tick.cancelled()
 
     async def test_async_stop_logs_tick_exception_at_warning(
         self,
@@ -1502,29 +1686,30 @@ class TestAsyncStopAwaitsInFlightTick:
         lock_code_manager_config_entry,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """An in-flight tick raising during stop is logged at WARNING with exc_info."""
+        """An in-flight tick raising while unwinding is logged at WARNING with exc_info."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
         manager._state = SyncState.OUT_OF_SYNC
 
         boom = RuntimeError("simulated tick failure")
         ready = asyncio.Event()
-        release = asyncio.Event()
 
         async def failing_tick_impl() -> None:
             ready.set()
-            await release.wait()
-            raise boom
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                raise boom from None
 
-        with patch.object(manager, "_async_tick_impl", failing_tick_impl):
+        with (
+            patch.object(manager, "_async_tick_impl", failing_tick_impl),
+            short_stop_grace(),
+        ):
             tick_task = hass.async_create_task(manager._async_tick())
             await asyncio.wait_for(ready.wait(), timeout=5)
 
-            stop_task = hass.async_create_task(manager.async_stop())
-            await asyncio.sleep(0)
-            release.set()
             with caplog.at_level(logging.WARNING):
-                await stop_task
+                await manager.async_stop()
 
         assert tick_task.done()
         assert isinstance(tick_task.exception(), RuntimeError)
@@ -1563,17 +1748,12 @@ class TestBreakerTickSoleMutatorInvariant:
         seeded_count = manager._slot_breaker.failure_count
         assert seeded_count == 1
 
-        mid_sync = asyncio.Event()
-        resume = asyncio.Event()
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID
         ]
-        original_set = lock_provider.async_set_usercode
-
-        async def paused_set(code_slot, usercode, name=None, **kwargs):
-            mid_sync.set()
-            await resume.wait()
-            return await original_set(code_slot, usercode, name, **kwargs)
+        paused_set, mid_sync, resume = async_blocking_stub(
+            lock_provider.async_set_usercode
+        )
 
         with (
             patch.object(lock_provider, "async_set_usercode", paused_set),

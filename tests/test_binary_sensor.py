@@ -72,7 +72,9 @@ from .common import (
     SLOT_2_IN_SYNC_ENTITY,
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
+    async_blocking_stub,
     in_sync_entity_id,
+    short_stop_grace,
     slot_entity_id,
     write_entry_config,
 )
@@ -1546,15 +1548,9 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
     )
     await hass.async_block_till_done()
 
-    mid_sync_event = asyncio.Event()
-    resume_event = asyncio.Event()
-    original_set = lock_provider.async_set_usercode
-
-    async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
-        """Set usercode but pause mid-operation so the test can push an update."""
-        mid_sync_event.set()
-        await resume_event.wait()
-        return await original_set(code_slot, usercode, name, **kwargs)
+    set_usercode_with_pause, mid_sync_event, resume_event = async_blocking_stub(
+        lock_provider.async_set_usercode
+    )
 
     with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
         # Force to OUT_OF_SYNC so tick will attempt sync
@@ -1595,8 +1591,9 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     """
     Stopping the sync manager while a sync tick is in progress does not raise.
 
-    Scenario: sync manager is SYNCING. Config entry unloads, calling async_stop()
-    which sets _started = False. The tick should gracefully finish or bail out.
+    Scenario: sync manager is SYNCING behind a write that never answers. Config
+    entry unloads, calling async_stop(), which sets _started = False and cancels
+    the tick once the grace runs out.
     """
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
@@ -1623,37 +1620,27 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     lock_provider.codes[1] = "1234"
     mgr._state = SyncState.OUT_OF_SYNC
 
-    mid_sync_event = asyncio.Event()
-    resume_event = asyncio.Event()
-    original_set = lock_provider.async_set_usercode
+    wedged_set, mid_sync_event, _ = async_blocking_stub()
 
-    async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
-        """Set usercode, but pause mid-operation."""
-        mid_sync_event.set()
-        await resume_event.wait()
-        return await original_set(code_slot, usercode, name, **kwargs)
-
-    with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
+    with (
+        patch.object(lock_provider, "async_set_usercode", wedged_set),
+        short_stop_grace(),
+    ):
         # Start the tick
         tick_task = hass.async_create_task(mgr._async_tick())
         # Wait deterministically until the mock signals it has been entered
         await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
-        # Stop the sync manager while sync is in progress. async_stop awaits
-        # the in-flight tick, so schedule it as a task and let the tick
-        # finish naturally below.
-        stop_task = hass.async_create_task(mgr.async_stop())
-
-        # Let the set_usercode complete
-        resume_event.set()
-
-        # Both tasks should complete without raising
-        await tick_task
-        await stop_task
+        # Stop the sync manager while sync is in progress. Stop must not raise
+        # even though it ends up cancelling the tick.
+        await mgr.async_stop()
         await hass.async_block_till_done()
 
-    # Verify clean shutdown -- _started should be False
+    # Verify clean shutdown -- _started should be False, the tick gone, and
+    # the lock's turn handed back.
     assert not mgr._started
+    assert tick_task.cancelled()
+    assert not lock_provider._aio_lock.locked()
 
     # Clean up
     await hass.config_entries.async_unload(config_entry.entry_id)
@@ -1689,28 +1676,20 @@ async def test_pin_change_during_sync_uses_snapshot(
     mgr._state = SyncState.OUT_OF_SYNC
 
     set_pins_recorded = []
-    mid_sync_event = asyncio.Event()
-    resume_event = asyncio.Event()
-    original_set = lock_provider.async_set_usercode
+    paused_set, mid_sync_event, resume_event = async_blocking_stub(
+        lock_provider.async_set_usercode
+    )
 
     async def recording_set_with_pause(code_slot, usercode, name=None, **kwargs):
-        """Record the PIN and pause mid-operation on first call."""
+        """Record the PIN, then pause mid-operation."""
         set_pins_recorded.append(usercode)
-        if not mid_sync_event.is_set():
-            mid_sync_event.set()
-            await resume_event.wait()
-        return await original_set(code_slot, usercode, name, **kwargs)
+        return await paused_set(code_slot, usercode, name, **kwargs)
 
     with patch.object(lock_provider, "async_set_usercode", recording_set_with_pause):
         # Start the tick
         tick_task = hass.async_create_task(mgr._async_tick())
-        # Yield control repeatedly until the mock signals it has been entered
-        for _ in range(20):
-            await asyncio.sleep(0)
-            if mid_sync_event.is_set():
-                break
-
-        assert mid_sync_event.is_set(), "Mock set_usercode was never entered"
+        # Wait deterministically until the mock signals it has been entered
+        await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
         # The sync captured PIN "1234" at tick start. Verify the
         # recorded PIN matches the snapshot value.
