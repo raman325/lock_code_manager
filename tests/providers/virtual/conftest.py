@@ -19,6 +19,8 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
+from ...common import user_subentries
+
 VIRTUAL_LOCK_ENTITY_ID = "lock.virtual_test_virtual"
 
 # LCM config: one virtual lock, two slots
@@ -70,7 +72,10 @@ async def virtual_lock_with_slots(hass: HomeAssistant) -> VirtualLock:
         },
     }
     config_entry = MockConfigEntry(
-        domain=DOMAIN, data=config, unique_id="test_virtual_usercodes"
+        domain=DOMAIN,
+        data={CONF_LOCKS: config[CONF_LOCKS]},
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+        unique_id="test_virtual_usercodes",
     )
     config_entry.add_to_hass(hass)
 

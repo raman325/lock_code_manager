@@ -270,3 +270,48 @@ def test_every_credential_kind_the_event_can_publish_is_translated() -> None:
     ]["state"]
 
     assert set(translated) == {member.value for member in CredentialType}
+
+
+_ADD_USER_CARD_TS = (
+    pathlib.Path(__file__).resolve().parent.parent / "ts" / "add-user-card.ts"
+)
+
+
+def test_the_add_user_card_sends_the_shape_the_action_declares() -> None:
+    """
+    The bundled card calls ``add_user`` the way the action is declared, not the
+    way the back-compat shim allows.
+
+    ``_flat_user_to_list`` exists for calls written before 6.0, when the action
+    took one user's fields at the top level. It also happens to accept what the
+    card sent, which made the shipped card the thing keeping that shim alive:
+    removing the shim would have broken the Add User button, and no frontend
+    test would have said so -- they mock ``callService``, so nothing on that
+    side ever meets the schema.
+    """
+    source = _ADD_USER_CARD_TS.read_text()
+    start = source.index("callService('lock_code_manager', 'add_user'")
+    opening = source.index("{", start)
+    body = source[opening:]
+
+    # The payload's own keys. Ones nested inside a conditional spread are not
+    # reached, which is fine: what matters is that `users` is at the top and
+    # that no stray field is.
+    depth, keys = 0, set()
+    for line in body.splitlines():
+        # Matched before the depth update, so a key that opens a nested
+        # literal -- `users: [` -- is still read at its own depth.
+        if depth == 1 and (match := re.match(r"\s*([a-z_]+):", line)):
+            keys.add(match.group(1))
+        depth += line.count("{") + line.count("[") - line.count("}") - line.count("]")
+        if depth <= 0:
+            break
+
+    assert "users" in keys, (
+        "the card sends one user's fields at the top level, which only works "
+        "through the pre-6.0 shim"
+    )
+    assert keys <= {"config_entry_id", "config_entry_title", "users"}, (
+        f"the card sends {sorted(keys - {'config_entry_id', 'config_entry_title', 'users'})}, "
+        "which add_user does not declare"
+    )

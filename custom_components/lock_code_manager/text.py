@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .domain.models import LockCodeManagerConfigEntry
+from .domain.queries import subentry_id_for_slot
 from .domain.slot_coordinator import InvalidNameError
 from .entity import BaseLockCodeManagerEntity
 
@@ -35,6 +36,7 @@ async def async_setup_entry(
                 for props in ((CONF_NAME, TextMode.TEXT), (CONF_PIN, TextMode.PASSWORD))
             ],
             True,
+            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 
     config_entry.async_on_unload(

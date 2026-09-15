@@ -26,6 +26,8 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
 
+from ...common import user_subentries
+
 Z2M_TOPIC_NAME = "TestLockZ2M"
 Z2M_FULL_TOPIC = f"zigbee2mqtt/{Z2M_TOPIC_NAME}"
 Z2M_GET_TOPIC = f"{Z2M_FULL_TOPIC}/get"
@@ -202,7 +204,12 @@ async def lcm_config_entry(
             2: {"name": "slot2", "pin": "5678", "enabled": True},
         },
     }
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_z2m_e2e")
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_z2m_e2e",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
     lcm_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(lcm_entry.entry_id)
     await hass.async_block_till_done()
