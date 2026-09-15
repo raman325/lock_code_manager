@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bybm4iz6t</task-id>
+<tool-use-id>toolu_011wQEuiVjyFYwqkgY1e9BqP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/bybm4iz6t.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the full suite on the merged v6 tree" completed (exit code 0)</summary>
+</task-notification>

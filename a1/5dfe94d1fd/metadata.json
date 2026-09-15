@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "a15dfe94d1fd",
+  "strategy": "manual-commit",
+  "branch": "debug/bombadil-rust-log",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/bombadil.yml",
+    "ts/pbt/cold_launch.mjs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a1/5dfe94d1fd/0/metadata.json",
+      "transcript": "/a1/5dfe94d1fd/0/full.jsonl",
+      "compact_transcript": "/a1/5dfe94d1fd/0/transcript.jsonl",
+      "content_hash": "/a1/5dfe94d1fd/0/content_hash.txt",
+      "prompt": "/a1/5dfe94d1fd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 14175,
+    "cache_read_tokens": 2247969,
+    "output_tokens": 8666,
+    "api_call_count": 5
+  }
+}
