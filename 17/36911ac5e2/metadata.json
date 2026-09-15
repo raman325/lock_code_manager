@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "1736911ac5e2",
+  "strategy": "manual-commit",
+  "branch": "fix/bombadil-cold-chrome",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/bombadil.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/36911ac5e2/0/metadata.json",
+      "transcript": "/17/36911ac5e2/0/full.jsonl",
+      "compact_transcript": "/17/36911ac5e2/0/transcript.jsonl",
+      "content_hash": "/17/36911ac5e2/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4114,
+    "cache_creation_tokens": 1438273,
+    "cache_read_tokens": 45547680,
+    "output_tokens": 189628,
+    "api_call_count": 171
+  }
+}
