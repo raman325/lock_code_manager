@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "78e1974c86d3",
+  "strategy": "manual-commit",
+  "branch": "docs/readme-esphome-use-credential",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/78/e1974c86d3/0/metadata.json",
+      "transcript": "/78/e1974c86d3/0/full.jsonl",
+      "compact_transcript": "/78/e1974c86d3/0/transcript.jsonl",
+      "content_hash": "/78/e1974c86d3/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 198,
+    "cache_creation_tokens": 17770,
+    "cache_read_tokens": 3800890,
+    "output_tokens": 7041,
+    "api_call_count": 8
+  }
+}
