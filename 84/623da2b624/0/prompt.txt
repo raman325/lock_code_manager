@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bxlv8kidj</task-id>
+<tool-use-id>toolu_014BgHn1okjVyAcMPQExPBBN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/bxlv8kidj.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the diagnostic run and print its trace log" completed (exit code 0)</summary>
+</task-notification>
