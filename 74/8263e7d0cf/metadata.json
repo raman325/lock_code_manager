@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "748263e7d0cf",
+  "strategy": "manual-commit",
+  "branch": "v6",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".pre-commit-config.yaml",
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/callbacks.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "package.json",
+    "requirements_lint.txt",
+    "requirements_test.txt",
+    "tests/common.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_callbacks.py",
+    "tests/test_init.py",
+    "tests/test_sync.py",
+    "yarn.lock"
+  ],
+  "sessions": [
+    {
+      "metadata": "/74/8263e7d0cf/0/metadata.json",
+      "transcript": "/74/8263e7d0cf/0/full.jsonl",
+      "compact_transcript": "/74/8263e7d0cf/0/transcript.jsonl",
+      "content_hash": "/74/8263e7d0cf/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 794,
+    "cache_read_tokens": 886723,
+    "output_tokens": 669,
+    "api_call_count": 2
+  }
+}
