@@ -27,8 +27,9 @@ Features:
   from automations
 - [Blueprints](https://github.com/raman325/lock_code_manager/wiki/Blueprints)
   for advanced use cases like usage limiting, calendar-driven PINs, and more
-- Check codes entered somewhere Lock Code Manager doesn't control — a
-  do-it-yourself ESPHome keypad, an intercom — against the same users and
+- [External keypads and code readers](https://github.com/raman325/lock_code_manager/wiki/External-Keypads)
+  — check codes entered somewhere Lock Code Manager doesn't control, such as a
+  do-it-yourself ESPHome keypad or an intercom, against the same users and
   schedules, and record the use like any other
 - [Guest and rental workflows](https://github.com/raman325/lock_code_manager/wiki/Managing-Guests-and-Rentals)
   — rotate a standing user per booking, or add and remove them per stay
@@ -36,7 +37,7 @@ Features:
   status — from one-line auto-generated dashboards to fully hand-composed
   layouts
 
-Supported lock integrations:
+Supported lock integrations and code sources:
 
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
@@ -48,6 +49,7 @@ Supported lock integrations:
 | [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | ✅ | ❌ | ❌ | Local API, polling-based |
 | [Virtual][wiki-virtual]¹ | ✅ | ❌ | ✅ | A credential store rather than a device: records uses reported by the `use_credential` action, and lets you try Lock Code Manager without a real lock |
+| [ESPHome][wiki-external-keypads]⁴ | ❌ | ❌ | ✅ | Keypads and readers, not locks: the device reports the entered code through the `use_credential` action, and Lock Code Manager checks and records it. Nothing is written to the device |
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])
@@ -72,6 +74,17 @@ MQTT api; gateway type **Named** or **ValueID** gives full functionality includi
 push updates and PIN-used events, while **Manual** runs polling-only. Configure Home
 Assistant’s **MQTT** integration on the same broker zwave-js-ui uses.
 
+⁴ **ESPHome and other keypads** — ESPHome's lock component has no user-code API, so
+there is no ESPHome provider and Lock Code Manager cannot push PINs onto an ESPHome
+device. Support runs the other way: the device, or an automation watching it, calls
+[`lock_code_manager.use_credential`][wiki-use-credential] with the code that was entered.
+The response says whether the code is valid and for which user, and a valid code fires the
+same credential-used event a real lock does, so one PIN and one schedule cover the keypad
+and your locks together. A configuration needs no lock at all for this. See
+[External Keypads][wiki-external-keypads] for ESPHome recipes, including a device that
+asks for itself and never publishes the code to an entity, and
+[Unsupported Integrations][wiki-unsupported] for what a real provider would need.
+
 [zigbee2mqtt]: https://www.zigbee2mqtt.io/
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
 [wiki-zigbee2mqtt]: https://github.com/raman325/lock_code_manager/wiki/Zigbee2MQTT-integration
@@ -80,6 +93,9 @@ Assistant’s **MQTT** integration on the same broker zwave-js-ui uses.
 [wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration
 [wiki-schlage]: https://github.com/raman325/lock_code_manager/wiki/Schlage-integration
 [wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
+[wiki-external-keypads]: https://github.com/raman325/lock_code_manager/wiki/External-Keypads
+[wiki-use-credential]: https://github.com/raman325/lock_code_manager/wiki/Services-and-Actions#use_credential
+[wiki-unsupported]: https://github.com/raman325/lock_code_manager/wiki/Unsupported-Integrations#esphome
 [local-akuvox]: https://github.com/pjaudiomv/hass-local-akuvox
 [hass-virtual]: https://github.com/twrecked/hass-virtual
 [wiki-zha]: https://github.com/raman325/lock_code_manager/wiki/ZHA-integration
@@ -93,7 +109,8 @@ guide. Contributors welcome!
 
 Some lock integrations cannot currently be supported due to limitations in their underlying
 libraries. See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Integrations)
-for details.
+for details. Having no provider is not always the end of it: ESPHome keypads work through
+the `use_credential` action instead, as described above.
 
 ## Condition Entity Integrations Not Supported
 
