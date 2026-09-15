@@ -24,6 +24,19 @@ jobs:
           cache: yarn
       - name: Install dependencies
         run: yarn install --frozen-lockfile
+      - name: Warm Chrome
+        # A cold runner's first Chrome launch can take several seconds to
+        # open its DevTools port, and Bombadil 0.7.3+ gives it three. The
+        # second launch takes well under one.
+        run: |
+          google-chrome-stable --headless --no-sandbox \
+            --user-data-dir="$(mktemp -d)" --remote-debugging-port=9222 \
+            about:blank >/dev/null 2>&1 &
+          for _ in $(seq 1 80); do
+            curl -sf http://127.0.0.1:9222/json/version >/dev/null && break
+            sleep 0.25
+          done
+          kill $! || true
       - name: Run Bombadil exploration
         env:
           BOMBADIL_HEADLESS: "1"
