@@ -75,6 +75,7 @@ UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
 
 def sync_manager_of(entity_obj: Any) -> SlotSyncManager:
     """Return the PIN sync manager an in-sync entity is a view of, through its own seam."""
+    assert entity_obj._slot_coordinator is not None
     manager = entity_obj._slot_coordinator.sync_manager(
         entity_obj.lock.lock.entity_id, pin_address(int(entity_obj.slot_num))
     )

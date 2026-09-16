@@ -924,10 +924,10 @@ def _setup_entry_after_start(
     """
     Set up config entry.
 
-    Should only be run once Home Assistant has started. Update-listener
-    registration is guarded by ``runtime_data.update_listener_registered`` so
-    a reload racing with EVENT_HOMEASSISTANT_STARTED cannot stack multiple
-    listeners on the same entry.
+    Should only be run once Home Assistant has started. Runs once per
+    runtime data: a reload racing with EVENT_HOMEASSISTANT_STARTED must not
+    stack a second update listener on the entry, nor diff everything against
+    nothing a second time and set every lock and slot up twice.
     """
     # Popped, so it runs once however many entries were migrated. At boot
     # this fires after every entry has, so the renames are complete; on a
@@ -938,16 +938,17 @@ def _setup_entry_after_start(
         )
 
     runtime_data = config_entry.runtime_data
-    if not runtime_data.update_listener_registered:
-        runtime_data.update_listener_registered = True
-        unsub = config_entry.add_update_listener(async_update_listener)
+    if runtime_data.update_listener_registered:
+        return
+    runtime_data.update_listener_registered = True
+    unsub = config_entry.add_update_listener(async_update_listener)
 
-        @callback
-        def _clear_listener_registered() -> None:
-            runtime_data.update_listener_registered = False
-            unsub()
+    @callback
+    def _clear_listener_registered() -> None:
+        runtime_data.update_listener_registered = False
+        unsub()
 
-        config_entry.async_on_unload(_clear_listener_registered)
+    config_entry.async_on_unload(_clear_listener_registered)
 
     # Everything is new at setup, so the pass compares against nothing. The
     # data-into-options move this used to do existed only so the listener had
@@ -1087,19 +1088,24 @@ def _lock_still_owned_by_another_entry(
 async def async_unload_lock(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
-    lock_entity_id: str | None = None,
+    lock_entity_ids: Iterable[str] | None = None,
     remove_permanently: bool = False,
 ):
-    """Unload lock."""
+    """Unload some locks of an entry, or every one of them."""
     runtime_data = config_entry.runtime_data
     lock_entity_ids = (
-        [lock_entity_id] if lock_entity_id else list(runtime_data.locks.keys())
+        list(runtime_data.locks) if lock_entity_ids is None else list(lock_entity_ids)
     )
+    # Popped before anything awaits, so a pass that starts managers on the
+    # entry's locks meanwhile does not find these; the managers are then
+    # stopped together, one grace for all of them.
+    locks = {
+        _lock_entity_id: lock
+        for _lock_entity_id in lock_entity_ids
+        if (lock := runtime_data.locks.pop(_lock_entity_id, None))
+    }
     await _async_stop_slot_sync(runtime_data, lock_entity_ids)
-    for _lock_entity_id in lock_entity_ids:
-        lock = runtime_data.locks.pop(_lock_entity_id, None)
-        if lock is None:
-            continue
+    for _lock_entity_id, lock in locks.items():
         if not _lock_still_owned_by_another_entry(hass, config_entry, _lock_entity_id):
             # ``remove_permanently`` discards state that deliberately outlives
             # an unload -- the per-lock setup-failed repair, the provider's
@@ -1132,13 +1138,13 @@ async def async_release_locks(
     symptom when it is missed.
 
     The registry rows of the dropped locks' per-lock entities go regardless:
-    an entry that failed setup (reauth is the common way a lock leaves such
-    an entry) has nothing loaded to remove itself, and on a loaded entry a
-    registry removal is what removes the entity anyway. Runtime teardown
-    needs the entry to be loaded; an entry that never was built no lock
-    instances, so there is nothing further to do.
+    an entry that failed setup has nothing loaded to remove itself, and on a
+    loaded entry a registry removal is what removes the entity anyway. The
+    runtime teardown needs a loaded entry; one that never loaded built no
+    lock instances, so there is nothing further to do.
     """
-    lock_entity_ids = list(lock_entity_ids)
+    if not (lock_entity_ids := list(lock_entity_ids)):
+        return
     _async_purge_dropped_locks(hass, config_entry, lock_entity_ids)
     if (runtime_data := getattr(config_entry, "runtime_data", None)) is None:
         return
@@ -1151,13 +1157,12 @@ async def async_release_locks(
             async_delete_issue(
                 hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
             )
-        # LCM no longer adds its config entry to the lock's device (its
-        # per-lock entities link to the device via ``device_entry``), so
-        # there is no config-entry association to unmerge here; the per-lock
-        # entities are torn down by ``async_unload_lock`` below.
-        await async_unload_lock(
-            hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
-        )
+    # LCM no longer adds its config entry to the lock's device (its per-lock
+    # entities link to the device via ``device_entry``), so there is no
+    # config-entry association to unmerge here.
+    await async_unload_lock(
+        hass, config_entry, lock_entity_ids, remove_permanently=True
+    )
 
 
 async def async_unload_entry(
@@ -1168,37 +1173,18 @@ async def async_unload_entry(
     runtime_data = config_entry.runtime_data
     callbacks = runtime_data.callbacks
 
-    # Stop tick managers FIRST so no in-flight tick can keep calling
-    # _perform_sync, coordinator.async_refresh, or a state listener once
-    # downstream teardown begins.
-    await _async_stop_slot_sync(runtime_data)
-
-    # Fire slot entity removal callbacks first so per-slot entities (which
-    # reference locks) clean up before the locks are torn down. Read
-    # current slots from the cached EntryConfig view because
-    # ``_setup_entry_after_start`` migrates the entry's data to options
-    # at first setup, so ``config_entry.data`` is empty for any
-    # normally-loaded entry.
-    curr_slots = sorted(get_entry_config(config_entry).slot_numbers)
-    if curr_slots:
-        _LOGGER.debug("Unload: removing slots %s", curr_slots)
-        await asyncio.gather(
-            *(
-                callbacks.invoke_entity_removers_for_slot(slot_num)
-                for slot_num in curr_slots
-            )
-        )
-
-    # Stop per-slot coordinators after entity removal so the entities'
-    # async_will_remove_from_hass can still call into them. One raising
-    # stop must not block the rest -- the registry is cleared whether
-    # individual stops succeed or fail.
-    for coordinator in list(runtime_data.slot_coordinators.values()):
-        try:
-            coordinator.async_stop()
-        except Exception:
-            _LOGGER.exception("Unload: slot coordinator stop raised")
-    runtime_data.slot_coordinators.clear()
+    # The slots go first, so no tick or entity of theirs reaches a lock once
+    # its teardown begins. Read from the cached EntryConfig view because
+    # ``config_entry.data`` is empty for any normally-loaded entry.
+    await _async_shutdown_slots(
+        runtime_data,
+        sorted(
+            {
+                *get_entry_config(config_entry).slot_numbers,
+                *runtime_data.slot_coordinators,
+            }
+        ),
+    )
 
     # Fire lock-removed callbacks so per-lock entities are notified
     lock_ids = list(runtime_data.locks)
@@ -1479,37 +1465,63 @@ def _async_purge_dropped_locks(
     )
 
 
-def _slot_coordinators(
-    runtime_data: LockCodeManagerConfigEntryRuntimeData,
-    slot_nums: Collection[int] | None,
-) -> list[SlotEntityCoordinator]:
-    """Return the coordinators of ``slot_nums``, or of every slot; a missing one is skipped."""
-    return [
-        coordinator
-        for slot_num, coordinator in runtime_data.slot_coordinators.items()
-        if slot_nums is None or slot_num in slot_nums
-    ]
-
-
 async def _async_start_slot_sync(
     runtime_data: LockCodeManagerConfigEntryRuntimeData,
-    locks: Iterable[BaseLock],
+    locks: Collection[BaseLock],
     *,
-    slot_nums: Collection[int] | None = None,
+    slot_nums: Collection[int],
 ) -> None:
     """
-    Start sync managers together for ``locks`` on some slots or on every slot.
+    Start sync managers together for ``locks`` on ``slot_nums``.
 
     Registered before the entity adders run, so the entities find their
-    managers on add; started together, so no slot waits on another. A slot
-    whose coordinator is gone belongs to an unload that overtook this pass.
+    managers on add; started together, so no slot or lock waits on another.
+    A slot whose coordinator is gone belongs to an unload that overtook this
+    pass.
     """
     await asyncio.gather(
         *(
             coordinator.async_start_sync(lock)
-            for coordinator in _slot_coordinators(runtime_data, slot_nums)
+            for slot_num in slot_nums
+            if (coordinator := runtime_data.slot_coordinators.get(slot_num))
             for lock in locks
         )
+    )
+
+
+async def _async_shutdown_slots(
+    runtime_data: LockCodeManagerConfigEntryRuntimeData,
+    slot_nums: Collection[int],
+) -> None:
+    """
+    Take slots out of the entry's runtime: coordinators, managers, entities.
+
+    The coordinators are popped and stopped before anything awaits, so a
+    pass racing this one finds nothing to start a manager on; the entities
+    keep their own reference for unsubscribing. One raising stop must not
+    keep the rest running. The managers' stop and the entities' removal then
+    run together, so the grace an in-flight tick gets does not keep the
+    entities alive for its length.
+    """
+    if not slot_nums:
+        return
+    _LOGGER.debug("Removing slots %s", list(slot_nums))
+    removed = [
+        coordinator
+        for slot_num in slot_nums
+        if (coordinator := runtime_data.slot_coordinators.pop(slot_num, None))
+    ]
+    for coordinator in removed:
+        try:
+            coordinator.async_stop()
+        except Exception:
+            _LOGGER.exception("%s coordinator stop raised", coordinator.log_prefix)
+    await asyncio.gather(
+        *(coordinator.async_stop_sync() for coordinator in removed),
+        *(
+            runtime_data.callbacks.invoke_entity_removers_for_slot(slot_num)
+            for slot_num in slot_nums
+        ),
     )
 
 
@@ -1867,18 +1879,19 @@ async def _async_setup_new_locks(
                 result.lock.entity_id,
             )
 
-        await _async_start_slot_sync(
-            runtime_data, [result], slot_nums=new_config.slot_numbers
-        )
+    await _async_start_slot_sync(
+        runtime_data, added_locks, slot_nums=new_config.slot_numbers
+    )
+    for lock in added_locks:
         for slot_num in new_config.slot_numbers:
             _LOGGER.debug(
                 "%s (%s): Adding lock %s slot %s sensor and event entity",
                 entry_id,
                 entry_title,
-                lock_entity_id,
+                lock.lock.entity_id,
                 slot_num,
             )
-            callbacks.invoke_lock_slot_adders(result, slot_num, ent_reg)
+            callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
 
     if added_locks:
         callbacks.invoke_lock_added_handlers(added_locks)
@@ -2032,33 +2045,7 @@ async def _async_apply_entry_update(
         _LOGGER.debug(
             "%s (%s): Removing slots %s", entry_id, entry_title, list(slots_to_remove)
         )
-        # Taken out of the registry and stopped before anything awaits, so a
-        # pass racing this one finds no coordinator to start a manager on.
-        # The entities keep their own reference for unsubscribing.
-        removed = [
-            coordinator
-            for slot_num in slots_to_remove
-            if (coordinator := runtime_data.slot_coordinators.pop(slot_num, None))
-        ]
-        for coordinator in removed:
-            try:
-                coordinator.async_stop()
-            except Exception:
-                _LOGGER.exception(
-                    "%s (%s): slot %s coordinator stop raised",
-                    entry_id,
-                    entry_title,
-                    coordinator.slot_num,
-                )
-        await asyncio.gather(
-            *(coordinator.async_stop_sync() for coordinator in removed)
-        )
-        await asyncio.gather(
-            *(
-                callbacks.invoke_entity_removers_for_slot(slot_num)
-                for slot_num in slots_to_remove
-            )
-        )
+        await _async_shutdown_slots(runtime_data, slots_to_remove)
         # After the entity removers have run, so the registry teardown order
         # matches a normal removal (entities first, then their device).
         _async_remove_slot_devices(hass, config_entry, slots_to_remove)
@@ -2122,10 +2109,6 @@ async def _async_apply_entry_update(
     # `in_sync`) look up the slot coordinator in async_added_to_hass and
     # would warn if it did not yet exist.
     for slot_num in slots_to_add:
-        # A coordinator already here owns running sync managers; replacing it
-        # would orphan them. A setup that runs twice keeps the first.
-        if slot_num in runtime_data.slot_coordinators:
-            continue
         coordinator = SlotEntityCoordinator(hass, config_entry, slot_num)
         runtime_data.slot_coordinators[slot_num] = coordinator
         coordinator.async_start()
