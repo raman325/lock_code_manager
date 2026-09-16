@@ -1522,6 +1522,65 @@ async def test_the_lock_pushing_an_empty_slot_ends_an_unconfirmed_write(
     assert push_coordinator.credential(pin_address(1)) == SlotCredential.empty()
 
 
+async def test_a_read_of_the_old_code_is_stale_unless_it_was_written_back(
+    push_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """
+    A cache that never saw the write answers with the code the slot held.
+
+    That answer is no evidence about a new code, but it is the write itself
+    when the code written is the one the slot held.
+    """
+    push_coordinator.async_set_updated_data(
+        {pin_address(1): SlotCredential.known("1111")}
+    )
+    stale = {pin_address(1): SlotCredential.known("1111")}
+
+    push_coordinator.record_write(pin_address(1), "2222", believed=True)
+    assert push_coordinator._apply_read(stale) == {
+        pin_address(1): SlotCredential.known("2222")
+    }
+    assert push_coordinator.in_doubt(pin_address(1))
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    assert push_coordinator._apply_read(stale) == {
+        pin_address(1): SlotCredential.unreadable()
+    }
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+    # Changed back before anything settled: the old code is the write now.
+    push_coordinator.record_write(pin_address(1), "1111", believed=True)
+    assert push_coordinator._apply_read(stale) == stale
+    assert not push_coordinator.in_doubt(pin_address(1))
+    assert push_coordinator.unconfirmed_slots == []
+
+
+async def test_a_clear_the_lock_could_not_verify_reads_empty_until_a_new_code(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """The old code is the stale cache; any other code, or the lock's word, ends it."""
+    push_coordinator.async_set_updated_data(
+        {pin_address(1): SlotCredential.known("1111")}
+    )
+    push_coordinator.record_unconfirmed_clear(pin_address(1))
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.empty()
+    assert push_coordinator.unconfirmed_pins() == {}
+
+    stale = {pin_address(1): SlotCredential.known("1111")}
+    assert push_coordinator._apply_read(stale) == {
+        pin_address(1): SlotCredential.empty()
+    }
+    assert push_coordinator.in_doubt(pin_address(1))
+    new = {pin_address(1): SlotCredential.known("3333")}
+    assert push_coordinator._apply_read(new) == new
+    assert not push_coordinator.in_doubt(pin_address(1))
+
+    # A push is the lock's word, even repeating the old code.
+    push_coordinator.record_unconfirmed_clear(pin_address(1))
+    push_coordinator.push_update({1: SlotCredential.known("3333")})
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("3333")
+    assert not push_coordinator.in_doubt(pin_address(1))
+
+
 @pytest.mark.parametrize("ending", ["record_write", "drop_pending"])
 async def test_writing_or_clearing_again_ends_an_unconfirmed_write(
     push_coordinator: LockUsercodeUpdateCoordinator, freezer, ending: str

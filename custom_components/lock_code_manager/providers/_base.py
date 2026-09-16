@@ -1538,10 +1538,14 @@ class BaseLock:
                 if adopt_untagged
                 else None
             )
-        if owner_user_id is None:
+        if owner_user_id is None and (
+            self.coordinator is not None
+            and self.coordinator.in_doubt(pin_address(code_slot))
+        ):
             # The stack's cache names no owner. A write it could not verify
             # may still be on the lock, so it is deleted through the user it
-            # was written to; otherwise there is nothing to clear.
+            # was written to. Once a read has settled the slot, that user is
+            # a stale guess, and the code there may be somebody else's.
             owner_user_id = self._unverified_owners.get(code_slot)
         if owner_user_id is None:
             return False

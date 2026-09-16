@@ -7,6 +7,7 @@ from datetime import timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -559,30 +560,76 @@ class TestUnconfirmableWrites:
 
         await hass.config_entries.async_unload(lcm_entry.entry_id)
 
-    async def test_a_clear_that_may_not_have_landed_is_repeated_through_its_user(
+    @pytest.mark.parametrize(
+        ("read_between", "expected_deletes"),
+        [
+            pytest.param(None, 2, id="still_in_doubt"),
+            pytest.param("4321", 1, id="a_read_showed_another_code"),
+        ],
+    )
+    async def test_releasing_a_slot_in_doubt_clears_it_through_the_same_user(
         self,
         hass: HomeAssistant,
-        zwave_js_lock: ZWaveJSLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
         mock_access_control: MagicMock,
         mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+        read_between: str | None,
+        expected_deletes: int,
     ) -> None:
         """
-        Releasing the slot clears it again, though the cache names no owner.
+        Removing the user clears the slot again, though the cache names no owner.
 
         Neither the write nor the clear reached the driver's cache, so the
-        user they went through is the only one that can hold the code.
+        user they went through is the only one that can hold the code. Once
+        a read shows the slot holding a code of someone else's, that user is
+        no longer a guess worth acting on: releasing a slot leaves a code it
+        cannot attribute alone.
         """
-        zwave_js_lock._min_operation_delay = 0.0
         unknown = HomeAssistantError(translation_key="credential_rejected_unknown")
         mock_lock_helpers["async_set_credential"].side_effect = unknown
         mock_lock_helpers["async_delete_credential"].side_effect = unknown
         mock_lock_helpers["async_set_user"].return_value = {"user_id": 7}
+        node = lock_schlage_be469
+        node.values[f"{node.node_id}-99-0-userIdStatus-1"].update({"value": 0})
+        node.values[f"{node.node_id}-99-0-userCode-1"].update({"value": ""})
+        slots = copy.deepcopy(ZWAVE_JS_LCM_CONFIG_SLOTS)
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots},
+            unique_id="test_zwave_js_unconfirmable_release",
+        )
+        lcm_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+        await _settle_then_reread(hass, lcm_entry, lock_entity.entity_id, freezer)
 
-        await zwave_js_lock.async_internal_set_usercode(1, "9999", "bob")
-        assert await zwave_js_lock.async_internal_clear_usercode(1)
-        await zwave_js_lock.async_release_managed_slot(1)
+        slots = copy.deepcopy(slots)
+        slots[1][CONF_ENABLED] = False
+        assert write_entry_config(
+            hass, lcm_entry, {CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots}
+        )
+        await _settle_then_reread(hass, lcm_entry, lock_entity.entity_id, freezer)
+        if read_between is not None:
+            _cache_holds(mock_access_control, lock_schlage_be469, read_between)
+            coordinator = lcm_entry.runtime_data.locks[
+                lock_entity.entity_id
+            ].coordinator
+            await coordinator.async_refresh()
 
-        assert [
+        del slots[1]
+        assert write_entry_config(
+            hass, lcm_entry, {CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots}
+        )
+        await hass.async_block_till_done()
+
+        deletes = [
             call.args[1:]
             for call in mock_lock_helpers["async_delete_credential"].await_args_list
-        ] == [(7, UserCredentialType.PIN_CODE, 1)] * 2
+            if call.args[3] == 1
+        ]
+        assert deletes == [(7, UserCredentialType.PIN_CODE, 1)] * expected_deletes
+
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
