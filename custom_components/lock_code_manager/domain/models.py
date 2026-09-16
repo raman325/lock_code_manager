@@ -165,11 +165,9 @@ class LockCodeManagerConfigEntryRuntimeData:
     # Update passes run one at a time under this lock, and an unload takes it
     # too, so a pass never sees a half-torn entry and an unload never
     # overlaps a pass. Once ``unloading`` is set, a pass that gets the lock
-    # returns without touching anything; ``pass_task`` is the pass holding it,
-    # for an unload that has waited long enough to cancel it.
+    # returns without touching anything.
     pass_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     unloading: bool = False
-    pass_task: asyncio.Task[None] | None = None
     # (lock, slot) pairs whose credential is to be left on the lock when the
     # slot leaves the configuration, set by the delete-user service and drained
     # by the update listener. A hand-off cannot be expressed in the new

@@ -226,10 +226,6 @@ TICK_INTERVAL = timedelta(seconds=2)
 # take longer on a degraded link (ZHA retries, the zwave-js-ui API timeout)
 # write in one command, so a cut there loses nothing the reload cannot redo.
 STOP_GRACE_SECONDS: float = 30.0
-# How long an unload waits for the update pass in flight before cancelling it.
-# A pass's longest waits are a lock's setup and its managers' stop grace, both
-# bounded, so a pass still running after twice the grace is not going to end.
-PASS_DRAIN_SECONDS: float = 2 * STOP_GRACE_SECONDS
 MAX_SYNC_ATTEMPTS = 3
 SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 
