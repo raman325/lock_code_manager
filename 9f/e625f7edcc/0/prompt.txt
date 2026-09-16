@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b5jvq2j3e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/b5jvq2j3e.output</output-file>
+<status>completed</status>
+<summary>Background command "Run PR 1's full suite with coverage on the round-4 changes" completed (exit code 0)</summary>
+</task-notification>
