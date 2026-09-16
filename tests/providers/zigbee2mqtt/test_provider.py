@@ -16,6 +16,7 @@ import pytest
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
@@ -1545,6 +1546,47 @@ class TestUnansweredReads:
         with patch.object(lock, "_get_topic", return_value=None):
             assert await lock._async_device_responds() is False
         assert lock._heard_from_device == []
+
+    @pytest.mark.parametrize(
+        ("last_seen", "responds"),
+        [
+            pytest.param(None, True, id="none"),
+            pytest.param("2999-01-01T00:00:00+00:00", True, id="iso_after"),
+            pytest.param("2020-01-01T00:00:00Z", False, id="iso_before"),
+            pytest.param(32503680000000, True, id="epoch_after"),
+            pytest.param(1577836800000, False, id="epoch_before"),
+            pytest.param("not a time", True, id="unreadable"),
+            pytest.param(True, True, id="not_a_time_at_all"),
+            # A clock running a little behind still dates the reply as new.
+            pytest.param("slightly_behind", True, id="clock_slack"),
+            pytest.param("naive_before", False, id="naive"),
+        ],
+    )
+    async def test_a_reply_older_than_the_request_is_not_an_answer(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+        last_seen: object,
+        responds: bool,
+    ) -> None:
+        """``last_seen``, when Zigbee2MQTT sends it, dates what it says."""
+        lock = zigbee2mqtt_lock_connected
+        if last_seen == "slightly_behind":
+            last_seen = (dt_util.utcnow() - timedelta(seconds=2)).isoformat()
+        elif last_seen == "naive_before":
+            last_seen = "2020-01-01T00:00:00"
+        payload: dict[str, object] = {"state": "LOCKED"}
+        if last_seen is not None:
+            payload["last_seen"] = last_seen
+
+        async def answer_state(_hass: HomeAssistant, topic: str, body: str, **_kw):
+            lock._process_z2m_device_payload(payload)
+
+        with (
+            patch.object(lock, "slot_read_timeout", 0.01),
+            patch(_PUBLISH, side_effect=answer_state),
+        ):
+            assert await lock._async_device_responds() is responds
 
     async def test_by_default_a_lock_responds_while_its_entity_is_available(
         self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock

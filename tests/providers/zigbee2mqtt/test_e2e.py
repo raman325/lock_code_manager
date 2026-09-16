@@ -549,6 +549,49 @@ class TestAddingThroughTheUserInterface:
         )
         assert read_health(hass, mqtt_lock_discovered.entity_id) is expected
 
+    async def test_a_replayed_state_is_not_the_lock_answering(
+        self,
+        hass: HomeAssistant,
+        mqtt_lock_discovered,
+        mqtt_mock,
+    ) -> None:
+        """
+        The broker replaying a retained state says nothing about the lock now.
+
+        Nor does a state whose ``last_seen`` is older than the request.
+        """
+        with patch.object(Zigbee2MQTTLock, "slot_read_timeout", 0.01):
+
+            def replay(topic: str, payload: str, *args: Any, **kwargs: Any):
+                if topic == Z2M_GET_TOPIC and "state" in json.loads(payload):
+                    async_fire_mqtt_message(
+                        hass,
+                        Z2M_FULL_TOPIC,
+                        json.dumps({"state": "LOCKED"}),
+                        retain=True,
+                    )
+                    _fire_device_payload(
+                        hass,
+                        {"state": "LOCKED", "last_seen": "2020-01-01T00:00:00Z"},
+                    )
+                return DEFAULT
+
+            mqtt_mock.async_publish.side_effect = replay
+            result = await hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": SOURCE_USER}
+            )
+            flow_id = result["flow_id"]
+            await async_configure_flow(
+                hass,
+                flow_id,
+                {CONF_NAME: "z2m", CONF_LOCKS: [mqtt_lock_discovered.entity_id]},
+            )
+            await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+            result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 1})
+
+        assert result["errors"] == {"base": "occupancy_unknown"}
+        assert read_health(hass, mqtt_lock_discovered.entity_id) is None
+
     async def test_a_lock_out_of_reach_is_not_mistaken_for_one_that_cannot_read(
         self,
         hass: HomeAssistant,
