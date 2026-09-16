@@ -161,6 +161,11 @@ class LockUsercodeUpdateCoordinator(
         # wrote, the same trade it makes for a lock that never shows its
         # codes; a clear reads as empty.
         self._unconfirmed: dict[CredentialAddress, Unconfirmed] = {}
+        # What each address was last read or pushed as, before anything of
+        # ours is laid over it. ``data`` also carries the values of writes
+        # nobody has seen yet, which say nothing about what a stale cache
+        # will answer with.
+        self._observed: dict[CredentialAddress, SlotCredential] = {}
         # The single confirmation look for this lock: a task for the immediate
         # first look, then a timer while anything stays pending. One per
         # coordinator, not per write: N pending slots on one lock are one read
@@ -256,6 +261,7 @@ class LockUsercodeUpdateCoordinator(
         """
         now = time.monotonic()
         out: dict[CredentialAddress, SlotCredential] = {}
+        self._observed.update(observed)
         for address, cred in observed.items():
             pending = self._pending.get(address)
             if pending is None:
@@ -368,8 +374,7 @@ class LockUsercodeUpdateCoordinator(
 
     def _last_seen(self, address: CredentialAddress) -> SlotCredential | None:
         """Return what the lock was last seen to hold, past any write of ours."""
-        prior = self._pending.get(address) or self._unconfirmed.get(address)
-        return self.data.get(address) if prior is None else prior.previous
+        return self._observed.get(address)
 
     def is_verified(self, address: CredentialAddress) -> bool:
         """
@@ -719,11 +724,13 @@ class LockUsercodeUpdateCoordinator(
         if not updates:
             return
 
+        observed = self._normalize_keys(updates)
+        self._observed.update(observed)
         new_data = {
             **self.data,
             **{
                 address: self._resolve_unconfirmed(address, value, spoken=True)
-                for address, value in self._normalize_keys(updates).items()
+                for address, value in observed.items()
             },
         }
         if new_data == self.data:
@@ -973,6 +980,7 @@ class LockUsercodeUpdateCoordinator(
         self._pending.clear()
         self._failed_writes.clear()
         self._unconfirmed.clear()
+        self._observed.clear()
         if self._confirm_task is not None:
             self._confirm_task.cancel()
             self._confirm_task = None
