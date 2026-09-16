@@ -347,6 +347,16 @@ class LockUsercodeUpdateCoordinator(
         """Return the slots whose last write stands without the lock showing it."""
         return sorted(address.user_ref for address in self._unconfirmed)
 
+    def in_doubt(self, address: CredentialAddress) -> bool:
+        """
+        Return whether what the lock holds at the address is unsettled by us.
+
+        True while a write is pending there, or a write or clear the stack
+        could not verify stands; false once a read or push has settled it.
+        """
+        checked = _checked(address)
+        return checked in self._pending or checked in self._unconfirmed
+
     def unconfirmed_pins(self) -> dict[int, str]:
         """Return the PINs written but not confirmed, by slot."""
         return {
@@ -447,6 +457,22 @@ class LockUsercodeUpdateCoordinator(
         self._pending.pop(checked, None)
         self._failed_writes.discard(checked)
         self._unconfirmed.pop(checked, None)
+
+    @callback
+    def supersede_pending(self, address: CredentialAddress) -> None:
+        """
+        Forget a pending write the configuration no longer wants.
+
+        Not a failure either. Unlike ``drop_pending``, nothing has been
+        learned about the lock: a write the stack could not verify may be on
+        it all the same, so it stands as unconfirmed until the next write or
+        clear to the address replaces it, or a read or push settles it.
+        """
+        checked = _checked(address)
+        pending = self._pending.get(checked)
+        self.drop_pending(checked)
+        if pending is not None and pending.believed:
+            self._unconfirmed[checked] = Unconfirmed(pending.pin, pending.previous)
 
     @callback
     def take_failed_write(self, address: CredentialAddress) -> bool:

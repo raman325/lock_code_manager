@@ -1583,6 +1583,30 @@ async def test_what_the_slot_held_outlives_a_write_replaced_before_it_settled(
     assert push_coordinator.take_failed_write(pin_address(1)) is False
 
 
+@pytest.mark.parametrize("believed", [True, False])
+async def test_superseding_a_write_keeps_the_doubt_it_leaves(
+    push_coordinator: LockUsercodeUpdateCoordinator, believed: bool
+) -> None:
+    """
+    The configuration changing says nothing about the lock.
+
+    A write the stack could not verify may be there all the same; one it
+    vouched for was confirmed, or failed, on other evidence.
+    """
+    push_coordinator.push_update({1: SlotCredential.known("1111")})
+    push_coordinator.record_write(pin_address(1), "2222", believed=believed)
+    push_coordinator.supersede_pending(pin_address(1))
+
+    assert push_coordinator.pending_write(pin_address(1)) is None
+    assert push_coordinator.in_doubt(pin_address(1)) is believed
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+    # The old code read back is still no answer about the write.
+    stale = {pin_address(1): SlotCredential.known("1111")}
+    assert push_coordinator._apply_read(stale) == (
+        {pin_address(1): SlotCredential.unreadable()} if believed else stale
+    )
+
+
 async def test_a_clear_the_lock_could_not_verify_reads_empty_until_a_new_code(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ) -> None:

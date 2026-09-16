@@ -873,7 +873,7 @@ class SlotSyncManager:
                     self._state = SyncState.PENDING_CONFIRMATION
                     self._write_state()
                 return
-            self._coordinator.drop_pending(self._address)
+            self._coordinator.supersede_pending(self._address)
             self._state = SyncState.OUT_OF_SYNC
             self._write_state()
             return

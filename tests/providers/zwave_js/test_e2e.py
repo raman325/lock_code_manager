@@ -690,3 +690,66 @@ class TestUnconfirmableWrites:
         assert deletes == [(7, UserCredentialType.PIN_CODE, 1)]
 
         await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+    @pytest.mark.parametrize(
+        ("cache_after", "expected_deletes"),
+        [
+            # The PIN change was never shown: the cache still names the old
+            # code, under a user this release may not adopt.
+            pytest.param("stale", 1, id="the_cache_still_shows_the_old_code"),
+            # Someone's code was read there, then the cache lost sight of it
+            # again: occupied, value withheld, so it names no user.
+            pytest.param("masked", 0, id="a_read_settled_it_first"),
+        ],
+    )
+    async def test_releasing_a_slot_follows_what_was_learned_not_the_cache(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+        cache_after: str,
+        expected_deletes: int,
+    ) -> None:
+        """Only a slot still in doubt is cleared through the user it was written to."""
+        mock_lock_helpers["async_set_credential"].side_effect = HomeAssistantError(
+            translation_key="credential_rejected_unknown"
+        )
+        mock_lock_helpers["async_set_user"].return_value = {"user_id": 7}
+        _cache_holds(mock_access_control, lock_schlage_be469, "4444")
+        slots = copy.deepcopy(ZWAVE_JS_LCM_CONFIG_SLOTS)
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots},
+            unique_id="test_zwave_js_unconfirmable_release_learned",
+        )
+        lcm_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+        await _settle_then_reread(hass, lcm_entry, lock_entity.entity_id, freezer)
+
+        if cache_after == "masked":
+            coordinator = lcm_entry.runtime_data.locks[
+                lock_entity.entity_id
+            ].coordinator
+            coordinator.push_update({1: SlotCredential.known("2468")})
+            mock_access_control.get_users_cached.return_value = []
+            mock_access_control.get_all_credentials_cached.return_value = []
+
+        del slots[1]
+        assert write_entry_config(
+            hass, lcm_entry, {CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots}
+        )
+        await hass.async_block_till_done()
+
+        deletes = [
+            call.args[1:]
+            for call in mock_lock_helpers["async_delete_credential"].await_args_list
+            if call.args[3] == 1
+        ]
+        assert deletes == [(7, UserCredentialType.PIN_CODE, 1)] * expected_deletes
+
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
