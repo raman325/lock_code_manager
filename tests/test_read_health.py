@@ -289,3 +289,64 @@ async def test_setup_after_a_flow_still_prepares_its_own_data(
 
     assert "resources" in hass.data[DOMAIN]
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_verdict_only_in_memory_is_stored_when_the_lock_is_added(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """A lock classified while nothing managed it, then added to an entry."""
+    entry = lock_code_manager_config_entry
+    one_lock = copy.deepcopy(BASE_CONFIG)
+    one_lock[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    assert write_entry_config(hass, entry, one_lock)
+    await hass.async_block_till_done()
+    # What a config flow reading the lock, then abandoned, leaves behind.
+    async_record_read_health(hass, LOCK_2_ENTITY_ID, ReadHealth.UNANSWERED)
+    assert _stored(entry) == {}
+    assert _issue(hass, LOCK_2_ENTITY_ID) is None
+
+    assert write_entry_config(hass, entry, copy.deepcopy(BASE_CONFIG))
+    await hass.async_block_till_done()
+
+    assert _stored(entry) == {
+        _registry_id(hass, LOCK_2_ENTITY_ID): ReadHealth.UNANSWERED.value
+    }
+    assert _issue(hass, LOCK_2_ENTITY_ID) is not None
+
+
+async def _own_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Set up an entry the test may remove, which the shared fixture's is not."""
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="removable")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def test_removing_the_entry_forgets_what_only_it_knew(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Added to another entry later, the lock starts from nothing."""
+    entry = await _own_entry(hass)
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert read_health(hass, LOCK_1_ENTITY_ID) is None
+    assert _issue(hass, LOCK_1_ENTITY_ID) is None
+
+
+async def test_removing_one_entry_keeps_what_another_still_uses(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The verdict belongs to the lock, which the other entry still manages."""
+    entry = await _own_entry(hass)
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    other = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [LOCK_1_ENTITY_ID]})
+    other.add_to_hass(hass)
+
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert read_health(hass, LOCK_1_ENTITY_ID) is ReadHealth.UNANSWERED

@@ -275,7 +275,9 @@ class BaseMqttLock(BaseLock):
           has started to answer. Every slot reads unreadable, which sync
           judges by the last PIN it wrote.
         - **Seen to answer.** Every slot failing at the transport is an
-          outage and raises, but only for a read of two slots or more. Asking
+          outage and raises, but only for a read of two slots or more, and,
+          on a lock that may decline code reads, only if it answers nothing
+          else either. Asking
           about one and hearing nothing is a single lost reply, routine on a
           lossy mesh (issue #1397 had a node dropping about half), and raising
           there would trip the connectivity breaker for an entry with one user
@@ -348,6 +350,13 @@ class BaseMqttLock(BaseLock):
             health is ReadHealth.ANSWERED
             and len(ordered) > 1
             and all(reads.get(slot) is None for slot in ordered)
+            # A lock that may decline code reads can decline every slot asked
+            # about while talking perfectly well; only one that answers
+            # nothing else is gone.
+            and not (
+                self.code_reads_may_be_unsupported
+                and await self._async_device_responds()
+            )
         ):
             raise LockDisconnected(
                 f"{self.lock.entity_id}: every one of the {len(ordered)} requested "

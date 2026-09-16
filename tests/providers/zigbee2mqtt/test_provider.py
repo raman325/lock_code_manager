@@ -1394,6 +1394,7 @@ class TestUnansweredReads:
 
         with (
             self._reading(lock, silent),
+            patch.object(lock, "_async_device_responds", AsyncMock(return_value=False)),
             pytest.raises(LockDisconnected, match="every one of the 2"),
         ):
             await lock.async_get_usercodes([1, 2])

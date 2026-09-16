@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.domain.read_health import (
     SILENT_READS_TO_CLASSIFY,
     UNANSWERED_ISSUE,
     ReadHealth,
+    async_record_read_health,
     read_health,
 )
 from custom_components.lock_code_manager.domain.util import per_lock_issue_id
@@ -438,6 +439,50 @@ class TestAddingThroughTheUserInterface:
         assert result["step_id"] == "code_slot"
         assert read_health(hass, mqtt_lock_discovered.entity_id) is (
             ReadHealth.UNANSWERED
+        )
+
+    async def test_a_lock_that_answers_declining_some_slots_is_not_out_of_reach(
+        self,
+        hass: HomeAssistant,
+        mqtt_lock_discovered,
+        mqtt_mock,
+    ) -> None:
+        """
+        Declining to describe a slot is still the lock talking.
+
+        A lock known to answer that declines every slot a read asks about is
+        reachable, so the read is not an outage.
+        """
+        async_record_read_health(
+            hass, mqtt_lock_discovered.entity_id, ReadHealth.ANSWERED
+        )
+
+        def not_supported(topic: str, payload: str, *args: Any, **kwargs: Any):
+            if topic == Z2M_GET_TOPIC and "state" in json.loads(payload):
+                _fire_device_payload(hass, {"state": "LOCKED"})
+            elif topic == Z2M_GET_TOPIC:
+                slot = json.loads(payload)["pin_code"]["user"]
+                _fire_device_payload(
+                    hass, {"users": {str(slot): {"status": "not_supported_255"}}}
+                )
+            return DEFAULT
+
+        mqtt_mock.async_publish.side_effect = not_supported
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        flow_id = result["flow_id"]
+        await async_configure_flow(
+            hass,
+            flow_id,
+            {CONF_NAME: "z2m", CONF_LOCKS: [mqtt_lock_discovered.entity_id]},
+        )
+        await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+        result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+
+        assert result.get("errors") != {"base": "occupancy_unknown"}
+        assert read_health(hass, mqtt_lock_discovered.entity_id) is (
+            ReadHealth.ANSWERED
         )
 
     async def test_a_lock_out_of_reach_is_not_mistaken_for_one_that_cannot_read(

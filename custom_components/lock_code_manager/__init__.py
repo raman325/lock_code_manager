@@ -127,6 +127,7 @@ from .domain.queries import get_entry_config, subentry_id_for_slot
 from .domain.read_health import (
     UNANSWERED_ISSUE,
     async_forget_read_health,
+    async_forget_unmanaged_read_health,
     async_persist_read_health,
 )
 from .domain.references import async_notify_moved
@@ -1265,6 +1266,7 @@ async def async_remove_entry(
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
+        async_forget_unmanaged_read_health(hass, lock_entity_id)
         # Only delete per-lock issues if no other LCM entry manages this lock.
         if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
             for issue_key in PER_LOCK_ISSUE_KEYS:
@@ -2178,6 +2180,7 @@ async def _async_apply_entry_update_locked(
         await _async_setup_new_locks(
             hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
         )
+        async_persist_read_health(hass, config_entry)
 
     # For each new slot: add the standard entities and, for the locks that
     # already had their per-lock entities, the ones that view them; then start

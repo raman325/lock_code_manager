@@ -183,12 +183,29 @@ def async_forget_read_health(
 
 
 @callback
+def async_forget_unmanaged_read_health(
+    hass: HomeAssistant, lock_entity_id: str
+) -> None:
+    """
+    Drop what this run learned about a lock no entry manages any more.
+
+    For an entry that has been deleted, whose stored record went with it.
+    """
+    if (
+        registry_id := _registry_id(hass, lock_entity_id)
+    ) is not None and not _entries_managing(hass, lock_entity_id):
+        _cache(hass).pop(registry_id, None)
+
+
+@callback
 def async_persist_read_health(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """
-    Bring an entry's stored read health in line with its locks, at setup.
+    Bring an entry's stored read health in line with its locks.
 
-    The config flow reads its locks before the entry it creates exists, so a
-    lock classified there is only in memory until now. A record for a lock
+    At setup, and whenever locks are added. The config flow reads its locks
+    before the entry it creates exists, so a lock classified there is only
+    in memory until now; so is one classified by a flow that was abandoned,
+    then added to an entry that already existed. A record for a lock
     the entry no longer has is dropped here too: a lock removed through
     reauth may have lost its registry entry, and with it the id that
     removal would have forgotten it by.
