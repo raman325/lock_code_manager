@@ -16,7 +16,7 @@ one SlotSyncManager per lock and credential address for that slot.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Awaitable, Callable, Collection, Iterable
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +60,26 @@ _LOGGER = logging.getLogger(__name__)
 
 
 ActiveViewWriter = Callable[[bool | None, list[str]], None]
+
+
+async def _async_gather_managers(
+    managers: list[SlotSyncManager],
+    operation: Callable[[SlotSyncManager], Awaitable[None]],
+    what: str,
+) -> None:
+    """Run ``operation`` on every manager together; one raising is logged, not fatal."""
+    results = await asyncio.gather(
+        *(operation(manager) for manager in managers), return_exceptions=True
+    )
+    for manager, result in zip(managers, results, strict=True):
+        if isinstance(result, Exception):
+            _LOGGER.warning(
+                "%s: Sync manager %s: %s",
+                manager.log_prefix,
+                what,
+                result,
+                exc_info=result,
+            )
 
 
 class SlotEntityCoordinator:
@@ -137,9 +157,7 @@ class SlotEntityCoordinator:
 
     # -- Sync managers -------------------------------------------------------
 
-    async def async_start_sync(
-        self, lock: BaseLock, ent_reg: er.EntityRegistry
-    ) -> None:
+    async def async_start_sync(self, lock: BaseLock) -> None:
         """
         Start a manager for every credential of this slot on ``lock``.
 
@@ -163,6 +181,7 @@ class SlotEntityCoordinator:
                 self._config_entry.state,
             )
             return
+        ent_reg = er.async_get(self._hass)
         new = {
             key: SlotSyncManager(
                 self._hass,
@@ -179,16 +198,9 @@ class SlotEntityCoordinator:
         self._sync_managers.update(new)
         # One manager failing to start must not take the rest of the setup
         # pass with it; it stays registered so the stop still reaches it.
-        results = await asyncio.gather(
-            *(manager.async_start() for manager in new.values()), return_exceptions=True
+        await _async_gather_managers(
+            list(new.values()), lambda manager: manager.async_start(), "failed to start"
         )
-        for manager, result in zip(new.values(), results, strict=True):
-            if isinstance(result, Exception):
-                _LOGGER.exception(
-                    "%s: Sync manager failed to start",
-                    manager.log_prefix,
-                    exc_info=result,
-                )
 
     async def async_stop_sync(
         self, lock_entity_ids: Collection[str] | None = None
@@ -206,17 +218,9 @@ class SlotEntityCoordinator:
             for key in list(self._sync_managers)
             if lock_entity_ids is None or key[0] in lock_entity_ids
         ]
-        results = await asyncio.gather(
-            *(manager.async_stop() for manager in managers), return_exceptions=True
+        await _async_gather_managers(
+            managers, lambda manager: manager.async_stop(), "stop raised"
         )
-        for manager, result in zip(managers, results, strict=True):
-            if isinstance(result, Exception):
-                _LOGGER.warning(
-                    "%s: Sync manager stop raised: %s",
-                    manager.log_prefix,
-                    result,
-                    exc_info=result,
-                )
 
     @property
     def sync_managers(self) -> list[SlotSyncManager]:

@@ -75,11 +75,10 @@ UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
 
 
 def sync_manager_of(entity_obj: Any) -> SlotSyncManager:
-    """Return the PIN sync manager an in-sync entity is a view of."""
-    slot_num = int(entity_obj.slot_num)
-    manager = entity_obj.config_entry.runtime_data.slot_coordinators[
-        slot_num
-    ].sync_manager(entity_obj.lock.lock.entity_id, pin_address(slot_num))
+    """Return the PIN sync manager an in-sync entity is a view of, through its own seam."""
+    manager = entity_obj._slot_coordinator.sync_manager(
+        entity_obj.lock.lock.entity_id, pin_address(int(entity_obj.slot_num))
+    )
     assert manager is not None
     return manager
 
@@ -97,16 +96,10 @@ def all_sync_managers(config_entry: ConfigEntry) -> list[SlotSyncManager]:
 def recording_listener(manager: SlotSyncManager, sink: list[bool | None]):
     """Append every in-sync value the manager publishes to ``sink`` while inside."""
     on_change = manager._on_change
-
-    def _record() -> None:
-        on_change()
-        sink.append(manager.in_sync)
-
-    manager._on_change = _record
-    try:
+    with patch.object(
+        manager, "_on_change", lambda: (on_change(), sink.append(manager.in_sync))
+    ):
         yield
-    finally:
-        manager._on_change = on_change
 
 
 def async_blocking_stub(

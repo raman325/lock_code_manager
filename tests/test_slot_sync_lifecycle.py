@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialAddress,
@@ -28,7 +27,7 @@ async def test_a_lock_without_a_coordinator_starts_no_manager(
     lock.coordinator = None
     lock.lock.entity_id = "lock.not_ready"
 
-    await coordinator.async_start_sync(lock, er.async_get(hass))
+    await coordinator.async_start_sync(lock)
 
     assert coordinator.sync_managers == before
 
@@ -43,7 +42,7 @@ async def test_a_stopped_coordinator_starts_no_manager(
     await coordinator.async_stop_sync()
     coordinator.async_stop()
 
-    await coordinator.async_start_sync(lock, er.async_get(hass))
+    await coordinator.async_start_sync(lock)
 
     assert coordinator.sync_managers == []
 
@@ -59,7 +58,7 @@ async def test_an_unloading_entry_starts_no_manager(
 
     entry.mock_state(hass, ConfigEntryState.UNLOAD_IN_PROGRESS)
     try:
-        await coordinator.async_start_sync(lock, er.async_get(hass))
+        await coordinator.async_start_sync(lock)
     finally:
         entry.mock_state(hass, ConfigEntryState.LOADED)
 
@@ -103,5 +102,5 @@ async def test_a_manager_that_fails_to_start_does_not_take_the_others(
         "custom_components.lock_code_manager.domain.slot_coordinator.SlotSyncManager.async_start",
         side_effect=RuntimeError("boom"),
     ):
-        await coordinator.async_start_sync(lock, er.async_get(hass))
+        await coordinator.async_start_sync(lock)
     assert coordinator.sync_manager(LOCK_1_ENTITY_ID, pin_address(1)) is not None
