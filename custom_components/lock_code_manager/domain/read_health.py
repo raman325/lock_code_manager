@@ -155,7 +155,7 @@ def async_record_read_health(
     _cache(hass)[registry_id] = health
     for entry in _entries_managing(hass, lock_entity_id):
         _async_store(hass, entry, {**_stored(entry), registry_id: health.value})
-    async_sync_issue(hass, lock_entity_id)
+    async_sync_read_health_issue(hass, lock_entity_id)
     _LOGGER.info(
         "%s %s requests to read its codes",
         lock_entity_id,
@@ -240,11 +240,11 @@ def async_persist_read_health(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if stored != dict(_stored(entry)):
         _async_store(hass, entry, stored)
     for lock_entity_id in locks:
-        async_sync_issue(hass, lock_entity_id)
+        async_sync_read_health_issue(hass, lock_entity_id)
 
 
 @callback
-def async_sync_issue(hass: HomeAssistant, lock_entity_id: str) -> None:
+def async_sync_read_health_issue(hass: HomeAssistant, lock_entity_id: str) -> None:
     """
     Raise the repair while a managed lock does not answer reads; clear it otherwise.
 

@@ -129,6 +129,7 @@ from .domain.read_health import (
     async_forget_read_health,
     async_forget_unmanaged_read_health,
     async_persist_read_health,
+    async_sync_read_health_issue,
 )
 from .domain.references import async_notify_moved
 from .domain.services import (
@@ -1247,6 +1248,11 @@ async def async_unload_entry(
     )
     if not other_loaded_entries:
         await _async_cleanup_strategy_resource(hass, hass_data)
+
+    # Disabling an entry unloads it, and a disabled entry writes nothing to
+    # its locks, so a repair it alone was keeping up no longer applies.
+    for lock_entity_id in get_entry_config(config_entry).locks:
+        async_sync_read_health_issue(hass, lock_entity_id)
 
     return unload_ok
 

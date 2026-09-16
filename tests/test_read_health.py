@@ -436,3 +436,24 @@ async def test_a_lock_only_a_disabled_entry_manages_raises_no_repair(
         _registry_id(hass, LOCK_2_ENTITY_ID): ReadHealth.UNANSWERED.value
     }
     assert _issue(hass, LOCK_2_ENTITY_ID) is None
+
+
+async def test_disabling_the_only_managing_entry_clears_the_repair(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A disabled entry writes nothing to the lock, so there is nothing to warn about."""
+    entry = await _own_entry(hass)
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    assert _issue(hass, LOCK_1_ENTITY_ID) is not None
+
+    assert await hass.config_entries.async_set_disabled_by(
+        entry.entry_id, ConfigEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+    assert _issue(hass, LOCK_1_ENTITY_ID) is None
+
+    # Enabled again, it warns again.
+    assert await hass.config_entries.async_set_disabled_by(entry.entry_id, None)
+    await hass.async_block_till_done()
+    assert _issue(hass, LOCK_1_ENTITY_ID) is not None
+    assert await hass.config_entries.async_unload(entry.entry_id)
