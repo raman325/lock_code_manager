@@ -6,6 +6,7 @@ import copy
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
@@ -409,4 +410,29 @@ async def test_releasing_a_lock_from_an_unloaded_entry_clears_the_repair(
 
     await async_release_locks(hass, entry, [LOCK_2_ENTITY_ID])
 
+    assert _issue(hass, LOCK_2_ENTITY_ID) is None
+
+
+async def test_a_lock_only_a_disabled_entry_manages_raises_no_repair(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """A disabled entry keeps what it knows, but manages nothing until enabled."""
+    entry = lock_code_manager_config_entry
+    disabled = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_2_ENTITY_ID]},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    disabled.add_to_hass(hass)
+    one_lock = copy.deepcopy(BASE_CONFIG)
+    one_lock[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    assert write_entry_config(hass, entry, one_lock)
+    await hass.async_block_till_done()
+
+    async_record_read_health(hass, LOCK_2_ENTITY_ID, ReadHealth.UNANSWERED)
+
+    assert read_health(hass, LOCK_2_ENTITY_ID) is ReadHealth.UNANSWERED
+    assert _stored(disabled) == {
+        _registry_id(hass, LOCK_2_ENTITY_ID): ReadHealth.UNANSWERED.value
+    }
     assert _issue(hass, LOCK_2_ENTITY_ID) is None

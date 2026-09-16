@@ -91,11 +91,20 @@ def _stored(entry: ConfigEntry) -> Mapping[str, str]:
     return internal.get(INTERNAL_LOCK_READS) or {}
 
 
-def _entries_managing(hass: HomeAssistant, lock_entity_id: str) -> list[ConfigEntry]:
-    """Return every Lock Code Manager entry configured with this lock."""
+def _entries_managing(
+    hass: HomeAssistant, lock_entity_id: str, *, active_only: bool = False
+) -> list[ConfigEntry]:
+    """
+    Return every Lock Code Manager entry configured with this lock.
+
+    A disabled entry still keeps what it knows about the lock, but it is not
+    managing it now, so ``active_only`` leaves it out, and ignored ones.
+    """
     return [
         entry
-        for entry in hass.config_entries.async_entries(DOMAIN)
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_ignore=not active_only, include_disabled=not active_only
+        )
         if lock_entity_id in EntryConfig.from_entry(entry).locks
     ]
 
@@ -245,7 +254,9 @@ def async_sync_issue(hass: HomeAssistant, lock_entity_id: str) -> None:
     issue_id = per_lock_issue_id(UNANSWERED_ISSUE, lock_entity_id)
     if read_health(
         hass, lock_entity_id
-    ) is not ReadHealth.UNANSWERED or not _entries_managing(hass, lock_entity_id):
+    ) is not ReadHealth.UNANSWERED or not _entries_managing(
+        hass, lock_entity_id, active_only=True
+    ):
         async_delete_issue(hass, DOMAIN, issue_id)
         return
     async_create_issue(

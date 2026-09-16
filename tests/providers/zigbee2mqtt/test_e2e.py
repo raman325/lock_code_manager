@@ -405,11 +405,21 @@ class TestAddingThroughTheUserInterface:
         )
         assert await hass.config_entries.async_unload(entry.entry_id)
 
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [
+            pytest.param("not_supported_255", ReadHealth.UNANSWERED, id="0xff"),
+            # Outside the converter's map, but a status the lock did send.
+            pytest.param("not_supported_2", ReadHealth.ANSWERED, id="other"),
+        ],
+    )
     async def test_a_lock_answering_not_supported_counts_as_not_answering(
         self,
         hass: HomeAssistant,
         mqtt_lock_discovered,
         mqtt_mock,
+        status: str,
+        expected: ReadHealth,
     ) -> None:
         """A user status the lock will not give is not an answer to the read."""
 
@@ -418,9 +428,7 @@ class TestAddingThroughTheUserInterface:
                 _fire_device_payload(hass, {"state": "LOCKED"})
             elif topic == Z2M_GET_TOPIC:
                 slot = json.loads(payload)["pin_code"]["user"]
-                _fire_device_payload(
-                    hass, {"users": {str(slot): {"status": "not_supported_255"}}}
-                )
+                _fire_device_payload(hass, {"users": {str(slot): {"status": status}}})
             return DEFAULT
 
         mqtt_mock.async_publish.side_effect = not_supported
@@ -436,10 +444,7 @@ class TestAddingThroughTheUserInterface:
         await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
         result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 1})
 
-        assert result["step_id"] == "code_slot"
-        assert read_health(hass, mqtt_lock_discovered.entity_id) is (
-            ReadHealth.UNANSWERED
-        )
+        assert read_health(hass, mqtt_lock_discovered.entity_id) is expected
 
     async def test_a_lock_that_answers_declining_some_slots_is_not_out_of_reach(
         self,
@@ -484,6 +489,65 @@ class TestAddingThroughTheUserInterface:
         assert read_health(hass, mqtt_lock_discovered.entity_id) is (
             ReadHealth.ANSWERED
         )
+
+    @pytest.mark.parametrize(
+        ("late_status", "expected"),
+        [
+            pytest.param("available", ReadHealth.ANSWERED, id="an_answer"),
+            # Late or not, declining is no answer.
+            pytest.param("not_supported_255", ReadHealth.UNANSWERED, id="a_decline"),
+        ],
+    )
+    async def test_a_lock_answering_too_slowly_is_not_taken_for_one_that_cannot(
+        self,
+        hass: HomeAssistant,
+        mqtt_lock_discovered,
+        mqtt_mock,
+        late_status: str,
+        expected: ReadHealth,
+    ) -> None:
+        """
+        Each reply arrives after its read has stopped waiting.
+
+        The last one lands while the lock is asked for its state, which is
+        what would otherwise settle the lock as unable to report its codes.
+        """
+        asked: list[int] = []
+
+        def slow(topic: str, payload: str, *args: Any, **kwargs: Any):
+            request = json.loads(payload)
+            if topic == Z2M_GET_TOPIC and "state" in request:
+                _fire_device_payload(
+                    hass,
+                    {
+                        "state": "LOCKED",
+                        "users": {str(asked[-1]): {"status": late_status}},
+                    },
+                )
+            elif topic == Z2M_GET_TOPIC:
+                asked.append(request["pin_code"]["user"])
+            return DEFAULT
+
+        mqtt_mock.async_publish.side_effect = slow
+        with patch.object(Zigbee2MQTTLock, "slot_read_timeout", 0.01):
+            result = await hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": SOURCE_USER}
+            )
+            flow_id = result["flow_id"]
+            await async_configure_flow(
+                hass,
+                flow_id,
+                {CONF_NAME: "z2m", CONF_LOCKS: [mqtt_lock_discovered.entity_id]},
+            )
+            await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+            await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 1})
+
+        # Judged after the fifth silence; a lock that answers is then read on.
+        assert asked[:SILENT_READS_TO_CLASSIFY] == [1] * SILENT_READS_TO_CLASSIFY
+        assert (len(asked) > SILENT_READS_TO_CLASSIFY) is (
+            expected is ReadHealth.ANSWERED
+        )
+        assert read_health(hass, mqtt_lock_discovered.entity_id) is expected
 
     async def test_a_lock_out_of_reach_is_not_mistaken_for_one_that_cannot_read(
         self,

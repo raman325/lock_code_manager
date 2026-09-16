@@ -117,13 +117,12 @@ def _z2m_status_says_nothing(user_info: dict[str, Any]) -> bool:
     """
     Return whether a user entry is the lock declining to say anything.
 
-    A ``not_supported_*`` status is how the converter reports a user status
-    the lock would not give -- 0xFF, "not supported", in the Zigbee Door Lock
-    cluster. Answering a read with it is the lock saying it cannot be read,
-    so for the read it counts as silence, not as an answer.
+    The converter reports any user status outside its map as
+    ``not_supported_<n>``. Only 0xFF is the Zigbee Door Lock cluster's "not
+    supported", the lock saying it cannot be read, so only that counts as
+    silence; any other number is a status the lock did report.
     """
-    status = user_info.get("status")
-    return isinstance(status, str) and status.startswith("not_supported")
+    return user_info.get("status") == "not_supported_255"
 
 
 @dataclass(repr=False, eq=False)
@@ -142,6 +141,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
         init=False, default_factory=dict
     )
     # Waiting for the device to say anything at all; see _async_device_responds.
+    # Slots whose last read gave up waiting. A reply for one arriving later
+    # still shows the lock answers, only slowly.
+    _late_reads: set[int] = field(default_factory=set, init=False)
     _heard_from_device: list[asyncio.Future[None]] = field(
         init=False, default_factory=list
     )
@@ -320,6 +322,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     future := self._pending_codes.pop(user_id, None)
                 ) is not None and not future.done():
                     future.set_result(None if user_id in unanswered else state)
+                elif user_id in self._late_reads and user_id not in unanswered:
+                    self._late_reads.discard(user_id)
+                    self._note_answered()
 
             # Zigbee2MQTT republishes its full cached state on every
             # attribute change, so most users payloads restate old entries
@@ -678,6 +683,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 self.lock.entity_id,
                 slot_num,
             )
+            self._late_reads.add(slot_num)
             credential = None
         except Exception as err:
             # Broad catch is intentional: the future is resolved by the MQTT
@@ -696,6 +702,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
             credential = SlotCredential.unreadable()
         else:
             credential = result
+            self._late_reads.discard(slot_num)
         finally:
             self._pending_codes.pop(slot_num, None)
         return credential
