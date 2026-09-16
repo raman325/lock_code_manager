@@ -152,7 +152,8 @@ async def test_get_config_entry_data(
 
     # Verify entities (no number_of_uses entity since the migration strips
     # number_of_uses from BASE_CONFIG slot 2 before platform forwarding).
-    assert len(result[CONF_ENTITIES]) == 18
+    # Two slots on two locks each carry a pin_in_sync sensor beside in_sync.
+    assert len(result[CONF_ENTITIES]) == 22
 
     # Verify locks (now objects with entity_id and name)
     lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}

@@ -5,6 +5,7 @@ import {
     CONDITION_KEYS,
     DIVIDER_CARD,
     IN_SYNC_KEY,
+    IN_SYNC_KEYS,
     KEY_ORDER
 } from './const';
 import {
@@ -158,7 +159,7 @@ export function compareAndSortEntities(
     // sort code sensors alphabetically based on the lock entity_id
     if (
         entityA.key === entityB.key &&
-        [CODE_EVENT_KEY, CODE_SENSOR_KEY, IN_SYNC_KEY].includes(entityA.key) &&
+        [CODE_EVENT_KEY, CODE_SENSOR_KEY, ...IN_SYNC_KEYS].includes(entityA.key) &&
         entityA.lockEntityId < entityB.lockEntityId
     )
         return -1;
@@ -185,7 +186,7 @@ export function generateEntityCards(
     entities: LockCodeManagerEntityEntry[]
 ): { entity: string; name?: string }[] {
     return entities.map((entity) => {
-        if ([IN_SYNC_KEY, CODE_SENSOR_KEY].includes(entity.key)) {
+        if ([...IN_SYNC_KEYS, CODE_SENSOR_KEY].includes(entity.key)) {
             return {
                 entity: entity.entity_id,
                 name:
@@ -333,11 +334,13 @@ export function getSlotMapping(
     const codeSensorEntities: LockCodeManagerEntityEntry[] = [];
     const inSyncEntities: LockCodeManagerEntityEntry[] = [];
     lockCodeManagerEntities
-        .filter((entity) => entity.slotNum === slotNum)
+        // A disabled entity has no state to show; the per-credential in-sync
+        // sensors ship disabled and appear here once someone enables them.
+        .filter((entity) => entity.slotNum === slotNum && !entity.disabled_by)
         .forEach((entity) => {
             if (entity.key === CODE_SENSOR_KEY) {
                 codeSensorEntities.push(entity);
-            } else if (entity.key === IN_SYNC_KEY) {
+            } else if (IN_SYNC_KEYS.includes(entity.key)) {
                 inSyncEntities.push(entity);
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntities.push(entity);

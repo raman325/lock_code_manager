@@ -2,6 +2,9 @@ export const CODE_SENSOR_KEY = 'code';
 export const CODE_EVENT_KEY = 'credential_used';
 export const ACTIVE_KEY = 'active';
 export const IN_SYNC_KEY = 'in_sync';
+// Per-credential in-sync sensors, one per credential type; `in_sync` is their conjunction.
+export const PIN_IN_SYNC_KEY = 'pin_in_sync';
+export const IN_SYNC_KEYS = [IN_SYNC_KEY, PIN_IN_SYNC_KEY];
 
 // Condition keys
 export const CONDITION_CALENDAR = 'calendar';
@@ -28,6 +31,7 @@ export const KEY_ORDER = [
     ACTIVE_KEY,
     ...CONDITION_KEYS,
     IN_SYNC_KEY,
+    PIN_IN_SYNC_KEY,
     CODE_SENSOR_KEY,
     CODE_EVENT_KEY
 ];

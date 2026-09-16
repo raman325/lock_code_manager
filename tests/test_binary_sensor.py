@@ -37,6 +37,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
+    ATTR_PIN_IN_SYNC,
     ATTR_SYNC_STATUS,
     CONF_LOCKS,
     CONF_SLOTS,
@@ -46,6 +47,7 @@ from custom_components.lock_code_manager.const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
@@ -73,6 +75,7 @@ from .common import (
     SLOT_2_IN_SYNC_ENTITY,
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
+    _per_lock_entity_id,
     async_blocking_stub,
     in_sync_entity_id,
     short_stop_grace,
@@ -2412,6 +2415,67 @@ async def test_the_next_confirmation_read_settles_a_pending_write_without_a_seco
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
+def _pin_in_sync_entity_id(
+    hass, config_entry, slot_num: int, lock_entity_id: str
+) -> str:
+    return _per_lock_entity_id(
+        hass, "binary_sensor", config_entry, slot_num, ATTR_PIN_IN_SYNC, lock_entity_id
+    )
+
+
+async def test_pin_in_sync_is_registered_but_disabled_by_default(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The per-credential sensor exists for whoever wants the split, off until asked."""
+    entity_id = _pin_in_sync_entity_id(
+        hass, lock_code_manager_config_entry, 1, LOCK_1_ENTITY_ID
+    )
+    entry = er.async_get(hass).async_get(entity_id)
+    assert entry is not None
+    assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.states.get(entity_id) is None
+
+
+async def test_pin_in_sync_mirrors_the_manager_once_enabled(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Enabled, the PIN sensor reads exactly what the aggregate reads for a PIN-only user."""
+    entry = lock_code_manager_config_entry
+    pin_entity_id = _pin_in_sync_entity_id(hass, entry, 1, LOCK_1_ENTITY_ID)
+    er.async_get(hass).async_update_entity(pin_entity_id, disabled_by=None)
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    aggregate_id = in_sync_entity_id(hass, entry, 1)
+    await async_initial_tick(hass, aggregate_id)
+    aggregate = hass.states.get(aggregate_id)
+    pin = hass.states.get(pin_entity_id)
+    assert aggregate is not None and pin is not None
+    assert pin.state == aggregate.state == STATE_ON
+    assert pin.attributes[ATTR_SYNC_STATUS] == aggregate.attributes[ATTR_SYNC_STATUS]
+
+    # A change the manager publishes reaches both views.
+    manager = sync_manager_of(get_in_sync_entity_obj(hass, aggregate_id))
+    lock_provider = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock_provider.codes[1] = "0000"
+    await lock_provider.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    manager._state = SyncState.OUT_OF_SYNC
+    with patch.object(manager, "_perform_sync", side_effect=LockOperationFailed("no")):
+        await manager._async_tick()
+    await hass.async_block_till_done()
+    assert hass.states.get(aggregate_id).state == STATE_OFF
+    assert hass.states.get(pin_entity_id).state == STATE_OFF
+    assert (
+        hass.states.get(pin_entity_id).attributes[ATTR_SYNC_STATUS]
+        == hass.states.get(aggregate_id).attributes[ATTR_SYNC_STATUS]
+    )
+
+
 async def test_disabling_the_in_sync_sensor_does_not_stop_the_sync(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -2457,3 +2521,37 @@ async def test_in_sync_folds_over_every_manager(
 
     assert entity_obj.is_on is False
     assert entity_obj.extra_state_attributes[ATTR_SYNC_STATUS] == "suspended"
+
+
+async def test_pin_in_sync_added_without_a_slot_coordinator_has_nothing_to_mirror(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """With no coordinator to look up a manager on, the view has nothing to mirror."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    assert 99 not in runtime_data.slot_coordinators
+    ent_reg = er.async_get(hass)
+    # Registered enabled ahead of time, so the platform adds it despite the
+    # class default.
+    unique_id = build_slot_unique_id(
+        entry.entry_id, 99, ATTR_PIN_IN_SYNC, LOCK_1_ENTITY_ID
+    )
+    ent_reg.async_get_or_create(
+        "binary_sensor", DOMAIN, unique_id, config_entry=entry, disabled_by=None
+    )
+
+    runtime_data.callbacks.invoke_lock_slot_adders(
+        runtime_data.locks[LOCK_1_ENTITY_ID], 99, ent_reg
+    )
+    await hass.async_block_till_done()
+
+    entity_id = ent_reg.async_get_entity_id("binary_sensor", DOMAIN, unique_id)
+    assert entity_id is not None
+    # Added without raising; with no manager behind it there is no sync
+    # status to report, and no credential to be available for.
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == STATE_UNAVAILABLE
+    assert ATTR_SYNC_STATUS not in state.attributes
