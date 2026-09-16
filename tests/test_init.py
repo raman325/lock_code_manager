@@ -869,9 +869,7 @@ async def test_lock_leaving_one_entry_is_not_removed_permanently(
     # Dropping the lock from A's options tears the instance down, but B still
     # manages it, so the state that outlives a reload -- the per-lock
     # setup-failed repair, the provider's stored codes -- has to survive.
-    await async_unload_lock(
-        hass, entry_a, lock_entity_id=LOCK_1_ENTITY_ID, remove_permanently=True
-    )
+    await async_unload_lock(hass, entry_a, [LOCK_1_ENTITY_ID], remove_permanently=True)
     await hass.async_block_till_done()
 
     assert shared_lock.service_calls["unload"] == [(False,)]
@@ -2028,7 +2026,7 @@ async def test_async_unload_lock_skips_untracked_lock_entity_id(
     runtime_data = entry.runtime_data
     assert set(runtime_data.locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
 
-    await async_unload_lock(hass, entry, lock_entity_id="lock.untracked")
+    await async_unload_lock(hass, entry, ["lock.untracked"])
 
     assert set(runtime_data.locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
 

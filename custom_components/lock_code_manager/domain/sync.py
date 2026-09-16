@@ -1144,23 +1144,21 @@ class SlotSyncManager:
 # suspended credential is a suspended user, and one out of sync outranks the
 # transient states, which resolve on their own.
 _STATUS_PRECEDENCE = (
-    SyncState.SUSPENDED.value,
-    SyncState.OUT_OF_SYNC.value,
-    SyncState.SYNCING.value,
-    SyncState.PENDING_CONFIRMATION.value,
-    SyncState.IN_SYNC.value,
+    SyncState.SUSPENDED,
+    SyncState.OUT_OF_SYNC,
+    SyncState.SYNCING,
+    SyncState.PENDING_CONFIRMATION,
+    SyncState.IN_SYNC,
 )
 
 
 def fold_in_sync(values: Iterable[bool | None]) -> bool | None:
     """Fold per-credential in-sync values: on when all are, unknown while any is."""
     seen = list(values)
-    if not seen or any(value is None for value in seen):
-        return None
-    return all(seen)
+    return all(seen) if seen and None not in seen else None
 
 
 def fold_sync_status(statuses: Iterable[str | None]) -> str | None:
     """Fold per-credential statuses to the worst one among them."""
     seen = {status for status in statuses if status is not None}
-    return next((status for status in _STATUS_PRECEDENCE if status in seen), None)
+    return next((status.value for status in _STATUS_PRECEDENCE if status in seen), None)

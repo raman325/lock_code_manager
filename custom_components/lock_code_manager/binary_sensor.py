@@ -175,7 +175,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
         CoordinatorEntity.__init__(self, coordinator)
         self._addresses = tuple(addresses)
         self._attr_entity_registry_enabled_default = enabled_default
-        self._attr_sync_status: str | None = None
 
     @property
     def available(self) -> bool:
@@ -185,34 +184,32 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
 
     @property
-    def extra_state_attributes(self) -> dict[str, str]:
-        """Return extra state attributes."""
-        if self._attr_sync_status is None:
-            return {}
-        return {ATTR_SYNC_STATUS: self._attr_sync_status}
-
-    @callback
-    def _recompute(self) -> None:
-        """Take the coordinator's fold as this sensor's state."""
+    def _sync_state(self) -> tuple[bool | None, str | None]:
+        """The coordinator's fold for this lock, or unknown without a coordinator."""
         if self._slot_coordinator is None:
-            return
-        self._attr_is_on, self._attr_sync_status = (
-            self._slot_coordinator.sync_state_for(
-                self.lock.lock.entity_id, self._addresses
-            )
+            return None, None
+        return self._slot_coordinator.sync_state_for(
+            self.lock.lock.entity_id, self._addresses
         )
 
-    @callback
-    def _fold(self) -> None:
-        """Recompute and write, on a change the coordinator reports."""
-        self._recompute()
-        self.async_write_ha_state()
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether every credential this sensor covers is in sync."""
+        return self._sync_state[0]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        """Return extra state attributes."""
+        status = self._sync_state[1]
+        return {} if status is None else {ATTR_SYNC_STATUS: status}
 
     def _register_slot_coordinator_subscription(self) -> None:
-        """Recompute on every change the coordinator reports, managers included."""
+        """Write state when a manager of this lock changes; config writes are not this sensor's."""
         assert self._slot_coordinator is not None
         self.async_on_remove(
-            self._slot_coordinator.register_state_subscriber(self._fold)
+            self._slot_coordinator.register_sync_subscriber(
+                self.lock.lock.entity_id, self.async_write_ha_state
+            )
         )
 
     async def async_added_to_hass(self) -> None:
@@ -220,5 +217,3 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
-        # Home Assistant writes the state itself once the add completes.
-        self._recompute()

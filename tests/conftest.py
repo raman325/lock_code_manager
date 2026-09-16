@@ -321,13 +321,10 @@ async def async_trigger_sync_tick(
     triggering an immediate tick, useful for testing tick-based sync behavior
     without waiting for the natural 5-second tick interval.
     """
-    entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    if set_dirty and sync_manager_of(entity_obj)._state not in (
-        SyncState.LOADING,
-        SyncState.OUT_OF_SYNC,
-    ):
-        sync_manager_of(entity_obj)._state = SyncState.OUT_OF_SYNC
-    await sync_manager_of(entity_obj)._async_tick()
+    manager = sync_manager_of(get_in_sync_entity_obj(hass, entity_id))
+    if set_dirty and manager._state not in (SyncState.LOADING, SyncState.OUT_OF_SYNC):
+        manager._state = SyncState.OUT_OF_SYNC
+    await manager._async_tick()
     await hass.async_block_till_done()
 
 
@@ -340,9 +337,9 @@ async def async_initial_tick(hass: HomeAssistant, entity_id: str) -> None:
     a tick to complete initial state loading, but only if the entity hasn't
     been initialized yet (state is LOADING).
     """
-    entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    if sync_manager_of(entity_obj)._state is SyncState.LOADING:
-        await sync_manager_of(entity_obj)._async_tick()
+    manager = sync_manager_of(get_in_sync_entity_obj(hass, entity_id))
+    if manager._state is SyncState.LOADING:
+        await manager._async_tick()
         await hass.async_block_till_done()
 
 

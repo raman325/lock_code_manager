@@ -16,11 +16,12 @@ one SlotSyncManager per lock and credential address for that slot.
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from collections.abc import Awaitable, Callable, Collection, Iterable
+from functools import partial
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     CONF_CONDITION,
     CONF_ENABLED,
@@ -67,7 +68,13 @@ async def _async_gather_managers(
     operation: Callable[[SlotSyncManager], Awaitable[None]],
     what: str,
 ) -> None:
-    """Run ``operation`` on every manager together; one raising is logged, not fatal."""
+    """
+    Run ``operation`` on every manager together; one raising is logged, not fatal.
+
+    A cancellation is not a failure: ``gather`` hands a cancelled child back
+    as a value, and dropping it would let a setup pass carry on through a
+    shutdown as if nothing had happened.
+    """
     results = await asyncio.gather(
         *(operation(manager) for manager in managers), return_exceptions=True
     )
@@ -80,6 +87,11 @@ async def _async_gather_managers(
                 result,
                 exc_info=result,
             )
+    if cancelled := next(
+        (result for result in results if isinstance(result, asyncio.CancelledError)),
+        None,
+    ):
+        raise cancelled
 
 
 class SlotEntityCoordinator:
@@ -107,6 +119,7 @@ class SlotEntityCoordinator:
     ) -> None:
         """Initialize the coordinator."""
         self._hass = hass
+        self._ent_reg = er.async_get(hass)
         self._config_entry = config_entry
         self._slot_num = int(slot_num)
         self._log_prefix = (
@@ -115,6 +128,10 @@ class SlotEntityCoordinator:
 
         self._active_view_writers: set[ActiveViewWriter] = set()
         self._state_subscribers: set[Callable[[], None]] = set()
+        # Sync subscribers are per lock: a manager's change concerns the
+        # sensors of its lock, not the slot's text and switch entities nor
+        # the other locks' sensors.
+        self._sync_subscribers: dict[str, set[Callable[[], None]]] = defaultdict(set)
         self._sync_managers: dict[tuple[str, CredentialAddress], SlotSyncManager] = {}
 
         # Condition-entity subscription state
@@ -151,49 +168,56 @@ class SlotEntityCoordinator:
             self._condition_unsub = None
         self._subscribed_condition_entity_id = None
         self._active_view_writers.clear()
-        # The managers are stopped by ``async_stop_sync``, which every
-        # teardown path awaits before this; stopping takes an await this
-        # callback cannot make.
+        # The managers are stopped by ``async_stop_sync``: stopping takes an
+        # await this callback cannot make.
 
     # -- Sync managers -------------------------------------------------------
+
+    @property
+    def _is_current(self) -> bool:
+        """
+        Whether this is the entry's live coordinator for its slot.
+
+        A pass that captured the coordinator before an unload, a slot removal,
+        or a reload finished holds one the entry no longer runs; a manager it
+        started would have no teardown left to stop it.
+        """
+        runtime_data = getattr(self._config_entry, "runtime_data", None)
+        return (
+            runtime_data is not None
+            and runtime_data.slot_coordinators.get(self._slot_num) is self
+        )
 
     async def async_start_sync(self, lock: BaseLock) -> None:
         """
         Start a manager for every credential of this slot on ``lock``.
 
-        Nothing starts on a coordinator that has stopped or an entry on its
-        way out: an update listener can reach here after the unload it is
-        racing has already stopped everything, and a manager started then
-        would have no unload left to stop it.
+        Nothing starts on a coordinator that has stopped or that the entry no
+        longer runs: an update listener can reach here after the unload it is
+        racing has already stopped everything.
         """
-        if (
-            lock.coordinator is None
-            or not self._started
-            or self._config_entry.state
-            in (ConfigEntryState.UNLOAD_IN_PROGRESS, ConfigEntryState.NOT_LOADED)
-        ):
+        if lock.coordinator is None or not self._started or not self._is_current:
             _LOGGER.debug(
-                "%s: Not starting sync on %s (coordinator ready: %s, running: %s, entry: %s)",
+                "%s: Not starting sync on %s (coordinator ready: %s, running: %s, current: %s)",
                 self._log_prefix,
                 lock.lock.entity_id,
                 lock.coordinator is not None,
                 self._started,
-                self._config_entry.state,
+                self._is_current,
             )
             return
-        ent_reg = er.async_get(self._hass)
+        lock_entity_id = lock.lock.entity_id
         new = {
-            key: SlotSyncManager(
+            (lock_entity_id, address): SlotSyncManager(
                 self._hass,
-                ent_reg,
+                self._ent_reg,
                 self._config_entry,
                 lock.coordinator,
                 lock,
                 address,
-                on_change=self._notify_state_subscribers,
+                on_change=partial(self._notify_sync_changed, lock_entity_id),
             )
             for address in managed_addresses(self._slot_num)
-            if (key := (lock.lock.entity_id, address)) not in self._sync_managers
         }
         self._sync_managers.update(new)
         # One manager failing to start must not take the rest of the setup
@@ -256,6 +280,11 @@ class SlotEntityCoordinator:
         )
 
     # -- Read-only views (consumed by entities) ------------------------------
+
+    @property
+    def log_prefix(self) -> str:
+        """Return the log prefix identifying this coordinator's entry and slot."""
+        return self._log_prefix
 
     @property
     def slot_num(self) -> int:
@@ -324,6 +353,15 @@ class SlotEntityCoordinator:
         """
         self._state_subscribers.add(callback_fn)
         return lambda: self._state_subscribers.discard(callback_fn)
+
+    @callback
+    def register_sync_subscriber(
+        self, lock_entity_id: str, callback_fn: Callable[[], None]
+    ) -> Callable[[], None]:
+        """Register a callback fired when a manager of ``lock_entity_id`` changes state."""
+        subscribers = self._sync_subscribers[lock_entity_id]
+        subscribers.add(callback_fn)
+        return lambda: subscribers.discard(callback_fn)
 
     # -- Intent dispatch -----------------------------------------------------
 
@@ -522,11 +560,20 @@ class SlotEntityCoordinator:
     @callback
     def _notify_state_subscribers(self) -> None:
         """Notify entity-side write-back subscribers that config changed."""
-        for subscriber in list(self._state_subscribers):
+        self._notify(self._state_subscribers, "State subscriber")
+
+    @callback
+    def _notify_sync_changed(self, lock_entity_id: str) -> None:
+        """Notify the sensors of one lock that a manager of theirs changed state."""
+        self._notify(self._sync_subscribers[lock_entity_id], "Sync subscriber")
+
+    def _notify(self, subscribers: Iterable[Callable[[], None]], what: str) -> None:
+        """Call every subscriber; one raising is logged so the rest still hear."""
+        for subscriber in list(subscribers):
             try:
                 subscriber()
             except Exception:
-                _LOGGER.exception("%s: State subscriber raised", self._log_prefix)
+                _LOGGER.exception("%s: %s raised", self._log_prefix, what)
 
     @callback
     def _poke_sync_managers(self) -> None:
