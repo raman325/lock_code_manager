@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "8e87be006ec6",
+  "strategy": "manual-commit",
+  "branch": "feat/pin-in-sync-sensor",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/icons.json",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "tests/test_binary_sensor.py",
+    "tests/test_frontend_contract.py",
+    "tests/test_init.py",
+    "tests/test_websocket.py",
+    "ts/const.ts",
+    "ts/generate-view.internal.ts",
+    "ts/generate-view.test.ts",
+    "ts/generate-view.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8e/87be006ec6/0/metadata.json",
+      "transcript": "/8e/87be006ec6/0/full.jsonl",
+      "compact_transcript": "/8e/87be006ec6/0/transcript.jsonl",
+      "content_hash": "/8e/87be006ec6/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7198,
+    "cache_creation_tokens": 2216135,
+    "cache_read_tokens": 115646968,
+    "output_tokens": 347742,
+    "api_call_count": 284
+  }
+}
