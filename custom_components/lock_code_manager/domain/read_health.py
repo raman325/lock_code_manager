@@ -212,19 +212,22 @@ def async_persist_read_health(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """
     locks = EntryConfig.from_entry(entry).locks
     registry_ids = {
-        registry_id
+        lock_entity_id: registry_id
         for lock_entity_id in locks
         if (registry_id := _registry_id(hass, lock_entity_id)) is not None
     }
     stored = {
         registry_id: value
         for registry_id, value in _stored(entry).items()
-        if registry_id in registry_ids
+        if registry_id in registry_ids.values()
     }
-    for registry_id in registry_ids:
-        learned = _cache(hass).get(registry_id)
-        if learned is not None and stored.get(registry_id) != ReadHealth.ANSWERED:
-            stored[registry_id] = learned.value
+    for lock_entity_id, registry_id in registry_ids.items():
+        # Everything known, not only what this run learned: a lock that does
+        # not answer is not read again, so after a restart what is known about
+        # it is on the entries that already manage it.
+        known = read_health(hass, lock_entity_id)
+        if known is not None and stored.get(registry_id) != ReadHealth.ANSWERED:
+            stored[registry_id] = known.value
     if stored != dict(_stored(entry)):
         _async_store(hass, entry, stored)
     for lock_entity_id in locks:

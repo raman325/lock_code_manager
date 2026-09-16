@@ -10,6 +10,7 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
+from custom_components.lock_code_manager import async_release_locks
 from custom_components.lock_code_manager.const import (
     CONF_INTERNAL,
     CONF_LOCKS,
@@ -350,3 +351,62 @@ async def test_removing_one_entry_keeps_what_another_still_uses(
     await hass.async_block_till_done()
 
     assert read_health(hass, LOCK_1_ENTITY_ID) is ReadHealth.UNANSWERED
+
+
+async def test_a_lock_added_to_a_second_entry_takes_the_stored_verdict(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    After a restart the verdict is only on the first entry.
+
+    A lock that does not answer is left alone, so nothing learns it again;
+    the second entry has to copy it, or it goes with the first.
+    """
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    hass.data[DOMAIN].pop("lock_reads")
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_2_ENTITY_ID],
+            CONF_SLOTS: {5: {CONF_NAME: "test5", CONF_PIN: "5555"}},
+        },
+        unique_id="other",
+    )
+    other.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(other.entry_id)
+    await hass.async_block_till_done()
+
+    assert write_entry_config(
+        hass,
+        other,
+        {
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+            CONF_SLOTS: {5: {CONF_NAME: "test5", CONF_PIN: "5555"}},
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert _stored(other) == {
+        _registry_id(hass, LOCK_1_ENTITY_ID): ReadHealth.UNANSWERED.value
+    }
+    assert await hass.config_entries.async_unload(other.entry_id)
+
+
+async def test_releasing_a_lock_from_an_unloaded_entry_clears_the_repair(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    The lock's entity is gone, so setup failed and reauth swaps it out.
+
+    Nothing is loaded to tear down, and without a registry entry there is no
+    record to forget, but the repair still names a lock the entry dropped.
+    """
+    entry = lock_code_manager_config_entry
+    async_record_read_health(hass, LOCK_2_ENTITY_ID, ReadHealth.UNANSWERED)
+    assert _issue(hass, LOCK_2_ENTITY_ID) is not None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+
+    await async_release_locks(hass, entry, [LOCK_2_ENTITY_ID])
+
+    assert _issue(hass, LOCK_2_ENTITY_ID) is None

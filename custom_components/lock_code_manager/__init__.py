@@ -1171,6 +1171,12 @@ async def _async_release_locks(
     _async_purge_dropped_locks(hass, config_entry, lock_entity_ids)
     for lock_entity_id in lock_entity_ids:
         async_forget_read_health(hass, config_entry, lock_entity_id)
+        # Whether or not anything is loaded: the lock may have lost its
+        # registry entry, which leaves no record to forget it by.
+        if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
+            async_delete_issue(
+                hass, DOMAIN, per_lock_issue_id(UNANSWERED_ISSUE, lock_entity_id)
+            )
     if (runtime_data := getattr(config_entry, "runtime_data", None)) is None:
         return
     for lock_entity_id in lock_entity_ids:
@@ -1181,9 +1187,6 @@ async def _async_release_locks(
             # repair asks the user to do.
             async_delete_issue(
                 hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
-            )
-            async_delete_issue(
-                hass, DOMAIN, per_lock_issue_id(UNANSWERED_ISSUE, lock_entity_id)
             )
     # Lock Code Manager no longer adds its config entry to the lock's device (its per-lock
     # entities link to the device via ``device_entry``), so there is no
