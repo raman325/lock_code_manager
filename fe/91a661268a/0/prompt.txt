@@ -1,0 +1,356 @@
+<task-notification>
+<task-id>ae789c4e4fd885db4</task-id>
+<tool-use-id>toolu_01QvaSbo4spU7PtHpMNpQWBS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ae789c4e4fd885db4.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: reuse finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings (REUSE angle), ordered by confidence. Paths are repo-relative to `/Users/raman/projects/lock_code_manager/.worktrees/pin-in-sync`.
+
+**1. diagnostics.py:47 — third hand-rolled `split("|")[2]` key extraction; no shared key parser exists, and the builder's inverse family lives in domain/config.py**
+- summary: `_is_sensitive` now does `parts = (entry.unique_id or "").split("|")` / `parts[2]`. The codebase already parses this same unique-id shape in three other places by hand: `custom_components/lock_code_manager/__init__.py:1602` and `:1624` (`entity.unique_id.split('|')[2]` for the key) and `__init__.py:1418` `_lock_of` (`parts[3]` for the lock). The only shared parsers are `parse_slot_unique_id` and `parse_slot_device_identifier` in `custom_components/lock_code_manager/domain/config.py:594` / `:565`, which sit beside `build_slot_unique_id` (`:537`) and recover only the slot number.
+- failure_scenario: the `{entry_id}|{slot}|{key}|{lock}` layout is now restated in four modules with no single inverse of `build_slot_unique_id`. A change to the builder (e.g. the named-user migration `CredentialAddress.user_ref` docstring anticipates) has to find every `[2]`/`[3]` by grep; `_is_sensitive` silently returns False for every entity if the key moves position, un-redacting PIN sensors in diagnostics. Fix: add `parse_slot_unique_id_key(unique_id) -&gt; str | None` next to `parse_slot_unique_id` in domain/config.py (same `startswith(f"{entry_id}|")` guard `_lock_of` uses) and call it from diagnostics and both `__init__.py` sites. Honest caveat: this is "a helper should exist next to the builder", not "call an existing one".
+
+**2. ts/const.ts:14 — `CREDENTIAL_LABELS = { pin: 'PIN' }` is a third copy of the credential-type label vocabulary, and the only one not under contract test**
+- summary: The backend already declares the pin → "PIN" label twice: `custom_components/lock_code_manager/strings.json` `entity.event.credential_used.state_attributes.event_type.state` (`pin: "PIN"`, plus rfid/fingerprint/face/password/nfc — the full `CredentialType` vocabulary, held to the enum by `test_every_credential_kind_the_event_can_publish_is_translated`), and `PER_LOCK_ENTITY_SUFFIX[ATTR_PIN_IN_SYNC] = "PIN in sync"` (`const.py:180`, held to strings.json by `test_per_lock_suffixes_match_the_entity_names`). No label map or key-parsing helper existed in `ts/` before this diff; the only unique-id parsing there is `createLockCodeManagerEntity` at `ts/generate-view.ts:174`.
+- failure_scenario: `tests/test_frontend_contract.py` pins `ts/const.ts` constants to backend values via `_SHARED_KEYS` (`IN_SYNC_KEY`, new `PIN_IN_SYNC_KEY`) but nothing pins `CREDENTIAL_LABELS`. When a second managed type lands, `MANAGED_CREDENTIAL_TYPES` + the new `test_every_managed_credential_type_has_an_in_sync_sensor_declared` force strings.json/icons/`PER_LOCK_ENTITY_SUFFIX` to be updated, while the card falls back to the raw key (`?? credential`) and renders "Front Lock rfid". Reuse: either extend `_SHARED_KEYS`-style checking in test_frontend_contract to assert `CREDENTIAL_LABELS` equals strings.json's `event_type.state` map for every `MANAGED_CREDENTIAL_TYPES` member, or drop the map and read the entity's translated `original_name` (present in `as_partial_dict`, which is what the websocket already ships).
+
+**3. binary_sensor.py:61 — intermediate typed `sensors` list where sibling platforms comprehend inline**
+- summary: `async_setup_entry` builds `sensors: list[tuple[str, tuple[CredentialAddress, ...], bool]]` with an unpacked generator, then a second comprehension over it. The established per-slot multi-entity pattern is `custom_components/lock_code_manager/text.py:33-37`: `[LockCodeManagerText(hass, ent_reg, config_entry, slot_num, *props) for props in ((CONF_NAME, TextMode.TEXT), (CONF_PIN, TextMode.PASSWORD))]` directly inside `async_add_entities`. `sensor.py:36` and `event.py:35` are the single-entity forms of the same shape.
+- failure_scenario: Not a correctness cost; two-stage construction plus a typed local for a list consumed once. Mirroring text.py (a single comprehension over `((ATTR_IN_SYNC, addresses, True), *((credential_in_sync_key(a.credential_type), (a,), False) for a in addresses))`) removes the annotation, the `Iterable` import stays. Low; flag only if the reviewer wants platform files to read alike.
+
+**4. tests/common.py:240 — `pin_in_sync_entity_id` is a thin wrapper as requested, but uses the literal `"binary_sensor"`**
+- summary: Both `in_sync_entity_id` (`:220`) and `code_entity_id` (`:208`) pass the imported `BINARY_SENSOR_DOMAIN` / `SENSOR_DOMAIN`; the new wrapper hardcodes `"binary_sensor"`. No duplication beyond the wrapper itself; a single parametrized helper is not warranted since callers read better with a named function.
+- failure_scenario: cosmetic only; use `BINARY_SENSOR_DOMAIN` (already imported in the module) for consistency.
+
+**5. tests/test_frontend_contract.py:208 — fifth inline strings.json loader; no existing loader/fixture to reuse**
+- summary: The new test builds `component = pathlib.Path(__file__)...parent.parent / "custom_components" / "lock_code_manager"` and `json.loads(... .read_text())` inline. The same construction already appears at `:180-186`, `:242-248`, `:272-278` (as `root`), and `:294-300`. The only module-level path is `_CONST_TS` (`:29`). There is no fixture or `_load_strings()` helper in the module or in `tests/conftest.py` for this.
+- failure_scenario: no existing helper to call, so not a reuse defect in this PR; the diff copies an established local habit. If the reviewer wants it addressed, a module-level `_COMPONENT = _CONST_TS.parent.parent / "custom_components" / "lock_code_manager"` plus a `_json(name)` helper would collapse five sites, but that is a refactor beyond this PR's scope.
+
+**6. const.py:167 — `credential_in_sync_key`: no existing key-composition helper; nothing to reuse**
+- summary: Grep of `const.py` and `domain/credentials.py` finds no prior `f"{type}_{...}"` key builder or CredentialType-based naming helper; the nearest analogue is `pin_address()` in `domain/credentials.py:178`, which exists precisely to make PIN-only call sites explicit. `ATTR_PIN_IN_SYNC = credential_in_sync_key("pin")` restates the wire value as a literal rather than `CredentialType.PIN`, but const.py importing from domain would invert the dependency direction, so that is defensible.
+- failure_scenario: none; reported so the caller knows the angle was checked.
+
+Aside (not a reuse finding): `tests/test_websocket.py:636-640` asserts absence via `ATTR_PIN_IN_SYNC in entity["unique_id"]` — substring matching on the unique id, the exact idiom diagnostics.py just moved off of. It is correct today because no other key contains `pin_in_sync`, but a key-segment parse (finding 1) would serve both sites.</result>
+<usage><subagent_tokens>104631</subagent_tokens><tool_uses>8</tool_uses><duration_ms>126148</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a75927ac2176cc794</task-id>
+<tool-use-id>toolu_01DVtAGuDX7gGogtrFrkxr1u</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a75927ac2176cc794.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: simplification finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings, simplification angle, PR #1573 (worktree `/Users/raman/projects/lock_code_manager/.worktrees/pin-in-sync`).
+
+---
+
+**1. `ts/const.ts:8-14` and `ts/generate-view.ts:190-201` — suffix-parsing machinery (`isInSyncKey`, `inSyncCredential`, `CREDENTIAL_LABELS`) generalises over a set that is fixed at one member and already pinned by a contract test.**
+
+Summary: Three exports encode the `&lt;type&gt;_in_sync` rule twice (`endsWith` in one, `slice(0, -(len+1))` arithmetic in the other) plus a label table with a `?? credential` fallback that no test exercises. The backend side of this PR already forces every new managed type through `_SHARED_KEYS` in `tests/test_frontend_contract.py` (a `PIN_IN_SYNC_KEY` constant must exist in `const.ts`), so the TS side cannot "just work" for a new type anyway: someone adds the constant, and at that moment they can add it to a list.
+
+Failure scenario / cost: the next credential type reaches the card with `CREDENTIAL_LABELS` untouched and the untested fallback prints the raw backend key (`Front password`) with no test failing; meanwhile every reader of the three call sites has to reconstruct the suffix rule to know what `isInSyncKey` admits. Simpler form: keep the original array-includes shape the code had before the diff:
+
+```ts
+export const PIN_IN_SYNC_KEY = 'pin_in_sync';
+export const IN_SYNC_KEYS = [IN_SYNC_KEY, PIN_IN_SYNC_KEY];
+export const IN_SYNC_ROW_SUFFIX: Record&lt;string, string&gt; = { [PIN_IN_SYNC_KEY]: 'PIN' };
+```
+
+and in `generateEntityCards`: `name: [lockName, IN_SYNC_ROW_SUFFIX[entity.key]].filter(Boolean).join(' ')` (or the one ternary `entity.key === PIN_IN_SYNC_KEY ? \`${lockName} PIN\` : lockName`). Deletes `isInSyncKey`, `inSyncCredential`, the slice arithmetic and the `??` fallback; the three call sites (`compareAndSortEntities:163`, `generateEntityCards:190`, `getSlotMapping:347`) become `IN_SYNC_KEYS.includes(entity.key)`. If the parsing is kept, at least collapse the two functions to one regex (`/^(?:(.+)_)?in_sync$/`) so the rule is stated once. On the question of reusing the entity's registered name instead of a label table: not advisable, `original_name` is frozen at creation (the migration comment at `custom_components/lock_code_manager/__init__.py:1595-1599` says exactly this) while the existing in-sync rows deliberately show the lock's live `friendly_name`, so it would regress on lock rename.
+
+**2. `custom_components/lock_code_manager/binary_sensor.py:171-178` — `Iterable[CredentialAddress]` + `tuple(addresses)` and a defaulted keyword that the only caller always supplies.**
+
+Summary: `managed_addresses` returns `tuple[CredentialAddress, ...]` and the per-credential branch passes `(address,)`, so both inputs are already tuples; `Iterable` (new import) and the `tuple()` copy exist only to accept a shape nobody sends. `enabled_default: bool = True` is keyword-only with a default, but the single call site (line 74) always passes it explicitly, so the default is dead.
+
+Failure scenario / cost: the signature advertises more flexibility than exists, so the next reader checks whether generators/lists arrive from somewhere (they don't), and the dead default lets a future caller silently create an enabled per-credential sensor. Simpler form: `addresses: tuple[CredentialAddress, ...]`, `enabled_default: bool` (no default), `self._addresses = addresses`, drop the `collections.abc` import. The `sensors` triple-list with the star-unpacked generator (lines 54-64) is acceptable as the way to avoid repeating six constructor args; if you want it flatter, a two-line local `def sensor(key, covered, enabled_default)` returning the entity and two comprehension parts reads about the same, so I would not push on it.
+
+**3. `tests/test_websocket.py:195-208` and `:218/228/239` — inserting a request mid-test forced renumbering ids 3 to 6 and split an existing assertion block.**
+
+Summary: the new "user-disabled row still present" block is spliced between the title-lookup call and `assert result[CONF_SLOTS] == {...}` (line 210), which asserts on the *first* response; after the diff that assertion reads as if it belongs to the new request. Three unrelated existing requests were renumbered to make room.
+
+Failure scenario / cost: every future insertion into this test repeats the renumbering churn, and the misplaced `CONF_SLOTS` assertion will confuse the next person debugging a slot-payload failure. Simpler form: a standalone `test_get_config_entry_data_omits_integration_disabled_entities` holding both the `assert not [... ATTR_PIN_IN_SYNC in unique_id]` check (currently lines 157-163) and the user-disabled follow-up, with its own ids 1 and 2; the existing test then changes only by nothing (the count 18 is unchanged). Drop "as before" from the comment at line 195; it narrates history.
+
+**4. `tests/test_binary_sensor.py:2494-2496` and `tests/test_diagnostics.py:207-209` — the enable-then-reload dance is copy-pasted, while its inverse already has a helper.**
+
+Summary: `tests/common.py:87` has `async_disable_and_reload(hass, config_entry, entity_id)`; both new tests hand-roll the mirror image (`async_update_entity(..., disabled_by=None)`, `async_reload`, `async_block_till_done`) with no assertion that the entity actually came up.
+
+Failure scenario / cost: the third test to need an enabled `pin_in_sync` sensor copies it again, and if a reload ever stops surfacing the entity the tests fail later on a `None` state with a less direct message. Simpler form: `async_enable_and_reload` next to the existing helper, ending with `assert hass.states.get(entity_id) is not None`, used by both tests.
+
+**5. `tests/test_binary_sensor.py:2514-2519` — five repeated `hass.states.get(...)` calls where two bindings do.**
+
+Summary: after the failed tick the test fetches `pin_entity_id` three times and `aggregate_id` twice inside one assertion group; the first half of the same test (lines 2500-2503) already shows the bind-once pattern.
+
+Failure scenario / cost: purely readability, but the closing assertion is a four-line expression comparing two lookups when `pin.attributes[...] == aggregate.attributes[...]` on rebound names says it in one. Simpler form: rebind `aggregate`/`pin` after the tick and assert `pin.state == aggregate.state == STATE_OFF` plus the attribute equality, mirroring lines 2504-2505.
+
+**6. `custom_components/lock_code_manager/binary_sensor.py:54-60` — the comment's second sentence justifies the default rather than a deviation.**
+
+Summary: "Not updated before add: the sensors read the coordinator's fold, and a refresh requested by a sensor about to be discarded as disabled would cost the lock a read." Omitting `update_before_add` *is* `async_add_entities`'s default; the sentence exists because the diff removed a `True` that used to be there, i.e., it is review/history narrative. The sibling `add_pin_active_entity` (line 43) still passes `True`, which is the only reason a reader might wonder.
+
+Failure scenario / cost: minor, but it violates the project's stated comment rule (deviation/trap, not justification for the expected mechanism) and will drift once the sibling changes. Simpler form: cut it to the one-clause trap if you want to keep it ("no update_before_add: a CoordinatorEntity refresh here would cost the lock a read for a sensor that ships disabled"), or drop it and let the commit message carry the removal of `True`.
+
+Checked and not flagged: `credential_in_sync_key` in `const.py:167` has exactly one production call (`binary_sensor.py:65`) but is also the single place the key format lives for `test_frontend_contract.py:220`, which is the test that forces strings/icons/suffix entries for each managed type; inlining it would duplicate the format in the test, so keeping the function is the simpler option. `diagnostics._is_sensitive` and the websocket filter comment are fine as written.</result>
+<usage><subagent_tokens>102150</subagent_tokens><tool_uses>8</tool_uses><duration_ms>140307</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab1b2e536c80a3edd</task-id>
+<tool-use-id>toolu_01LQ12Lwahsr4EyWT6VschyT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ab1b2e536c80a3edd.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: CLAUDE.md conventions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need; no further tool calls are required.
+
+## Findings: none
+
+I read every governing instructions file fully and checked the diff against each rule I could quote. No diff line clearly breaks a stated rule. Candidates I investigated and rejected, with evidence:
+
+**Instruction files read**
+- `/Users/raman/.claude/CLAUDE.md` (+ `RTK.md`)
+- `/Users/raman/projects/lock_code_manager/.worktrees/pin-in-sync/CLAUDE.md` (delegates to AGENTS.md)
+- `/Users/raman/projects/lock_code_manager/.worktrees/pin-in-sync/AGENTS.md`
+- Project-level `.claude/CLAUDE.md` is not present in the worktree (it exists only in the main checkout; its three rules — templates, fast pytest, `prek` — are all process rules not testable from the diff). No `CLAUDE.md`/`CLAUDE.local.md` exists under `custom_components/`, `tests/`, or `ts/`.
+
+**Rules checked, and why each is satisfied**
+
+| Rule (source) | Result |
+|---|---|
+| "Do NOT add Google-style `Args:`/`Returns:` sections" (AGENTS.md Code Style) | No new docstring in the diff has either section. |
+| "No inline/local imports" (AGENTS.md) | All new imports are module-top. |
+| "Import order: future → stdlib → third-party → homeassistant → first-party → local" (AGENTS.md); `force-sort-within-sections = true` in pyproject | `from collections.abc import Iterable` before `import logging` is correct under that setting. `uvx ruff@0.16.7 check` with the project config on every changed Python file: **All checks passed!** (My `--select D` run showed D212 hits, but those are a config-override artifact — the project deliberately ignores D212 and every pre-existing docstring in `websocket.py` uses the same second-line style.) |
+| "Prefer imports from canonical/top-level modules … where the symbol is canonically defined" (~/.claude/CLAUDE.md Python) | `MANAGED_CREDENTIAL_TYPES` (line 59), `CredentialAddress` (line 150), `CredentialType` (line 28) are all defined in `domain/credentials.py`, exactly where the diff imports them from. |
+| "Tests go with code changes in the same PR" (AGENTS.md Git conventions) | Diff adds tests in `test_binary_sensor.py`, `test_diagnostics.py`, `test_frontend_contract.py`, `test_init.py`, `test_websocket.py`, `generate-view.test.ts`. |
+| "Don't manually inject `hass.data`" / "Minimize caplog text assertions" / "Don't use `MagicMock()` for coordinators" (AGENTS.md Testing) | None of the new tests touch `hass.data`, `caplog`, or mock a coordinator. The `ent_reg.async_get_or_create` + `invoke_lock_slot_adders` pattern in the parametrized test is the pre-existing pattern of the test it replaces. |
+| "After modifying any TypeScript files in `ts/`, the JavaScript bundle must be rebuilt" (AGENTS.md Building) | `git diff --stat origin/refactor/slot-coordinator-owns-sync-managers...HEAD -- custom_components/lock_code_manager/www/generated` shows `lock-code-manager.js | 2 +-`, and `git log` shows the bundle was committed in the same commits as the `ts/` changes (`6a6ac380`, `3aea9c22`, `e83ca13a`). The `yarn-build` pre-commit hook also enforces this. (`/tmp/pr1573.diff` simply omits the minified bundle.) |
+| "Entity unique IDs: `{entry_id}\|{slot}\|{entity_type}` (per-lock entities add `\|{lock_entity_id}`)" (AGENTS.md Important Constraints) | The new sensor reuses `BaseLockCodeManagerCodeSlotPerLockEntity` with key `pin_in_sync`; `test_init.py` asserts the exact `{entry}\|{slot}\|pin_in_sync\|{lock}` form. `diagnostics.py`'s new `parts[2]` check relies on this same documented layout. |
+| Translations must be generated, not hand-edited | **No such rule exists.** AGENTS.md, `.pre-commit-config.yaml`, `package.json`, `pyproject.toml`, `scripts/`, and `.github/workflows` contain no translation generator or hassfest step. `strings.json` and `translations/en.json` are byte-identical and have been committed together by hand in every recent commit. |
+| Wiki / docs / CHANGELOG update required on new entity | **No such rule.** AGENTS.md only says wiki changes "should only be pushed when that code is released"; no `docs/` or `CHANGELOG.md` exists in the repo. The diff *does* update AGENTS.md's Entities section for the new sensor. |
+| "Spell out acronyms in code comments" (AGENTS.md) | New comments use "PIN", which AGENTS.md itself uses as the domain term throughout (`PIN active status`, `Per-lock slot PIN sensors`); not a clear violation. |
+| "No `nonlocal`/`global`" (AGENTS.md) | None introduced. |
+
+**One adjacent observation (pre-existing, not a diff violation):** AGENTS.md line 290 states the compiled output is `custom_components/lock_code_manager/www/lock-code-manager-strategy.js`, but the real artifact is `www/generated/lock-code-manager.js`. The diff didn't introduce this and no rule is broken by it, so it is not a finding — just a stale line the caller may want to fix separately.</result>
+<usage><subagent_tokens>110879</subagent_tokens><tool_uses>14</tool_uses><duration_ms>113669</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad2955abd0e97c69b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/ad2955abd0e97c69b.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: altitude finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have what I need. Findings follow.
+
+## Candidates
+
+### 1. `custom_components/lock_code_manager/const.py:171` — `ATTR_PIN_IN_SYNC = credential_in_sync_key("pin")` plus a hand-extended `PER_LOCK_ENTITY_SUFFIX`
+
+**Summary.** The PR adds a generator (`credential_in_sync_key`) and then immediately hard-codes its single output as a literal `"pin"` constant and a literal `"PIN in sync"` suffix. `MANAGED_CREDENTIAL_TYPES` already exists (`domain/credentials.py:59`) and `binary_sensor.py` loops over it via `managed_addresses`; `const.py` does not. The three places a new managed type must be added by hand (strings.json, icons.json, `PER_LOCK_ENTITY_SUFFIX`) are guarded by a new test rather than reduced.
+
+**Failure scenario.** Adding `CredentialType.PASSWORD` to `MANAGED_CREDENTIAL_TYPES` makes the platform emit a `password_in_sync` sensor (it loops over addresses), then `test_every_managed_credential_type_has_an_in_sync_sensor_declared` fails and the migration at `__init__.py:1602` raises `KeyError` on `PER_LOCK_ENTITY_SUFFIX[...]` for any install that already registered that sensor. The deeper change: `PER_LOCK_ENTITY_SUFFIX` can be built from one per-type label map (`{CredentialType.PIN: "PIN"}`) as `{ATTR_CODE: label, ATTR_IN_SYNC: "in sync", **{credential_in_sync_key(t): f"{label} in sync" for t, label in labels}}`, and the same label map is what strings.json's `{lock_name} PIN in sync` and the TS `CREDENTIAL_LABELS` restate. That collapses three edits to one label entry plus the two JSON files that HA itself requires. Note `const.py` cannot import `domain.credentials` today only if there is a cycle; `credentials.py` imports nothing from `const`, so the import is legal.
+
+### 2. `custom_components/lock_code_manager/websocket.py:449` — filtering `disabled_by is not INTEGRATION` in the payload
+
+**Summary.** The filter special-cases one disabler at the backend to keep a card from rendering a stateless row. `as_partial_dict` already ships `disabled_by` (verified in HA's `RegistryEntry.as_partial_dict`), so the card has everything it needs to decide; the TS `EntityRegistryEntry` stub (`ts/ha_type_stubs.ts:8`) simply does not declare it. The comment's "legacy strategy addresses the slot's required rows directly" claim holds for `pinActiveEntity.entity_id` / `codeEventEntity.entity_id` (`generate-view.ts:262-268`, undefined → TypeError), but NOT for in_sync rows: those go through `maybeGenerateFoldEntityRowCard` and a user-disabled one just renders as HA's "entity not available" row today, exactly what this PR is trying to avoid for shipped-disabled ones.
+
+**Failure scenario.** A user who disables `pin_in_sync` after enabling it gets the same "not available" row the PR removed for the shipped-disabled case; the payload now carries an asymmetry nobody else asked for, and `test_websocket` pins `len == 18` against it. The simpler change: leave the payload as the registry (all entries, as before) and have `getSlotMapping` skip `disabled_by != null` entries for the optional groups (`inSyncEntities`, `codeSensorEntities`) while leaving required rows alone. One rule, in the layer that knows which rows are optional, for every disabler.
+
+### 3. `ts/const.ts:12` — `CREDENTIAL_LABELS: Record&lt;string,string&gt; = { pin: 'PIN' }`
+
+**Summary.** A second copy of a name strings.json already owns. `as_partial_dict` ships `original_name` (the translated `{lock_name} PIN in sync` with `lock_name` filled from `entity.py:347`), and `getEntityDisplayName` (`generate-view.ts:215`) already reads `entity.name ?? entity.original_name` for every non-per-lock row. The new branch reconstructs `"Front PIN"` from the lock's `friendly_name` plus a TS label instead.
+
+**Failure scenario.** A non-English install renders `Front PIN` on the card next to a localized entity name elsewhere; a new credential type shows its raw key (`?? credential` fallback) until someone edits TS. Deeper change: for per-lock rows use `original_name` with the lock's display name stripped (the same strip-a-prefix pattern `getEntityDisplayName` uses for the config title), so the card reads the name the backend already translated and `CREDENTIAL_LABELS` disappears.
+
+### 4. `custom_components/lock_code_manager/diagnostics.py:41` — `_SENSITIVE_KEYS = frozenset({"pin", "code"})` matched on `parts[2]`
+
+**Summary.** Diagnostics now knows both the unique-id positional layout and which keys hold secrets. The layout is parsed in four places by hand (`diagnostics.py:47`, `__init__.py:1420, 1602, 1624`, and `ts/generate-view.ts:174-179`) while `domain/config.py` has `build_slot_unique_id`/`parse_slot_unique_id` but no key accessor. The key set restates `CONF_PIN` (text.py) and `ATTR_CODE` (sensor.py) as literals.
+
+**Failure scenario.** A `password` text entity (`CredentialType.PASSWORD` exists at `credentials.py:43`) ships with its cleartext state in diagnostics until someone remembers to edit `_SENSITIVE_KEYS`; the failure mode is a silent disclosure, not a test failure. Deeper change: export the sensitive set beside the entity definitions (`SENSITIVE_ENTITY_KEYS = {ATTR_CODE, *CredentialType}` in const.py, or a class attribute the text/sensor platforms set) and add a `slot_unique_id_key()` accessor in `domain/config.py` so no caller splits on `|` itself. The current fix is correct but at the wrong altitude for a redaction rule.
+
+### 5. `custom_components/lock_code_manager/binary_sensor.py:62` — `enabled_default` threaded as a tuple element and `__init__` keyword
+
+**Summary.** The policy "per-credential sensors ship disabled because with one managed type they duplicate the aggregate" is stated in a comment and encoded as a literal `True`/`False` in a tuple. It is derivable: `enabled_default = key == ATTR_IN_SYNC` at the call site, or better, the entity computes it from what it covers (`len(self._addresses) == len(managed_addresses(slot_num))`) so the aggregate and a per-type sensor are one class with one rule, no keyword.
+
+**Failure scenario.** No runtime cost today; the cost is that the tuple's third column is the only place the rule lives and the next per-type sensor copies `False` without the reasoning. The `available` semantics are consistent between aggregate and single (both require `has_credential` for every covered address), so the shared-class model does not hide a divergence there. Low severity.
+
+### 6. `ts/const.ts:6` — `PIN_IN_SYNC_KEY` added to `KEY_ORDER`; `isInSyncKey`/`inSyncCredential` derive from the suffix
+
+**Summary.** The TS side introduces a generic suffix rule (`endsWith('_in_sync')`) and then still adds the one concrete `pin_in_sync` key to `KEY_ORDER`, and `test_frontend_contract` binds `PIN_IN_SYNC_KEY` as a shared constant. The generic rule and the enumerated key coexist; only the enumerated one drives ordering.
+
+**Failure scenario.** A `password_in_sync` sensor groups correctly (suffix rule) but falls out of the sort order and lands wherever `compareAndSortEntities` puts unknown keys. Simpler: sort with `isInSyncKey` as a class (all `*_in_sync` after `in_sync`, then by credential) and drop the per-type constant from `KEY_ORDER` and the contract test's `_SHARED_KEYS`.
+
+## Verified claims from the angle
+
+- "Legacy strategy addresses required rows directly": true for `active`/`credential_used` (`ts/generate-view.ts:262-268`), false for in_sync rows, which are optional and tolerate absence.
+- `as_partial_dict` includes `disabled_by`, `name`, `original_name`, `translation_key`; the TS stub declares none but `name`/`original_name`.
+- Literal `"pin"`/`"PIN"` in the diff: `const.py:171` (`credential_in_sync_key("pin")`), `const.py:181` (`"PIN in sync"`), `diagnostics.py:41`, `ts/const.ts:6,12`, plus strings/icons JSON (those two are legitimately per-key).</result>
+<usage><subagent_tokens>104953</subagent_tokens><tool_uses>9</tool_uses><duration_ms>130416</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9f69407804d918d3</task-id>
+<tool-use-id>toolu_01QjqAD7ztANgJxj4DhA5cwB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a9f69407804d918d3.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: efficiency finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything needed is in hand. Findings follow.
+
+## Efficiency review — PR "feat: a pin_in_sync sensor per user and lock, disabled by default"
+
+Verified against HA 2026.9.0b4 in `/Users/raman/projects/lock_code_manager/.venv` (the worktree's own `.venv` has no `homeassistant` installed).
+
+### Candidate 1 — the `update_before_add` removal saves no lock read; the comment's justification is wrong
+
+- **file:** `custom_components/lock_code_manager/binary_sensor.py`
+- **line:** 58–60 (comment), 72–88 (the `async_add_entities` call)
+- **summary:** The comment claims dropping `update_before_add=True` avoids "cost[ing] the lock a read" from a sensor about to be discarded as disabled. The mechanism is real (`_async_add_entity` calls `entity.async_device_update` before the registry entry exists, `Entity.enabled` returns True because `registry_entry is None`, and `CoordinatorEntity.async_update` calls `coordinator.async_request_refresh()`). But the read still happens, requested by a sibling in the same tick.
+- **failure_scenario:** `callbacks.invoke_lock_slot_adders` (`domain/callbacks.py:171`) calls every lock-slot adder for the same `(lock, slot)`. `sensor.py:36-44` still adds `LockCodeManagerCodeSlotSensorEntity` — a `CoordinatorEntity` on the *same* `lock.coordinator` — with `update_before_add=True`, and `sensor.py:104-108` additionally force-calls `self.async_update()` in `async_added_to_hass` when `native_value is None`. All of these go through the same `DataUpdateCoordinator._debounced_refresh` (`REQUEST_REFRESH_DEFAULT_COOLDOWN=10`, `immediate=True`), which collapses every request in the window to at most one immediate refresh plus one trailing call. For N slots on one lock, old code issued 2N+ requests → 2 reads; new code issues N+ requests → 2 reads. Net lock I/O: unchanged. What the removal *does* buy is that the binary_sensor platform's add no longer awaits the immediate refresh before assigning entity IDs (the `immediate` debouncer path awaits the actual `async_refresh`), so binary_sensor entities register without blocking on the lock — a latency win for that one platform, not an I/O win. The comment should say that, or be dropped. The cheaper alternative, if fewer startup reads is the actual goal: `update_before_add=True` on a `CoordinatorEntity` is redundant with the coordinator's own `async_config_entry_first_refresh` (`providers/_base.py:906`) in every platform; removing it from `sensor.py` (whose `async_added_to_hass` already self-heals a missing value) is where a read would actually be avoided. That is out of this PR's scope but is the honest framing.
+
+### Candidate 2 — `_sync_state` fold computed twice per state write (low)
+
+- **file:** `custom_components/lock_code_manager/binary_sensor.py`
+- **line:** 186–204
+- **summary:** `Entity.__async_calculate_state` reads `available` once, then `is_on` and `extra_state_attributes` separately; each of the latter two calls `_sync_state` → `SlotEntityCoordinator.sync_state_for` (`domain/slot_coordinator.py:265-283`), which builds a manager list and runs `fold_in_sync` + `fold_sync_status` (list + set construction). There is no cache. `available` (line 182) also iterates `has_credential` over the same addresses.
+- **failure_scenario:** Per manager state change, per *enabled* sensor on that lock: 2× (N dict lookups + list build + set build). With PIN as the only managed type, N=1 and the total is a handful of microseconds. This structure predates the diff (the diff only parameterises `_addresses`), and because `async_added_to_hass` never runs for the disabled per-type sensor, the diff adds no new subscriber to the hot path until a user enables one — at which point each manager change fans out to 2 sensors × 2 folds instead of 1 × 2. Cheaper alternative if you want it: have the sync subscriber callback snapshot `sync_state_for` once into `_attr_is_on` / `_attr_extra_state_attributes` and then call `async_write_ha_state`, instead of passing `self.async_write_ha_state` directly at line 211. Measurable only in principle; flagging as low.
+
+### Checked and not flagged (with the numbers you asked for)
+
+**Item 1 — cost of constructing the disabled per-type entity.** Traced `EntityPlatform._async_add_entity`: `__init__` runs; then `entity.name` (translation cache lookup + placeholder format), `entity_registry.async_get_entity_id`, `dev_reg.async_get_or_create` (existing slot device → compare-and-no-op update), `_async_derive_object_ids`, `entity_registry.async_get_or_create` (existing entry → `_async_update_entity`, no save when unchanged), then `entity.registry_entry.disabled` → `add_to_platform_abort()` and return. **`async_added_to_hass` does not run**, so none of the per-entity side effects in `entity.py` happen for the discarded object: no `async_track_state_change_filtered` tracker (line 275), no `register_sync_subscriber`, no coordinator listener, no `register_entity_remover` / lock-added / lock-removed callbacks (lines 191–213). `__init__` itself (`entity.py:72-109`, `323-351`) does `list(runtime_data.locks.values())`, `build_slot_device_info` → `get_entry_config` (cached on `runtime_data.config`) + `name_for` (linear scan of users, `config.py:258-264`), and two `build_slot_unique_id` calls — no registry writes. A registry entry **is** persisted on first setup (one debounced storage save covering the whole batch), which is the feature. Per reload: `slots × locks × managed_types` extra constructions, each a few dict lookups and one O(users) scan — e.g. 20 users × 3 locks = 60 discarded objects, comfortably sub-millisecond each. No cheaper HA-idiomatic path exists: a registry entry with `disabled_by=INTEGRATION` is only written by the platform on a constructed entity. Not a finding.
+
+**Item 4 — websocket registry lookup.** `websocket.py:445-451`: `er.async_get(hass)` is the *argument* to `er.async_entries_for_config_entry`, evaluated once per request; the comprehension iterates the already-materialised, index-backed list and applies the `disabled_by` filter. No per-iteration registry call. Not a finding.
+
+**Item 5 — `compareAndSortEntities`.** `ts/generate-view.ts:150-169`: the comparator's repeated work is four `KEY_ORDER.indexOf` calls per comparison, which is pre-existing; the diff adds one `key === IN_SYNC_KEY || key.endsWith(...)` and lengthens `KEY_ORDER` by one. Nothing new beyond that. Not a finding.
+
+**Item 6 — diagnostics `.split("|")`.** `diagnostics.py:43-46` runs only inside `async_get_config_entry_diagnostics` (user-triggered download), once per registry entry. Not a hot path. Not a finding.
+
+**Other diff-introduced allocations checked:** `managed_addresses(slot_num)` (`credentials.py:170-175`, sorts a tiny frozenset) is called once per `(lock, slot)` adder invocation and its result shared with the aggregate sensor; `tuple(addresses)` at line 176 is a one-off copy. Neither is measurable.</result>
+<usage><subagent_tokens>121124</subagent_tokens><tool_uses>23</tool_uses><duration_ms>190475</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a26de45f1a3137798</task-id>
+<tool-use-id>toolu_01PUQ7iAwDdpSUPwEYAsDPej</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a26de45f1a3137798.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle C: cross-file tracer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Trace complete. Both suites run green in the worktree (293 Python tests across the five touched files, 826 vitest). Findings below; everything else traced clean.
+
+## Candidates
+
+**1. `custom_components/lock_code_manager/websocket.py:449` — a per-credential sensor the user turned back off re-enters the card payload as a stateless row**
+
+The filter drops only `disabled_by is INTEGRATION`. That correctly hides the shipped-disabled `pin_in_sync`, but the comment's justification ("one the user disabled stays: the legacy strategy addresses the slot's required rows") only holds for rows the strategy *requires* (`pinActiveEntity`, `codeEventEntity`, the aggregate `in_sync`). `pin_in_sync` is opt-in and not required by anything in `ts/generate-view.ts`.
+
+Failure scenario: user enables `binary_sensor.&lt;lock&gt;_pin_in_sync` (disabled_by → `None`), later disables it again from the entity settings dialog (disabled_by → `USER`). `get_config_entry_data` now includes it; `getSlotMapping` routes it into `inSyncEntities` via `isInSyncKey`; `generateEntityCards` emits `{entity, name: "Front PIN"}`; the "Locks in sync" fold renders an "Entity not available" row for a sensor the user explicitly opted out of. Before this PR no opt-in entity existed, so the USER-disabled pass-through was harmless. Suggested predicate: keep USER-disabled rows only for keys the strategy requires, or drop any disabled row whose key is not `in_sync`/`active`/`credential_used`.
+
+**2. `tests/test_init.py:259` — the runtime-added slot's `pin_in_sync` rows are never asserted**
+
+The middle step of `test_entry_setup_and_unload` (slot 3 + lock 2 added through `write_entry_config`) enumerates `(ATTR_CODE, ATTR_IN_SYNC)` only and filters the registry with `if hass.states.get(entity.entity_id)`, which excludes the disabled `pin_in_sync` rows by construction. The PR updated the setup-time and teardown-time enumerations (lines 181, 196, 306) but not this one. The final step only covers slots 1–2 on lock 1, all created at setup.
+
+Failure scenario: a regression in the `lock_slot_adder` path for slots added via the update listener (e.g. `add_code_slot_entities` registering only the aggregate on that path) leaves slot 3 without `pin_in_sync` rows; this test passes unchanged. Fix: add `ATTR_PIN_IN_SYNC` to the line-259 tuple and assert against `async_entries_for_config_entry` without the state filter (or with `include_disabled_entities`), as the other two steps already do.
+
+## Traced with no break (per your numbered list)
+
+1. `LockCodeManagerCodeSlotInSyncEntity.__init__`: only construction site is `binary_sensor.py:74`. No subclasses, nothing in `tests/`, `tests/properties/`, or `pbt/` instantiates it directly.
+2. `PER_LOCK_ENTITY_SUFFIX`: sole reader is `__init__.py:1602` inside `_async_rename_slot_entity_ids`, which iterates existing registry rows (not the dict) and runs only on the version 3→4 branch (`__init__.py:340`). A v3 registry has no `pin_in_sync` rows, so no KeyError and no phantom rename. `tests/test_frontend_contract.py:189` and the new test at line 199 pin the dict to strings.json.
+3. `entity.py:88-93`: `_attr_translation_key = key` and `build_slot_unique_id(..., key, lock_entity_id)`, so `pin_in_sync` resolves to `entity.binary_sensor.pin_in_sync` and the `{lock_name}` placeholder is set at `entity.py:347`. Device is the slot device (unchanged). Cleanup: lock removal uses `_lock_of` (`__init__.py:1418`, any 4-part id, includes disabled rows); slot removal at runtime goes through `_async_remove_slot_devices` and HA's registry drops every entity on the removed device including disabled ones (which is why `test_init.py:306` passes); migration purge uses `parse_slot_unique_id`. `slot_coordinator.py:640` skips `ATTR_IN_SYNC` in `_recompute_active`, but it iterates slot *config* keys, and `pin_in_sync` is never a config key.
+4. `CredentialType(StrEnum).PIN = "pin"` → `credential_in_sync_key("pin") == "pin_in_sync"`, matching strings.json/icons.json; `MANAGED_CREDENTIAL_TYPES = {PIN}`.
+5. TS: `slot-section-strategy.ts:86` and `generate-view.ts:58` consume `entities` without counting; `getSlotMapping` requires only `active`/`credential_used`. `KEY_ORDER` has `PIN_IN_SYNC_KEY` after `IN_SYNC_KEY`. `slot-card.ts` uses a different websocket payload. Only concern is candidate 1.
+6. `tests/common.py`: `pin_in_sync_entity_id` added; no helper enumerates per-slot removal lists. Only the gap in candidate 2.
+7. `_is_sensitive` has one caller (`diagnostics.py:68`). All LCM unique IDs go through `build_slot_unique_id` so `parts[2]` is always the key; `pin`/`code` still match. Note `tests/test_diagnostics.py:189` still says "checks unique_id for |pin and |code markers", which the PR made false (comment rot, no runtime effect).
+
+Also checked: dropping `update_before_add=True` on the in-sync sensors does not lose the initial coordinator refresh, since `sensor.py:42` still passes `True` for the code sensor on the same lock coordinator and `Platform.SENSOR` is always forwarded (`const.py:11`).</result>
+<usage><subagent_tokens>132831</subagent_tokens><tool_uses>21</tool_uses><duration_ms>265701</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4f29efad8ee689b9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a4f29efad8ee689b9.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle A: line-by-line diff scan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need; no further requests. Final report follows.
+
+## Angle A findings — PR "pin_in_sync sensor per user and lock"
+
+Worktree: `/Users/raman/projects/lock_code_manager/.worktrees/pin-in-sync`. Line numbers are 1-indexed in the NEW files.
+
+### Candidate 1 (highest confidence) — websocket filter drops a slot's required rows under a stock HA option
+
+- **file**: `custom_components/lock_code_manager/websocket.py`
+- **line**: 449 (`if entity.disabled_by is not er.RegistryEntryDisabler.INTEGRATION`), comment at 441-443
+- **summary**: The filter treats `INTEGRATION` as meaning "shipped disabled by LCM", but HA also stamps `INTEGRATION` on every new entity of a config entry whose "Enable newly added entities" system option is off, so the payload silently loses a new user's name/pin/enabled/active/event/code/in_sync rows.
+- **failure_scenario**: Verified in the installed HA: `entity_registry.py:1570-1576` sets `disabled_by = RegistryEntryDisabler.INTEGRATION` whenever `config_entry.pref_disable_new_entities` is true, and `entity_platform.py:1003-1004` only stamps it for `entity_registry_enabled_default=False`. User turns off "Enable newly added entities" on the LCM entry, then adds a user. Every row for that slot is created `disabled_by=INTEGRATION`. Pre-PR, `get_config_entry_data` still returned them and the card rendered "unavailable" rows. Post-PR they are gone: `ts/generate-view.ts:57-63` finds no entity for the slot so `user_entity_id` (line 106) is `undefined`, and the legacy path `getSlotMapping` (line 333) returns `pinActiveEntity`/`codeEventEntity` as `undefined`, which `generateSlotCard` dereferences at lines 262 and 266 (`slotMapping.pinActiveEntity.entity_id`) → TypeError, no dashboard. The comment's claim "One the user disabled stays" is true for `USER` but the predicate is not "disabled by LCM"; it is "disabled by anything HA labels INTEGRATION". A tighter predicate would key on the specific unique-id key (`pin_in_sync`/any `credential_in_sync_key`) rather than on `disabled_by`.
+
+### Candidate 2 (low, half-believed) — `isInSyncKey` throws where the old `.includes` tolerated `undefined`
+
+- **file**: `ts/generate-view.ts`
+- **line**: 163 (`compareAndSortEntities`), 190 (`generateEntityCards`), 347 (`getSlotMapping`); helper at `ts/const.ts:8-9`
+- **summary**: `entity.key` is `split[2]` from `createLockCodeManagerEntity` (line 177) and is `undefined` for any registry row whose unique_id has fewer than three `|` segments; `[..].includes(undefined)` returned false, but `undefined.endsWith(...)` throws.
+- **failure_scenario**: Any LCM-platform registry row with a short unique_id (a foreign/corrupt row, or something a future provider registers under the entry without the slot shape) reaches the strategy → `TypeError: Cannot read properties of undefined (reading 'endsWith')` on the first comparison or grouping, and the whole view fails instead of one row mis-sorting. Every builder in the integration emits ≥3 segments (`domain/config.py:537-549`) and I found no other unique-id format, so this needs a row LCM did not create. `isInSyncKey` could guard with `typeof key === 'string'` or `key?.endsWith`.
+
+### Verified safe (not candidates, listed so you don't re-derive them)
+
+- **`binary_sensor.py:87` removed `update_before_add=True`**: inert. `providers/_base.py:906` runs `async_config_entry_first_refresh()` during lock setup, before `__init__.py:1891` invokes the slot adders, and `sensor.py:42` still passes `True` for the code sensor on the same coordinator. First written state of the in-sync sensors is unchanged.
+- **`diagnostics.py:47-48` substring → exact key**: the only row the old `|pin` marker matched that the new one doesn't is a leftover legacy `pin_used` event row (only left behind when the rename migration hits a duplicate, `__init__.py:1398-1412`). Its attributes are the bus event payload at `domain/events.py:95-105`, which carries name/entry/source/target/type/operation — no PIN. Harmless. `platform == DOMAIN` guard unchanged; `len(parts) &gt; 2` guard is correct for all builder shapes.
+- **`__init__.py:1602` `PER_LOCK_ENTITY_SUFFIX[...]` KeyError**: the migration iterates `async_entries_for_config_entry` (includes disabled rows), so the new `pin_in_sync` rows do flow through it; `ATTR_PIN_IN_SYNC` is in the dict and `test_every_managed_credential_type_has_an_in_sync_sensor_declared` pins it for every managed type. Only 4-segment keys are `code`, `in_sync`, `pin_in_sync`.
+- **Lock removal with disabled `pin_in_sync` rows**: `_async_purge_dropped_locks` (`__init__.py:1436-1456`) purges by `_lock_of(unique_id)` over registry rows, so a row with no live entity object is still removed. Slot removal likewise uses `parse_slot_unique_id` (line 1558). No orphaning.
+- **Committed bundle `www/generated/lock-code-manager.js`**: rebuilt in the HEAD commit and contains `isInSyncKey`/`inSyncCredential`/`CREDENTIAL_LABELS`. `pin_in_sync` literal is absent only because `KEY_ORDER`/`compareAndSortEntities` are tree-shaken out of the bundle on `main` too (0 hits for `indexOf(x.key)` on both). Not stale.
+- **`CredentialType.PIN.value`** is lowercase `"pin"` (`domain/credentials.py:36`), so `credential_in_sync_key` yields exactly `ATTR_PIN_IN_SYNC`; translation/icon lookup resolves.
+- **`register_sync_subscriber` set of bound methods**: two entity objects' `async_write_ha_state` are distinct bound methods, so both aggregate and per-credential sensors stay subscribed (`domain/slot_coordinator.py:361-374`).
+- **`slot_coordinator.py:640`** key tuple names `ATTR_IN_SYNC` but iterates slot *config* keys; `pin_in_sync` is never a config key. Not affected.</result>
+<usage><subagent_tokens>173516</subagent_tokens><tool_uses>54</tool_uses><duration_ms>520835</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a73bf808afbdca177</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a73bf808afbdca177.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle B: removed-behavior auditor" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Angle B — removed-behavior audit of `/tmp/pr1573.diff` (PR "pin_in_sync sensor per user and lock")
+
+**Caveat first:** the worktree is being edited concurrently while I reviewed. `/tmp/pr1573.diff` is stale relative to `/Users/raman/projects/lock_code_manager/.worktrees/pin-in-sync` (18 files uncommitted vs HEAD; `binary_sensor.py` changed at 08:04:27 and again between two of my reads). Findings below are against the diff as given, with a note where the live tree already supersedes it. The full suite passed on an intermediate snapshot (2449 passed, 112 s); a later snapshot failed 2 tests (see candidate 1), and the line has since changed again.
+
+### Candidates with a nameable failure scenario
+
+**1. (Working tree, not in the diff — flagging because it's what would be pushed.) `custom_components/lock_code_manager/binary_sensor.py:163`**
+Snapshot at 08:04 had `self._attr_entity_registry_enabled_default = set(addresses) == set(managed_addresses(slot_num))`. With `MANAGED_CREDENTIAL_TYPES = {PIN}` (`domain/credentials.py:59`), the aggregate's addresses and the PIN sensor's `(pin_address,)` are the same set, so `pin_in_sync` ships **enabled** — the opposite of the PR title. Verified: `set(managed_addresses(1)) == {pin_address(1)}` is `True`; `test_pin_in_sync_is_registered_but_disabled_by_default` and `test_get_config_entry_data` (now expecting `[INTEGRATION]*4` disabled rows) both FAILED on that snapshot. Failure scenario: fresh setup with 2 users × 2 locks → 4 extra enabled `binary_sensor.*_pin_in_sync` entities with state, and the legacy card renders a "Front PIN" row beside every lock row for everyone. On my last read the line is `key == ATTR_IN_SYNC`, which fixes it — whoever is editing should re-run those two tests before pushing.
+
+### Deletions audited — no failure scenario found (evidence, so nobody re-does this)
+
+**2. `binary_sensor.py` — `True` (update_before_add) removed.** What it did: HA calls `entity.async_device_update()` before registering, *also for entities about to be registered disabled* (`entity_platform._async_add_entity`, comment "also for disabled entities"); `CoordinatorEntity.async_update` → `coordinator.async_request_refresh()` (debounced, 10 s cooldown). So on main every in_sync add (setup, reload, slot add, lock add) requested a lock read. This matters on slot add: the sync manager's LOADING tick returns early when `coordinator.has_credential(address)` is False (`domain/sync.py:470`, "Slot not in coordinator data, skipping"), the sensor reports `unavailable` (`available` gates on `has_credential`), and nothing in the slot-add path (`__init__.py:2035-2143`, `_async_start_slot_sync`) requests a refresh itself; push providers have `update_interval=None`. **But** the `code` sensor in `sensor.py:42` still passes `True` and is added by the same lock-slot adder, so the refresh still happens. Verified with a stack-capture probe after `add_user` on a push-mode mock lock: the post-add `request_refresh` calls originate from `entity_platform._async_add_entity → async_device_update → CoordinatorEntity.async_update`, i.e. the code sensor; the new slot converges to `in_sync=on`, PIN written. Net: no behavior change, but the deleted comment's rationale ("a refresh requested by a sensor about to be discarded as disabled would cost the lock a read") is moot — the code sensor still costs that read on every add. The working tree already dropped that comment. Also checked: the non-update add path (`_async_add_entities`) still isolates per-entity exceptions (try/except per entity), same as the gather/`return_exceptions` path it replaced. No test asserts initial state without `async_initial_tick`/a coordinator refresh.
+
+**3. `binary_sensor.py` — `managed_addresses(slot_num)` at init → `tuple(addresses)`.** `managed_addresses` (`domain/credentials.py:170`) is pure (builds addresses from the constant type set, reads no config). Nothing lost; the aggregate gets the identical tuple from the adder.
+
+**4. `diagnostics.py` — `("|pin","|code") in uid` → `parts[2] in {"pin","code"}`.** Every unique_id under `DOMAIN` is built by `build_slot_unique_id` (`domain/config.py:537`): `{entry}|{slot}|{key}` or `{entry}|{slot}|{key}|{lock_entity_id}` — sole call sites `entity.py:93` (slot entities: `pin`, `name`, `enabled`, `active`, `calendar`, `condition_entity`, `credential_used`, legacy `pin_used`) and `entity.py:349` (per-lock: `code`, `in_sync`, now `pin_in_sync`). `websocket.py:160/620/797` build the same shape for lookups. No lock-level/hub entities carry platform `DOMAIN` (only `PLATFORMS = binary_sensor, event, sensor` plus text/switch, all via the same base). Entry ids are hex and lock entity ids contain no `|`, so the old substring predicate and the new index predicate agree on every pre-existing entity; the only divergence is `pin_in_sync`, which is the intent. Working tree now uses `slot_unique_id_key` + `SENSITIVE_ENTITY_KEYS = {code, *CREDENTIAL_LABELS}` = `{code, pin}` — same set.
+
+**5. `const.py` — `PER_LOCK_ENTITY_SUFFIX` moved/extended.** Readers: `__init__.py:1602` (rename migration, indexes by `unique_id.split('|')[2]` for per-lock rows; `er.async_entries_for_config_entry` returns disabled rows too, so the disabled `pin_in_sync` rows are renamed and must have a key — they do) and `tests/test_frontend_contract.py:189`. The new `test_every_managed_credential_type_has_an_in_sync_sensor_declared` guards the KeyError for future types. Working tree indexes via `slot_unique_id_key` — same value.
+
+**6. `websocket.py` — payload excludes `disabled_by is INTEGRATION`.** Consumers of `CONF_ENTITIES`: `ts/generate-view.ts:58` (first entity per slot as `user_entity_id`) and `ts/slot-section-strategy.ts:86` → `getSlotMapping` (legacy card). Neither needed the disabled rows; user-disabled rows were already passed through before and still are (`RegistryEntryDisabler` is a StrEnum singleton, so `is not` is sound). A user-enabled `pin_in_sync` gets a "&lt;Lock&gt; PIN" row; an absent aggregate is not a crash (rows are just omitted). Working tree reverted this backend filter in favor of a `!entity.disabled_by` guard on the two optional groups in `generate-view.ts:354-356` — strictly better (required rows still addressed), no regression either way.
+
+**7. `ts/generate-view.ts` — `[IN_SYNC_KEY, CODE_SENSOR_KEY].includes` → `isInSyncKey` (`endsWith('_in_sync')`).** Keys are `unique_id.split('|')[2]`; the full set is enumerated in item 4 — nothing else ends with `_in_sync`. Only edge: `split[2]` is `undefined` for a malformed unique_id and the diff's `key.endsWith` would throw, but `createLockCodeManagerEntity` already dereferences `entity.unique_id` before that (pre-existing), and the working tree hardened `isInSyncKey` to accept `undefined` via a regex anyway.
+
+No files written; the scratch probe under `tests/_probe_tmp.py` was removed after each run (`git status` shows only the concurrent editor's modifications).</result>
+<usage><subagent_tokens>205061</subagent_tokens><tool_uses>39</tool_uses><duration_ms>811973</duration_ms></usage>
+</task-notification>
