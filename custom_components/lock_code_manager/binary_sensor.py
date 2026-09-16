@@ -11,9 +11,9 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
+from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS, credential_in_sync_key
 from .domain.coordinator import LockUsercodeUpdateCoordinator
-from .domain.credentials import managed_addresses
+from .domain.credentials import CredentialAddress, managed_addresses
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import subentry_id_for_slot
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
@@ -50,13 +50,25 @@ async def async_setup_entry(
         coordinator = lock.coordinator
         if coordinator is None:
             return
+        addresses = managed_addresses(slot_num)
+        # The aggregate over every managed credential, then one sensor per
+        # credential.
         async_add_entities(
             [
                 LockCodeManagerCodeSlotInSyncEntity(
-                    hass, ent_reg, config_entry, coordinator, lock, slot_num
+                    hass, ent_reg, config_entry, coordinator, lock, slot_num, *props
+                )
+                for props in (
+                    (ATTR_IN_SYNC, addresses),
+                    *(
+                        (
+                            credential_in_sync_key(address.credential_type.value),
+                            (address,),
+                        )
+                        for address in addresses
+                    ),
                 )
             ],
-            True,
             config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 
@@ -116,13 +128,14 @@ class LockCodeManagerCodeSlotInSyncEntity(
     BinarySensorEntity,
 ):
     """
-    In-sync binary sensor for the user's whole record on this lock.
+    In-sync binary sensor over some credentials of the user on this lock.
 
-    A read-only view over the slot coordinator's fold of every managed
-    credential for this user on this lock: on when all are in sync,
-    reporting the worst of their statuses. The coordinator owns the
-    managers and notifies its subscribers when one changes; this entity
-    neither starts nor stops them, so disabling it never stops a sync.
+    A read-only view over the slot coordinator's fold of those credentials:
+    on when all are in sync, reporting the worst of their statuses. The
+    aggregate ``in_sync`` sensor covers every managed credential; a
+    per-credential sensor covers one. The coordinator owns the managers and
+    notifies its subscribers when one changes; this entity neither starts
+    nor stops them, so disabling it never stops a sync.
     """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -135,13 +148,19 @@ class LockCodeManagerCodeSlotInSyncEntity(
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
         slot_num: int,
+        key: str,
+        addresses: tuple[CredentialAddress, ...],
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
-            self, hass, ent_reg, config_entry, lock, slot_num, ATTR_IN_SYNC
+            self, hass, ent_reg, config_entry, lock, slot_num, key
         )
         CoordinatorEntity.__init__(self, coordinator)
-        self._addresses = managed_addresses(slot_num)
+        self._addresses = addresses
+        # With a single credential type a per-credential sensor reads the same
+        # as the aggregate, so only the aggregate ships enabled; enabling a
+        # per-credential one splits the view for whoever wants it.
+        self._attr_entity_registry_enabled_default = key == ATTR_IN_SYNC
 
     @property
     def available(self) -> bool:
@@ -161,7 +180,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     @property
     def is_on(self) -> bool | None:
-        """Return whether every managed credential is in sync."""
+        """Return whether every credential this sensor covers is in sync."""
         return self._sync_state[0]
 
     @property

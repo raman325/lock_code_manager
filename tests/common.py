@@ -29,6 +29,7 @@ from homeassistant.util import slugify
 from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_IN_SYNC,
+    ATTR_PIN_IN_SYNC,
     CONF_LOCKS,
     CONF_SLOT,
     CONF_SLOTS,
@@ -93,6 +94,16 @@ async def async_disable_and_reload(
     await hass.config_entries.async_reload(config_entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get(entity_id) is None
+
+
+async def async_enable_and_reload(
+    hass: HomeAssistant, config_entry: ConfigEntry, entity_id: str
+) -> None:
+    """Enable a registry-disabled entity and reload the entry, so it loads."""
+    er.async_get(hass).async_update_entity(entity_id, disabled_by=None)
+    await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id) is not None
 
 
 def all_sync_managers(config_entry: ConfigEntry) -> list[SlotSyncManager]:
@@ -233,6 +244,23 @@ def in_sync_entity_id(
     """
     return _per_lock_entity_id(
         hass, BINARY_SENSOR_DOMAIN, config_entry, slot_num, ATTR_IN_SYNC, lock_entity_id
+    )
+
+
+def pin_in_sync_entity_id(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    slot_num: int,
+    lock_entity_id: str = LOCK_1_ENTITY_ID,
+) -> str:
+    """Return the PIN in-sync entity for one slot on one lock, enabled or not."""
+    return _per_lock_entity_id(
+        hass,
+        BINARY_SENSOR_DOMAIN,
+        config_entry,
+        slot_num,
+        ATTR_PIN_IN_SYNC,
+        lock_entity_id,
     )
 
 

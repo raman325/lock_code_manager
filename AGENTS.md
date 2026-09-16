@@ -100,7 +100,9 @@ entities.
 ### Entities
 
 - `binary_sensor.py`: PIN active status (enabled + conditions met) and per-lock in-sync status
-  with `sync_status` extra state attribute (`in_sync`, `out_of_sync`, `syncing`, `suspended`)
+  with `sync_status` extra state attribute (`in_sync`, `out_of_sync`, `syncing`, `suspended`).
+  `in_sync` is the aggregate over every managed credential; one `<type>_in_sync` sensor per
+  credential type (`pin_in_sync` today) views a single credential and is disabled by default
 - `sensor.py`: Per-lock slot PIN sensors showing current codes on each lock
 - `text.py`: Name and PIN configuration entities
 - `number.py`: Number of uses tracking (decrements on PIN use)
@@ -284,7 +286,7 @@ yarn watch                     # Watch mode for development
 **Important:** After modifying any TypeScript files in `ts/`, the JavaScript
 bundle must be rebuilt before testing in the browser. Use `yarn watch` during
 development for automatic rebuilds, or run `yarn build` manually. The compiled
-output is `custom_components/lock_code_manager/www/lock-code-manager-strategy.js`.
+output is `custom_components/lock_code_manager/www/generated/lock-code-manager.js`.
 If you test with stale JavaScript, the Lovelace strategy will fail with:
 `Timeout waiting for strategy element ll-strategy-dashboard-lock-code-manager to be registered`
 

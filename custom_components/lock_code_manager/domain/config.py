@@ -615,6 +615,12 @@ def parse_slot_unique_id(entry_id: str, unique_id: str) -> int | None:
     return slot_num if str(slot_num) == suffix else None
 
 
+def slot_unique_id_key(unique_id: str) -> str | None:
+    """Recover the entity key from a slot entity's unique ID, else ``None``."""
+    parts = unique_id.split("|")
+    return parts[2] if len(parts) > 2 else None
+
+
 @callback
 def async_write_entry_config(
     hass: HomeAssistant, entry: ConfigEntry, config: EntryConfig

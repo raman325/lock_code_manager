@@ -53,6 +53,7 @@ from custom_components.lock_code_manager import (
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
     ATTR_IN_SYNC,
+    ATTR_PIN_IN_SYNC,
     ATTR_TEXT,
     BACKOFF_FAILURE_THRESHOLD,
     CONF_CALENDAR,
@@ -171,11 +172,13 @@ async def test_entry_setup_and_unload(
         # Exact, so anything unexpected landing here is caught too.
         assert {
             entry.unique_id
-            for entry in er.async_entries_for_device(ent_reg, slot_device.id)
+            for entry in er.async_entries_for_device(
+                ent_reg, slot_device.id, include_disabled_entities=True
+            )
         } == {
             f"{lcm_entry_id}|{slot}|{key}|{entity_id}"
             for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
-            for key in (ATTR_CODE, ATTR_IN_SYNC)
+            for key in (ATTR_CODE, ATTR_IN_SYNC, ATTR_PIN_IN_SYNC)
         } | {
             f"{lcm_entry_id}|{slot}|{key}"
             for key in (
@@ -190,7 +193,7 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 3):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            for key in (ATTR_CODE, ATTR_IN_SYNC):
+            for key in (ATTR_CODE, ATTR_IN_SYNC, ATTR_PIN_IN_SYNC):
                 unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
@@ -253,7 +256,7 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 4):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            for key in (ATTR_CODE, ATTR_IN_SYNC):
+            for key in (ATTR_CODE, ATTR_IN_SYNC, ATTR_PIN_IN_SYNC):
                 unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
@@ -268,7 +271,6 @@ async def test_entry_setup_and_unload(
     assert unique_ids == {
         entity.unique_id
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
-        if hass.states.get(entity.entity_id)
     }
     assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 9
     assert len(hass.states.async_entity_ids(Platform.EVENT)) == 3
@@ -300,7 +302,7 @@ async def test_entry_setup_and_unload(
 
     unique_ids = set()
     for slot in range(1, 3):
-        for key in (ATTR_CODE, ATTR_IN_SYNC):
+        for key in (ATTR_CODE, ATTR_IN_SYNC, ATTR_PIN_IN_SYNC):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{LOCK_1_ENTITY_ID}")
 
         for key in (

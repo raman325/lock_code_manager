@@ -3,9 +3,12 @@ import {
     CODE_EVENT_KEY,
     CODE_SENSOR_KEY,
     CONDITION_KEYS,
+    CREDENTIAL_LABELS,
     DIVIDER_CARD,
     IN_SYNC_KEY,
-    KEY_ORDER
+    KEY_ORDER,
+    inSyncCredential,
+    isInSyncKey
 } from './const';
 import {
     EntityRegistryEntry,
@@ -144,6 +147,9 @@ export async function generateView(
     };
 }
 
+const keyRank = (key: string): number =>
+    inSyncCredential(key) ? KEY_ORDER.indexOf(IN_SYNC_KEY) + 0.5 : KEY_ORDER.indexOf(key);
+
 /** @internal - exported for testing via generate-view.internal.ts */
 export function compareAndSortEntities(
     entityA: LockCodeManagerEntityEntry,
@@ -152,13 +158,14 @@ export function compareAndSortEntities(
     // sort by slot number
     if (entityA.slotNum < entityB.slotNum) return -1;
     if (entityA.slotNum > entityB.slotNum) return 1;
-    // sort by key order
-    if (KEY_ORDER.indexOf(entityA.key) < KEY_ORDER.indexOf(entityB.key)) return -1;
-    if (KEY_ORDER.indexOf(entityA.key) > KEY_ORDER.indexOf(entityB.key)) return 1;
+    // sort by key order; the per-credential in-sync keys follow the aggregate
+    if (keyRank(entityA.key) < keyRank(entityB.key)) return -1;
+    if (keyRank(entityA.key) > keyRank(entityB.key)) return 1;
+    if (entityA.key !== entityB.key) return entityA.key < entityB.key ? -1 : 1;
     // sort code sensors alphabetically based on the lock entity_id
     if (
         entityA.key === entityB.key &&
-        [CODE_EVENT_KEY, CODE_SENSOR_KEY, IN_SYNC_KEY].includes(entityA.key) &&
+        ([CODE_EVENT_KEY, CODE_SENSOR_KEY].includes(entityA.key) || isInSyncKey(entityA.key)) &&
         entityA.lockEntityId < entityB.lockEntityId
     )
         return -1;
@@ -185,12 +192,17 @@ export function generateEntityCards(
     entities: LockCodeManagerEntityEntry[]
 ): { entity: string; name?: string }[] {
     return entities.map((entity) => {
-        if ([IN_SYNC_KEY, CODE_SENSOR_KEY].includes(entity.key)) {
+        if (entity.key === CODE_SENSOR_KEY || isInSyncKey(entity.key)) {
+            const lockName =
+                hass.states[entity.lockEntityId]?.attributes?.friendly_name ?? entity.lockEntityId;
+            // A per-credential row sits beside the aggregate's for the same
+            // lock, so it carries the credential's name too.
+            const credential = inSyncCredential(entity.key);
             return {
                 entity: entity.entity_id,
-                name:
-                    hass.states[entity.lockEntityId]?.attributes?.friendly_name ??
-                    entity.lockEntityId
+                name: credential
+                    ? `${lockName} ${CREDENTIAL_LABELS[credential] ?? credential}`
+                    : lockName
             };
         }
         return {
@@ -335,13 +347,16 @@ export function getSlotMapping(
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
+            // A disabled row has no state to show. These two groups are
+            // optional, so such a row is left out; the required rows below
+            // are addressed whether or not they are disabled.
             if (entity.key === CODE_SENSOR_KEY) {
-                codeSensorEntities.push(entity);
-            } else if (entity.key === IN_SYNC_KEY) {
-                inSyncEntities.push(entity);
+                if (!entity.disabled_by) codeSensorEntities.push(entity);
+            } else if (isInSyncKey(entity.key)) {
+                if (!entity.disabled_by) inSyncEntities.push(entity);
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntities.push(entity);
-            } else if (![ACTIVE_KEY, IN_SYNC_KEY, CODE_EVENT_KEY].includes(entity.key)) {
+            } else if (![ACTIVE_KEY, CODE_EVENT_KEY].includes(entity.key)) {
                 mainEntities.push(entity);
             }
         });
