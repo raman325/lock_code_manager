@@ -232,6 +232,11 @@ class BaseLock:
     # Slots whose most recent write from this integration was a clear that
     # changed something. See ``last_write_was_clear``.
     _cleared_slots: set[int] = field(default_factory=set, init=False)
+    # The lock user a write went to, by slot, while the lock's stack could not
+    # verify it. Such a write may be on the lock while the stack's cache does
+    # not show it, so a clear that looks for the credential there finds
+    # nothing to delete; this is who it belongs to.
+    _unverified_owners: dict[int, int] = field(default_factory=dict, init=False)
     # Slots with an outstanding optimistic (ambiguous-but-treated-as-completed)
     # write awaiting confirmation, mapped to (believed_pin, monotonic_deadline).
     # A confirmation -- a push event or a hard-refresh read observing the slot
@@ -1524,7 +1529,11 @@ class BaseLock:
                 else None
             )
         if owner_user_id is None:
-            # No user owns this slot's credential -- nothing to clear.
+            # The stack's cache names no owner. A write it could not verify
+            # may still be on the lock, so it is deleted through the user it
+            # was written to; otherwise there is nothing to clear.
+            owner_user_id = self._unverified_owners.get(code_slot)
+        if owner_user_id is None:
             return False
 
         ref = CredentialRef(
@@ -1570,6 +1579,7 @@ class BaseLock:
         # that never reached the lock.
         if self.coordinator is not None:
             self.coordinator.drop_pending(pin_address(code_slot))
+        self._unverified_owners.pop(code_slot, None)
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
         # there.
@@ -1899,7 +1909,7 @@ class BaseLock:
             credential_user_id = user.user_id
             rollback_user_id = None
         try:
-            return await self.async_set_credential(
+            written = await self.async_set_credential(
                 credential_user_id, credential, pin, name=name, source=source
             )
         except Exception:
@@ -1919,6 +1929,11 @@ class BaseLock:
                         rollback_err,
                     )
             raise
+        if written is WriteResult.OPTIMISTIC:
+            self._unverified_owners[credential.slot] = credential_user_id
+        elif written is WriteResult.CONFIRMED:
+            self._unverified_owners.pop(credential.slot, None)
+        return written
 
     @final
     async def _delete_credential(self, ref: CredentialRef) -> bool:

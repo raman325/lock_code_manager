@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import timedelta
 from typing import Any
 from unittest.mock import MagicMock
@@ -18,7 +19,7 @@ from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
-from homeassistant.const import STATE_ON
+from homeassistant.const import CONF_ENABLED, STATE_ON
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -36,7 +37,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
-from tests.common import in_sync_entity_id
+from tests.common import in_sync_entity_id, write_entry_config
 from tests.providers.zwave_js.conftest import ZWAVE_JS_LCM_CONFIG_SLOTS
 
 
@@ -400,5 +401,31 @@ class TestUnconfirmableWrites:
             if call.args[3] == "9999"
         ]
         assert len(writes) == 1
+
+        # Disabling the user has to take the code off the lock, although the
+        # driver's cache still shows nothing to take.
+        slots = copy.deepcopy(ZWAVE_JS_LCM_CONFIG_SLOTS)
+        slots[1][CONF_ENABLED] = False
+        assert write_entry_config(
+            hass,
+            lcm_entry,
+            {CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots},
+        )
+        for _ in range(6):
+            freezer.tick(timedelta(seconds=PENDING_WRITE_TTL))
+            async_fire_time_changed(hass)
+            await hass.async_block_till_done()
+
+        deletes = [
+            call
+            for call in mock_lock_helpers["async_delete_credential"].await_args_list
+            if call.args[3] == 1
+        ]
+        assert [call.args[1:] for call in deletes] == [
+            (1, UserCredentialType.PIN_CODE, 1)
+        ]
+        state = hass.states.get(in_sync)
+        assert state is not None
+        assert state.state == STATE_ON
 
         await hass.config_entries.async_unload(lcm_entry.entry_id)
