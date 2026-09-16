@@ -601,10 +601,13 @@ class LockUsercodeUpdateCoordinator(
             address: value for address, value in overdue.items() if value is not None
         }
         if unconfirmed:
-            self.async_set_updated_data({**self.data, **unconfirmed})
+            # The read failed, so this is not an update: setting the data
+            # through the coordinator would mark it a success and cancel a
+            # refresh queued to probe for recovery.
+            self.data = {**self.data, **unconfirmed}
+        if overdue:
+            self.async_update_listeners()
         if failed := [address for address in overdue if address not in unconfirmed]:
-            if not unconfirmed:
-                self.async_update_listeners()
             _LOGGER.info(
                 "%s could not be read back before the deadline (%s); giving up "
                 "on the writes to slots %s",

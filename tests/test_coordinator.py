@@ -1797,6 +1797,23 @@ async def test_record_write_while_the_timer_is_armed_pulls_the_look_forward(
     assert poll_coordinator._confirm_unsub is not None  # one chain, re-armed once
 
 
+async def test_keeping_a_write_after_a_failed_read_does_not_report_the_read_a_success(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """The read failed: the lock must not read as reachable because of it."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    push_coordinator.last_update_success = False
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=LockDisconnected("offline")),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.unreadable()
+    assert push_coordinator.last_update_success is False
+
+
 @pytest.mark.parametrize("believed", [False, True])
 async def test_pending_slot_a_completed_read_never_names_is_given_up_at_the_deadline(
     push_lock: MockLCMPushLock,
