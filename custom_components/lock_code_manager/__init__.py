@@ -1135,11 +1135,16 @@ async def async_release_locks(
     failed setup, where there is no runtime data to release anything from;
     such an entry never built lock instances, so there is nothing here to do.
     """
+    lock_entity_ids = list(lock_entity_ids)
+    runtime_data = getattr(config_entry, "runtime_data", None)
     # Registry-only, so it runs whether or not the entry ever loaded: reauth
-    # on an entry that failed setup is the common way a lock leaves.
-    for lock_entity_id in lock_entity_ids:
-        _async_purge_dropped_lock(hass, config_entry, lock_entity_id)
-    if (runtime_data := getattr(config_entry, "runtime_data", None)) is None:
+    # on an entry that failed setup is the common way a lock leaves. On a
+    # loaded entry only the disabled rows need it, since a loaded entity
+    # removes itself; on one that never loaded, nothing does.
+    _async_purge_dropped_locks(
+        hass, config_entry, lock_entity_ids, only_disabled=runtime_data is not None
+    )
+    if runtime_data is None:
         return
     for lock_entity_id in lock_entity_ids:
         runtime_data.callbacks.invoke_lock_removed_handlers(lock_entity_id)
@@ -1456,27 +1461,65 @@ def _async_purge_entities(
 
 
 @callback
-def _async_purge_dropped_lock(
+def _async_purge_dropped_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
-    lock_entity_id: str,
+    lock_entity_ids: Iterable[str],
+    *,
+    only_disabled: bool,
 ) -> None:
     """
-    Remove the registry rows of a lock's disabled per-lock entities.
+    Remove the registry rows of the dropped locks' per-lock entities.
 
-    A loaded entity removes itself when told its lock is gone, but an
-    entity disabled in the registry was never loaded and has nobody to do
-    that for it; left alone its row lingers, named for a lock the entry no
-    longer has. Loaded ones are left to their own removal.
+    An entity that never loaded has nobody to remove its row: one disabled
+    in the registry, or any of them on an entry that failed setup. Left
+    alone the row lingers, named for a lock the entry no longer has.
+    ``only_disabled`` leaves loaded entities to their own removal.
     """
     entry_id = config_entry.entry_id
+    dropped = set(lock_entity_ids)
     _async_purge_entities(
         hass,
         config_entry,
         lambda entity: (
-            entity.disabled_by is not None
-            and _lock_of(entry_id, entity.unique_id) == lock_entity_id
+            (entity.disabled_by is not None or not only_disabled)
+            and _lock_of(entry_id, entity.unique_id) in dropped
         ),
+    )
+
+
+def _slot_coordinators(
+    runtime_data: LockCodeManagerConfigEntryRuntimeData,
+    slot_nums: Collection[int] | None,
+) -> list[SlotEntityCoordinator]:
+    """Return the coordinators of ``slot_nums``, or of every slot; a missing one is skipped."""
+    return [
+        coordinator
+        for slot_num, coordinator in runtime_data.slot_coordinators.items()
+        if slot_nums is None or slot_num in slot_nums
+    ]
+
+
+async def _async_start_slot_sync(
+    runtime_data: LockCodeManagerConfigEntryRuntimeData,
+    ent_reg: er.EntityRegistry,
+    locks: Iterable[BaseLock],
+    *,
+    slot_nums: Collection[int] | None = None,
+) -> None:
+    """
+    Start sync managers together for ``locks`` on some slots or on every slot.
+
+    Registered before the entity adders run, so the entities find their
+    managers on add; started together, so no slot waits on another. A slot
+    whose coordinator is gone belongs to an unload that overtook this pass.
+    """
+    await asyncio.gather(
+        *(
+            coordinator.async_start_sync(lock, ent_reg)
+            for coordinator in _slot_coordinators(runtime_data, slot_nums)
+            for lock in locks
+        )
     )
 
 
@@ -1492,19 +1535,10 @@ async def _async_stop_slot_sync(
     One gather across the whole set, so several locks that have stopped
     answering cost one stop grace rather than one each.
     """
-    coordinators = [
-        coordinator
-        for slot_num, coordinator in runtime_data.slot_coordinators.items()
-        if slot_nums is None or slot_num in slot_nums
-    ]
-    locks: Collection[str | None] = (
-        [None] if lock_entity_ids is None else lock_entity_ids
-    )
     await asyncio.gather(
         *(
-            coordinator.async_stop_sync(lock_entity_id)
-            for coordinator in coordinators
-            for lock_entity_id in locks
+            coordinator.async_stop_sync(lock_entity_ids)
+            for coordinator in _slot_coordinators(runtime_data, slot_nums)
         )
     )
 
@@ -1854,16 +1888,8 @@ async def _async_setup_new_locks(
                 result.lock.entity_id,
             )
 
-        # Registered before the adders, so the entities find their managers
-        # on add; started together, so a lock's slots do not wait on each
-        # other. A slot whose coordinator is gone belongs to an unload that
-        # overtook this pass.
-        await asyncio.gather(
-            *(
-                coordinator.async_start_sync(result, ent_reg)
-                for slot_num in new_config.slot_numbers
-                if (coordinator := runtime_data.slot_coordinators.get(slot_num))
-            )
+        await _async_start_slot_sync(
+            runtime_data, ent_reg, [result], slot_nums=new_config.slot_numbers
         )
         for slot_num in new_config.slot_numbers:
             _LOGGER.debug(
@@ -2027,6 +2053,22 @@ async def _async_apply_entry_update(
         _LOGGER.debug(
             "%s (%s): Removing slots %s", entry_id, entry_title, list(slots_to_remove)
         )
+        # The coordinators stop first, so a pass racing this one cannot start
+        # a manager on a slot whose managers are being stopped below; a
+        # stopped coordinator refuses. The entity removers only unsubscribe
+        # from them, which a stopped coordinator still answers.
+        for slot_num in slots_to_remove:
+            if (coordinator := runtime_data.slot_coordinators.get(slot_num)) is None:
+                continue
+            try:
+                coordinator.async_stop()
+            except Exception:
+                _LOGGER.exception(
+                    "%s (%s): slot %s coordinator stop raised",
+                    entry_id,
+                    entry_title,
+                    slot_num,
+                )
         await _async_stop_slot_sync(runtime_data, slot_nums=slots_to_remove)
         await asyncio.gather(
             *(
@@ -2038,18 +2080,7 @@ async def _async_apply_entry_update(
         # matches a normal removal (entities first, then their device).
         _async_remove_slot_devices(hass, config_entry, slots_to_remove)
         for slot_num in slots_to_remove:
-            coordinator = runtime_data.slot_coordinators.pop(slot_num, None)
-            if coordinator is None:
-                continue
-            try:
-                coordinator.async_stop()
-            except Exception:
-                _LOGGER.exception(
-                    "%s (%s): slot %s coordinator stop raised",
-                    entry_id,
-                    entry_title,
-                    slot_num,
-                )
+            runtime_data.slot_coordinators.pop(slot_num, None)
 
     # Release lock-side state LCM owns for any (lock, slot) pair that no
     # longer exists in config. Native-user providers (Matter, Z-Wave User
@@ -2126,14 +2157,15 @@ async def _async_apply_entry_update(
     # For each new slot: start its managers on the existing locks (new locks
     # already got theirs above), then add standard entities and the per-lock
     # entities that view them.
-    await asyncio.gather(
-        *(
-            coordinator.async_start_sync(lock, ent_reg)
-            for slot_num in slots_to_add
-            if (coordinator := runtime_data.slot_coordinators.get(slot_num))
+    await _async_start_slot_sync(
+        runtime_data,
+        ent_reg,
+        [
+            lock
             for lock_entity_id, lock in runtime_data.locks.items()
             if lock_entity_id not in locks_to_add
-        )
+        ],
+        slot_nums=slots_to_add,
     )
     for slot_num in slots_to_add:
         _LOGGER.debug(

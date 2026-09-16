@@ -16,7 +16,7 @@ one SlotSyncManager per lock and credential address for that slot.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Iterable
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -49,7 +49,7 @@ from .config import EntryConfig, async_write_entry_config
 from .credentials import CredentialAddress, CredentialType, managed_addresses
 from .names import name_error, normalize_name
 from .queries import get_entry_config
-from .sync import SlotSyncManager
+from .sync import SlotSyncManager, fold_in_sync, fold_sync_status
 
 if TYPE_CHECKING:
     from ..providers import BaseLock
@@ -148,47 +148,64 @@ class SlotEntityCoordinator:
         racing has already stopped everything, and a manager started then
         would have no unload left to stop it.
         """
-        if lock.coordinator is None or not self._started:
-            return
-        if self._config_entry.state in (
-            ConfigEntryState.UNLOAD_IN_PROGRESS,
-            ConfigEntryState.NOT_LOADED,
+        if (
+            lock.coordinator is None
+            or not self._started
+            or self._config_entry.state
+            in (ConfigEntryState.UNLOAD_IN_PROGRESS, ConfigEntryState.NOT_LOADED)
         ):
+            _LOGGER.debug(
+                "%s: Not starting sync on %s (coordinator ready: %s, running: %s, entry: %s)",
+                self._log_prefix,
+                lock.lock.entity_id,
+                lock.coordinator is not None,
+                self._started,
+                self._config_entry.state,
+            )
             return
-        started: list[SlotSyncManager] = []
-        for address in managed_addresses(self._slot_num):
-            key = (lock.lock.entity_id, address)
-            if key in self._sync_managers:
-                continue
-            manager = SlotSyncManager(
+        new = {
+            key: SlotSyncManager(
                 self._hass,
                 ent_reg,
                 self._config_entry,
                 lock.coordinator,
                 lock,
                 address,
+                on_change=self._notify_state_subscribers,
             )
-            self._sync_managers[key] = manager
-            started.append(manager)
-        await asyncio.gather(*(manager.async_start() for manager in started))
+            for address in managed_addresses(self._slot_num)
+            if (key := (lock.lock.entity_id, address)) not in self._sync_managers
+        }
+        self._sync_managers.update(new)
+        # One manager failing to start must not take the rest of the setup
+        # pass with it; it stays registered so the stop still reaches it.
+        results = await asyncio.gather(
+            *(manager.async_start() for manager in new.values()), return_exceptions=True
+        )
+        for manager, result in zip(new.values(), results, strict=True):
+            if isinstance(result, Exception):
+                _LOGGER.exception(
+                    "%s: Sync manager failed to start",
+                    manager.log_prefix,
+                    exc_info=result,
+                )
 
-    async def async_stop_sync(self, lock_entity_id: str | None = None) -> None:
+    async def async_stop_sync(
+        self, lock_entity_ids: Collection[str] | None = None
+    ) -> None:
         """
-        Stop and drop this slot's managers, for one lock or for all of them.
+        Stop and drop this slot's managers, for some locks or for all of them.
 
         Stopped together, so several locks that have stopped answering cost
         one stop grace rather than one each. A manager whose stop raises is
         logged and dropped like the rest; nothing stays registered that is
         not running.
         """
-        keys = [
-            key
-            for key in self._sync_managers
-            if lock_entity_id is None or key[0] == lock_entity_id
+        managers = [
+            self._sync_managers.pop(key)
+            for key in list(self._sync_managers)
+            if lock_entity_ids is None or key[0] in lock_entity_ids
         ]
-        managers = [self._sync_managers.pop(key) for key in keys]
-        if not managers:
-            return
         results = await asyncio.gather(
             *(manager.async_stop() for manager in managers), return_exceptions=True
         )
@@ -207,20 +224,32 @@ class SlotEntityCoordinator:
         return list(self._sync_managers.values())
 
     @callback
-    def sync_managers_for(self, lock_entity_id: str) -> list[SlotSyncManager]:
-        """Return the managers keeping this slot in sync on ``lock_entity_id``."""
-        return [
-            manager
-            for (lock_id, _), manager in self._sync_managers.items()
-            if lock_id == lock_entity_id
-        ]
-
-    @callback
     def sync_manager(
         self, lock_entity_id: str, address: CredentialAddress
     ) -> SlotSyncManager | None:
         """Return the manager for one credential on one lock, if it is running."""
         return self._sync_managers.get((lock_entity_id, address))
+
+    @callback
+    def sync_state_for(
+        self, lock_entity_id: str, addresses: Iterable[CredentialAddress]
+    ) -> tuple[bool | None, str | None]:
+        """
+        Fold the in-sync state of some credentials on one lock.
+
+        On when every manager is; the worst of their statuses. A credential
+        with no manager reads as unknown, so a sensor added before its
+        manager, or for a lock without one, says so rather than guessing.
+        """
+        managers = [
+            self._sync_managers.get((lock_entity_id, address)) for address in addresses
+        ]
+        return (
+            fold_in_sync(manager.in_sync if manager else None for manager in managers),
+            fold_sync_status(
+                manager.sync_status if manager else None for manager in managers
+            ),
+        )
 
     # -- Read-only views (consumed by entities) ------------------------------
 

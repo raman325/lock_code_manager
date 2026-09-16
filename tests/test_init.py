@@ -42,8 +42,10 @@ from custom_components import lock_code_manager
 from custom_components.lock_code_manager import (
     _async_reclaim_entities_from_foreign_devices,
     _async_setup_new_locks,
+    _lock_of,
     _setup_entry_after_start,
     async_migrate_entry,
+    async_release_locks,
     async_remove_config_entry_device,
     async_remove_entry,
     async_unload_lock,
@@ -69,6 +71,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.config import (
     build_slot_device_identifier,
 )
+from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import (
     LockBusy,
     LockDisconnected,
@@ -1456,8 +1459,8 @@ async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
     # Verify LOCK_2 is gone from runtime_data, and nothing keeps syncing it
     assert LOCK_2_ENTITY_ID not in runtime_data.locks
     assert not any(
-        coordinator.sync_managers_for(LOCK_2_ENTITY_ID)
-        for coordinator in runtime_data.slot_coordinators.values()
+        coordinator.sync_manager(LOCK_2_ENTITY_ID, pin_address(slot_num))
+        for slot_num, coordinator in runtime_data.slot_coordinators.items()
     )
 
     # Verify LOCK_2's in-sync entities are removed (state no longer present)
@@ -3683,3 +3686,47 @@ async def test_removing_a_dropped_lock_clears_its_repair(
 
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def test_releasing_a_lock_from_an_entry_that_never_loaded_purges_every_row(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """With nothing loaded, no entity can remove itself, so the release removes all of them."""
+    entry = lock_code_manager_config_entry
+    ent_reg = er.async_get(hass)
+    lock_2_rows = [
+        entity.entity_id
+        for entity in er.async_entries_for_config_entry(ent_reg, entry.entry_id)
+        if _lock_of(entry.entry_id, entity.unique_id) == LOCK_2_ENTITY_ID
+    ]
+    assert lock_2_rows
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert not hasattr(entry, "runtime_data")
+
+    await async_release_locks(hass, entry, [LOCK_2_ENTITY_ID])
+
+    assert all(ent_reg.async_get(entity_id) is None for entity_id in lock_2_rows)
+
+
+async def test_removing_a_slot_stops_its_managers(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A removed slot's coordinator goes with every manager it ran, all stopped."""
+    entry = lock_code_manager_config_entry
+    coordinator = entry.runtime_data.slot_coordinators[2]
+    managers = coordinator.sync_managers
+    assert managers and all(manager._started for manager in managers)
+
+    new_config = copy.deepcopy(BASE_CONFIG)
+    del new_config[CONF_SLOTS][2]
+    write_entry_config(hass, entry, new_config)
+    await hass.async_block_till_done()
+
+    assert 2 not in entry.runtime_data.slot_coordinators
+    assert coordinator.sync_managers == []
+    assert not any(manager._started for manager in managers)

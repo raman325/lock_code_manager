@@ -4,7 +4,7 @@ import asyncio
 import copy
 from datetime import timedelta
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -37,6 +37,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
+    ATTR_IN_SYNC,
     ATTR_PIN_IN_SYNC,
     ATTR_SYNC_STATUS,
     CONF_LOCKS,
@@ -2415,6 +2416,55 @@ async def test_the_next_confirmation_read_settles_a_pending_write_without_a_seco
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
+async def test_disabling_the_in_sync_sensor_does_not_stop_the_sync(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The sensors are views: the manager runs whether or not anyone watches it."""
+    entry = lock_code_manager_config_entry
+    aggregate_id = in_sync_entity_id(hass, entry, 1)
+    er.async_get(hass).async_update_entity(
+        aggregate_id, disabled_by=er.RegistryEntryDisabler.USER
+    )
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(aggregate_id) is None
+    manager = entry.runtime_data.slot_coordinators[1].sync_manager(
+        LOCK_1_ENTITY_ID, pin_address(1)
+    )
+    assert manager is not None
+    assert manager._started
+
+
+async def test_in_sync_added_without_a_slot_coordinator_reads_unknown(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """With no coordinator to fold, the sensor has nothing to say and says so."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    assert 99 not in runtime_data.slot_coordinators
+    ent_reg = er.async_get(hass)
+
+    runtime_data.callbacks.invoke_lock_slot_adders(
+        runtime_data.locks[LOCK_1_ENTITY_ID], 99, ent_reg
+    )
+    await hass.async_block_till_done()
+
+    entity_id = ent_reg.async_get_entity_id(
+        "binary_sensor",
+        DOMAIN,
+        build_slot_unique_id(entry.entry_id, 99, ATTR_IN_SYNC, LOCK_1_ENTITY_ID),
+    )
+    assert entity_id is not None
+    entity_obj = get_in_sync_entity_obj(hass, entity_id)
+    assert entity_obj.is_on is None
+    assert entity_obj.extra_state_attributes == {}
+
+
 async def test_pin_in_sync_is_registered_but_disabled_by_default(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -2466,49 +2516,6 @@ async def test_pin_in_sync_mirrors_the_manager_once_enabled(
     )
 
 
-async def test_disabling_the_in_sync_sensor_does_not_stop_the_sync(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """The sensors are views: the manager runs whether or not anyone watches it."""
-    entry = lock_code_manager_config_entry
-    aggregate_id = in_sync_entity_id(hass, entry, 1)
-    er.async_get(hass).async_update_entity(
-        aggregate_id, disabled_by=er.RegistryEntryDisabler.USER
-    )
-    await hass.config_entries.async_reload(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert hass.states.get(aggregate_id) is None
-    manager = entry.runtime_data.slot_coordinators[1].sync_manager(
-        LOCK_1_ENTITY_ID, pin_address(1)
-    )
-    assert manager is not None
-    assert manager._started
-
-
-async def test_in_sync_folds_over_every_manager(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """One credential out of sync makes the user out of sync, with its status."""
-    aggregate_id = in_sync_entity_id(hass, lock_code_manager_config_entry, 1)
-    await async_initial_tick(hass, aggregate_id)
-    entity_obj = get_in_sync_entity_obj(hass, aggregate_id)
-    assert entity_obj.is_on is True
-
-    second = MagicMock()
-    second.in_sync = False
-    second.sync_status = SyncState.SUSPENDED.value
-    entity_obj._managers.append(second)
-    entity_obj._fold()
-
-    assert entity_obj.is_on is False
-    assert entity_obj.extra_state_attributes[ATTR_SYNC_STATUS] == "suspended"
-
-
 async def test_pin_in_sync_added_without_a_slot_coordinator_has_nothing_to_mirror(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -2538,7 +2545,7 @@ async def test_pin_in_sync_added_without_a_slot_coordinator_has_nothing_to_mirro
     # Added without raising; with no manager behind it there is nothing to
     # fold, and no credential at that slot to be available for.
     entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    assert entity_obj._managers == []
+    assert entity_obj.is_on is None
     assert entity_obj.extra_state_attributes == {}
     state = hass.states.get(entity_id)
     assert state is not None
