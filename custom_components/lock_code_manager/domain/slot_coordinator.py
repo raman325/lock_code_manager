@@ -16,7 +16,6 @@ one SlotSyncManager per lock and credential address for that slot.
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from collections.abc import Awaitable, Callable, Collection, Iterable
 from functools import partial
 import logging
@@ -71,9 +70,10 @@ async def _async_gather_managers(
     """
     Run ``operation`` on every manager together; one raising is logged, not fatal.
 
-    A cancellation is not a failure: ``gather`` hands a cancelled child back
-    as a value, and dropping it would let a setup pass carry on through a
-    shutdown as if nothing had happened.
+    A cancellation from outside is not a failure: ``gather`` hands a cancelled
+    child back as a value, and dropping it would let the pass carry on as if
+    nothing had happened. (A stop's own cancellation of a first tick never
+    reaches here; the manager absorbs it.)
     """
     results = await asyncio.gather(
         *(operation(manager) for manager in managers), return_exceptions=True
@@ -131,7 +131,7 @@ class SlotEntityCoordinator:
         # Sync subscribers are per lock: a manager's change concerns the
         # sensors of its lock, not the slot's text and switch entities nor
         # the other locks' sensors.
-        self._sync_subscribers: dict[str, set[Callable[[], None]]] = defaultdict(set)
+        self._sync_subscribers: dict[str, set[Callable[[], None]]] = {}
         self._sync_managers: dict[tuple[str, CredentialAddress], SlotSyncManager] = {}
 
         # Condition-entity subscription state
@@ -207,8 +207,10 @@ class SlotEntityCoordinator:
             )
             return
         lock_entity_id = lock.lock.entity_id
+        # A manager already running for a credential stays; replacing it would
+        # leave the old one ticking with nothing able to reach it.
         new = {
-            (lock_entity_id, address): SlotSyncManager(
+            key: SlotSyncManager(
                 self._hass,
                 self._ent_reg,
                 self._config_entry,
@@ -218,6 +220,7 @@ class SlotEntityCoordinator:
                 on_change=partial(self._notify_sync_changed, lock_entity_id),
             )
             for address in managed_addresses(self._slot_num)
+            if (key := (lock_entity_id, address)) not in self._sync_managers
         }
         self._sync_managers.update(new)
         # One manager failing to start must not take the rest of the setup
@@ -237,10 +240,11 @@ class SlotEntityCoordinator:
         logged and dropped like the rest; nothing stays registered that is
         not running.
         """
+        wanted = None if lock_entity_ids is None else set(lock_entity_ids)
         managers = [
             self._sync_managers.pop(key)
             for key in list(self._sync_managers)
-            if lock_entity_ids is None or key[0] in lock_entity_ids
+            if wanted is None or key[0] in wanted
         ]
         await _async_gather_managers(
             managers, lambda manager: manager.async_stop(), "stop raised"
@@ -251,7 +255,6 @@ class SlotEntityCoordinator:
         """Return every manager this slot is running."""
         return list(self._sync_managers.values())
 
-    @callback
     def sync_manager(
         self, lock_entity_id: str, address: CredentialAddress
     ) -> SlotSyncManager | None:
@@ -359,9 +362,16 @@ class SlotEntityCoordinator:
         self, lock_entity_id: str, callback_fn: Callable[[], None]
     ) -> Callable[[], None]:
         """Register a callback fired when a manager of ``lock_entity_id`` changes state."""
-        subscribers = self._sync_subscribers[lock_entity_id]
+        subscribers = self._sync_subscribers.setdefault(lock_entity_id, set())
         subscribers.add(callback_fn)
-        return lambda: subscribers.discard(callback_fn)
+
+        @callback
+        def unsubscribe() -> None:
+            subscribers.discard(callback_fn)
+            if not subscribers:
+                self._sync_subscribers.pop(lock_entity_id, None)
+
+        return unsubscribe
 
     # -- Intent dispatch -----------------------------------------------------
 
@@ -565,7 +575,7 @@ class SlotEntityCoordinator:
     @callback
     def _notify_sync_changed(self, lock_entity_id: str) -> None:
         """Notify the sensors of one lock that a manager of theirs changed state."""
-        self._notify(self._sync_subscribers[lock_entity_id], "Sync subscriber")
+        self._notify(self._sync_subscribers.get(lock_entity_id, ()), "Sync subscriber")
 
     def _notify(self, subscribers: Iterable[Callable[[], None]], what: str) -> None:
         """Call every subscriber; one raising is logged so the rest still hear."""

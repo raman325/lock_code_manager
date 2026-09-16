@@ -149,7 +149,7 @@ class LockCodeManagerConfigEntryRuntimeData:
     # True once the options update listener has been registered for this
     # entry. Guards against stacking when _setup_entry_after_start runs more
     # than once (for example, a reload racing with EVENT_HOMEASSISTANT_STARTED).
-    update_listener_registered: bool = False
+    post_start_setup_done: bool = False
     # Set whenever the update listener finishes a pass. Home Assistant runs
     # update listeners as a task rather than awaiting them, so a caller that
     # writes to the entry returns before the entry has reacted -- before the
