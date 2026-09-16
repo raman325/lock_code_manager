@@ -34,6 +34,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
     DOMAIN,
+    PENDING_WRITE_TTL,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.coordinator import (
@@ -3059,3 +3060,34 @@ async def test_a_probe_that_never_answers_is_cut_off_before_the_queue(
         )
 
     assert not lock._aio_lock.locked()
+
+
+async def test_check_duplicate_code_counts_a_code_the_lock_never_showed(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    freezer,
+):
+    """A PIN written but never read back is still on the lock, as far as anyone knows."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+    coordinator.record_write(pin_address(1), "1234", believed=True)
+    coordinator.record_write(pin_address(2), "5678", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    coordinator.async_set_updated_data(
+        coordinator._apply_read(
+            {
+                pin_address(1): SlotCredential.empty(),
+                pin_address(2): SlotCredential.empty(),
+                pin_address(3): SlotCredential.empty(),
+            }
+        )
+    )
+    coordinator.record_unconfirmed_clear(pin_address(2))
+
+    with pytest.raises(DuplicateCodeError) as exc_info:
+        lock._check_duplicate_code(3, "1234")
+    assert exc_info.value.conflicting_slot == 1
+    # A clear the lock never showed leaves no code behind to collide with.
+    lock._check_duplicate_code(3, "5678")

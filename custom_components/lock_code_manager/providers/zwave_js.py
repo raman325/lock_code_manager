@@ -705,6 +705,9 @@ class ZWaveJSLock(BaseLock):
         Delete the credential addressed by ref.
 
         The clear goes through HA's ``lock_helpers.async_delete_credential``.
+        A driver ``ERROR_UNKNOWN`` means what it does for a set: the command
+        was accepted and the read-back that would confirm it did not arrive,
+        so the clear is reported as a change the lock could not verify.
         """
         try:
             await lock_helpers.async_delete_credential(
@@ -715,6 +718,16 @@ class ZWaveJSLock(BaseLock):
                 err, f"delete credential slot {ref.slot} failed"
             ) from err
         except HomeAssistantError as err:
+            if getattr(err, "translation_key", None) == "credential_rejected_unknown":
+                _LOGGER.debug(
+                    "Lock %s slot %s: driver returned ERROR_UNKNOWN for a "
+                    "delete; treating it as an unconfirmed clear: %s",
+                    self.lock.entity_id,
+                    ref.slot,
+                    err,
+                )
+                self._note_unverified_clear(ref.slot)
+                return True
             # Same supervised-failure staleness as the set path (see
             # _async_uc_reconcile_value_db). Success needs no read: the
             # driver clears its cached User Code CC values on a

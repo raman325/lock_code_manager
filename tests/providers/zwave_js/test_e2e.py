@@ -55,6 +55,36 @@ def async_capture_events(
     return events
 
 
+def _cache_holds(access_control: MagicMock, node: Node, pin: str) -> None:
+    """Make the driver's cache show slot 1 holding ``pin``, as it never stops doing."""
+    node.values[f"{node.node_id}-99-0-userIdStatus-1"].update({"value": 1})
+    node.values[f"{node.node_id}-99-0-userCode-1"].update({"value": pin})
+    access_control.get_users_cached.return_value = [
+        UserData(user_id=1, active=True, user_type=UserCredentialUserType.GENERAL)
+    ]
+    access_control.get_all_credentials_cached.return_value = [
+        CredentialData(user_id=1, type=UserCredentialType.PIN_CODE, slot=1, data=pin)
+    ]
+
+
+async def _settle_then_reread(
+    hass: HomeAssistant, lcm_entry: MockConfigEntry, lock_entity_id: str, freezer
+) -> None:
+    """
+    Run well past the breaker's window, then read the lock and run again.
+
+    The read comes through the cache that never saw the write, as a
+    refresh after the lock comes back does.
+    """
+    coordinator = lcm_entry.runtime_data.locks[lock_entity_id].coordinator
+    for lap in range(24):
+        if lap == 12:
+            await coordinator.async_refresh()
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+
+
 class TestFullSetupLifecycle:
     """Verify LCM correctly discovers and sets up the Z-Wave JS provider."""
 
@@ -429,3 +459,130 @@ class TestUnconfirmableWrites:
         assert state.state == STATE_ON
 
         await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+    async def test_a_changed_code_the_lock_never_reads_back_settles_in_sync(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+    ) -> None:
+        """
+        The same, over a code the driver's cache still shows.
+
+        A cache that never saw the write keeps answering with the code the
+        slot held before, which is no more evidence than an empty slot.
+        """
+        mock_lock_helpers["async_set_credential"].side_effect = HomeAssistantError(
+            translation_key="credential_rejected_unknown"
+        )
+        _cache_holds(mock_access_control, lock_schlage_be469, "4444")
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [lock_entity.entity_id],
+                CONF_SLOTS: ZWAVE_JS_LCM_CONFIG_SLOTS,
+            },
+            unique_id="test_zwave_js_unconfirmable_change",
+        )
+        lcm_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+        in_sync = in_sync_entity_id(hass, lcm_entry, 1, lock_entity.entity_id)
+
+        await _settle_then_reread(hass, lcm_entry, lock_entity.entity_id, freezer)
+
+        state = hass.states.get(in_sync)
+        assert state is not None
+        assert state.state == STATE_ON
+        writes = [
+            call
+            for call in mock_lock_helpers["async_set_credential"].await_args_list
+            if call.args[3] == "9999"
+        ]
+        assert len(writes) == 1
+
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+    async def test_a_clear_the_lock_never_reads_back_settles_in_sync(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+    ) -> None:
+        """
+        A delete the driver could not read back is trusted too.
+
+        Its cache keeps showing the code that was there, so a clear judged by
+        that cache would be repeated until the slot was suspended.
+        """
+        mock_lock_helpers["async_delete_credential"].side_effect = HomeAssistantError(
+            translation_key="credential_rejected_unknown"
+        )
+        _cache_holds(mock_access_control, lock_schlage_be469, "9999")
+        slots = copy.deepcopy(ZWAVE_JS_LCM_CONFIG_SLOTS)
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots},
+            unique_id="test_zwave_js_unconfirmable_clear",
+        )
+        lcm_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+        in_sync = in_sync_entity_id(hass, lcm_entry, 1, lock_entity.entity_id)
+
+        slots = copy.deepcopy(slots)
+        slots[1][CONF_ENABLED] = False
+        assert write_entry_config(
+            hass,
+            lcm_entry,
+            {CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots},
+        )
+        await _settle_then_reread(hass, lcm_entry, lock_entity.entity_id, freezer)
+
+        deletes = [
+            call
+            for call in mock_lock_helpers["async_delete_credential"].await_args_list
+            if call.args[3] == 1
+        ]
+        assert len(deletes) == 1
+        state = hass.states.get(in_sync)
+        assert state is not None
+        assert state.state == STATE_ON
+
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+    async def test_a_clear_that_may_not_have_landed_is_repeated_through_its_user(
+        self,
+        hass: HomeAssistant,
+        zwave_js_lock: ZWaveJSLock,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+    ) -> None:
+        """
+        Releasing the slot clears it again, though the cache names no owner.
+
+        Neither the write nor the clear reached the driver's cache, so the
+        user they went through is the only one that can hold the code.
+        """
+        zwave_js_lock._min_operation_delay = 0.0
+        unknown = HomeAssistantError(translation_key="credential_rejected_unknown")
+        mock_lock_helpers["async_set_credential"].side_effect = unknown
+        mock_lock_helpers["async_delete_credential"].side_effect = unknown
+        mock_lock_helpers["async_set_user"].return_value = {"user_id": 7}
+
+        await zwave_js_lock.async_internal_set_usercode(1, "9999", "bob")
+        assert await zwave_js_lock.async_internal_clear_usercode(1)
+        await zwave_js_lock.async_release_managed_slot(1)
+
+        assert [
+            call.args[1:]
+            for call in mock_lock_helpers["async_delete_credential"].await_args_list
+        ] == [(7, UserCredentialType.PIN_CODE, 1)] * 2

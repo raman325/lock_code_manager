@@ -58,6 +58,10 @@ class PendingWrite(NamedTuple):
     pin: str
     written_at: float
     believed: bool
+    # What the lock was last seen to hold before this write. A read repeating
+    # it, after a write the stack could not verify, may be the stack's own
+    # stale answer rather than the lock's.
+    previous: SlotCredential | None = None
 
     @property
     def deadline(self) -> float:
@@ -85,6 +89,25 @@ def _checked(address: CredentialAddress) -> CredentialAddress:
             f"Only PIN credentials are addressable today, got {address.credential_type}"
         )
     return CredentialAddress(int(address.user_ref), address.credential_type)
+
+
+class Unconfirmed(NamedTuple):
+    """
+    A write the lock's stack accepted without being able to verify.
+
+    ``pin`` is the PIN written, or ``None`` for a clear. ``previous`` is what
+    the lock was last seen to hold before it.
+    """
+
+    pin: str | None
+    previous: SlotCredential | None
+
+    @property
+    def trusted(self) -> SlotCredential:
+        """Return what the address reads as while the write stands."""
+        return (
+            SlotCredential.empty() if self.pin is None else SlotCredential.unreadable()
+        )
 
 
 class LockUsercodeUpdateCoordinator(
@@ -129,14 +152,15 @@ class LockUsercodeUpdateCoordinator(
         # displaced by a different code -- awaiting the sync tick's one charge
         # to the slot breaker. Consumed by ``take_failed_write``.
         self._failed_writes: set[CredentialAddress] = set()
-        # Writes the lock's stack accepted without being able to verify, that
-        # no read showed by the deadline and nothing has contradicted since,
-        # with the PIN written. The stack reporting the outcome as unknown
-        # means its own read-back did not arrive, so a later read through the
-        # same path showing nothing is no evidence either way. These addresses
-        # read as unreadable, which sync judges by the last PIN it wrote, the
-        # same trade it makes for a lock that never shows its codes.
-        self._unconfirmed: dict[CredentialAddress, str] = {}
+        # Writes and clears the lock's stack accepted without being able to
+        # verify, that no read showed and nothing has contradicted since. The
+        # stack reporting the outcome as unknown means its own read-back did
+        # not arrive, so a later read through the same path saying nothing, or
+        # repeating what the slot held before, is no evidence either way. A
+        # write reads as unreadable, which sync judges by the last PIN it
+        # wrote, the same trade it makes for a lock that never shows its
+        # codes; a clear reads as empty.
+        self._unconfirmed: dict[CredentialAddress, Unconfirmed] = {}
         # The single confirmation look for this lock: a task for the immediate
         # first look, then a timer while anything stays pending. One per
         # coordinator, not per write: N pending slots on one lock are one read
@@ -236,6 +260,13 @@ class LockUsercodeUpdateCoordinator(
             pending = self._pending.get(address)
             if pending is None:
                 out[address] = self._resolve_unconfirmed(address, cred, spoken=False)
+            elif pending.believed and cred.is_readable and cred == pending.previous:
+                # The code the slot held before: the stack that could not
+                # verify the write may simply not have looked again.
+                if now >= pending.deadline:
+                    out[address] = self._give_up(address) or cred
+                else:
+                    out[address] = SlotCredential.known(pending.pin)
             elif cred.is_present:
                 del self._pending[address]
                 if cred.is_readable and cred.readable_pin != pending.pin:
@@ -266,8 +297,9 @@ class LockUsercodeUpdateCoordinator(
         """
         pending = self._pending.pop(address)
         if pending.believed:
-            self._unconfirmed[address] = pending.pin
-            return SlotCredential.unreadable()
+            record = Unconfirmed(pending.pin, pending.previous)
+            self._unconfirmed[address] = record
+            return record.trusted
         self._failed_writes.add(address)
         return None
 
@@ -277,24 +309,64 @@ class LockUsercodeUpdateCoordinator(
         """
         Return what an address reads as, given an unconfirmed write against it.
 
-        A readable value ends the doubt either way: the lock showed what it
-        holds. A slot the lock says holds something it will not show leaves
-        the write standing. A slot reading empty ends it only when the lock
-        itself spoke (``spoken``): a read through the path that could not
-        verify the write says nothing new by coming back empty.
+        The lock itself speaking (``spoken``) ends the doubt: a push is its
+        word now. A read is weaker, because it may come through the path that
+        could not verify the write:
+
+        - Repeating what the slot held before the write says nothing.
+        - After a write, a readable value ends it either way (the lock showed
+          what it holds), and so does nothing else: an empty or masked slot
+          leaves the write standing.
+        - After a clear, anything but the old value ends it: empty confirms
+          the clear, and anything else is a code that is there.
         """
-        pin = self._unconfirmed.get(address)
-        if pin is None:
+        record = self._unconfirmed.get(address)
+        if record is None:
             return observed
-        if observed.is_readable or (observed.is_empty and spoken):
-            del self._unconfirmed[address]
-            return observed
-        return SlotCredential.unreadable()
+        stands = not spoken and (
+            observed == record.previous
+            if record.pin is None
+            else not observed.is_readable or observed == record.previous
+        )
+        if stands:
+            return record.trusted
+        del self._unconfirmed[address]
+        return observed
 
     @property
     def unconfirmed_slots(self) -> list[int]:
         """Return the slots whose last write stands without the lock showing it."""
         return sorted(address.user_ref for address in self._unconfirmed)
+
+    def unconfirmed_pins(self) -> dict[int, str]:
+        """Return the PINs written but not confirmed, by slot."""
+        return {
+            address.user_ref: record.pin
+            for address, record in self._unconfirmed.items()
+            if record.pin is not None
+        }
+
+    @callback
+    def record_unconfirmed_clear(self, address: CredentialAddress) -> None:
+        """
+        Trust a clear the lock's stack accepted without being able to verify.
+
+        The slot reads empty from now on, until the lock is seen holding
+        something other than what it held before the clear. Supersedes any
+        write pending on the slot, as a clear does.
+        """
+        checked = _checked(address)
+        previous = self._last_seen(checked)
+        self.drop_pending(checked)
+        self._unconfirmed[checked] = Unconfirmed(None, previous)
+        new_data = {**self.data, checked: SlotCredential.empty()}
+        if new_data != self.data:
+            self.async_set_updated_data(new_data)
+
+    def _last_seen(self, address: CredentialAddress) -> SlotCredential | None:
+        """Return what the lock was last seen to hold, past any write of ours."""
+        prior = self._pending.get(address) or self._unconfirmed.get(address)
+        return self.data.get(address) if prior is None else prior.previous
 
     def is_verified(self, address: CredentialAddress) -> bool:
         """
@@ -340,7 +412,8 @@ class LockUsercodeUpdateCoordinator(
             # for; recording it would start a look against a torn-down lock.
             return
         checked = _checked(address)
-        self._pending[checked] = PendingWrite(pin, time.monotonic(), believed)
+        previous = self._last_seen(checked)
+        self._pending[checked] = PendingWrite(pin, time.monotonic(), believed, previous)
         self._failed_writes.discard(checked)
         self._unconfirmed.pop(checked, None)
         if believed:

@@ -237,6 +237,9 @@ class BaseLock:
     # not show it, so a clear that looks for the credential there finds
     # nothing to delete; this is who it belongs to.
     _unverified_owners: dict[int, int] = field(default_factory=dict, init=False)
+    # Slots whose last clear the stack accepted without being able to verify,
+    # noted by the provider's delete primitive for the clear that called it.
+    _unverified_clears: set[int] = field(default_factory=set, init=False)
     # Slots with an outstanding optimistic (ambiguous-but-treated-as-completed)
     # write awaiting confirmation, mapped to (believed_pin, monotonic_deadline).
     # A confirmation -- a push event or a hard-refresh read observing the slot
@@ -570,11 +573,18 @@ class BaseLock:
         # Return early if there's nothing to check
         if not usercode or not self.coordinator or not self.coordinator.data:
             return
+        # A PIN written but never shown back is still on the lock as far as
+        # anyone knows, though its slot reads unreadable.
+        unconfirmed = self.coordinator.unconfirmed_pins()
         try:
             other_code_slot = next(
                 other_code_slot
                 for other_code_slot, other_credential in self.coordinator.credentials_by_slot().items()
-                if other_code_slot != code_slot and other_credential.matches(usercode)
+                if other_code_slot != code_slot
+                and (
+                    other_credential.matches(usercode)
+                    or unconfirmed.get(other_code_slot) == usercode
+                )
             )
         except StopIteration:
             pass
@@ -1577,9 +1587,17 @@ class BaseLock:
         # raised superseded nothing: the write stays pending, so a believed
         # value it pushed is not taken as verified on the strength of a clear
         # that never reached the lock.
+        unverified = code_slot in self._unverified_clears
+        self._unverified_clears.discard(code_slot)
         if self.coordinator is not None:
-            self.coordinator.drop_pending(pin_address(code_slot))
-        self._unverified_owners.pop(code_slot, None)
+            if unverified:
+                self.coordinator.record_unconfirmed_clear(pin_address(code_slot))
+            else:
+                self.coordinator.drop_pending(pin_address(code_slot))
+        # A clear that may not have landed may need repeating through the
+        # same user.
+        if not unverified:
+            self._unverified_owners.pop(code_slot, None)
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
         # there.
@@ -1934,6 +1952,16 @@ class BaseLock:
         elif written is WriteResult.CONFIRMED:
             self._unverified_owners.pop(credential.slot, None)
         return written
+
+    @final
+    def _note_unverified_clear(self, slot: int) -> None:
+        """
+        Note that the stack accepted a clear it could not verify.
+
+        For a provider's delete primitive, which then reports the clear as a
+        change. The slot is trusted empty until a read shows otherwise.
+        """
+        self._unverified_clears.add(slot)
 
     @final
     async def _delete_credential(self, ref: CredentialRef) -> bool:
