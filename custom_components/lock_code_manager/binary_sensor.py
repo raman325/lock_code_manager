@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.const import EntityCategory
@@ -14,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
 from .domain.coordinator import LockUsercodeUpdateCoordinator
+from .domain.credentials import managed_addresses
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import subentry_id_for_slot
 from .domain.sync import SlotSyncManager, fold_in_sync, fold_sync_status
@@ -120,8 +120,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
     In-sync binary sensor for the user's whole record on this lock.
 
     A view over every sync manager for this user on this lock: on when all
-    of them are, and reporting the worst of their statuses. The managers
-    live in the entry's runtime data; this entity neither starts nor stops
+    of them are, and reporting the worst of their statuses. The slot
+    coordinator owns the managers; this entity neither starts nor stops
     them, so disabling it never stops a sync.
     """
 
@@ -148,8 +148,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
     def available(self) -> bool:
         """Return whether binary sensor is available or not."""
         return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and all(
-            self.coordinator.has_credential(manager.address)
-            for manager in self._managers
+            self.coordinator.has_credential(address)
+            for address in managed_addresses(int(self.slot_num))
         )
 
     @property
@@ -160,14 +160,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
         return {ATTR_SYNC_STATUS: self._attr_sync_status}
 
     @callback
-    def _fold(self, *_args: Any) -> None:
+    def _fold(self) -> None:
         """Recompute this sensor from every manager and write the result."""
         self._attr_is_on = fold_in_sync(manager.in_sync for manager in self._managers)
         self._attr_sync_status = fold_sync_status(
             manager.sync_status for manager in self._managers
         )
-        if self.hass is not None and self.entity_id:
-            self.async_write_ha_state()
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""

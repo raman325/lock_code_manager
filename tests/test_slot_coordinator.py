@@ -995,12 +995,10 @@ async def test_hook_dispatch_routes_each_entity_kind_to_the_right_collection(
     Pins the polymorphic ``_register_slot_coordinator_subscription`` hook
     for the slot-scoped entities. A regression that broke either
     subclass's override would route the entity into the wrong
-    collection. (In-sync per-lock entities go through a separate
-    lock-slot adder path that fires before the slot coordinator exists
-    on initial setup -- a pre-existing D-design limitation; their
-    ``register_sync_manager`` registration is exercised only via the
-    options-flow ``_async_setup_new_locks`` path, covered by the slot
-    add/remove lifecycle tests.)
+    collection. (The in-sync per-lock sensor takes the base subscription;
+    its managers are started by the coordinator itself on the
+    ``_async_setup_new_locks`` path, covered by the slot add/remove
+    lifecycle tests.)
     """
     runtime_data = lock_code_manager_config_entry.runtime_data
     coordinator = runtime_data.slot_coordinators[1]

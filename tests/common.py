@@ -95,7 +95,7 @@ def all_sync_managers(config_entry: ConfigEntry) -> list[SlotSyncManager]:
 @contextmanager
 def recording_listener(manager: SlotSyncManager, sink: list[bool | None]):
     """Append every in-sync value the manager publishes to ``sink`` while inside."""
-    unsub = manager.async_add_listener(lambda in_sync, _status: sink.append(in_sync))
+    unsub = manager.async_add_listener(lambda: sink.append(manager.in_sync))
     try:
         yield
     finally:
