@@ -164,11 +164,11 @@ class Zigbee2MQTTLock(BaseMqttLock):
     _pending_codes: dict[int, asyncio.Future[SlotCredential | None]] = field(
         init=False, default_factory=dict
     )
-    # Waiting for the device to say anything at all; see _async_device_responds.
     # Slots whose last read gave up waiting. A reply for one arriving later
     # still shows the lock answers, only slowly.
     _late_reads: set[int] = field(default_factory=set, init=False)
-    # Waiting for the device to say anything, with when it was asked.
+    # Waiting for the device to say anything, with when it was asked; see
+    # _async_device_responds.
     _heard_from_device: list[tuple[datetime, asyncio.Future[None]]] = field(
         init=False, default_factory=list
     )
