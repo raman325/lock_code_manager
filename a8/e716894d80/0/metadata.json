@@ -1,0 +1,348 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "a8e716894d80",
+  "session_id": "fadb7389-15f9-469d-b9a2-4d12e0c7cead",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-16T01:48:59.822616Z",
+  "branch": "refactor/slot-coordinator-owns-sync-managers",
+  "checkpoints_count": 6,
+  "save_step_count": 4,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/domain/credentials.py",
+    "custom_components/lock_code_manager/domain/models.py",
+    "custom_components/lock_code_manager/domain/slot_coordinator.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "tests/common.py",
+    "tests/conftest.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_init.py",
+    "tests/test_slot_coordinator.py",
+    "tests/test_sync.py",
+    "tests/test_sync_folds.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5-1",
+  "turn_id": "7ae0fa88d941",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 7134,
+    "cache_creation_tokens": 2212005,
+    "cache_read_tokens": 114160269,
+    "output_tokens": 345066,
+    "api_call_count": 282
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_011n4uURwhBd58X2uHmqPeCo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:using-git-worktrees"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7ae0fa88d941",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 39,
+        "end": 40,
+        "entry_ids": [
+          "054f2373-169f-4702-be03-47dccb51e09e"
+        ],
+        "tool_use_id": "toolu_011n4uURwhBd58X2uHmqPeCo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011n4uURwhBd58X2uHmqPeCo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:using-git-worktrees",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01XWe7gyoULnfVNedNLeaj9t",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7ae0fa88d941",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 217,
+        "end": 218,
+        "entry_ids": [
+          "2777937e-b16d-499a-9e61-cc98caf2c0be"
+        ],
+        "tool_use_id": "toolu_01XWe7gyoULnfVNedNLeaj9t"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XWe7gyoULnfVNedNLeaj9t"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01GvcCDXSMRZfVFGZywh76tS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7ae0fa88d941",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 357,
+        "end": 358,
+        "entry_ids": [
+          "892a53a6-b9a3-47c1-b917-19d38f7d8b60"
+        ],
+        "tool_use_id": "toolu_01GvcCDXSMRZfVFGZywh76tS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01GvcCDXSMRZfVFGZywh76tS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01XhFmiCV7z4VfTqcKo2wdBG",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7ae0fa88d941",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 570,
+        "end": 571,
+        "entry_ids": [
+          "f979f7b4-fb2e-4ee8-9986-5d466111c28e"
+        ],
+        "tool_use_id": "toolu_01XhFmiCV7z4VfTqcKo2wdBG"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XhFmiCV7z4VfTqcKo2wdBG"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_014Y5SriL733i4tJZPvJEtWK",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7ae0fa88d941",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 842,
+        "end": 843,
+        "entry_ids": [
+          "5fcd041b-1d26-468e-9f38-190eea19727d"
+        ],
+        "tool_use_id": "toolu_014Y5SriL733i4tJZPvJEtWK"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_014Y5SriL733i4tJZPvJEtWK"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01RgjNqbK7AoJuvSMajXwwQZ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:systematic-debugging"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7ae0fa88d941",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1064,
+        "end": 1065,
+        "entry_ids": [
+          "8cc5391b-f0dd-4aa7-99f5-bb94e6f3e399"
+        ],
+        "tool_use_id": "toolu_01RgjNqbK7AoJuvSMajXwwQZ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01RgjNqbK7AoJuvSMajXwwQZ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:systematic-debugging",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-16T01:48:59.609616Z",
+    "agent_lines": 224,
+    "agent_removed": 272,
+    "human_added": 307,
+    "human_modified": 485,
+    "human_removed": 0,
+    "total_committed": 820,
+    "total_lines_changed": 1288,
+    "agent_percentage": 38.50931677018634,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 154,
+      "user_lines_removed": 7,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        "custom_components/lock_code_manager/binary_sensor.py": 115,
+        "custom_components/lock_code_manager/const.py": 6,
+        "custom_components/lock_code_manager/icons.json": 7,
+        "custom_components/lock_code_manager/strings.json": 13,
+        "custom_components/lock_code_manager/translations/en.json": 13
+      },
+      "user_removed_per_file": {
+        "custom_components/lock_code_manager/binary_sensor.py": 6,
+        "custom_components/lock_code_manager/const.py": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 708,
+      "user_lines_removed": 294,
+      "agent_lines_added": 154,
+      "agent_lines_removed": 7,
+      "user_added_per_file": {
+        "custom_components/lock_code_manager/__init__.py": 43,
+        "custom_components/lock_code_manager/binary_sensor.py": 45,
+        "custom_components/lock_code_manager/domain/credentials.py": 5,
+        "custom_components/lock_code_manager/domain/slot_coordinator.py": 90,
+        "custom_components/lock_code_manager/domain/sync.py": 47,
+        "custom_components/lock_code_manager/www/generated/lock-code-manager.js": 1,
+        "tests/common.py": 34,
+        "tests/conftest.py": 12,
+        "tests/test_binary_sensor.py": 168,
+        "tests/test_frontend_contract.py": 3,
+        "tests/test_init.py": 24,
+        "tests/test_slot_coordinator.py": 4,
+        "tests/test_sync.py": 79,
+        "tests/test_sync_folds.py": 51,
+        "tests/test_websocket.py": 2,
+        "ts/const.ts": 4,
+        "ts/generate-view.internal.ts": 2,
+        "ts/generate-view.test.ts": 87,
+        "ts/generate-view.ts": 7
+      },
+      "user_removed_per_file": {
+        "custom_components/lock_code_manager/__init__.py": 26,
+        "custom_components/lock_code_manager/binary_sensor.py": 75,
+        "custom_components/lock_code_manager/domain/models.py": 2,
+        "custom_components/lock_code_manager/domain/slot_coordinator.py": 14,
+        "custom_components/lock_code_manager/domain/sync.py": 4,
+        "custom_components/lock_code_manager/www/generated/lock-code-manager.js": 1,
+        "tests/common.py": 1,
+        "tests/conftest.py": 6,
+        "tests/test_binary_sensor.py": 50,
+        "tests/test_init.py": 19,
+        "tests/test_slot_coordinator.py": 4,
+        "tests/test_sync.py": 77,
+        "tests/test_websocket.py": 1,
+        "ts/generate-view.internal.ts": 1,
+        "ts/generate-view.test.ts": 9,
+        "ts/generate-view.ts": 4
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 267,
+      "user_lines_removed": 21,
+      "agent_lines_added": 562,
+      "agent_lines_removed": 244,
+      "user_added_per_file": {
+        "custom_components/lock_code_manager/binary_sensor.py": 91,
+        "custom_components/lock_code_manager/www/generated/lock-code-manager.js": 1,
+        "tests/test_binary_sensor.py": 63,
+        "tests/test_frontend_contract.py": 3,
+        "tests/test_init.py": 7,
+        "tests/test_websocket.py": 2,
+        "ts/const.ts": 4,
+        "ts/generate-view.internal.ts": 2,
+        "ts/generate-view.test.ts": 87,
+        "ts/generate-view.ts": 7
+      },
+      "user_removed_per_file": {
+        "custom_components/lock_code_manager/binary_sensor.py": 1,
+        "custom_components/lock_code_manager/www/generated/lock-code-manager.js": 1,
+        "tests/test_init.py": 4,
+        "tests/test_websocket.py": 1,
+        "ts/generate-view.internal.ts": 1,
+        "ts/generate-view.test.ts": 9,
+        "ts/generate-view.ts": 4
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 921,
+      "agent_lines_removed": 256
+    }
+  ]
+}
