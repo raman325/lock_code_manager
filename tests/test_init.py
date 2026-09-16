@@ -96,6 +96,7 @@ from .common import (
     MockLCMLock,
     async_blocking_stub,
     async_discover_unclaimed_mqtt_lock,
+    code_entity_id,
     entry_users,
     in_sync_entity_id,
     short_stop_grace,
@@ -1823,6 +1824,41 @@ async def test_setup_prunes_devices_for_unconfigured_slots(
         dev_reg.async_get_device_by_identifier((DOMAIN, f"{entry_id}|1"), entry_id)
         is not None
     )
+
+
+async def test_setup_prunes_entities_for_unconfigured_locks(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    A lock dropped while the entry was unloaded leaves no entities behind.
+
+    A loaded per-lock entity removes its own row when its lock goes, but one
+    disabled in the registry never loads, and the update listener that would
+    otherwise notice the drop is not registered while the entry is unloaded.
+    """
+    entry = lock_code_manager_config_entry
+    ent_reg = er.async_get(hass)
+    disabled = in_sync_entity_id(hass, entry, 1, LOCK_2_ENTITY_ID)
+    kept = in_sync_entity_id(hass, entry, 1, LOCK_1_ENTITY_ID)
+    ent_reg.async_update_entity(disabled, disabled_by=er.RegistryEntryDisabler.USER)
+    ent_reg.async_update_entity(kept, disabled_by=er.RegistryEntryDisabler.USER)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    one_lock = copy.deepcopy(BASE_CONFIG)
+    one_lock[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    assert write_entry_config(hass, entry, one_lock)
+    await hass.async_block_till_done()
+    assert ent_reg.async_get(disabled) is not None
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert ent_reg.async_get(disabled) is None
+    assert ent_reg.async_get(kept) is not None
+    assert code_entity_id(hass, entry, 1, LOCK_1_ENTITY_ID)
 
 
 async def test_remove_config_entry_device_allows_only_unconfigured_slots(
