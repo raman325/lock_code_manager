@@ -330,6 +330,11 @@ class BaseMqttLock(BaseLock):
                     continue
                 if health is not None or not self.code_reads_may_be_unsupported:
                     continue
+                # A reply that arrived after its read stopped waiting may have
+                # shown the lock answers since this read began.
+                if self._answered_since_read_began():
+                    health = ReadHealth.ANSWERED
+                    continue
                 silences += 1
                 if silences >= SILENT_READS_TO_CLASSIFY:
                     if not await self._async_device_responds():
@@ -337,6 +342,9 @@ class BaseMqttLock(BaseLock):
                             f"{self.lock.entity_id}: answered none of "
                             f"{silences} code reads, nor anything else"
                         )
+                    if self._answered_since_read_began():
+                        health = ReadHealth.ANSWERED
+                        continue
                     async_record_read_health(
                         self.hass, self.lock.entity_id, ReadHealth.UNANSWERED
                     )
@@ -382,6 +390,10 @@ class BaseMqttLock(BaseLock):
         should ask the device itself.
         """
         return await self.async_is_device_available()
+
+    def _answered_since_read_began(self) -> bool:
+        """Return whether the lock is now known to answer code reads."""
+        return read_health(self.hass, self.lock.entity_id) is ReadHealth.ANSWERED
 
     def _note_answered(self) -> ReadHealth:
         """Record that the lock answered a read, and return that it does."""

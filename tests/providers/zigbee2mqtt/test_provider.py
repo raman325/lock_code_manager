@@ -1383,6 +1383,80 @@ class TestUnansweredReads:
         assert codes == {slot: SlotCredential.known("1234") for slot in (1, 2)}
         assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
 
+    async def test_a_late_answer_mid_read_keeps_the_read_going(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """
+        Each reply lands only once the next slot has been asked.
+
+        The first one shows the lock answers, so the read asks every slot
+        rather than stopping at the silences a lock that cannot answer gives.
+        """
+        lock = zigbee2mqtt_lock_connected
+        asked: list[int] = []
+
+        async def _late(
+            hass: HomeAssistant, topic: str, payload: str, **kwargs: object
+        ) -> None:
+            if asked:
+                lock._process_z2m_device_payload(
+                    {"users": {str(asked[-1]): {"status": "available"}}}
+                )
+            asked.append(json.loads(payload)["pin_code"]["user"])
+
+        slots = list(range(1, 2 * SILENT_READS_TO_CLASSIFY + 1))
+        responds = AsyncMock(return_value=True)
+        with (
+            patch.object(
+                lock, "async_is_integration_connected", new=AsyncMock(return_value=True)
+            ),
+            patch.object(lock, "_get_topic", return_value="topic/get"),
+            patch.object(lock, "_async_device_responds", responds),
+            patch.object(Zigbee2MQTTLock, "slot_read_timeout", 0.01),
+            patch(_PUBLISH, side_effect=_late),
+        ):
+            codes = await lock.async_get_usercodes(slots)
+
+        assert asked == slots
+        assert set(codes) == set(slots)
+        assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
+        # Known to answer by the second slot, so not judged at the fifth
+        # silence; asked once, only because every slot of the read was silent.
+        assert responds.await_count == 1
+
+    async def test_a_late_answer_during_the_lock_state_check_keeps_the_read_going(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """The last silent slot's reply is what the lock sends back first."""
+        lock = zigbee2mqtt_lock_connected
+        asked: list[int] = []
+
+        async def _silent(
+            hass: HomeAssistant, topic: str, payload: str, **kwargs: object
+        ) -> None:
+            asked.append(json.loads(payload)["pin_code"]["user"])
+
+        async def _responds() -> bool:
+            lock._process_z2m_device_payload(
+                {"users": {str(asked[-1]): {"status": "available"}}}
+            )
+            return True
+
+        slots = list(range(1, 2 * SILENT_READS_TO_CLASSIFY + 1))
+        with (
+            patch.object(
+                lock, "async_is_integration_connected", new=AsyncMock(return_value=True)
+            ),
+            patch.object(lock, "_get_topic", return_value="topic/get"),
+            patch.object(lock, "_async_device_responds", _responds),
+            patch.object(Zigbee2MQTTLock, "slot_read_timeout", 0.01),
+            patch(_PUBLISH, side_effect=_silent),
+        ):
+            await lock.async_get_usercodes(slots)
+
+        assert asked == slots
+        assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
+
     async def test_answered_is_final(
         self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
     ) -> None:
