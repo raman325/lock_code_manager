@@ -40,7 +40,13 @@ from custom_components.lock_code_manager.domain.models import SyncState
 from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
 from custom_components.lock_code_manager.providers._base import BaseLock
 
-from .common import BASE_CONFIG, MockCalendarEntity, MockLCMLock, MockLockEntity
+from .common import (
+    BASE_CONFIG,
+    MockCalendarEntity,
+    MockLCMLock,
+    MockLockEntity,
+    sync_manager_of,
+)
 
 pytest_plugins = ["pytest_homeassistant_custom_component"]
 
@@ -316,12 +322,12 @@ async def async_trigger_sync_tick(
     without waiting for the natural 5-second tick interval.
     """
     entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    if set_dirty and entity_obj._sync_manager._state not in (
+    if set_dirty and sync_manager_of(entity_obj)._state not in (
         SyncState.LOADING,
         SyncState.OUT_OF_SYNC,
     ):
-        entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
-    await entity_obj._sync_manager._async_tick()
+        sync_manager_of(entity_obj)._state = SyncState.OUT_OF_SYNC
+    await sync_manager_of(entity_obj)._async_tick()
     await hass.async_block_till_done()
 
 
@@ -335,8 +341,8 @@ async def async_initial_tick(hass: HomeAssistant, entity_id: str) -> None:
     been initialized yet (state is LOADING).
     """
     entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    if entity_obj._sync_manager._state is SyncState.LOADING:
-        await entity_obj._sync_manager._async_tick()
+    if sync_manager_of(entity_obj)._state is SyncState.LOADING:
+        await sync_manager_of(entity_obj)._async_tick()
         await hass.async_block_till_done()
 
 

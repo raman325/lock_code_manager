@@ -15,10 +15,12 @@ lock SlotSyncManager remains one per (config_entry, slot_num, lock).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 import logging
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     CONF_CONDITION,
     CONF_ENABLED,
@@ -34,6 +36,7 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -43,13 +46,14 @@ from homeassistant.helpers.issue_registry import (
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
 from .config import EntryConfig, async_write_entry_config
-from .credentials import CredentialType
+from .credentials import CredentialAddress, CredentialType, managed_addresses
 from .names import name_error, normalize_name
 from .queries import get_entry_config
+from .sync import SlotSyncManager
 
 if TYPE_CHECKING:
+    from ..providers import BaseLock
     from .models import LockCodeManagerConfigEntry
-    from .sync import SlotSyncManager
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,9 +73,10 @@ class SlotEntityCoordinator:
     have to mutate the config entry or call sibling-entity services
     directly.
 
-    The coordinator does not own the per-lock SlotSyncManager state
-    machine; it just keeps a reference to the managers for this slot so
-    it can request a sync check after a user-visible state change.
+    Owns the slot's sync managers: one per lock and credential address,
+    started when a lock is set up for the slot and stopped when the lock
+    or the slot goes. The in-sync sensors are views over them, so
+    disabling a sensor never stops a sync.
     """
 
     def __init__(
@@ -90,7 +95,7 @@ class SlotEntityCoordinator:
 
         self._active_view_writers: set[ActiveViewWriter] = set()
         self._state_subscribers: set[Callable[[], None]] = set()
-        self._sync_managers: set[SlotSyncManager] = set()
+        self._sync_managers: dict[tuple[str, CredentialAddress], SlotSyncManager] = {}
 
         # Condition-entity subscription state
         self._condition_unsub: Callable[[], None] | None = None
@@ -126,7 +131,95 @@ class SlotEntityCoordinator:
             self._condition_unsub = None
         self._subscribed_condition_entity_id = None
         self._active_view_writers.clear()
-        self._sync_managers.clear()
+        # Normally empty by now: unload stops the managers before it stops the
+        # coordinators. One registered since is an update listener that lost
+        # a race with the unload; it is stopped rather than orphaned.
+        if self._sync_managers:
+            self._config_entry.async_create_task(self._hass, self.async_stop_sync())
+
+    # -- Sync managers -------------------------------------------------------
+
+    async def async_start_sync(self, lock: BaseLock) -> None:
+        """
+        Start a manager for every credential of this slot on ``lock``.
+
+        Nothing starts on a coordinator that has stopped or an entry on its
+        way out: an update listener can reach here after the unload it is
+        racing has already stopped everything, and a manager started then
+        would have no unload left to stop it.
+        """
+        if lock.coordinator is None or not self._started:
+            return
+        if self._config_entry.state in (
+            ConfigEntryState.UNLOAD_IN_PROGRESS,
+            ConfigEntryState.NOT_LOADED,
+        ):
+            return
+        ent_reg = er.async_get(self._hass)
+        for address in managed_addresses(self._slot_num):
+            key = (lock.lock.entity_id, address)
+            if key in self._sync_managers:
+                continue
+            manager = SlotSyncManager(
+                self._hass,
+                ent_reg,
+                self._config_entry,
+                lock.coordinator,
+                lock,
+                address,
+            )
+            self._sync_managers[key] = manager
+            await manager.async_start()
+
+    async def async_stop_sync(self, lock_entity_id: str | None = None) -> None:
+        """
+        Stop and drop this slot's managers, for one lock or for all of them.
+
+        Stopped together, so several locks that have stopped answering cost
+        one stop grace rather than one each. A manager whose stop raises is
+        logged and dropped like the rest; nothing stays registered that is
+        not running.
+        """
+        keys = [
+            key
+            for key in self._sync_managers
+            if lock_entity_id is None or key[0] == lock_entity_id
+        ]
+        managers = [self._sync_managers.pop(key) for key in keys]
+        if not managers:
+            return
+        results = await asyncio.gather(
+            *(manager.async_stop() for manager in managers), return_exceptions=True
+        )
+        for manager, result in zip(managers, results, strict=True):
+            if isinstance(result, Exception):
+                _LOGGER.warning(
+                    "%s: Sync manager stop raised: %s",
+                    manager.log_prefix,
+                    result,
+                    exc_info=result,
+                )
+
+    @property
+    def sync_managers(self) -> list[SlotSyncManager]:
+        """Return every manager this slot is running."""
+        return list(self._sync_managers.values())
+
+    @callback
+    def sync_managers_for(self, lock_entity_id: str) -> list[SlotSyncManager]:
+        """Return the managers keeping this slot in sync on ``lock_entity_id``."""
+        return [
+            manager
+            for (lock_id, _), manager in self._sync_managers.items()
+            if lock_id == lock_entity_id
+        ]
+
+    @callback
+    def sync_manager(
+        self, lock_entity_id: str, address: CredentialAddress
+    ) -> SlotSyncManager | None:
+        """Return the manager for one credential on one lock, if it is running."""
+        return self._sync_managers.get((lock_entity_id, address))
 
     # -- Read-only views (consumed by entities) ------------------------------
 
@@ -183,12 +276,6 @@ class SlotEntityCoordinator:
             raise
         self._active_view_writers.add(writer)
         return lambda: self._active_view_writers.discard(writer)
-
-    @callback
-    def register_sync_manager(self, manager: SlotSyncManager) -> Callable[[], None]:
-        """Register a per-lock sync manager so the coordinator can poke it on changes."""
-        self._sync_managers.add(manager)
-        return lambda: self._sync_managers.discard(manager)
 
     @callback
     def register_state_subscriber(
@@ -410,7 +497,7 @@ class SlotEntityCoordinator:
     @callback
     def _poke_sync_managers(self) -> None:
         """Ask each per-lock sync manager to re-evaluate against fresh state."""
-        for manager in list(self._sync_managers):
+        for manager in list(self._sync_managers.values()):
             try:
                 manager.request_sync_check()
             except Exception:

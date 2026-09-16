@@ -41,9 +41,13 @@ from custom_components.lock_code_manager.domain.config import (
     async_write_entry_config,
     build_slot_unique_id,
 )
-from custom_components.lock_code_manager.domain.credentials import WriteResult
+from custom_components.lock_code_manager.domain.credentials import (
+    WriteResult,
+    pin_address,
+)
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.slot_assignment import identity
+from custom_components.lock_code_manager.domain.sync import SlotSyncManager
 from custom_components.lock_code_manager.providers import BaseLock
 
 LOCK_1_ENTITY_ID = "lock.test_1"
@@ -67,6 +71,35 @@ BASE_CONFIG = {
 
 UNCLAIMED_IDENTIFIER = "somebridge_1"
 UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
+
+
+def sync_manager_of(entity_obj: Any) -> SlotSyncManager:
+    """Return the PIN sync manager an in-sync entity is a view of."""
+    slot_num = int(entity_obj.slot_num)
+    manager = entity_obj.config_entry.runtime_data.slot_coordinators[
+        slot_num
+    ].sync_manager(entity_obj.lock.lock.entity_id, pin_address(slot_num))
+    assert manager is not None
+    return manager
+
+
+def all_sync_managers(config_entry: ConfigEntry) -> list[SlotSyncManager]:
+    """Return every running sync manager of an entry, across its slots."""
+    return [
+        manager
+        for coordinator in config_entry.runtime_data.slot_coordinators.values()
+        for manager in coordinator.sync_managers
+    ]
+
+
+@contextmanager
+def recording_listener(manager: SlotSyncManager, sink: list[bool | None]):
+    """Append every in-sync value the manager publishes to ``sink`` while inside."""
+    unsub = manager.async_add_listener(lambda in_sync, _status: sink.append(in_sync))
+    try:
+        yield
+    finally:
+        unsub()
 
 
 def async_blocking_stub(

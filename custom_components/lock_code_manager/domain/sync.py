@@ -13,7 +13,7 @@ Circuit breaker: 3 attempts within 5 minutes (MAX_SYNC_ATTEMPTS, SYNC_ATTEMPT_WI
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 import logging
@@ -172,7 +172,6 @@ class SlotSyncManager:
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
         address: CredentialAddress,
-        state_writer: Callable[[bool | None], None],
     ) -> None:
         """Initialize the sync manager."""
         self._hass = hass
@@ -186,7 +185,7 @@ class SlotSyncManager:
         # IS the slot number; the lease lookup replaces this once users are
         # named.
         self._slot_num = slot_num = int(address.user_ref)
-        self._state_writer = state_writer
+        self._listeners: list[Callable[[bool | None, str | None], None]] = []
 
         self._log_prefix = (
             f"{config_entry.entry_id} ({config_entry.title}): "
@@ -273,6 +272,24 @@ class SlotSyncManager:
     def log_prefix(self) -> str:
         """Return the structured log prefix identifying this manager's slot."""
         return self._log_prefix
+
+    @property
+    def address(self) -> CredentialAddress:
+        """Return the credential this manager keeps in sync."""
+        return self._address
+
+    @callback
+    def async_add_listener(
+        self, listener: Callable[[bool | None, str | None], None]
+    ) -> Callable[[], None]:
+        """Call ``listener`` with in-sync and status on every state change, until removed."""
+        self._listeners.append(listener)
+
+        @callback
+        def _remove() -> None:
+            self._listeners.remove(listener)
+
+        return _remove
 
     @property
     def in_sync(self) -> bool | None:
@@ -679,7 +696,8 @@ class SlotSyncManager:
         # async_stop has begun teardown of the owning entity.
         if not self._started:
             return
-        self._state_writer(self.in_sync)
+        for listener in list(self._listeners):
+            listener(self.in_sync, self.sync_status)
 
     @callback
     def request_sync_check(self, *_args: Any) -> None:
@@ -1138,3 +1156,28 @@ class SlotSyncManager:
                 "%s: Waiting for dependent entities, tracking all state changes",
                 self._log_prefix,
             )
+
+
+# The order that decides what a set of credentials reads as, worst first: one
+# suspended credential is a suspended user.
+_STATUS_PRECEDENCE = (
+    SyncState.SUSPENDED.value,
+    SyncState.SYNCING.value,
+    SyncState.PENDING_CONFIRMATION.value,
+    SyncState.OUT_OF_SYNC.value,
+    SyncState.IN_SYNC.value,
+)
+
+
+def fold_in_sync(values: Iterable[bool | None]) -> bool | None:
+    """Fold per-credential in-sync values: on when all are, unknown while any is."""
+    seen = list(values)
+    if not seen or any(value is None for value in seen):
+        return None
+    return all(seen)
+
+
+def fold_sync_status(statuses: Iterable[str | None]) -> str | None:
+    """Fold per-credential statuses to the worst one among them."""
+    seen = {status for status in statuses if status is not None}
+    return next((status for status in _STATUS_PRECEDENCE if status in seen), None)

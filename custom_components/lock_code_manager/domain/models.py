@@ -21,7 +21,6 @@ from .config import EntryConfig
 if TYPE_CHECKING:
     from ..providers import BaseLock
     from .slot_coordinator import SlotEntityCoordinator
-    from .sync import SlotSyncManager
 
 
 class SyncState(StrEnum):
@@ -150,7 +149,6 @@ class LockCodeManagerConfigEntryRuntimeData:
     # them up front -- before lock-removed callbacks fire and before platforms
     # unload -- so an in-flight tick cannot keep running against torn-down
     # state.
-    sync_managers: set[SlotSyncManager] = field(default_factory=set)
     slot_coordinators: dict[int, SlotEntityCoordinator] = field(default_factory=dict)
     # True once the options update listener has been registered for this
     # entry. Guards against stacking when _setup_entry_after_start runs more

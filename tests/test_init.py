@@ -94,11 +94,13 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_NAME_ENTITY,
     MockLCMLock,
+    all_sync_managers,
     async_blocking_stub,
     async_discover_unclaimed_mqtt_lock,
     entry_users,
     in_sync_entity_id,
     short_stop_grace,
+    sync_manager_of,
     write_entry_config,
 )
 from .conftest import (
@@ -1383,7 +1385,7 @@ async def test_reload_resets_sync_state_cleanly(
 
     # Get the sync manager reference and verify _last_set_pin has a value
     entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    old_sync_mgr = entity_obj._sync_manager
+    old_sync_mgr = sync_manager_of(entity_obj)
     # After sync the _last_set_pin should be set (the initial code was set)
     # or the slot is already in sync without needing a set. Either way we
     # capture the reference for identity comparison later.
@@ -1399,7 +1401,7 @@ async def test_reload_resets_sync_state_cleanly(
 
     # Get new sync manager reference (should be a different object)
     new_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    new_sync_mgr = new_entity_obj._sync_manager
+    new_sync_mgr = sync_manager_of(new_entity_obj)
     assert id(new_sync_mgr) != old_mgr_id, (
         "After reload, sync manager should be a fresh instance"
     )
@@ -1512,7 +1514,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     await async_trigger_sync_tick(hass, entry_b_in_sync_entity)
 
     entry_b_entity_obj = get_in_sync_entity_obj(hass, entry_b_in_sync_entity)
-    assert entry_b_entity_obj._sync_manager._state == SyncState.IN_SYNC
+    assert sync_manager_of(entry_b_entity_obj)._state == SyncState.IN_SYNC
 
     # Suspend the coordinator (simulating circuit breaker trip from entry A)
     for _ in range(BACKOFF_FAILURE_THRESHOLD):
@@ -1522,7 +1524,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
 
     # An IN_SYNC slot stays IN_SYNC during suspension (nothing to do), which
     # is correct behavior: it's already synced, no need to block.
-    assert entry_b_entity_obj._sync_manager._state == SyncState.IN_SYNC
+    assert sync_manager_of(entry_b_entity_obj)._state == SyncState.IN_SYNC
 
     # Now make entry B's slot out-of-sync by changing the code on the lock
     # while the coordinator is suspended
@@ -1544,7 +1546,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     # Then on the next tick, the unreachable check blocks it into SUSPENDED.
     await async_trigger_sync_tick(hass, entry_b_in_sync_entity, set_dirty=False)
     await hass.async_block_till_done()
-    assert entry_b_entity_obj._sync_manager._state == SyncState.SUSPENDED, (
+    assert sync_manager_of(entry_b_entity_obj)._state == SyncState.SUSPENDED, (
         "OUT_OF_SYNC slot should be blocked by lock-level suspension"
     )
 
@@ -1554,9 +1556,9 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
 
     # After recovery, entry B's sync manager should resume from SUSPENDED
     # via _request_sync_check detecting the lock is reachable again
-    assert entry_b_entity_obj._sync_manager._state == SyncState.OUT_OF_SYNC, (
+    assert sync_manager_of(entry_b_entity_obj)._state == SyncState.OUT_OF_SYNC, (
         f"Entry B's sync manager should have resumed to OUT_OF_SYNC, "
-        f"but state is {entry_b_entity_obj._sync_manager._state}"
+        f"but state is {sync_manager_of(entry_b_entity_obj)._state}"
     )
 
     await hass.config_entries.async_unload(entry_b.entry_id)
@@ -1628,6 +1630,30 @@ async def test_options_saved_while_entry_down_survive_data_migration(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
 
+async def test_removing_a_lock_purges_its_disabled_entities(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A per-lock entity disabled in the registry never loads, so nobody else removes it."""
+    entry = lock_code_manager_config_entry
+    ent_reg = er.async_get(hass)
+    disabled_id = in_sync_entity_id(hass, entry, 1, LOCK_2_ENTITY_ID)
+    ent_reg.async_update_entity(disabled_id, disabled_by=er.RegistryEntryDisabler.USER)
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(disabled_id) is None
+    assert ent_reg.async_get(disabled_id) is not None
+
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    hass.config_entries.async_update_entry(entry, options=new_config)
+    await hass.async_block_till_done()
+
+    assert ent_reg.async_get(disabled_id) is None
+    assert LOCK_2_ENTITY_ID not in entry.runtime_data.locks
+
+
 async def test_unload_stops_sync_managers_before_callbacks_and_platforms(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1642,12 +1668,14 @@ async def test_unload_stops_sync_managers_before_callbacks_and_platforms(
     sync_manager_count_at_lock_removed: list[int] = []
 
     def _on_lock_removed(_entity_id: str) -> None:
-        sync_manager_count_at_lock_removed.append(len(runtime_data.sync_managers))
+        sync_manager_count_at_lock_removed.append(
+            len(all_sync_managers(lock_code_manager_config_entry))
+        )
 
     callbacks.register_lock_removed_handler(_on_lock_removed)
 
-    assert len(runtime_data.sync_managers) > 0
-    initial_manager_count = len(runtime_data.sync_managers)
+    assert len(all_sync_managers(lock_code_manager_config_entry)) > 0
+    initial_manager_count = len(all_sync_managers(lock_code_manager_config_entry))
 
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -1669,12 +1697,11 @@ async def test_unload_cancels_in_flight_sync_tick(
     lock_code_manager_config_entry,
 ):
     """Unload cancels an in-flight sync tick instead of waiting it out."""
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    assert runtime_data.sync_managers
+    assert all_sync_managers(lock_code_manager_config_entry)
 
     # Pick a manager and stall its tick mid-flight by patching its
     # _async_tick_impl to never return.
-    manager = next(iter(runtime_data.sync_managers))
+    manager = all_sync_managers(lock_code_manager_config_entry)[0]
     manager._state = SyncState.OUT_OF_SYNC
 
     stalled_tick_impl, mid_tick, _ = async_blocking_stub()
@@ -1702,8 +1729,7 @@ async def test_unload_logs_sync_manager_stop_exceptions(
     caplog: pytest.LogCaptureFixture,
 ):
     """Unload logs warnings when individual sync manager stops raise and still stops the rest."""
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    managers = list(runtime_data.sync_managers)
+    managers = all_sync_managers(lock_code_manager_config_entry)
     assert len(managers) >= 2
 
     boom = RuntimeError("simulated stop failure")
@@ -2059,7 +2085,9 @@ async def test_update_listener_slot_removal_handles_missing_and_failing_coordina
     assert 2 in runtime_data.slot_coordinators
 
     # Simulate slot 1's coordinator already having been discarded.
-    runtime_data.slot_coordinators.pop(1)
+    # Whoever discards a coordinator has stopped its managers first; the
+    # removal path cannot reach them once the coordinator is gone.
+    await runtime_data.slot_coordinators.pop(1).async_stop_sync()
 
     # Slot 2's coordinator raises when stopped.
     boom = RuntimeError("simulated coordinator stop failure")

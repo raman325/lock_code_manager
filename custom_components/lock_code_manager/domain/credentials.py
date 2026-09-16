@@ -167,6 +167,11 @@ class CredentialAddress(NamedTuple):
     credential_type: CredentialType
 
 
+def managed_addresses(user_ref: int) -> tuple[CredentialAddress, ...]:
+    """Return every credential address Lock Code Manager keeps in sync for a user."""
+    return (pin_address(user_ref),)
+
+
 def pin_address(user_ref: int) -> CredentialAddress:
     """
     Build the Personal Identification Number address for a managed user.
