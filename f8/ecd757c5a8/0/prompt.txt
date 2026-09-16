@@ -1,0 +1,53 @@
+<task-notification>
+<task-id>a9d338e3c7158f27b</task-id>
+<tool-use-id>toolu_01TEGLeWfKRLT3RZ83Snior9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a9d338e3c7158f27b.output</output-file>
+<status>completed</status>
+<summary>Agent "Reuse angle" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. Most of the angle's hypotheses checked out clean: there is no pre-existing "gather with `return_exceptions` and log per item" helper (the two other `return_exceptions=True` sites in `__init__.py` at lines 627 and 1817 aggregate into a raised error and re-raise `CancelledError` respectively, so `_async_gather_managers` is not a duplicate), no status-precedence table exists anywhere else (websocket and frontend both carry only a per-lock boolean), `_async_purge_entities` is the only registry-remove loop after this PR (the loops at 1331 and 1583 update rather than remove), and `sync_manager_of` is used consistently across `tests/conftest.py` and all 70+ sites in `tests/test_sync.py`. The `test_binary_sensor.py:2431` inline lookup is justified because the entity is disabled there, so no entity object exists to hand `sync_manager_of`.
+
+Below are the findings I could tie to a named existing helper or duplicated block.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 2043,
+    "summary": "The slot-removal block in _async_apply_entry_update hand-rolls 'pop coordinator, try/except async_stop with _LOGGER.exception, gather async_stop_sync' -- the same three steps async_unload_entry performs at lines 1171 (_async_stop_slot_sync), 1196-1201 (try/except coordinator.async_stop + clear). No shared 'stop a slot coordinator and its managers' helper owns this.",
+    "failure_scenario": "Two copies of the coordinator teardown sequence now live 850 lines apart and already disagree on order: the unload comment at line 1192 says coordinators are stopped AFTER entity removers 'so the entities' async_will_remove_from_hass can still call into them', while the new block at 2043 stops them BEFORE invoke_entity_removers_for_slot. A future fix to either (e.g. the shield/reload finding in #1562) lands in one and not the other. Extract `_async_stop_slot_coordinators(runtime_data, slot_nums, *, log_prefix)` that pops, calls async_stop under try/except, and awaits async_stop_sync; call it from both async_unload_entry (with slot_nums=None) and _async_apply_entry_update (with slots_to_remove), and settle the ordering once."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 1516,
+    "summary": "_async_stop_slot_sync iterates runtime_data.slot_coordinators.values() directly and takes no slot_nums, while its sibling _async_start_slot_sync (line 1494) goes through the new _slot_coordinators(runtime_data, slot_nums) filter. The slot-removal block at line 2054 then re-implements the missing subset stop as its own `asyncio.gather(*(coordinator.async_stop_sync() for coordinator in removed))`.",
+    "failure_scenario": "_slot_coordinators exists to make start/stop symmetric over a slot subset but only start uses it, so the removal path grows a third gather-over-coordinators expression. Give _async_stop_slot_sync the same `slot_nums: Collection[int] | None = None` keyword routed through _slot_coordinators, and replace the inline gather at line 2054 with `await _async_stop_slot_sync(runtime_data, slot_nums=slots_to_remove)` (or fold into the shared helper from the finding above, which makes _slot_coordinators single-use and a candidate for inlining)."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/slot_coordinator.py",
+    "line": 184,
+    "summary": "async_start_sync calls er.async_get(self._hass) on every invocation to hand each new SlotSyncManager an entity registry, even though SlotSyncManager itself stores it as self._ent_reg and the coordinator is constructed once per slot with hass in hand.",
+    "failure_scenario": "Every lock added to every slot re-resolves the registry singleton; the pre-PR binary sensor received ent_reg from the platform's async_setup_entry and passed it straight through. Resolve once in SlotEntityCoordinator.__init__ (`self._ent_reg = er.async_get(hass)`) and pass self._ent_reg, matching how BaseLockCodeManagerEntity and the platforms already thread a single registry handle (custom_components/lock_code_manager/entity.py, `self.ent_reg`)."
+  },
+  {
+    "file": "tests/test_init.py",
+    "line": 1458,
+    "summary": "Inline `not any(coordinator.sync_manager(LOCK_2_ENTITY_ID, pin_address(slot_num)) for slot_num, coordinator in runtime_data.slot_coordinators.items())` re-walks every coordinator's managers, which is exactly what the new tests/common.py helper all_sync_managers(config_entry) does.",
+    "failure_scenario": "all_sync_managers was added in this PR (tests/common.py line 84) but has no caller in this file; the one place that needs 'every manager across slots' hand-rolls the loop, keyed by PIN only. If MANAGED_CREDENTIAL_TYPES grows, this assertion silently stops covering the new credential's manager while all_sync_managers would. Replace with `assert not any(m._lock.lock.entity_id == LOCK_2_ENTITY_ID for m in all_sync_managers(entry))`."
+  },
+  {
+    "file": "custom_components/lock_code_manager/binary_sensor.py",
+    "line": 150,
+    "summary": "`available` folds `all(self.coordinator.has_credential(address) for address in self._addresses)` inline, while the sibling per-lock entity in sensor.py (lines 81, 91, 98) still builds `pin_address(int(self.slot_num))` on every property read instead of caching addresses in __init__ as this class now does.",
+    "failure_scenario": "Two per-lock views of the same slot now answer 'do I have my credentials' two different ways: binary_sensor caches managed_addresses(slot_num) once, sensor.py recomputes pin_address three times per state read. When a second managed credential type is added, sensor.py stays PIN-only unless someone remembers it. Hoist the cached `self._addresses = managed_addresses(slot_num)` and the all(has_credential) check into BaseLockCodeManagerCodeSlotPerLockEntity (custom_components/lock_code_manager/entity.py) so both platforms share it."
+  }
+]
+```
+
+Key file paths:
+- `/Users/raman/projects/lock_code_manager/.worktrees/sync-ownership/custom_components/lock_code_manager/__init__.py` (lines 1171–1201 unload block, 1482–1531 new helpers, 2035–2061 removal block)
+- `/Users/raman/projects/lock_code_manager/.worktrees/sync-ownership/custom_components/lock_code_manager/domain/slot_coordinator.py` (line 65 `_async_gather_managers`, 184 `er.async_get`)
+- `/Users/raman/projects/lock_code_manager/.worktrees/sync-ownership/tests/common.py` (lines 76–91 `sync_manager_of` / `all_sync_managers`)
+- `/Users/raman/projects/lock_code_manager/.worktrees/sync-ownership/tests/test_init.py` (line 1458)</result>
+<usage><subagent_tokens>107723</subagent_tokens><tool_uses>10</tool_uses><duration_ms>136200</duration_ms></usage>
+</task-notification>
