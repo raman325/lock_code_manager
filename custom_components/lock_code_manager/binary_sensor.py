@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 import logging
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -53,36 +52,22 @@ async def async_setup_entry(
             return
         addresses = managed_addresses(slot_num)
         # The aggregate over every managed credential, then one sensor per
-        # credential. With a single credential type the two read the same,
-        # so the per-credential sensors ship disabled; enabling one splits
-        # the view for whoever wants it. Not updated before add: the sensors
-        # read the coordinator's fold, and a refresh requested by a sensor
-        # about to be discarded as disabled would cost the lock a read.
-        sensors: list[tuple[str, tuple[CredentialAddress, ...], bool]] = [
-            (ATTR_IN_SYNC, addresses, True),
-            *(
-                (
-                    credential_in_sync_key(address.credential_type.value),
-                    (address,),
-                    False,
-                )
-                for address in addresses
-            ),
-        ]
+        # credential.
         async_add_entities(
             [
                 LockCodeManagerCodeSlotInSyncEntity(
-                    hass,
-                    ent_reg,
-                    config_entry,
-                    coordinator,
-                    lock,
-                    slot_num,
-                    key,
-                    covered,
-                    enabled_default=enabled_default,
+                    hass, ent_reg, config_entry, coordinator, lock, slot_num, *props
                 )
-                for key, covered, enabled_default in sensors
+                for props in (
+                    (ATTR_IN_SYNC, addresses),
+                    *(
+                        (
+                            credential_in_sync_key(address.credential_type.value),
+                            (address,),
+                        )
+                        for address in addresses
+                    ),
+                )
             ],
             config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
@@ -164,17 +149,18 @@ class LockCodeManagerCodeSlotInSyncEntity(
         lock: BaseLock,
         slot_num: int,
         key: str,
-        addresses: Iterable[CredentialAddress],
-        *,
-        enabled_default: bool = True,
+        addresses: tuple[CredentialAddress, ...],
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
             self, hass, ent_reg, config_entry, lock, slot_num, key
         )
         CoordinatorEntity.__init__(self, coordinator)
-        self._addresses = tuple(addresses)
-        self._attr_entity_registry_enabled_default = enabled_default
+        self._addresses = addresses
+        # With a single credential type a per-credential sensor reads the same
+        # as the aggregate, so only the aggregate ships enabled; enabling a
+        # per-credential one splits the view for whoever wants it.
+        self._attr_entity_registry_enabled_default = key == ATTR_IN_SYNC
 
     @property
     def available(self) -> bool:

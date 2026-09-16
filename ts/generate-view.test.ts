@@ -8,7 +8,6 @@ import {
     CONDITION_KEYS,
     DIVIDER_CARD,
     IN_SYNC_KEY,
-    PIN_IN_SYNC_KEY,
     compareAndSortEntities,
     createLockCodeManagerEntity,
     generateEntityCards,
@@ -375,7 +374,7 @@ describe('getSlotMapping per-credential in-sync sensors', () => {
     it('groups a pin_in_sync sensor with the in-sync entities', () => {
         const entities = [
             createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front'),
-            createTestEntity(1, PIN_IN_SYNC_KEY, 'binary_sensor.pin_in_sync', 'lock.front')
+            createTestEntity(1, 'pin_in_sync', 'binary_sensor.pin_in_sync', 'lock.front')
         ];
         const result = getSlotMapping(1, entities, configEntryData);
         expect(result.inSyncEntities.map((e) => e.entity_id)).toEqual([
@@ -385,13 +384,36 @@ describe('getSlotMapping per-credential in-sync sensors', () => {
         expect(result.mainEntities).toHaveLength(0);
     });
 
+    it('leaves a disabled in-sync sensor out of the group', () => {
+        const entities = [
+            createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front'),
+            {
+                ...createTestEntity(1, 'pin_in_sync', 'binary_sensor.pin_in_sync', 'lock.front'),
+                disabled_by: 'integration'
+            }
+        ];
+        const result = getSlotMapping(1, entities, configEntryData);
+        expect(result.inSyncEntities.map((e) => e.entity_id)).toEqual(['binary_sensor.in_sync']);
+    });
+
+    it('sorts a per-credential in-sync sensor after the aggregate', () => {
+        const entities = [
+            createTestEntity(1, 'pin_in_sync', 'binary_sensor.pin_in_sync', 'lock.front'),
+            createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front')
+        ];
+        expect([...entities].sort(compareAndSortEntities).map((e) => e.entity_id)).toEqual([
+            'binary_sensor.in_sync',
+            'binary_sensor.pin_in_sync'
+        ]);
+    });
+
     it('names a pin_in_sync card after its lock and the credential', () => {
         const hass = createMockHass({
             states: { 'lock.front': { attributes: { friendly_name: 'Front' }, state: 'locked' } }
         });
         const entities = [
             createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front'),
-            createTestEntity(1, PIN_IN_SYNC_KEY, 'binary_sensor.pin_in_sync', 'lock.front')
+            createTestEntity(1, 'pin_in_sync', 'binary_sensor.pin_in_sync', 'lock.front')
         ];
         expect(generateEntityCards(hass, mockConfigEntry, entities).map((c) => c.name)).toEqual([
             'Front',

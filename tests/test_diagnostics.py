@@ -6,7 +6,7 @@ import copy
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr
 
 from custom_components.lock_code_manager.const import CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.diagnostics import (
@@ -19,6 +19,7 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
+    async_enable_and_reload,
     pin_in_sync_entity_id,
     write_entry_config,
 )
@@ -186,8 +187,8 @@ async def test_sensitive_entities_redacted(
     for lock_diag in result["locks"].values():
         all_entities.extend(lock_diag.get("entities", []))
 
-    # _is_sensitive checks unique_id for |pin and |code markers, which
-    # results in **REDACTED** state. Verify at least one entity is redacted.
+    # An entity keyed by a credential (the PIN text, the code sensor) reads
+    # **REDACTED**. Verify at least one entity is redacted.
     redacted = [e for e in all_entities if e["state"] == "**REDACTED**"]
     assert len(redacted) > 0, "Expected at least one redacted entity"
 
@@ -204,9 +205,7 @@ async def test_the_pin_in_sync_sensor_is_not_redacted(
     """A sensor whose key starts with ``pin`` holds no PIN; it is what the download is for."""
     entry = lock_code_manager_config_entry
     entity_id = pin_in_sync_entity_id(hass, entry, 1)
-    er.async_get(hass).async_update_entity(entity_id, disabled_by=None)
-    await hass.config_entries.async_reload(entry.entry_id)
-    await hass.async_block_till_done()
+    await async_enable_and_reload(hass, entry, entity_id)
 
     result = await async_get_config_entry_diagnostics(hass, entry)
     reported = next(

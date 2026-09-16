@@ -3,14 +3,16 @@ export const CODE_EVENT_KEY = 'credential_used';
 export const ACTIVE_KEY = 'active';
 export const IN_SYNC_KEY = 'in_sync';
 // Per-credential in-sync sensors are keyed `<credential>_in_sync`, one per
-// credential type the backend manages; `in_sync` is their conjunction.
-export const PIN_IN_SYNC_KEY = 'pin_in_sync';
-export const isInSyncKey = (key: string): boolean =>
-    key === IN_SYNC_KEY || key.endsWith(`_${IN_SYNC_KEY}`);
+// credential type the backend manages; `in_sync` is their conjunction. The
+// key may be undefined for a registry row that is not shaped like a slot's.
+const IN_SYNC_KEY_PATTERN = new RegExp(`^(?:(.+)_)?${IN_SYNC_KEY}$`);
+export const isInSyncKey = (key: string | undefined): boolean =>
+    typeof key === 'string' && IN_SYNC_KEY_PATTERN.test(key);
 // The credential a per-credential in-sync key is for; undefined for the aggregate.
 export const inSyncCredential = (key: string): string | undefined =>
-    key === IN_SYNC_KEY ? undefined : key.slice(0, -(IN_SYNC_KEY.length + 1));
-// How a credential is named on a card row, keyed by the backend's credential type.
+    IN_SYNC_KEY_PATTERN.exec(key)?.[1];
+// How a credential is named on a card row, keyed by the backend's credential
+// type; mirrors CREDENTIAL_LABELS in the backend's const.py.
 export const CREDENTIAL_LABELS: Record<string, string> = { pin: 'PIN' };
 
 // Condition keys
@@ -38,7 +40,6 @@ export const KEY_ORDER = [
     ACTIVE_KEY,
     ...CONDITION_KEYS,
     IN_SYNC_KEY,
-    PIN_IN_SYNC_KEY,
     CODE_SENSOR_KEY,
     CODE_EVENT_KEY
 ];

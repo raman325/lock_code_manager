@@ -169,6 +169,12 @@ def credential_in_sync_key(credential_type: str) -> str:
     return f"{credential_type}_{ATTR_IN_SYNC}"
 
 
+# How each credential type is named in an entity's name, keyed by the type's
+# value (strings, so this module stays below the domain package). The
+# frontend carries the same map for its card rows; test_frontend_contract
+# holds the two together and to the managed credential types.
+CREDENTIAL_LABELS = {"pin": "PIN"}
+
 ATTR_PIN_IN_SYNC = credential_in_sync_key("pin")
 
 # What a per-lock entity is called after the lock's name. Mirrors the
@@ -176,10 +182,17 @@ ATTR_PIN_IN_SYNC = credential_in_sync_key("pin")
 # build the id the running integration would generate. test_frontend_contract
 # holds the two together.
 PER_LOCK_ENTITY_SUFFIX = {
-    "code": "PIN",
+    ATTR_CODE: "PIN",
     ATTR_IN_SYNC: "in sync",
-    ATTR_PIN_IN_SYNC: "PIN in sync",
+    **{
+        credential_in_sync_key(credential_type): f"{label} in sync"
+        for credential_type, label in CREDENTIAL_LABELS.items()
+    },
 }
+
+# The entity keys whose state is a credential: redacted from diagnostics. A
+# value entity is keyed by its credential type.
+SENSITIVE_ENTITY_KEYS = frozenset({ATTR_CODE, *CREDENTIAL_LABELS})
 
 # Code slot properties
 CONF_CALENDAR = "calendar"

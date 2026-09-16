@@ -7,6 +7,7 @@ export interface ConfigEntry {
 
 export interface EntityRegistryEntry {
     config_entry_id: string;
+    disabled_by?: string | null;
     entity_id: string;
     name: string;
     original_name: string;

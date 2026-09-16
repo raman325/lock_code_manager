@@ -110,6 +110,7 @@ from .domain.config import (
     build_slot_unique_id,
     parse_slot_device_identifier,
     parse_slot_unique_id,
+    slot_unique_id_key,
 )
 from .domain.credentials import CredentialType
 from .domain.exceptions import LockCodeManagerProviderError, UnclaimedLockError
@@ -1599,7 +1600,7 @@ def _async_rename_slot_entity_ids(
             suggested = (
                 f"{config_entry.title} {name} "
                 f"{lock_display_name(hass, lock_entity_id)} "
-                f"{PER_LOCK_ENTITY_SUFFIX[entity.unique_id.split('|')[2]]}"
+                f"{PER_LOCK_ENTITY_SUFFIX[slot_unique_id_key(entity.unique_id) or '']}"
             )
         elif entity.original_name:
             # What Home Assistant would generate today: the device's name
@@ -1621,7 +1622,7 @@ def _async_rename_slot_entity_ids(
             old_prefix = slugify(f"{config_entry.title} Code slot {slot_num}")
             if object_id != old_prefix and not object_id.startswith(f"{old_prefix}_"):
                 continue
-            key = entity.unique_id.split("|")[2]
+            key = slot_unique_id_key(entity.unique_id) or ""
             suggested = f"{config_entry.title} {name} {key.replace('_', ' ')}"
         new_entity_id = ent_reg.async_get_available_entity_id(
             domain, suggested, current_entity_id=entity.entity_id

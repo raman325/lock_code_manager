@@ -256,7 +256,7 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 4):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            for key in (ATTR_CODE, ATTR_IN_SYNC):
+            for key in (ATTR_CODE, ATTR_IN_SYNC, ATTR_PIN_IN_SYNC):
                 unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
@@ -271,7 +271,6 @@ async def test_entry_setup_and_unload(
     assert unique_ids == {
         entity.unique_id
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
-        if hass.states.get(entity.entity_id)
     }
     assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 9
     assert len(hass.states.async_entity_ids(Platform.EVENT)) == 3

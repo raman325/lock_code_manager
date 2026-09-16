@@ -107,7 +107,6 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_EVENT_ENTITY,
-    in_sync_entity_id,
     unnumbered_user_subentry,
     user_subentries,
 )
@@ -154,14 +153,16 @@ async def test_get_config_entry_data(
 
     # Verify entities (no number_of_uses entity since the migration strips
     # number_of_uses from BASE_CONFIG slot 2 before platform forwarding).
-    # The pin_in_sync sensors ship disabled, and a disabled entity has no
-    # state for a card to show, so the payload leaves them out.
-    assert len(result[CONF_ENTITIES]) == 18
-    assert not [
-        entity
+    # The payload is the registry, disabled rows included: the card decides
+    # which of its rows are optional, and needs the required ones whatever
+    # disabled them.
+    assert len(result[CONF_ENTITIES]) == 22
+    shipped_disabled = [
+        entity["disabled_by"]
         for entity in result[CONF_ENTITIES]
         if ATTR_PIN_IN_SYNC in entity["unique_id"]
     ]
+    assert shipped_disabled == [er.RegistryEntryDisabler.INTEGRATION] * 4
 
     # Verify locks (now objects with entity_id and name)
     lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
@@ -192,30 +193,10 @@ async def test_get_config_entry_data(
     msg = await ws_client.receive_json()
     assert msg["success"]
 
-    # A row the user disabled is still the card's to find, as before.
-    er.async_get(hass).async_update_entity(
-        in_sync_entity_id(hass, lock_code_manager_config_entry, 1),
-        disabled_by=er.RegistryEntryDisabler.USER,
-    )
-    await ws_client.send_json(
-        {
-            "id": 3,
-            "type": "lock_code_manager/get_config_entry_data",
-            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-        }
-    )
-    assert len((await ws_client.receive_json())["result"][CONF_ENTITIES]) == 18
-    assert result[CONF_SLOTS] == {
-        # The name travels with the slot so the card never has to work out
-        # who holds it.
-        "1": {CONF_NAME: "test1", CONF_CONDITION: None},
-        "2": {CONF_NAME: "test2", CONF_CONDITION: "calendar.test_1"},
-    }
-
     # Try API call with invalid entry ID
     await ws_client.send_json(
         {
-            "id": 4,
+            "id": 3,
             "type": "lock_code_manager/get_config_entry_data",
             ATTR_CONFIG_ENTRY_ID: "fake_entry_id",
         }
@@ -225,7 +206,7 @@ async def test_get_config_entry_data(
 
     # Try API call without entry title or ID
     await ws_client.send_json(
-        {"id": 5, "type": "lock_code_manager/get_config_entry_data"}
+        {"id": 4, "type": "lock_code_manager/get_config_entry_data"}
     )
     msg = await ws_client.receive_json()
     assert not msg["success"]
@@ -236,7 +217,7 @@ async def test_get_config_entry_data(
     # Try API call with unloaded entry ID - should fail
     await ws_client.send_json(
         {
-            "id": 6,
+            "id": 5,
             "type": "lock_code_manager/get_config_entry_data",
             ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
         }

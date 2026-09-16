@@ -78,6 +78,7 @@ from .common import (
     MockLCMLock,
     async_blocking_stub,
     async_disable_and_reload,
+    async_enable_and_reload,
     in_sync_entity_id,
     pin_in_sync_entity_id,
     short_stop_grace,
@@ -2491,9 +2492,7 @@ async def test_pin_in_sync_mirrors_the_manager_once_enabled(
     """Enabled, the PIN sensor reads exactly what the aggregate reads for a PIN-only user."""
     entry = lock_code_manager_config_entry
     pin_entity_id = pin_in_sync_entity_id(hass, entry, 1)
-    er.async_get(hass).async_update_entity(pin_entity_id, disabled_by=None)
-    await hass.config_entries.async_reload(entry.entry_id)
-    await hass.async_block_till_done()
+    await async_enable_and_reload(hass, entry, pin_entity_id)
 
     aggregate_id = in_sync_entity_id(hass, entry, 1)
     await async_initial_tick(hass, aggregate_id)
@@ -2511,9 +2510,8 @@ async def test_pin_in_sync_mirrors_the_manager_once_enabled(
     await hass.async_block_till_done()
     with patch.object(manager, "_perform_sync", side_effect=LockOperationFailed("no")):
         await async_trigger_sync_tick_for_manager(hass, manager)
-    assert hass.states.get(aggregate_id).state == STATE_OFF
-    assert hass.states.get(pin_entity_id).state == STATE_OFF
-    assert (
-        hass.states.get(pin_entity_id).attributes[ATTR_SYNC_STATUS]
-        == hass.states.get(aggregate_id).attributes[ATTR_SYNC_STATUS]
-    )
+    aggregate = hass.states.get(aggregate_id)
+    pin = hass.states.get(pin_entity_id)
+    assert aggregate is not None and pin is not None
+    assert pin.state == aggregate.state == STATE_OFF
+    assert pin.attributes[ATTR_SYNC_STATUS] == aggregate.attributes[ATTR_SYNC_STATUS]

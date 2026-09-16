@@ -5,6 +5,7 @@ import {
     CONDITION_KEYS,
     CREDENTIAL_LABELS,
     DIVIDER_CARD,
+    IN_SYNC_KEY,
     KEY_ORDER,
     inSyncCredential,
     isInSyncKey
@@ -146,6 +147,9 @@ export async function generateView(
     };
 }
 
+const keyRank = (key: string): number =>
+    inSyncCredential(key) ? KEY_ORDER.indexOf(IN_SYNC_KEY) + 0.5 : KEY_ORDER.indexOf(key);
+
 /** @internal - exported for testing via generate-view.internal.ts */
 export function compareAndSortEntities(
     entityA: LockCodeManagerEntityEntry,
@@ -154,9 +158,10 @@ export function compareAndSortEntities(
     // sort by slot number
     if (entityA.slotNum < entityB.slotNum) return -1;
     if (entityA.slotNum > entityB.slotNum) return 1;
-    // sort by key order
-    if (KEY_ORDER.indexOf(entityA.key) < KEY_ORDER.indexOf(entityB.key)) return -1;
-    if (KEY_ORDER.indexOf(entityA.key) > KEY_ORDER.indexOf(entityB.key)) return 1;
+    // sort by key order; the per-credential in-sync keys follow the aggregate
+    if (keyRank(entityA.key) < keyRank(entityB.key)) return -1;
+    if (keyRank(entityA.key) > keyRank(entityB.key)) return 1;
+    if (entityA.key !== entityB.key) return entityA.key < entityB.key ? -1 : 1;
     // sort code sensors alphabetically based on the lock entity_id
     if (
         entityA.key === entityB.key &&
@@ -342,10 +347,13 @@ export function getSlotMapping(
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
+            // A disabled row has no state to show. These two groups are
+            // optional, so such a row is left out; the required rows below
+            // are addressed whether or not they are disabled.
             if (entity.key === CODE_SENSOR_KEY) {
-                codeSensorEntities.push(entity);
+                if (!entity.disabled_by) codeSensorEntities.push(entity);
             } else if (isInSyncKey(entity.key)) {
-                inSyncEntities.push(entity);
+                if (!entity.disabled_by) inSyncEntities.push(entity);
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntities.push(entity);
             } else if (![ACTIVE_KEY, CODE_EVENT_KEY].includes(entity.key)) {

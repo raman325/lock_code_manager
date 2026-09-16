@@ -12,8 +12,7 @@ export {
     CONDITION_KEYS,
     DIVIDER_CARD,
     IN_SYNC_KEY,
-    KEY_ORDER,
-    PIN_IN_SYNC_KEY
+    KEY_ORDER
 } from './const';
 export {
     compareAndSortEntities,
