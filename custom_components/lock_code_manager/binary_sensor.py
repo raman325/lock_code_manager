@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.const import EntityCategory
@@ -14,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
 from .domain.coordinator import LockUsercodeUpdateCoordinator
-from .domain.credentials import CredentialAddress, pin_address
+from .domain.credentials import CredentialAddress, managed_addresses, pin_address
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import subentry_id_for_slot
 from .domain.sync import SlotSyncManager, fold_in_sync, fold_sync_status
@@ -130,8 +129,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
     In-sync binary sensor for the user's whole record on this lock.
 
     A view over every sync manager for this user on this lock: on when all
-    of them are, and reporting the worst of their statuses. The managers
-    live in the entry's runtime data; this entity neither starts nor stops
+    of them are, and reporting the worst of their statuses. The slot
+    coordinator owns the managers; this entity neither starts nor stops
     them, so disabling it never stops a sync.
     """
 
@@ -158,8 +157,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
     def available(self) -> bool:
         """Return whether binary sensor is available or not."""
         return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and all(
-            self.coordinator.has_credential(manager.address)
-            for manager in self._managers
+            self.coordinator.has_credential(address)
+            for address in managed_addresses(int(self.slot_num))
         )
 
     @property
@@ -170,14 +169,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
         return {ATTR_SYNC_STATUS: self._attr_sync_status}
 
     @callback
-    def _fold(self, *_args: Any) -> None:
+    def _fold(self) -> None:
         """Recompute this sensor from every manager and write the result."""
         self._attr_is_on = fold_in_sync(manager.in_sync for manager in self._managers)
         self._attr_sync_status = fold_sync_status(
             manager.sync_status for manager in self._managers
         )
-        if self.hass is not None and self.entity_id:
-            self.async_write_ha_state()
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
@@ -234,6 +232,7 @@ class LockCodeManagerCredentialInSyncEntity(
         )
         CoordinatorEntity.__init__(self, coordinator)
         self._address = address
+        self._manager: SlotSyncManager | None = None
         self._attr_sync_status: str | None = None
 
     @property
@@ -251,12 +250,12 @@ class LockCodeManagerCredentialInSyncEntity(
         return {ATTR_SYNC_STATUS: self._attr_sync_status}
 
     @callback
-    def _mirror(self, in_sync: bool | None, sync_status: str | None) -> None:
+    def _mirror(self) -> None:
         """Take the manager's state as this sensor's own."""
-        self._attr_is_on = in_sync
-        self._attr_sync_status = sync_status
-        if self.hass is not None and self.entity_id:
-            self.async_write_ha_state()
+        assert self._manager is not None
+        self._attr_is_on = self._manager.in_sync
+        self._attr_sync_status = self._manager.sync_status
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
@@ -264,12 +263,12 @@ class LockCodeManagerCredentialInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
         coordinator = self._slot_coordinator
-        manager = (
+        self._manager = (
             coordinator.sync_manager(self.lock.lock.entity_id, self._address)
             if coordinator is not None
             else None
         )
-        if manager is None:
+        if self._manager is None:
             return
-        self.async_on_remove(manager.async_add_listener(self._mirror))
-        self._mirror(manager.in_sync, manager.sync_status)
+        self.async_on_remove(self._manager.async_add_listener(self._mirror))
+        self._mirror()

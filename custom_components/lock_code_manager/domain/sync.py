@@ -185,7 +185,7 @@ class SlotSyncManager:
         # IS the slot number; the lease lookup replaces this once users are
         # named.
         self._slot_num = slot_num = int(address.user_ref)
-        self._listeners: list[Callable[[bool | None, str | None], None]] = []
+        self._listeners: set[Callable[[], None]] = set()
 
         self._log_prefix = (
             f"{config_entry.entry_id} ({config_entry.title}): "
@@ -273,23 +273,11 @@ class SlotSyncManager:
         """Return the structured log prefix identifying this manager's slot."""
         return self._log_prefix
 
-    @property
-    def address(self) -> CredentialAddress:
-        """Return the credential this manager keeps in sync."""
-        return self._address
-
     @callback
-    def async_add_listener(
-        self, listener: Callable[[bool | None, str | None], None]
-    ) -> Callable[[], None]:
-        """Call ``listener`` with in-sync and status on every state change, until removed."""
-        self._listeners.append(listener)
-
-        @callback
-        def _remove() -> None:
-            self._listeners.remove(listener)
-
-        return _remove
+    def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """Call ``listener`` after every state change until the returned unsubscribe runs."""
+        self._listeners.add(listener)
+        return lambda: self._listeners.discard(listener)
 
     @property
     def in_sync(self) -> bool | None:
@@ -320,13 +308,12 @@ class SlotSyncManager:
         )
         # The first tick gets its own task so ``_tick_tasks`` only ever holds
         # tasks this manager may cancel; awaited inline it would register the
-        # caller's, which is Home Assistant's entity-add task.
+        # caller's, which is the entry's setup or update-listener task.
         try:
             await self._hass.async_create_task(self._async_tick())
         except asyncio.CancelledError:
             # A stop that cancelled the first tick is this manager's business,
-            # not the caller's: it must not read as the entity add being
-            # cancelled.
+            # not the caller's: it must not read as the setup being cancelled.
             if self._started:
                 raise
 
@@ -693,11 +680,11 @@ class SlotSyncManager:
     def _write_state(self) -> None:
         """Notify the entity to write Home Assistant state."""
         # Skip if stopped: a tick mid-await may still call _write_state after
-        # async_stop has begun teardown of the owning entity.
+        # async_stop has begun, and the listeners are entities on their way out.
         if not self._started:
             return
         for listener in list(self._listeners):
-            listener(self.in_sync, self.sync_status)
+            listener()
 
     @callback
     def request_sync_check(self, *_args: Any) -> None:
@@ -1159,12 +1146,13 @@ class SlotSyncManager:
 
 
 # The order that decides what a set of credentials reads as, worst first: one
-# suspended credential is a suspended user.
+# suspended credential is a suspended user, and one out of sync outranks the
+# transient states, which resolve on their own.
 _STATUS_PRECEDENCE = (
     SyncState.SUSPENDED.value,
+    SyncState.OUT_OF_SYNC.value,
     SyncState.SYNCING.value,
     SyncState.PENDING_CONFIRMATION.value,
-    SyncState.OUT_OF_SYNC.value,
     SyncState.IN_SYNC.value,
 )
 

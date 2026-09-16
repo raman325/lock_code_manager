@@ -144,11 +144,7 @@ class LockCodeManagerConfigEntryRuntimeData:
     # update listener on every change. Readers should prefer this over
     # parsing config_entry.data/options directly. See data.EntryConfig.
     config: EntryConfig = field(default_factory=EntryConfig.empty)
-    # Active per-slot sync managers, registered by the in-sync binary sensor
-    # on add and discarded on remove. Tracked so async_unload_entry can stop
-    # them up front -- before lock-removed callbacks fire and before platforms
-    # unload -- so an in-flight tick cannot keep running against torn-down
-    # state.
+    # Per-slot coordinators; each owns that slot's sync managers.
     slot_coordinators: dict[int, SlotEntityCoordinator] = field(default_factory=dict)
     # True once the options update listener has been registered for this
     # entry. Guards against stacking when _setup_entry_after_start runs more

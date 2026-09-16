@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 import logging
 from pathlib import Path
 from types import MappingProxyType
@@ -1095,16 +1095,11 @@ async def async_unload_lock(
     lock_entity_ids = (
         [lock_entity_id] if lock_entity_id else list(runtime_data.locks.keys())
     )
+    await _async_stop_slot_sync(runtime_data, lock_entity_ids=lock_entity_ids)
     for _lock_entity_id in lock_entity_ids:
         lock = runtime_data.locks.pop(_lock_entity_id, None)
         if lock is None:
             continue
-        await asyncio.gather(
-            *(
-                coordinator.async_stop_sync(_lock_entity_id)
-                for coordinator in runtime_data.slot_coordinators.values()
-            )
-        )
         if not _lock_still_owned_by_another_entry(hass, config_entry, _lock_entity_id):
             # ``remove_permanently`` discards state that deliberately outlives
             # an unload -- the per-lock setup-failed repair, the provider's
@@ -1140,11 +1135,14 @@ async def async_release_locks(
     failed setup, where there is no runtime data to release anything from;
     such an entry never built lock instances, so there is nothing here to do.
     """
+    # Registry-only, so it runs whether or not the entry ever loaded: reauth
+    # on an entry that failed setup is the common way a lock leaves.
+    for lock_entity_id in lock_entity_ids:
+        _async_purge_dropped_lock(hass, config_entry, lock_entity_id)
     if (runtime_data := getattr(config_entry, "runtime_data", None)) is None:
         return
     for lock_entity_id in lock_entity_ids:
         runtime_data.callbacks.invoke_lock_removed_handlers(lock_entity_id)
-        _async_purge_dropped_lock(hass, config_entry, lock_entity_id)
         if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
             # A lock that never got an instance has no teardown to clear its
             # repair, and removing it from the entry is exactly what that
@@ -1172,12 +1170,7 @@ async def async_unload_entry(
     # Stop tick managers FIRST so no in-flight tick can keep calling
     # _perform_sync, coordinator.async_refresh, or a state listener once
     # downstream teardown begins.
-    await asyncio.gather(
-        *(
-            coordinator.async_stop_sync()
-            for coordinator in runtime_data.slot_coordinators.values()
-        )
-    )
+    await _async_stop_slot_sync(runtime_data)
 
     # Fire slot entity removal callbacks first so per-slot entities (which
     # reference locks) clean up before the locks are torn down. Read
@@ -1450,23 +1443,70 @@ def _lock_of(entry_id: str, unique_id: str) -> str | None:
 
 
 @callback
+def _async_purge_entities(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    dropped: Callable[[er.RegistryEntry], bool],
+) -> None:
+    """Remove every registry row of the entry that ``dropped`` accepts."""
+    ent_reg = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id):
+        if dropped(entity):
+            ent_reg.async_remove(entity.entity_id)
+
+
+@callback
 def _async_purge_dropped_lock(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     lock_entity_id: str,
 ) -> None:
     """
-    Remove the registry rows of a lock's per-lock entities.
+    Remove the registry rows of a lock's disabled per-lock entities.
 
     A loaded entity removes itself when told its lock is gone, but an
     entity disabled in the registry was never loaded and has nobody to do
     that for it; left alone its row lingers, named for a lock the entry no
-    longer has.
+    longer has. Loaded ones are left to their own removal.
     """
-    ent_reg = er.async_get(hass)
-    for entity in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id):
-        if _lock_of(config_entry.entry_id, entity.unique_id) == lock_entity_id:
-            ent_reg.async_remove(entity.entity_id)
+    entry_id = config_entry.entry_id
+    _async_purge_entities(
+        hass,
+        config_entry,
+        lambda entity: (
+            entity.disabled_by is not None
+            and _lock_of(entry_id, entity.unique_id) == lock_entity_id
+        ),
+    )
+
+
+async def _async_stop_slot_sync(
+    runtime_data: LockCodeManagerConfigEntryRuntimeData,
+    *,
+    lock_entity_ids: Collection[str] | None = None,
+    slot_nums: Collection[int] | None = None,
+) -> None:
+    """
+    Stop sync managers together: for some locks, some slots, or everything.
+
+    One gather across the whole set, so several locks that have stopped
+    answering cost one stop grace rather than one each.
+    """
+    coordinators = [
+        coordinator
+        for slot_num, coordinator in runtime_data.slot_coordinators.items()
+        if slot_nums is None or slot_num in slot_nums
+    ]
+    locks: Collection[str | None] = (
+        [None] if lock_entity_ids is None else lock_entity_ids
+    )
+    await asyncio.gather(
+        *(
+            coordinator.async_stop_sync(lock_entity_id)
+            for coordinator in coordinators
+            for lock_entity_id in locks
+        )
+    )
 
 
 @callback
@@ -1485,10 +1525,12 @@ def _async_purge_dropped_slots(
     entities named for a user who does not exist, and a device to match.
     """
     slots = {int(slot_num) for slot_num in dropped}
-    ent_reg = er.async_get(hass)
-    for entity in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id):
-        if parse_slot_unique_id(config_entry.entry_id, entity.unique_id) in slots:
-            ent_reg.async_remove(entity.entity_id)
+    entry_id = config_entry.entry_id
+    _async_purge_entities(
+        hass,
+        config_entry,
+        lambda entity: parse_slot_unique_id(entry_id, entity.unique_id) in slots,
+    )
     dev_reg = dr.async_get(hass)
     for slot_num in slots:
         identifier = (
@@ -1812,6 +1854,17 @@ async def _async_setup_new_locks(
                 result.lock.entity_id,
             )
 
+        # Registered before the adders, so the entities find their managers
+        # on add; started together, so a lock's slots do not wait on each
+        # other. A slot whose coordinator is gone belongs to an unload that
+        # overtook this pass.
+        await asyncio.gather(
+            *(
+                coordinator.async_start_sync(result, ent_reg)
+                for slot_num in new_config.slot_numbers
+                if (coordinator := runtime_data.slot_coordinators.get(slot_num))
+            )
+        )
         for slot_num in new_config.slot_numbers:
             _LOGGER.debug(
                 "%s (%s): Adding lock %s slot %s sensor and event entity",
@@ -1820,7 +1873,6 @@ async def _async_setup_new_locks(
                 lock_entity_id,
                 slot_num,
             )
-            await runtime_data.slot_coordinators[slot_num].async_start_sync(result)
             callbacks.invoke_lock_slot_adders(result, slot_num, ent_reg)
 
     if added_locks:
@@ -1975,13 +2027,7 @@ async def _async_apply_entry_update(
         _LOGGER.debug(
             "%s (%s): Removing slots %s", entry_id, entry_title, list(slots_to_remove)
         )
-        await asyncio.gather(
-            *(
-                runtime_data.slot_coordinators[slot_num].async_stop_sync()
-                for slot_num in slots_to_remove
-                if slot_num in runtime_data.slot_coordinators
-            )
-        )
+        await _async_stop_slot_sync(runtime_data, slot_nums=slots_to_remove)
         await asyncio.gather(
             *(
                 callbacks.invoke_entity_removers_for_slot(slot_num)
@@ -2077,8 +2123,18 @@ async def _async_apply_entry_update(
             hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
         )
 
-    # For each new slot: add standard entities, then per-lock entities for
-    # existing locks (new locks already got their per-lock entities above).
+    # For each new slot: start its managers on the existing locks (new locks
+    # already got theirs above), then add standard entities and the per-lock
+    # entities that view them.
+    await asyncio.gather(
+        *(
+            coordinator.async_start_sync(lock, ent_reg)
+            for slot_num in slots_to_add
+            if (coordinator := runtime_data.slot_coordinators.get(slot_num))
+            for lock_entity_id, lock in runtime_data.locks.items()
+            if lock_entity_id not in locks_to_add
+        )
+    )
     for slot_num in slots_to_add:
         _LOGGER.debug(
             "%s (%s): Adding standard entities for slot %s",
@@ -2098,7 +2154,6 @@ async def _async_apply_entry_update(
                 lock_entity_id,
                 slot_num,
             )
-            await runtime_data.slot_coordinators[slot_num].async_start_sync(lock)
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
 
     _LOGGER.info(

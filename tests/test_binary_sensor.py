@@ -2509,11 +2509,7 @@ async def test_in_sync_folds_over_every_manager(
     entity_obj = get_in_sync_entity_obj(hass, aggregate_id)
     assert entity_obj.is_on is True
 
-    # Stands in for a second credential type's manager; it reuses the PIN
-    # address only so availability, which asks the coordinator per address,
-    # still answers.
     second = MagicMock()
-    second.address = pin_address(1)
     second.in_sync = False
     second.sync_status = SyncState.SUSPENDED.value
     entity_obj._managers.append(second)

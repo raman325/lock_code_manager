@@ -1453,8 +1453,12 @@ async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
     hass.config_entries.async_update_entry(entry, options=new_config)
     await hass.async_block_till_done()
 
-    # Verify LOCK_2 is gone from runtime_data
+    # Verify LOCK_2 is gone from runtime_data, and nothing keeps syncing it
     assert LOCK_2_ENTITY_ID not in runtime_data.locks
+    assert not any(
+        coordinator.sync_managers_for(LOCK_2_ENTITY_ID)
+        for coordinator in runtime_data.slot_coordinators.values()
+    )
 
     # Verify LOCK_2's in-sync entities are removed (state no longer present)
     for entity in lock_2_in_sync_entities:

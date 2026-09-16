@@ -9,8 +9,8 @@ coordinator. The coordinator updates the canonical config entry, manages
 slot-level repair issues, and asks the per-lock SlotSyncManagers to
 re-evaluate on the next tick.
 
-There is one SlotEntityCoordinator per (config_entry, slot_num); the per-
-lock SlotSyncManager remains one per (config_entry, slot_num, lock).
+There is one SlotEntityCoordinator per (config_entry, slot_num); it owns
+one SlotSyncManager per lock and credential address for that slot.
 """
 
 from __future__ import annotations
@@ -131,15 +131,15 @@ class SlotEntityCoordinator:
             self._condition_unsub = None
         self._subscribed_condition_entity_id = None
         self._active_view_writers.clear()
-        # Normally empty by now: unload stops the managers before it stops the
-        # coordinators. One registered since is an update listener that lost
-        # a race with the unload; it is stopped rather than orphaned.
-        if self._sync_managers:
-            self._config_entry.async_create_task(self._hass, self.async_stop_sync())
+        # The managers are stopped by ``async_stop_sync``, which every
+        # teardown path awaits before this; stopping takes an await this
+        # callback cannot make.
 
     # -- Sync managers -------------------------------------------------------
 
-    async def async_start_sync(self, lock: BaseLock) -> None:
+    async def async_start_sync(
+        self, lock: BaseLock, ent_reg: er.EntityRegistry
+    ) -> None:
         """
         Start a manager for every credential of this slot on ``lock``.
 
@@ -155,7 +155,7 @@ class SlotEntityCoordinator:
             ConfigEntryState.NOT_LOADED,
         ):
             return
-        ent_reg = er.async_get(self._hass)
+        started: list[SlotSyncManager] = []
         for address in managed_addresses(self._slot_num):
             key = (lock.lock.entity_id, address)
             if key in self._sync_managers:
@@ -169,7 +169,8 @@ class SlotEntityCoordinator:
                 address,
             )
             self._sync_managers[key] = manager
-            await manager.async_start()
+            started.append(manager)
+        await asyncio.gather(*(manager.async_start() for manager in started))
 
     async def async_stop_sync(self, lock_entity_id: str | None = None) -> None:
         """
@@ -497,7 +498,7 @@ class SlotEntityCoordinator:
     @callback
     def _poke_sync_managers(self) -> None:
         """Ask each per-lock sync manager to re-evaluate against fresh state."""
-        for manager in list(self._sync_managers.values()):
+        for manager in self.sync_managers:
             try:
                 manager.request_sync_check()
             except Exception:
