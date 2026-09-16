@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "217e69d9bede",
+  "strategy": "manual-commit",
+  "branch": "fix/prune-orphaned-lock-entities",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/21/7e69d9bede/0/metadata.json",
+      "transcript": "/21/7e69d9bede/0/full.jsonl",
+      "compact_transcript": "/21/7e69d9bede/0/transcript.jsonl",
+      "content_hash": "/21/7e69d9bede/0/content_hash.txt",
+      "prompt": "/21/7e69d9bede/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 17274,
+    "cache_read_tokens": 6666862,
+    "output_tokens": 10523,
+    "api_call_count": 14
+  }
+}

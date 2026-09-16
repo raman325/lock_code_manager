@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bta2vnuag</task-id>
+<tool-use-id>toolu_01GvcyC6Coi43yEbdLZizbCx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/bta2vnuag.output</output-file>
+<status>completed</status>
+<summary>Background command "Run PR 2's full suite on the latest merge" completed (exit code 0)</summary>
+</task-notification>
