@@ -987,6 +987,7 @@ async def async_setup_entry(
 
     _async_reclaim_entities_from_foreign_devices(hass, config_entry)
     _async_prune_orphaned_slot_devices(hass, config_entry)
+    _async_prune_orphaned_lock_entities(hass, config_entry)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
@@ -1713,6 +1714,39 @@ def _async_prune_orphaned_slot_devices(
             sorted(orphaned),
         )
         _async_remove_slot_devices(hass, config_entry, orphaned)
+
+
+@callback
+def _async_prune_orphaned_lock_entities(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """
+    Drop per-lock entities whose lock is no longer in config.
+
+    A loaded per-lock entity removes its own registry row when its lock
+    leaves the entry, but one that never loads -- disabled in the registry,
+    or on an entry that was unloaded or failed setup when the lock left --
+    has nobody to do it. Like the slot-device sweep above, this reads the
+    registry against config rather than a diff, so it catches every path.
+    """
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    configured = set(get_entry_config(config_entry).locks)
+    orphaned = [
+        entity.entity_id
+        for entity in er.async_entries_for_config_entry(ent_reg, entry_id)
+        if (lock_entity_id := _lock_of(entry_id, entity.unique_id)) is not None
+        and lock_entity_id not in configured
+    ]
+    if orphaned:
+        _LOGGER.debug(
+            "%s (%s): Pruning entities of unconfigured locks: %s",
+            entry_id,
+            config_entry.title,
+            orphaned,
+        )
+    for entity_id in orphaned:
+        ent_reg.async_remove(entity_id)
 
 
 async def async_remove_config_entry_device(
