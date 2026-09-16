@@ -1,0 +1,30 @@
+<task-notification>
+<task-id>a256afd05a6531c89</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a256afd05a6531c89.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 1576 round 9" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The high-effort review of PR #1576 is done: it reported one medium-severity bug, which follows word for word. I did not change any files or create a virtualenv.
+
+---
+
+I found one likely bug in PR #1576 (`fix/unanswered-reads`). I couldn't submit it with a ReportFindings call because that tool isn't available in this session, so it's written out here instead.
+
+**Finding**
+
+`custom_components/lock_code_manager/providers/zigbee2mqtt.py:396` — severity: medium.
+
+When a code read gives up waiting, its slot is added to `_late_reads`. A reply that arrives after that is only recognised if it comes in the `users` form (the late check sits in that branch, around line 363). The `pin_code` form, which this handler also accepts (line 396 onward), only settles a read that is still waiting. It never checks `_late_reads` and never records the lock as answering.
+
+**Scenario:** a slow lock whose bridge replies in the `pin_code` form. Every reply arrives just after its 10-second wait ends, so each one is counted as silence. After five, the lock-state check succeeds and the lock is recorded as not answering. The PR description says this must not happen ("a lock doesn't get classified because it is slow"). From then on, allocation treats its unreadable slots as free, so it can overwrite keypad codes that are really on the lock. Every later late reply in this form is thrown away too, so nothing reverses the verdict; only the hourly probe can. The fix is to apply the same late-reply check in the `pin_code` branch.
+
+**What I checked and found sound**
+- **The read loop in `_mqtt.py`:** it always ends, and a lock that is known to answer but declines every slot is not reported as disconnected.
+- **Saved verdicts:** every writer merges back the live internal section, and a copy staged in options is ignored.
+- **Clean-up and repairs:** I checked the order in Home Assistant's own code: an entry is deleted from the list before the integration's `async_remove_entry` runs, and `disabled_by` is set before the unload. The repair is kept and cleared correctly around disable and removal.
+- **Allocation:** it still excludes numbers held by other entries on the same lock.
+
+The read-health and Zigbee2MQTT tests pass (170 passed, 1 skipped); I didn't run the full suite.</result>
+<usage><subagent_tokens>65351</subagent_tokens><tool_uses>2</tool_uses><duration_ms>547597</duration_ms></usage>
+</task-notification>
