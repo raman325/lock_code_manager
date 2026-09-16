@@ -412,7 +412,12 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 )
                 return
 
-            if user_id in self._pending_codes:
+            if user_id not in self._pending_codes:
+                # Every answer in this form is one, however late.
+                if user_id in self._late_reads:
+                    self._late_reads.discard(user_id)
+                    self._note_answered()
+            else:
                 future = self._pending_codes.pop(user_id)
                 if not future.done():
                     user_enabled = pin_code_data.get("user_enabled", False)

@@ -494,6 +494,7 @@ class TestAddingThroughTheUserInterface:
         ("late_status", "expected"),
         [
             pytest.param("available", ReadHealth.ANSWERED, id="an_answer"),
+            pytest.param(None, ReadHealth.ANSWERED, id="a_pin_code_answer"),
             # Late or not, declining is no answer.
             pytest.param("not_supported_255", ReadHealth.UNANSWERED, id="a_decline"),
         ],
@@ -503,7 +504,7 @@ class TestAddingThroughTheUserInterface:
         hass: HomeAssistant,
         mqtt_lock_discovered,
         mqtt_mock,
-        late_status: str,
+        late_status: str | None,
         expected: ReadHealth,
     ) -> None:
         """
@@ -517,13 +518,12 @@ class TestAddingThroughTheUserInterface:
         def slow(topic: str, payload: str, *args: Any, **kwargs: Any):
             request = json.loads(payload)
             if topic == Z2M_GET_TOPIC and "state" in request:
-                _fire_device_payload(
-                    hass,
-                    {
-                        "state": "LOCKED",
-                        "users": {str(asked[-1]): {"status": late_status}},
-                    },
+                late = (
+                    {"users": {str(asked[-1]): {"status": late_status}}}
+                    if late_status is not None
+                    else {"pin_code": {"user": asked[-1], "user_enabled": False}}
                 )
+                _fire_device_payload(hass, {"state": "LOCKED", **late})
             elif topic == Z2M_GET_TOPIC:
                 asked.append(request["pin_code"]["user"])
             return DEFAULT
