@@ -13,6 +13,7 @@ from .const import ATTR_CODE
 from .domain.coordinator import LockUsercodeUpdateCoordinator
 from .domain.credentials import pin_address
 from .domain.models import LockCodeManagerConfigEntry
+from .domain.queries import subentry_id_for_slot
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
 from .providers import BaseLock
 
@@ -39,6 +40,7 @@ async def async_setup_entry(
                 )
             ],
             True,
+            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 
     config_entry.async_on_unload(

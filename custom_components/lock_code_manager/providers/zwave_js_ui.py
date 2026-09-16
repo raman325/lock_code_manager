@@ -578,7 +578,7 @@ class ZWaveJSUILock(BaseMqttLock):
         if command_class in USER_CODE_CC_SEGMENTS:
             self._process_user_code_value(property_name, property_key, payload)
         elif command_class in NOTIFICATION_CC_SEGMENTS:
-            self._process_notification(topic, property_name, property_key, payload)
+            self._process_notification(property_name, property_key, payload)
 
     @callback
     def _process_user_code_value(
@@ -645,7 +645,6 @@ class ZWaveJSUILock(BaseMqttLock):
     @callback
     def _process_notification(
         self,
-        topic: str,
         label: str,
         event_label: str,
         payload: bytes | str,
@@ -677,8 +676,6 @@ class ZWaveJSUILock(BaseMqttLock):
         self.async_fire_code_slot_event(
             code_slot=code_slot,
             to_locked=to_locked,
-            action_text=event_label,
-            source_data={"topic": topic, "value": value},
         )
 
     @callback
