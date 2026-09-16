@@ -55,7 +55,20 @@ async def async_setup_entry(
         # The aggregate over every managed credential, then one sensor per
         # credential. With a single credential type the two read the same,
         # so the per-credential sensors ship disabled; enabling one splits
-        # the view for whoever wants it.
+        # the view for whoever wants it. Not updated before add: the sensors
+        # read the coordinator's fold, and a refresh requested by a sensor
+        # about to be discarded as disabled would cost the lock a read.
+        sensors: list[tuple[str, tuple[CredentialAddress, ...], bool]] = [
+            (ATTR_IN_SYNC, addresses, True),
+            *(
+                (
+                    credential_in_sync_key(address.credential_type.value),
+                    (address,),
+                    False,
+                )
+                for address in addresses
+            ),
+        ]
         async_add_entities(
             [
                 LockCodeManagerCodeSlotInSyncEntity(
@@ -65,25 +78,12 @@ async def async_setup_entry(
                     coordinator,
                     lock,
                     slot_num,
-                    ATTR_IN_SYNC,
-                    addresses,
-                ),
-                *(
-                    LockCodeManagerCodeSlotInSyncEntity(
-                        hass,
-                        ent_reg,
-                        config_entry,
-                        coordinator,
-                        lock,
-                        slot_num,
-                        credential_in_sync_key(address.credential_type.value),
-                        (address,),
-                        enabled_default=False,
-                    )
-                    for address in addresses
-                ),
+                    key,
+                    covered,
+                    enabled_default=enabled_default,
+                )
+                for key, covered, enabled_default in sensors
             ],
-            True,
             config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 

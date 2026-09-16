@@ -2438,31 +2438,40 @@ async def test_disabling_the_in_sync_sensor_does_not_stop_the_sync(
     assert manager._started
 
 
-async def test_in_sync_added_without_a_slot_coordinator_reads_unknown(
+@pytest.mark.parametrize("key", [ATTR_IN_SYNC, ATTR_PIN_IN_SYNC])
+async def test_an_in_sync_sensor_added_without_a_slot_coordinator_reads_unknown(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    key: str,
 ) -> None:
     """With no coordinator to fold, the sensor has nothing to say and says so."""
     entry = lock_code_manager_config_entry
     runtime_data = entry.runtime_data
     assert 99 not in runtime_data.slot_coordinators
     ent_reg = er.async_get(hass)
+    # Registered enabled ahead of time, so the platform adds the sensor
+    # whatever its class default.
+    unique_id = build_slot_unique_id(entry.entry_id, 99, key, LOCK_1_ENTITY_ID)
+    ent_reg.async_get_or_create(
+        BINARY_SENSOR_DOMAIN, DOMAIN, unique_id, config_entry=entry, disabled_by=None
+    )
 
     runtime_data.callbacks.invoke_lock_slot_adders(
         runtime_data.locks[LOCK_1_ENTITY_ID], 99, ent_reg
     )
     await hass.async_block_till_done()
 
-    entity_id = ent_reg.async_get_entity_id(
-        "binary_sensor",
-        DOMAIN,
-        build_slot_unique_id(entry.entry_id, 99, ATTR_IN_SYNC, LOCK_1_ENTITY_ID),
-    )
+    entity_id = ent_reg.async_get_entity_id(BINARY_SENSOR_DOMAIN, DOMAIN, unique_id)
     assert entity_id is not None
+    # Added without raising; with no manager behind it there is nothing to
+    # fold, and no credential at that slot to be available for.
     entity_obj = get_in_sync_entity_obj(hass, entity_id)
     assert entity_obj.is_on is None
     assert entity_obj.extra_state_attributes == {}
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == STATE_UNAVAILABLE
 
 
 async def test_pin_in_sync_is_registered_but_disabled_by_default(
@@ -2504,49 +2513,11 @@ async def test_pin_in_sync_mirrors_the_manager_once_enabled(
     lock_provider.codes[1] = "0000"
     await lock_provider.coordinator.async_refresh()
     await hass.async_block_till_done()
-    manager._state = SyncState.OUT_OF_SYNC
     with patch.object(manager, "_perform_sync", side_effect=LockOperationFailed("no")):
-        await manager._async_tick()
-    await hass.async_block_till_done()
+        await async_trigger_sync_tick_for_manager(hass, manager)
     assert hass.states.get(aggregate_id).state == STATE_OFF
     assert hass.states.get(pin_entity_id).state == STATE_OFF
     assert (
         hass.states.get(pin_entity_id).attributes[ATTR_SYNC_STATUS]
         == hass.states.get(aggregate_id).attributes[ATTR_SYNC_STATUS]
     )
-
-
-async def test_pin_in_sync_added_without_a_slot_coordinator_has_nothing_to_mirror(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """With no coordinator to look up a manager on, the view has nothing to mirror."""
-    entry = lock_code_manager_config_entry
-    runtime_data = entry.runtime_data
-    assert 99 not in runtime_data.slot_coordinators
-    ent_reg = er.async_get(hass)
-    # Registered enabled ahead of time, so the platform adds it despite the
-    # class default.
-    unique_id = build_slot_unique_id(
-        entry.entry_id, 99, ATTR_PIN_IN_SYNC, LOCK_1_ENTITY_ID
-    )
-    ent_reg.async_get_or_create(
-        "binary_sensor", DOMAIN, unique_id, config_entry=entry, disabled_by=None
-    )
-
-    runtime_data.callbacks.invoke_lock_slot_adders(
-        runtime_data.locks[LOCK_1_ENTITY_ID], 99, ent_reg
-    )
-    await hass.async_block_till_done()
-
-    entity_id = ent_reg.async_get_entity_id("binary_sensor", DOMAIN, unique_id)
-    assert entity_id is not None
-    # Added without raising; with no manager behind it there is nothing to
-    # fold, and no credential at that slot to be available for.
-    entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    assert entity_obj.is_on is None
-    assert entity_obj.extra_state_attributes == {}
-    state = hass.states.get(entity_id)
-    assert state is not None
-    assert state.state == STATE_UNAVAILABLE

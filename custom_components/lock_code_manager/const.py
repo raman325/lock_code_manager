@@ -51,10 +51,6 @@ ATTR_MANAGED = "managed"
 # which on the condition commands means the condition entity itself.
 ATTR_USER_ENTITY_ID = "user_entity_id"
 
-# What a per-lock entity is called after the lock's name. Mirrors the
-# ``entity`` names in strings.json, which the migration cannot read: it has to
-# build the id the running integration would generate. test_frontend_contract
-# holds the two together.
 # One repair for the whole entity-ID rename, however many entries moved.
 ENTITY_IDS_RENAMED_ISSUE = "entity_ids_renamed"
 # Where the migration accumulates those renames while entries migrate.
@@ -175,7 +171,10 @@ def credential_in_sync_key(credential_type: str) -> str:
 
 ATTR_PIN_IN_SYNC = credential_in_sync_key("pin")
 
-# The name each per-lock entity carries beside the lock's, keyed by entity key.
+# What a per-lock entity is called after the lock's name. Mirrors the
+# ``entity`` names in strings.json, which the migration cannot read: it has to
+# build the id the running integration would generate. test_frontend_contract
+# holds the two together.
 PER_LOCK_ENTITY_SUFFIX = {
     "code": "PIN",
     ATTR_IN_SYNC: "in sync",

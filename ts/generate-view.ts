@@ -3,10 +3,11 @@ import {
     CODE_EVENT_KEY,
     CODE_SENSOR_KEY,
     CONDITION_KEYS,
+    CREDENTIAL_LABELS,
     DIVIDER_CARD,
-    IN_SYNC_KEYS,
     KEY_ORDER,
-    PIN_IN_SYNC_KEY
+    inSyncCredential,
+    isInSyncKey
 } from './const';
 import {
     EntityRegistryEntry,
@@ -159,7 +160,7 @@ export function compareAndSortEntities(
     // sort code sensors alphabetically based on the lock entity_id
     if (
         entityA.key === entityB.key &&
-        [CODE_EVENT_KEY, CODE_SENSOR_KEY, ...IN_SYNC_KEYS].includes(entityA.key) &&
+        ([CODE_EVENT_KEY, CODE_SENSOR_KEY].includes(entityA.key) || isInSyncKey(entityA.key)) &&
         entityA.lockEntityId < entityB.lockEntityId
     )
         return -1;
@@ -186,14 +187,17 @@ export function generateEntityCards(
     entities: LockCodeManagerEntityEntry[]
 ): { entity: string; name?: string }[] {
     return entities.map((entity) => {
-        if ([...IN_SYNC_KEYS, CODE_SENSOR_KEY].includes(entity.key)) {
+        if (entity.key === CODE_SENSOR_KEY || isInSyncKey(entity.key)) {
             const lockName =
                 hass.states[entity.lockEntityId]?.attributes?.friendly_name ?? entity.lockEntityId;
             // A per-credential row sits beside the aggregate's for the same
             // lock, so it carries the credential's name too.
+            const credential = inSyncCredential(entity.key);
             return {
                 entity: entity.entity_id,
-                name: entity.key === PIN_IN_SYNC_KEY ? `${lockName} PIN` : lockName
+                name: credential
+                    ? `${lockName} ${CREDENTIAL_LABELS[credential] ?? credential}`
+                    : lockName
             };
         }
         return {
@@ -340,7 +344,7 @@ export function getSlotMapping(
         .forEach((entity) => {
             if (entity.key === CODE_SENSOR_KEY) {
                 codeSensorEntities.push(entity);
-            } else if (IN_SYNC_KEYS.includes(entity.key)) {
+            } else if (isInSyncKey(entity.key)) {
                 inSyncEntities.push(entity);
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntities.push(entity);

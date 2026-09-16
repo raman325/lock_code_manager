@@ -18,9 +18,13 @@ from custom_components.lock_code_manager.const import (
     CONDITION_ENTITY_DOMAINS,
     EVENT_CREDENTIAL_USED,
     PER_LOCK_ENTITY_SUFFIX,
+    credential_in_sync_key,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.credentials import CredentialType
+from custom_components.lock_code_manager.domain.credentials import (
+    MANAGED_CREDENTIAL_TYPES,
+    CredentialType,
+)
 
 _CONST_TS = pathlib.Path(__file__).resolve().parent.parent / "ts" / "const.ts"
 
@@ -190,6 +194,33 @@ def test_per_lock_suffixes_match_the_entity_names() -> None:
             if entity_key == key
         )
         assert declared == f"{{lock_name}} {suffix}"
+
+
+def test_every_managed_credential_type_has_an_in_sync_sensor_declared() -> None:
+    """
+    The per-type sensor's key is generated; what it needs declared is not.
+
+    The rename migration indexes PER_LOCK_ENTITY_SUFFIX by key, and the
+    platform looks the name and icon up by key, so a managed type whose key
+    is missing from any of the three fails at the next migration or renders
+    nameless.
+    """
+    component = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "custom_components"
+        / "lock_code_manager"
+    )
+    names = json.loads((component / "strings.json").read_text())["entity"][
+        "binary_sensor"
+    ]
+    icons = json.loads((component / "icons.json").read_text())["entity"][
+        "binary_sensor"
+    ]
+    for credential_type in MANAGED_CREDENTIAL_TYPES:
+        key = credential_in_sync_key(credential_type.value)
+        assert key in PER_LOCK_ENTITY_SUFFIX
+        assert key in names
+        assert key in icons
 
 
 # Keys that name no entity, so no entity name is owed for them. The

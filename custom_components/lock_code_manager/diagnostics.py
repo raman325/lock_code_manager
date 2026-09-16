@@ -36,15 +36,16 @@ def _mask_code(
     return mask_pin(label, slot_num, instance_id)
 
 
-_SENSITIVE_UNIQUE_ID_MARKERS = ("|pin", "|code")
+# The entity keys whose state is the credential itself. Matched on the key
+# segment of the unique ID, so a key that merely starts with one of these
+# (``pin_in_sync``) is not redacted with it.
+_SENSITIVE_KEYS = frozenset({"pin", "code"})
 
 
 def _is_sensitive(entry: er.RegistryEntry) -> bool:
     """Return True if the entity may expose a PIN or code in its state."""
-    uid = entry.unique_id or ""
-    return entry.platform == DOMAIN and any(
-        m in uid for m in _SENSITIVE_UNIQUE_ID_MARKERS
-    )
+    parts = (entry.unique_id or "").split("|")
+    return entry.platform == DOMAIN and len(parts) > 2 and parts[2] in _SENSITIVE_KEYS
 
 
 def _entity_states_for_device(
