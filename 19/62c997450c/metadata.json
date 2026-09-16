@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "1962c997450c",
+  "strategy": "manual-commit",
+  "branch": "fix/unanswered-reads",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/domain/read_health.py",
+    "tests/test_read_health.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/19/62c997450c/0/metadata.json",
+      "transcript": "/19/62c997450c/0/full.jsonl",
+      "compact_transcript": "/19/62c997450c/0/transcript.jsonl",
+      "content_hash": "/19/62c997450c/0/content_hash.txt",
+      "prompt": "/19/62c997450c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 8624,
+    "cache_read_tokens": 2458767,
+    "output_tokens": 4948,
+    "api_call_count": 7
+  }
+}
