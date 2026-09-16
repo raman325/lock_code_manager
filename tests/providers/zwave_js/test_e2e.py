@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 from unittest.mock import MagicMock
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
@@ -14,13 +18,17 @@ from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
+from homeassistant.const import STATE_ON
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
+    ATTR_SYNC_STATUS,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    PENDING_WRITE_TTL,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
@@ -28,6 +36,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from tests.common import in_sync_entity_id
 from tests.providers.zwave_js.conftest import ZWAVE_JS_LCM_CONFIG_SLOTS
 
 
@@ -326,5 +335,70 @@ class TestColdStartRace:
 
         assert lock._setup_succeeded is True
         assert lock._push_unsubs
+
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+class TestUnconfirmableWrites:
+    """A write the driver could not read back is trusted, not retried to suspension."""
+
+    async def test_a_write_the_lock_never_reads_back_settles_in_sync(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+    ) -> None:
+        """
+        Issue #1307: the code lands, but the lock never shows it.
+
+        A lock without Supervision is verified by the driver reading the code
+        back. On a lossy link that read times out, the driver reports the
+        outcome as unknown, and its cache keeps showing the slot empty. Every
+        later read comes through the same path and shows the same nothing,
+        which is no evidence the write failed.
+        """
+        mock_lock_helpers["async_set_credential"].side_effect = HomeAssistantError(
+            translation_key="credential_rejected_unknown"
+        )
+        # The driver's cache still says the slots are free: the reads that
+        # would have updated it never came back.
+        node = lock_schlage_be469
+        for slot in (1, 2):
+            node.values[f"{node.node_id}-99-0-userIdStatus-{slot}"].update({"value": 0})
+            node.values[f"{node.node_id}-99-0-userCode-{slot}"].update({"value": ""})
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [lock_entity.entity_id],
+                CONF_SLOTS: ZWAVE_JS_LCM_CONFIG_SLOTS,
+            },
+            unique_id="test_zwave_js_unconfirmable",
+        )
+        lcm_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+        in_sync = in_sync_entity_id(hass, lcm_entry, 1, lock_entity.entity_id)
+
+        # Well past the breaker's window: repeated write-and-give-up laps
+        # would keep the slot out of sync and then suspend it.
+        for _ in range(12):
+            freezer.tick(timedelta(seconds=PENDING_WRITE_TTL))
+            async_fire_time_changed(hass)
+            await hass.async_block_till_done()
+
+        state = hass.states.get(in_sync)
+        assert state is not None
+        assert state.attributes.get(ATTR_SYNC_STATUS) == "in_sync"
+        assert state.state == STATE_ON
+        writes = [
+            call
+            for call in mock_lock_helpers["async_set_credential"].await_args_list
+            if call.args[3] == "9999"
+        ]
+        assert len(writes) == 1
 
         await hass.config_entries.async_unload(lcm_entry.entry_id)

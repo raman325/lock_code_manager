@@ -1454,6 +1454,88 @@ async def test_apply_read_fails_an_absent_slot_past_the_deadline_once(
     assert poll_coordinator.take_failed_write(pin_address(1)) is False
 
 
+async def test_an_unverifiable_write_absent_at_the_deadline_is_kept_unconfirmed(
+    push_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """Absent at the deadline, but the stack could not verify it: not a failure."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    out = push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+    assert out[pin_address(1)] == SlotCredential.unreadable()
+    assert push_coordinator.is_verified(pin_address(1)) is True
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+    # Later reads through the same path that still show nothing change nothing.
+    out = push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+    assert out[pin_address(1)] == SlotCredential.unreadable()
+
+
+@pytest.mark.parametrize(
+    ("observed", "reads_as"),
+    [
+        (SlotCredential.known("9999"), SlotCredential.known("9999")),
+        (SlotCredential.known("1111"), SlotCredential.known("1111")),
+    ],
+    ids=["confirmed", "contradicted"],
+)
+async def test_a_readable_value_ends_an_unconfirmed_write(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    freezer,
+    observed: SlotCredential,
+    reads_as: SlotCredential,
+) -> None:
+    """Once the lock shows what the slot holds, that is what it reads as."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+
+    assert push_coordinator._apply_read({pin_address(1): observed}) == {
+        pin_address(1): reads_as
+    }
+    # The doubt is over: an empty read now is the lock's word.
+    assert push_coordinator._apply_read({pin_address(1): SlotCredential.empty()}) == {
+        pin_address(1): SlotCredential.empty()
+    }
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_the_lock_pushing_an_empty_slot_ends_an_unconfirmed_write(
+    push_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """A push is the lock speaking now, so an empty one is believed."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    push_coordinator.async_set_updated_data(
+        push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+    )
+
+    # A masked push leaves the write standing.
+    push_coordinator.push_update({1: SlotCredential.unreadable()})
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.unreadable()
+
+    push_coordinator.push_update({1: SlotCredential.empty()})
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.empty()
+
+
+@pytest.mark.parametrize("ending", ["record_write", "drop_pending"])
+async def test_writing_or_clearing_again_ends_an_unconfirmed_write(
+    push_coordinator: LockUsercodeUpdateCoordinator, freezer, ending: str
+) -> None:
+    """A new write or a clear replaces the doubt about the old one."""
+    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+
+    if ending == "record_write":
+        push_coordinator.record_write(pin_address(1), "1111", believed=False)
+        push_coordinator.drop_pending(pin_address(1))
+    else:
+        push_coordinator.drop_pending(pin_address(1))
+    assert push_coordinator._apply_read({pin_address(1): SlotCredential.empty()}) == {
+        pin_address(1): SlotCredential.empty()
+    }
+
+
 async def test_drop_pending_leaves_nothing_to_charge(
     poll_coordinator: LockUsercodeUpdateCoordinator, freezer
 ) -> None:
@@ -1571,16 +1653,23 @@ async def test_confirmation_read_failure_is_non_fatal_and_keeps_waiting(
     assert push_coordinator.take_failed_write(pin_address(1)) is False
 
 
+@pytest.mark.parametrize("believed", [False, True])
 async def test_confirmation_read_failure_past_the_deadline_gives_the_write_up(
-    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator, freezer
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    freezer,
+    believed: bool,
 ) -> None:
     """Reads that keep failing do not keep a write alive forever.
 
-    The lock has had the time to live to be seen holding the write and has not
-    been; a lock whose writes land but whose reads never return still ends in
-    a charged re-sync and a visible suspend, not a silent pending state.
+    The lock has had the time to live to be seen holding the write and has
+    not been. A write the lock accepted as its own word is counted failed, so
+    it ends in a charged re-sync rather than a silent pending state. A write
+    the stack could not verify is kept as unconfirmed instead: the read that
+    failed is the same read the stack could not complete, so it says nothing
+    about the write.
     """
-    push_coordinator.record_write(pin_address(1), "9999", believed=True)
+    push_coordinator.record_write(pin_address(1), "9999", believed=believed)
     freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
     with patch.object(
         push_lock,
@@ -1589,7 +1678,11 @@ async def test_confirmation_read_failure_past_the_deadline_gives_the_write_up(
     ):
         await push_coordinator.async_confirm_pending_writes()
     assert push_coordinator.is_verified(pin_address(1)) is True
-    assert push_coordinator.take_failed_write(pin_address(1)) is True
+    assert push_coordinator.take_failed_write(pin_address(1)) is not believed
+    if believed:
+        assert push_coordinator.credential(pin_address(1)) == (
+            SlotCredential.unreadable()
+        )
 
 
 async def test_confirmation_timer_fires_reads_and_rearms_while_pending(
@@ -1704,17 +1797,20 @@ async def test_record_write_while_the_timer_is_armed_pulls_the_look_forward(
     assert poll_coordinator._confirm_unsub is not None  # one chain, re-armed once
 
 
+@pytest.mark.parametrize("believed", [False, True])
 async def test_pending_slot_a_completed_read_never_names_is_given_up_at_the_deadline(
     push_lock: MockLCMPushLock,
     push_coordinator: LockUsercodeUpdateCoordinator,
     freezer,
+    believed: bool,
 ) -> None:
     """A whole-device read that omits a pending slot is the lock not holding it.
 
-    Waited for until the deadline like an absent slot, then failed -- never
-    left pending to hard-refresh the device every interval for good.
+    Waited for until the deadline like an absent slot, then given up -- never
+    left pending to hard-refresh the device every interval for good. Failed,
+    unless the stack could not verify the write, which is kept as unconfirmed.
     """
-    push_coordinator.record_write(pin_address(9), "4321", believed=True)
+    push_coordinator.record_write(pin_address(9), "4321", believed=believed)
     with patch.object(
         push_lock,
         "async_hard_refresh_codes",
@@ -1727,7 +1823,8 @@ async def test_pending_slot_a_completed_read_never_names_is_given_up_at_the_dead
         freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
         await push_coordinator.async_confirm_pending_writes()
     assert push_coordinator.has_pending_write(pin_address(9)) is False
-    assert push_coordinator.take_failed_write(pin_address(9)) is True
+    assert push_coordinator.take_failed_write(pin_address(9)) is not believed
+    assert (push_coordinator.credential(pin_address(9)) is not None) is believed
 
 
 async def test_a_read_with_an_unusable_key_does_not_strand_the_look(
