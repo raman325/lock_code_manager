@@ -74,13 +74,25 @@ UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
 
 
 def sync_manager_of(entity_obj: Any) -> SlotSyncManager:
-    """Return the PIN sync manager an in-sync entity is a view of, through its own seam."""
+    """Return the Personal Identification Number sync manager an in-sync entity views."""
     assert entity_obj._slot_coordinator is not None
     manager = entity_obj._slot_coordinator.sync_manager(
         entity_obj.lock.lock.entity_id, pin_address(int(entity_obj.slot_num))
     )
     assert manager is not None
     return manager
+
+
+async def async_disable_and_reload(
+    hass: HomeAssistant, config_entry: ConfigEntry, entity_id: str
+) -> None:
+    """Disable an entity in the registry and reload the entry, so it never loads."""
+    er.async_get(hass).async_update_entity(
+        entity_id, disabled_by=er.RegistryEntryDisabler.USER
+    )
+    await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id) is None
 
 
 def all_sync_managers(config_entry: ConfigEntry) -> list[SlotSyncManager]:

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
@@ -42,7 +43,6 @@ from custom_components import lock_code_manager
 from custom_components.lock_code_manager import (
     _async_reclaim_entities_from_foreign_devices,
     _async_setup_new_locks,
-    _lock_of,
     _setup_entry_after_start,
     async_migrate_entry,
     async_release_locks,
@@ -69,6 +69,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.domain.config import (
     build_slot_device_identifier,
+    build_slot_unique_id,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import (
@@ -99,7 +100,9 @@ from .common import (
     MockLCMLock,
     all_sync_managers,
     async_blocking_stub,
+    async_disable_and_reload,
     async_discover_unclaimed_mqtt_lock,
+    code_entity_id,
     entry_users,
     in_sync_entity_id,
     short_stop_grace,
@@ -1578,7 +1581,7 @@ async def test_setup_entry_after_start_does_not_stack_update_listeners(
     runtime_data = lock_code_manager_config_entry.runtime_data
     # Initial setup ran via the fixture and should have registered exactly one
     # listener, marked by the runtime-data flag.
-    assert runtime_data.update_listener_registered is True
+    assert runtime_data.post_start_setup_done is True
     initial_listener_count = len(lock_code_manager_config_entry.update_listeners)
 
     # A second invocation (simulating a reload race with EVENT_HOMEASSISTANT_STARTED)
@@ -1593,7 +1596,7 @@ async def test_setup_entry_after_start_does_not_stack_update_listeners(
     # After unload, the flag clears so a future setup will register again.
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
     await hass.async_block_till_done()
-    assert runtime_data.update_listener_registered is False
+    assert runtime_data.post_start_setup_done is False
 
 
 async def test_options_saved_while_entry_down_survive_data_migration(
@@ -1635,6 +1638,52 @@ async def test_options_saved_while_entry_down_survive_data_migration(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
 
+async def test_a_lock_released_while_its_setup_awaits_gets_no_managers(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A pass still holding a lock a concurrent pass released starts nothing on it."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    one_lock = copy.deepcopy(BASE_CONFIG)
+    one_lock[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    hass.config_entries.async_update_entry(entry, options=one_lock)
+    await hass.async_block_till_done()
+    assert LOCK_2_ENTITY_ID not in runtime_data.locks
+
+    wedged, entered, release = async_blocking_stub(BaseLock.async_setup_internal)
+    with patch.object(BaseLock, "async_setup_internal", wedged):
+        hass.config_entries.async_update_entry(
+            entry, options=copy.deepcopy(BASE_CONFIG)
+        )
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        # Released by a second pass while the first still awaits its setup.
+        hass.config_entries.async_update_entry(entry, options=one_lock)
+        for _ in range(100):
+            if LOCK_2_ENTITY_ID not in runtime_data.locks:
+                break
+            await asyncio.sleep(0)
+        assert LOCK_2_ENTITY_ID not in runtime_data.locks
+        release.set()
+        await hass.async_block_till_done()
+
+    assert LOCK_2_ENTITY_ID not in runtime_data.locks
+    assert not [
+        manager
+        for manager in all_sync_managers(entry)
+        if manager._lock.lock.entity_id == LOCK_2_ENTITY_ID
+    ]
+    assert (
+        er.async_get(hass).async_get_entity_id(
+            BINARY_SENSOR_DOMAIN,
+            DOMAIN,
+            build_slot_unique_id(entry.entry_id, 1, ATTR_IN_SYNC, LOCK_2_ENTITY_ID),
+        )
+        is None
+    )
+
+
 async def test_removing_a_lock_purges_its_disabled_entities(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1644,10 +1693,7 @@ async def test_removing_a_lock_purges_its_disabled_entities(
     entry = lock_code_manager_config_entry
     ent_reg = er.async_get(hass)
     disabled_id = in_sync_entity_id(hass, entry, 1, LOCK_2_ENTITY_ID)
-    ent_reg.async_update_entity(disabled_id, disabled_by=er.RegistryEntryDisabler.USER)
-    await hass.config_entries.async_reload(entry.entry_id)
-    await hass.async_block_till_done()
-    assert hass.states.get(disabled_id) is None
+    await async_disable_and_reload(hass, entry, disabled_id)
     assert ent_reg.async_get(disabled_id) is not None
 
     new_config = copy.deepcopy(BASE_CONFIG)
@@ -3692,11 +3738,11 @@ async def test_releasing_a_lock_from_an_entry_that_never_loaded_purges_every_row
     entry = lock_code_manager_config_entry
     ent_reg = er.async_get(hass)
     lock_2_rows = [
-        entity.entity_id
-        for entity in er.async_entries_for_config_entry(ent_reg, entry.entry_id)
-        if _lock_of(entry.entry_id, entity.unique_id) == LOCK_2_ENTITY_ID
+        entity_id(hass, entry, slot_num, LOCK_2_ENTITY_ID)
+        for slot_num in BASE_CONFIG[CONF_SLOTS]
+        for entity_id in (in_sync_entity_id, code_entity_id)
     ]
-    assert lock_2_rows
+    assert all(ent_reg.async_get(row) for row in lock_2_rows)
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert not hasattr(entry, "runtime_data")

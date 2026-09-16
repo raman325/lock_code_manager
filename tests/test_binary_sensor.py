@@ -75,6 +75,7 @@ from .common import (
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
     async_blocking_stub,
+    async_disable_and_reload,
     in_sync_entity_id,
     short_stop_grace,
     slot_entity_id,
@@ -87,6 +88,7 @@ from .conftest import (
     async_trigger_sync_tick,
     async_trigger_sync_tick_for_manager,
     get_in_sync_entity_obj,
+    sync_manager_for,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1298,8 +1300,8 @@ async def test_slot_suspension_isolated_from_other_slots(
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
 
-    mgr_1 = sync_manager_of(get_in_sync_entity_obj(hass, in_sync_slot_1))
-    mgr_2 = sync_manager_of(get_in_sync_entity_obj(hass, in_sync_slot_2))
+    mgr_1 = sync_manager_for(hass, in_sync_slot_1)
+    mgr_2 = sync_manager_for(hass, in_sync_slot_2)
 
     # Only slot 2's sync hits an unexpected error; slot 1 is left in sync.
     with patch.object(
@@ -2334,7 +2336,7 @@ async def test_confirmation_read_failure_leaves_the_write_pending_and_uncharged(
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
-    mgr = sync_manager_of(get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY))
+    mgr = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
 
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -2376,7 +2378,7 @@ async def test_the_next_confirmation_read_settles_a_pending_write_without_a_seco
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
-    mgr = sync_manager_of(get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY))
+    mgr = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
 
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -2421,13 +2423,7 @@ async def test_disabling_the_in_sync_sensor_does_not_stop_the_sync(
     """The sensors are views: the manager runs whether or not anyone watches it."""
     entry = lock_code_manager_config_entry
     aggregate_id = in_sync_entity_id(hass, entry, 1)
-    er.async_get(hass).async_update_entity(
-        aggregate_id, disabled_by=er.RegistryEntryDisabler.USER
-    )
-    await hass.config_entries.async_reload(entry.entry_id)
-    await hass.async_block_till_done()
-
-    assert hass.states.get(aggregate_id) is None
+    await async_disable_and_reload(hass, entry, aggregate_id)
     manager = entry.runtime_data.slot_coordinators[1].sync_manager(
         LOCK_1_ENTITY_ID, pin_address(1)
     )
