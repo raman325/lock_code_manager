@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "fcd7a3a2b49b",
+  "strategy": "manual-commit",
+  "branch": "fix/unconfirmable-writes",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/providers/zwave_js/test_e2e.py",
+    "tests/test_coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fc/d7a3a2b49b/0/metadata.json",
+      "transcript": "/fc/d7a3a2b49b/0/full.jsonl",
+      "compact_transcript": "/fc/d7a3a2b49b/0/transcript.jsonl",
+      "content_hash": "/fc/d7a3a2b49b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 9805,
+    "cache_read_tokens": 1063139,
+    "output_tokens": 6978,
+    "api_call_count": 6
+  }
+}
