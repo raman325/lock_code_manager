@@ -82,7 +82,6 @@ from .const import (
     DOMAIN,
     EVENT_CREDENTIAL_USED,
     LEGACY_EVENT_PIN_USED,
-    PASS_DRAIN_SECONDS,
     PER_LOCK_ENTITY_SUFFIX,
     PLATFORMS,
     RENAMES_KEY,
@@ -1177,30 +1176,6 @@ async def _async_release_locks(
     )
 
 
-async def _async_drain_passes(
-    runtime_data: LockCodeManagerConfigEntryRuntimeData,
-) -> None:
-    """
-    Take the pass lock for an unload, once the pass in flight is done.
-
-    Marked as unloading first, so the passes queued behind this one return
-    without acting. A pass still running after ``PASS_DRAIN_SECONDS`` is
-    cancelled rather than left to hold up a reload for good.
-    """
-    runtime_data.unloading = True
-    try:
-        async with asyncio.timeout(PASS_DRAIN_SECONDS):
-            await runtime_data.pass_lock.acquire()
-    except TimeoutError:
-        if (task := runtime_data.pass_task) is not None:
-            _LOGGER.warning(
-                "Update pass still running after %ss; cancelling it to unload",
-                PASS_DRAIN_SECONDS,
-            )
-            task.cancel()
-        await runtime_data.pass_lock.acquire()
-
-
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
@@ -1209,7 +1184,12 @@ async def async_unload_entry(
     runtime_data = config_entry.runtime_data
     callbacks = runtime_data.callbacks
 
-    await _async_drain_passes(runtime_data)
+    # Marked first, so the passes queued behind the one in flight return
+    # without acting. The one in flight is waited out, not cancelled: its lock
+    # calls are bounded by the provider operation budget, and cutting one
+    # shorter can stop a removed user's credential from being cleared.
+    runtime_data.unloading = True
+    await runtime_data.pass_lock.acquire()
     try:
         # The slots go first, so no tick or entity of theirs reaches a lock
         # once its teardown begins.
@@ -2010,13 +1990,9 @@ async def _async_apply_entry_update(
     async with runtime_data.pass_lock:
         if runtime_data.unloading:
             return
-        runtime_data.pass_task = asyncio.current_task()
-        try:
-            await _async_apply_entry_update_locked(
-                hass, config_entry, runtime_data, old_config
-            )
-        finally:
-            runtime_data.pass_task = None
+        await _async_apply_entry_update_locked(
+            hass, config_entry, runtime_data, old_config
+        )
 
 
 async def _async_apply_entry_update_locked(

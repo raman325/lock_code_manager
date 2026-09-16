@@ -1734,30 +1734,6 @@ async def test_unload_waits_for_the_pass_in_flight(
     )
 
 
-async def test_unload_cancels_a_pass_that_does_not_finish(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """A pass that never ends is cancelled rather than holding up the unload."""
-    entry = lock_code_manager_config_entry
-    runtime_data = entry.runtime_data
-    wedged, entered, _ = async_blocking_stub()
-    with (
-        patch.object(BaseLock, "async_setup_internal", wedged),
-        patch("custom_components.lock_code_manager.PASS_DRAIN_SECONDS", 0.05),
-    ):
-        await _async_wedge_adding_lock_2(hass, entry)
-        await asyncio.wait_for(entered.wait(), timeout=5)
-        assert await hass.config_entries.async_unload(entry.entry_id)
-        await hass.async_block_till_done()
-
-    assert runtime_data.pass_task is None
-    assert not runtime_data.pass_lock.locked()
-    assert runtime_data.locks == {}
-    assert runtime_data.slot_coordinators == {}
-
-
 async def test_removing_a_lock_purges_its_disabled_entities(
     hass: HomeAssistant,
     mock_lock_config_entry,
