@@ -422,6 +422,14 @@ with a comment citing the contract. Never silence one by rerunning.
 
    When in doubt, `unreadable()`. It costs a user one slot number; the other
    two mistakes cost them the code on their door.
+
+   A lock that never answers reads at all is the one place this rule gives
+   way, because every slot would read occupied and allocation could never
+   place anyone. That is decided per lock, not per read, in
+   `domain/read_health.py`: a provider whose reads can go unanswered reports
+   the silence (the MQTT base's `_async_read_slots` does), and once a lock
+   is recorded as not answering, allocation treats its unreadable slots as
+   free and a repair says what that risks.
 5. Optionally override `async_is_device_available()` to return `False` when the physical
    device is unresponsive (default returns `True`). Operations are gated on both
    integration connectivity and device availability.

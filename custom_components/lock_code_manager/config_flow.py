@@ -46,7 +46,11 @@ from .domain.allocation import (
     async_allocate_for,
     async_check_slot_capacity,
 )
-from .domain.config import EntryConfig, async_write_entry_config
+from .domain.config import (
+    EntryConfig,
+    async_write_entry_config,
+    with_live_internal,
+)
 from .domain.names import (
     identity,
     name_error,
@@ -784,10 +788,10 @@ class LockCodeManagerFlowHandler(
                 await async_release_locks(self.hass, config_entry, dropped)
                 self.hass.config_entries.async_update_entry(
                     config_entry,
-                    data={
-                        **get_entry_config(config_entry).to_dict(),
-                        **user_input,
-                    },
+                    data=with_live_internal(
+                        config_entry,
+                        {**get_entry_config(config_entry).to_dict(), **user_input},
+                    ),
                     options={},
                 )
                 self.hass.async_create_task(

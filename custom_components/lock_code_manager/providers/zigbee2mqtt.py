@@ -113,16 +113,29 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
     return SlotCredential.unreadable()
 
 
+def _z2m_status_says_nothing(user_info: dict[str, Any]) -> bool:
+    """
+    Return whether a user entry is the lock declining to say anything.
+
+    A ``not_supported_*`` status is how the converter reports a user status
+    the lock would not give -- 0xFF, "not supported", in the Zigbee Door Lock
+    cluster. Answering a read with it is the lock saying it cannot be read,
+    so for the read it counts as silence, not as an answer.
+    """
+    status = user_info.get("status")
+    return isinstance(status, str) and status.startswith("not_supported")
+
+
 @dataclass(repr=False, eq=False)
 class Zigbee2MQTTLock(BaseMqttLock):
     """Class to represent Zigbee2MQTT lock."""
 
-    # `_async_read_slot` waits 10s per slot before giving up on that slot.
-    # Above the 10s this provider itself allows a slot read before calling it
-    # silent, so that bound always speaks first.
+    # How long `_async_read_slot` waits for one slot before calling it silent.
+    slot_read_timeout: ClassVar[float] = 10.0
+    # Above the wait for one slot, so that bound always speaks first.
     per_exchange_budget: ClassVar[float | None] = 15.0
 
-    _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
+    _pending_codes: dict[int, asyncio.Future[SlotCredential | None]] = field(
         init=False, default_factory=dict
     )
     # Last projected state per slot from the most recent users payload;
@@ -261,6 +274,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         users_data = payload.get("users")
         if users_data and isinstance(users_data, dict):
             states: dict[int, SlotCredential] = {}
+            unanswered: set[int] = set()
             for user_id_str, user_info in users_data.items():
                 user_id = parse_slot_num(user_id_str)
                 if user_id is None:
@@ -281,6 +295,8 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     continue
 
                 states[user_id] = _project_z2m_user_state(user_info)
+                if _z2m_status_says_nothing(user_info):
+                    unanswered.add(user_id)
 
             # The converter answers GetPinCode through the users object
             # (fz.lock_pin_code_response), not through a pin_code response
@@ -293,7 +309,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 if (
                     future := self._pending_codes.pop(user_id, None)
                 ) is not None and not future.done():
-                    future.set_result(state)
+                    future.set_result(None if user_id in unanswered else state)
 
             # Zigbee2MQTT republishes its full cached state on every
             # attribute change, so most users payloads restate old entries
@@ -645,7 +661,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
             return None
 
         try:
-            result = await asyncio.wait_for(future, timeout=10.0)
+            result = await asyncio.wait_for(future, timeout=self.slot_read_timeout)
         except TimeoutError:
             LOGGER.debug(
                 "Timeout waiting for PIN code response for %s slot %s",

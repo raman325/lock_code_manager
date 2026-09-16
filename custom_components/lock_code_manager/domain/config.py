@@ -16,7 +16,14 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 
-from ..const import CONF_LOCKS, CONF_SLOT, CONF_SLOTS, CONF_USERS, SUBENTRY_TYPE_USER
+from ..const import (
+    CONF_INTERNAL,
+    CONF_LOCKS,
+    CONF_SLOT,
+    CONF_SLOTS,
+    CONF_USERS,
+    SUBENTRY_TYPE_USER,
+)
 from .names import normalize_name
 from .slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
@@ -177,6 +184,9 @@ class EntryConfig:
                     for side in (entry.data, entry.options)
                     for key, value in side.items()
                     if key not in _CONFIG_KEYS
+                    # Nothing stages the internal section; a copy in options
+                    # is one an options form carried over, and is stale.
+                    and not (key == CONF_INTERNAL and side is entry.options)
                 }
             ),
         )
@@ -621,6 +631,20 @@ def slot_unique_id_key(unique_id: str) -> str | None:
     return parts[2] if len(parts) > 2 else None
 
 
+def with_live_internal(entry: ConfigEntry, data: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    Return ``data`` carrying the entry's internal section as it is now.
+
+    Writers build the entry's data from a view taken earlier, and the
+    internal section is written by the integration itself in between, so the
+    view's copy may be stale. The live one always wins.
+    """
+    merged = {key: value for key, value in data.items() if key != CONF_INTERNAL}
+    if CONF_INTERNAL in entry.data:
+        merged[CONF_INTERNAL] = entry.data[CONF_INTERNAL]
+    return merged
+
+
 @callback
 def async_write_entry_config(
     hass: HomeAssistant, entry: ConfigEntry, config: EntryConfig
@@ -685,6 +709,8 @@ def async_write_entry_config(
     # options-first, because the options flow stages its submission there, so a
     # write that left them standing would be invisible -- and, showing no diff,
     # would not wake the listener that clears them either.
-    if hass.config_entries.async_update_entry(entry, data=config.to_dict(), options={}):
+    if hass.config_entries.async_update_entry(
+        entry, data=with_live_internal(entry, config.to_dict()), options={}
+    ):
         changed = True
     return changed

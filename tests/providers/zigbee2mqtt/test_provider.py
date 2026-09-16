@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, ExitStack
 from datetime import timedelta
 import json
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,6 +28,13 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.read_health import (
+    SILENT_READS_TO_CLASSIFY,
+    UNANSWERED_PROBE_INTERVAL,
+    ReadHealth,
+    async_record_read_health,
+    read_health,
+)
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._mqtt import BaseMqttLock
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
@@ -1274,3 +1282,141 @@ async def test_scoped_hard_refresh_on_a_bridge_still_names_every_managed_slot(
         await z2m_lock.async_hard_refresh_codes({7})
 
     assert asked == [frozenset({1, 2, 7})]
+
+
+class TestUnansweredReads:
+    """A lock that never answers is found out, then no longer asked."""
+
+    @staticmethod
+    def _reading(lock: Zigbee2MQTTLock, read: AsyncMock) -> AbstractContextManager[Any]:
+        """Patch the transport so only ``read`` decides what each slot says."""
+        stack = ExitStack()
+        stack.enter_context(
+            patch.object(
+                lock, "async_is_integration_connected", new=AsyncMock(return_value=True)
+            )
+        )
+        stack.enter_context(patch.object(lock, "_get_topic", return_value="topic/get"))
+        stack.enter_context(patch.object(lock, "_async_read_slot", read))
+        return stack
+
+    async def test_a_lock_never_seen_to_answer_is_classified_and_left_alone(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """
+        One slot to read still takes the full count of silences to judge.
+
+        Then nothing is asked until the probe is due, and the probe asks one
+        slot.
+        """
+        lock = zigbee2mqtt_lock_connected
+        silent = AsyncMock(return_value=None)
+
+        with self._reading(lock, silent):
+            codes = await lock.async_get_usercodes([3])
+            assert silent.await_count == SILENT_READS_TO_CLASSIFY
+            assert codes == {3: SlotCredential.unreadable()}
+            assert read_health(hass, lock.lock.entity_id) is ReadHealth.UNANSWERED
+
+            silent.reset_mock()
+            assert await lock.async_get_usercodes([1, 2, 3]) == {
+                slot: SlotCredential.unreadable() for slot in (1, 2, 3)
+            }
+            assert silent.await_count == 1
+
+            silent.reset_mock()
+            await lock.async_get_usercodes([1, 2, 3])
+            assert silent.await_count == 0
+
+            with patch(
+                "custom_components.lock_code_manager.providers._mqtt.time.monotonic",
+                return_value=time.monotonic() + UNANSWERED_PROBE_INTERVAL + 1,
+            ):
+                await lock.async_get_usercodes([1, 2, 3])
+            assert [c.args[0] for c in silent.await_args_list] == [1]
+
+    async def test_a_long_read_stops_at_the_verdict(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """Walking every slot of a lock that never answers is what took minutes."""
+        lock = zigbee2mqtt_lock_connected
+        silent = AsyncMock(return_value=None)
+
+        with self._reading(lock, silent):
+            codes = await lock.async_get_usercodes(range(1, 251))
+
+        assert silent.await_count == SILENT_READS_TO_CLASSIFY
+        assert set(codes) == set(range(1, 251))
+        assert all(code is SlotCredential.unreadable() for code in codes.values())
+
+    async def test_an_answer_before_the_verdict_means_the_lock_answers(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """A lossy lock that answers even once is never judged silent."""
+        lock = zigbee2mqtt_lock_connected
+        answers = [None] * (SILENT_READS_TO_CLASSIFY - 1) + [
+            SlotCredential.known("1234")
+        ]
+        read = AsyncMock(side_effect=[*answers, *([None] * 20)])
+
+        with self._reading(lock, read):
+            codes = await lock.async_get_usercodes(range(1, 20))
+
+        assert read.await_count == 19
+        assert codes[SILENT_READS_TO_CLASSIFY] == SlotCredential.known("1234")
+        assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
+
+    async def test_a_probe_that_is_answered_reads_the_rest(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """The lock started answering: it is read normally from then on."""
+        lock = zigbee2mqtt_lock_connected
+        async_record_read_health(hass, lock.lock.entity_id, ReadHealth.UNANSWERED)
+        read = AsyncMock(return_value=SlotCredential.known("1234"))
+
+        with self._reading(lock, read):
+            codes = await lock.async_get_usercodes([1, 2])
+
+        assert [c.args[0] for c in read.await_args_list] == [1, 2]
+        assert codes == {slot: SlotCredential.known("1234") for slot in (1, 2)}
+        assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
+
+    async def test_answered_is_final(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """Silence after an answer is an outage, not a lock that cannot answer."""
+        lock = zigbee2mqtt_lock_connected
+        async_record_read_health(hass, lock.lock.entity_id, ReadHealth.ANSWERED)
+        async_record_read_health(hass, lock.lock.entity_id, ReadHealth.UNANSWERED)
+        silent = AsyncMock(return_value=None)
+
+        with (
+            self._reading(lock, silent),
+            pytest.raises(LockDisconnected, match="every one of the 2"),
+        ):
+            await lock.async_get_usercodes([1, 2])
+        assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
+
+    async def test_an_unanswering_lock_offers_its_indices_to_allocation(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """Counting every silent index as taken would leave no number free, ever."""
+        lock = zigbee2mqtt_lock_connected
+        silent = AsyncMock(return_value=None)
+
+        with self._reading(lock, silent):
+            assert await lock.async_internal_get_occupied_indices([1, 2]) == frozenset()
+
+    async def test_a_lock_that_answers_keeps_its_unreadable_indices_taken(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """A code the lock says is there but will not show still holds its index."""
+        lock = zigbee2mqtt_lock_connected
+        read = AsyncMock(
+            side_effect=[SlotCredential.empty(), SlotCredential.unreadable()]
+        )
+
+        with self._reading(lock, read):
+            assert await lock.async_internal_get_occupied_indices([1, 2]) == frozenset(
+                {2}
+            )

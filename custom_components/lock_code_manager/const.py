@@ -200,6 +200,13 @@ PER_LOCK_ENTITY_SUFFIX = {
 # value entity is keyed by its credential type.
 SENSITIVE_ENTITY_KEYS = frozenset({ATTR_CODE, *CREDENTIAL_LABELS})
 
+# The entry's internal section: what Lock Code Manager learned rather than
+# what anybody configured. Read from the entry's data only, and written back
+# from the live entry by every writer (see ``domain/config.py``).
+CONF_INTERNAL = "internal"
+# Within it, whether each lock answers reads, by entity registry id.
+INTERNAL_LOCK_READS = "lock_reads"
+
 # Code slot properties
 CONF_CALENDAR = "calendar"
 

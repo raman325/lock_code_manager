@@ -454,6 +454,10 @@
           "unmanaged_code_clear_failed": "The code in slot {slot} on {lock} could not be cleared: {error}{link_health}\n\nIt is still on the lock, so this repair stays open."
         }
       }
+    },
+    "lock_reads_unanswered": {
+      "title": "{lock} does not report its codes",
+      "description": "`{lock_entity_id}` does not answer requests to read the codes stored on it. Lock Code Manager still writes and clears codes on it, and treats a code as in sync once it has written it.\n\nIt cannot see codes that were set at the keypad or by another app, so when it chooses a slot for a new user it may overwrite one of them. If you have such codes on this lock, clear them at the lock and add those people to Lock Code Manager instead.\n\nThis goes away on its own if the lock starts answering."
     }
   },
   "exceptions": {
