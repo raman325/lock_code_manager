@@ -1,0 +1,35 @@
+<task-notification>
+<task-id>a7d07fed73bd7cc39</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a7d07fed73bd7cc39.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 1576 round 4" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Here is the full result from the `code-review` skill for PR #1576 at high effort. I didn't modify any files. The skill's own run created an empty `.venv` in the worktree and deleted it again, as it notes below.
+
+---
+
+PR #1576 looks correct overall: I found no high or medium bugs, only two low-severity ones. The review tool (ReportFindings) isn't available in this session, so the findings are listed here instead.
+
+The PR's tests pass: `tests/test_read_health.py`, `tests/providers/zigbee2mqtt` and `tests/providers/zwave_js_ui` gave 414 passed and 1 skipped. I ran them with the main checkout's `.venv`. One side effect to own: a `uv run` I tried created an empty `.venv` in the worktree, and I deleted it right away.
+
+## Findings
+
+1. **`custom_components/lock_code_manager/domain/read_health.py:224` (low)** — When a lock is added to an entry, `async_persist_read_health` copies the verdict from the in-memory cache only. It ignores verdicts already stored in other entries, which `read_health()` does count.
+   - **Scenario:** after a restart, entry A still has lock X stored as not answering, and the cache is empty. Nothing refills it, because while X is in that state only the hourly probe reads it, and a silent probe records nothing. Entry B then adds X and stores nothing. B's own reads don't write the verdict either: they take the not-answering path, and `async_record_read_health` returns early when the value hasn't changed.
+   - **Result:** if X is later removed from A, or A is deleted, the verdict is gone. The repair disappears at the next setup. Allocation on B treats X's unreadable slots as occupied again until X is reclassified, which takes at least five silent reads plus the extra device check.
+   - **Fix:** fill from `read_health(hass, lock_entity_id)` rather than `_cache(hass)`.
+
+2. **`custom_components/lock_code_manager/__init__.py:1172` (low)** — `_async_release_locks` deletes the new "lock does not report its codes" repair only after the `runtime_data is None: return` check. When the entry isn't loaded, the repair is never cleared.
+   - **Scenario:** entry is loaded, lock X is judged not answering, and the repair is raised. X's entity is then deleted and the entry reloads. Setup fails with "lock can't be found", so Home Assistant has already removed `runtime_data`, and reauth starts. The user swaps X out in reauth.
+   - **Result:** `async_forget_read_health` also exits early, because X no longer has an entity registry entry. The repair for X stays up, pointing at a lock the entry no longer manages, until Home Assistant restarts. The repair isn't persistent, so a restart clears it.
+   - **Fix:** move the deletion of this repair above the `runtime_data` check, as with the stored-record cleanup.
+
+## Checked and fine
+- **Stale copies of the new internal section:** every writer of the entry's data either keeps the live copy (`with_live_internal`) or re-reads it from the entry (`_async_settle_options`). A stale copy left in options by the options form is ignored.
+- **Entry deletion:** Home Assistant drops the entry from its list before calling `async_remove_entry`, so `async_forget_unmanaged_read_health` correctly sees no other entry managing the lock.
+- **Time limits:** the extra reads when an entry has fewer than five slots (worst case about 60 seconds) fit well within the 600-second minimum read deadline.
+- **Update listener:** the setup-time save runs before the update listener is registered. Later saves also refresh the cached config, so the listener finds nothing changed and does no work.
+- **Cross-entry allocation:** slots held by other entries are still excluded, so treating unreadable slots as free can't overwrite another entry's codes.</result>
+<usage><subagent_tokens>65837</subagent_tokens><tool_uses>1</tool_uses><duration_ms>327984</duration_ms></usage>
+</task-notification>
