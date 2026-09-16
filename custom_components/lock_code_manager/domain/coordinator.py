@@ -459,6 +459,22 @@ class LockUsercodeUpdateCoordinator(
         self._unconfirmed.pop(checked, None)
 
     @callback
+    def record_clear(self, address: CredentialAddress) -> None:
+        """
+        Record a clear the lock's stack verified.
+
+        Supersedes any write pending on the slot, as ``drop_pending`` does. A
+        value this coordinator was standing in with for a write of ours is
+        replaced with the empty slot the stack vouched for: nothing else will
+        replace it on a lock that is only read when told to.
+        """
+        checked = _checked(address)
+        stood_in = self.in_doubt(checked)
+        self.drop_pending(checked)
+        if stood_in and self.data.get(checked) != SlotCredential.empty():
+            self.async_set_updated_data({**self.data, checked: SlotCredential.empty()})
+
+    @callback
     def supersede_pending(self, address: CredentialAddress) -> None:
         """
         Forget a pending write the configuration no longer wants.

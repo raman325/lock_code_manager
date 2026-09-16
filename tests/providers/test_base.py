@@ -3091,3 +3091,9 @@ async def test_check_duplicate_code_counts_a_code_the_lock_never_showed(
     assert exc_info.value.conflicting_slot == 1
     # A clear the lock never showed leaves no code behind to collide with.
     lock._check_duplicate_code(3, "5678")
+
+    # A read that leaves the slot out does not end what is known about it.
+    coordinator.async_set_updated_data({pin_address(3): SlotCredential.empty()})
+    with pytest.raises(DuplicateCodeError) as exc_info:
+        lock._check_duplicate_code(3, "1234")
+    assert exc_info.value.conflicting_slot == 1

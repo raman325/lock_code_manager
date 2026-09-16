@@ -455,6 +455,10 @@ class TestUnconfirmableWrites:
         assert [call.args[1:] for call in deletes] == [
             (1, UserCredentialType.PIN_CODE, 1)
         ]
+        # The driver vouched for the clear: the slot shows empty, not the
+        # stand-in kept for the write.
+        coordinator = lcm_entry.runtime_data.locks[lock_entity.entity_id].coordinator
+        assert coordinator.credential(pin_address(1)) == SlotCredential.empty()
         state = hass.states.get(in_sync)
         assert state is not None
         assert state.state == STATE_ON

@@ -1607,6 +1607,37 @@ async def test_superseding_a_write_keeps_the_doubt_it_leaves(
     )
 
 
+@pytest.mark.parametrize("stood_in", [True, False])
+async def test_a_verified_clear_replaces_only_a_value_of_ours(
+    poll_coordinator: LockUsercodeUpdateCoordinator, freezer, stood_in: bool
+) -> None:
+    """
+    What the lock last said stays until the lock says otherwise.
+
+    A clear a polled lock's service accepted is not the lock reporting it;
+    the read that follows is. A value kept for a write of ours is ours to
+    replace.
+    """
+    coordinator = poll_coordinator
+    coordinator.async_set_updated_data(
+        coordinator._apply_read({pin_address(1): SlotCredential.known("1111")})
+    )
+    if stood_in:
+        coordinator.record_write(pin_address(1), "2222", believed=True)
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+        coordinator.async_set_updated_data(
+            coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+        )
+        assert coordinator.credential(pin_address(1)) == SlotCredential.unreadable()
+
+    coordinator.record_clear(pin_address(1))
+
+    assert coordinator.credential(pin_address(1)) == (
+        SlotCredential.empty() if stood_in else SlotCredential.known("1111")
+    )
+    assert coordinator.unconfirmed_slots == []
+
+
 async def test_a_clear_the_lock_could_not_verify_reads_empty_until_a_new_code(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ) -> None:

@@ -574,17 +574,21 @@ class BaseLock:
         if not usercode or not self.coordinator or not self.coordinator.data:
             return
         # A PIN written but never shown back is still on the lock as far as
-        # anyone knows, though its slot reads unreadable.
-        unconfirmed = self.coordinator.unconfirmed_pins()
+        # anyone knows, though its slot reads unreadable, or is left out of
+        # a read altogether.
+        held = {
+            **{
+                other_code_slot: other_credential.readable_pin
+                for other_code_slot, other_credential in self.coordinator.credentials_by_slot().items()
+                if other_credential.is_readable
+            },
+            **self.coordinator.unconfirmed_pins(),
+        }
         try:
             other_code_slot = next(
                 other_code_slot
-                for other_code_slot, other_credential in self.coordinator.credentials_by_slot().items()
-                if other_code_slot != code_slot
-                and (
-                    other_credential.matches(usercode)
-                    or unconfirmed.get(other_code_slot) == usercode
-                )
+                for other_code_slot, pin in sorted(held.items())
+                if other_code_slot != code_slot and pin == usercode
             )
         except StopIteration:
             pass
@@ -1595,10 +1599,13 @@ class BaseLock:
         unverified = code_slot in self._unverified_clears
         self._unverified_clears.discard(code_slot)
         if self.coordinator is not None:
+            address = pin_address(code_slot)
             if unverified:
-                self.coordinator.record_unconfirmed_clear(pin_address(code_slot))
+                self.coordinator.record_unconfirmed_clear(address)
+            elif changed:
+                self.coordinator.record_clear(address)
             else:
-                self.coordinator.drop_pending(pin_address(code_slot))
+                self.coordinator.drop_pending(address)
         # A clear that may not have landed may need repeating through the
         # same user.
         if not unverified:
