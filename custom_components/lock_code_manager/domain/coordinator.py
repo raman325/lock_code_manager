@@ -341,16 +341,6 @@ class LockUsercodeUpdateCoordinator(
         """Return the slots whose last write stands without the lock showing it."""
         return sorted(address.user_ref for address in self._unconfirmed)
 
-    def in_doubt(self, address: CredentialAddress) -> bool:
-        """
-        Return whether a write or clear to the address is still unsettled.
-
-        True while it is pending, or kept as unconfirmed; false once a read or
-        push has settled it either way.
-        """
-        checked = _checked(address)
-        return checked in self._pending or checked in self._unconfirmed
-
     def unconfirmed_pins(self) -> dict[int, str]:
         """Return the PINs written but not confirmed, by slot."""
         return {

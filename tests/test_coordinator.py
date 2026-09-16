@@ -1540,7 +1540,7 @@ async def test_a_read_of_the_old_code_is_stale_unless_it_was_written_back(
     assert push_coordinator._apply_read(stale) == {
         pin_address(1): SlotCredential.known("2222")
     }
-    assert push_coordinator.in_doubt(pin_address(1))
+    assert push_coordinator.pending_write(pin_address(1)) is not None
     freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
     assert push_coordinator._apply_read(stale) == {
         pin_address(1): SlotCredential.unreadable()
@@ -1550,7 +1550,7 @@ async def test_a_read_of_the_old_code_is_stale_unless_it_was_written_back(
     # Changed back before anything settled: the old code is the write now.
     push_coordinator.record_write(pin_address(1), "1111", believed=True)
     assert push_coordinator._apply_read(stale) == stale
-    assert not push_coordinator.in_doubt(pin_address(1))
+    assert push_coordinator.pending_write(pin_address(1)) is None
     assert push_coordinator.unconfirmed_slots == []
 
 
@@ -1569,16 +1569,16 @@ async def test_a_clear_the_lock_could_not_verify_reads_empty_until_a_new_code(
     assert push_coordinator._apply_read(stale) == {
         pin_address(1): SlotCredential.empty()
     }
-    assert push_coordinator.in_doubt(pin_address(1))
+    assert push_coordinator.unconfirmed_slots == [1]
     new = {pin_address(1): SlotCredential.known("3333")}
     assert push_coordinator._apply_read(new) == new
-    assert not push_coordinator.in_doubt(pin_address(1))
+    assert push_coordinator.unconfirmed_slots == []
 
     # A push is the lock's word, even repeating the old code.
     push_coordinator.record_unconfirmed_clear(pin_address(1))
     push_coordinator.push_update({1: SlotCredential.known("3333")})
     assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("3333")
-    assert not push_coordinator.in_doubt(pin_address(1))
+    assert push_coordinator.unconfirmed_slots == []
 
 
 @pytest.mark.parametrize("ending", ["record_write", "drop_pending"])
