@@ -309,9 +309,10 @@ class LockUsercodeUpdateCoordinator(
         """
         Return what an address reads as, given an unconfirmed write against it.
 
-        The lock itself speaking (``spoken``) ends the doubt: a push is its
-        word now. A read is weaker, because it may come through the path that
-        could not verify the write:
+        The lock itself speaking (``spoken``) ends the doubt, unless it says a
+        written slot holds a code it will not show, which is what the write
+        would look like. A read is weaker, because it may come through the
+        path that could not verify the write:
 
         - Repeating what the slot held before the write says nothing.
         - After a write, a readable value ends it either way (the lock showed
@@ -323,11 +324,13 @@ class LockUsercodeUpdateCoordinator(
         record = self._unconfirmed.get(address)
         if record is None:
             return observed
-        stands = not spoken and (
-            observed == record.previous
-            if record.pin is None
-            else not observed.is_readable or observed == record.previous
-        )
+        masked = observed.is_present and not observed.is_readable
+        if record.pin is None:
+            stands = not spoken and observed == record.previous
+        elif spoken:
+            stands = masked
+        else:
+            stands = not observed.is_readable or observed == record.previous
         if stands:
             return record.trusted
         del self._unconfirmed[address]

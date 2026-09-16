@@ -1510,9 +1510,13 @@ async def test_the_lock_pushing_an_empty_slot_ends_an_unconfirmed_write(
         push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
     )
 
-    # A masked push leaves the write standing.
+    # A masked push leaves the write standing: the lock holds a code there,
+    # so a read through the cache that still shows nothing says no more.
     push_coordinator.push_update({1: SlotCredential.unreadable()})
     assert push_coordinator.credential(pin_address(1)) == SlotCredential.unreadable()
+    assert push_coordinator._apply_read({pin_address(1): SlotCredential.empty()}) == {
+        pin_address(1): SlotCredential.unreadable()
+    }
 
     push_coordinator.push_update({1: SlotCredential.empty()})
     assert push_coordinator.credential(pin_address(1)) == SlotCredential.empty()
