@@ -25,16 +25,18 @@ import zigpy.zdo.types as zdo_t
 
 from homeassistant.components.zha import const as zha_const
 from homeassistant.components.zha.helpers import get_zha_gateway
-from homeassistant.const import Platform
+from homeassistant.const import (
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    Platform,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from custom_components.lock_code_manager.const import (
-    CONF_ENABLED,
     CONF_LOCKS,
-    CONF_NAME,
-    CONF_PIN,
     CONF_SLOTS,
     DOMAIN,
 )

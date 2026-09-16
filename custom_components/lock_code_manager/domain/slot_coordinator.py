@@ -173,37 +173,20 @@ class SlotEntityCoordinator:
 
     # -- Sync managers -------------------------------------------------------
 
-    @property
-    def _is_current(self) -> bool:
-        """
-        Whether this is the entry's live coordinator for its slot.
-
-        A pass that captured the coordinator before an unload, a slot removal,
-        or a reload finished holds one the entry no longer runs; a manager it
-        started would have no teardown left to stop it.
-        """
-        runtime_data = getattr(self._config_entry, "runtime_data", None)
-        return (
-            runtime_data is not None
-            and runtime_data.slot_coordinators.get(self._slot_num) is self
-        )
-
     async def async_start_sync(self, lock: BaseLock) -> None:
         """
         Start a manager for every credential of this slot on ``lock``.
 
-        Nothing starts on a coordinator that has stopped or that the entry no
-        longer runs: an update listener can reach here after the unload it is
-        racing has already stopped everything.
+        Nothing starts on a coordinator that has stopped: its managers would
+        have no teardown left to stop them.
         """
-        if lock.coordinator is None or not self._started or not self._is_current:
+        if lock.coordinator is None or not self._started:
             _LOGGER.debug(
-                "%s: Not starting sync on %s (coordinator ready: %s, running: %s, current: %s)",
+                "%s: Not starting sync on %s (coordinator ready: %s, running: %s)",
                 self._log_prefix,
                 lock.lock.entity_id,
                 lock.coordinator is not None,
                 self._started,
-                self._is_current,
             )
             return
         lock_entity_id = lock.lock.entity_id

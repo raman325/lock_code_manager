@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
+from homeassistant.const import Platform
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
-PLATFORMS = (Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR)
+PLATFORMS = (
+    Platform.BINARY_SENSOR,
+    Platform.EVENT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TEXT,
+)
 
 FILES_URL_BASE = f"/{DOMAIN}_files"
 STRATEGY_FILENAME = "generated/lock-code-manager.js"
@@ -245,6 +251,10 @@ TICK_INTERVAL = timedelta(seconds=2)
 # take longer on a degraded link (ZHA retries, the zwave-js-ui API timeout)
 # write in one command, so a cut there loses nothing the reload cannot redo.
 STOP_GRACE_SECONDS: float = 30.0
+# How long an unload waits for the update pass in flight before cancelling it.
+# A pass's longest waits are a lock's setup and its managers' stop grace, both
+# bounded, so a pass still running after twice the grace is not going to end.
+PASS_DRAIN_SECONDS: float = 2 * STOP_GRACE_SECONDS
 MAX_SYNC_ATTEMPTS = 3
 SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 
@@ -263,11 +273,3 @@ DEFAULT_NUM_USERS = 3
 # Bounds only the SEARCH: a number a user already holds above it keeps
 # working, and a lock reporting a larger range is believed up to it.
 MAX_SEARCHED_SLOT = 255
-
-PLATFORM_MAP = {
-    CONF_CALENDAR: Platform.CALENDAR,
-    CONF_ENABLED: Platform.SWITCH,
-    CONF_NAME: Platform.TEXT,
-    CONF_PIN: Platform.TEXT,
-    EVENT_CREDENTIAL_USED: Platform.EVENT,
-}

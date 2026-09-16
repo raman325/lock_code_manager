@@ -1640,33 +1640,39 @@ async def test_options_saved_while_entry_down_survive_data_migration(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
 
-async def test_a_lock_released_while_its_setup_awaits_gets_no_managers(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """A pass still holding a lock a concurrent pass released starts nothing on it."""
-    entry = lock_code_manager_config_entry
-    runtime_data = entry.runtime_data
+async def _async_wedge_adding_lock_2(hass: HomeAssistant, entry) -> dict:
+    """Drop lock 2, then write it back; return the config without it."""
     one_lock = copy.deepcopy(BASE_CONFIG)
     one_lock[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
     hass.config_entries.async_update_entry(entry, options=one_lock)
     await hass.async_block_till_done()
-    assert LOCK_2_ENTITY_ID not in runtime_data.locks
+    assert LOCK_2_ENTITY_ID not in entry.runtime_data.locks
+    hass.config_entries.async_update_entry(entry, options=copy.deepcopy(BASE_CONFIG))
+    return one_lock
 
+
+async def _async_let_the_loop_run() -> None:
+    """Give every ready task several turns."""
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+async def test_update_passes_run_one_at_a_time(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A pass that arrives while another is setting a lock up waits for it."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
     wedged, entered, release = async_blocking_stub(BaseLock.async_setup_internal)
     with patch.object(BaseLock, "async_setup_internal", wedged):
-        hass.config_entries.async_update_entry(
-            entry, options=copy.deepcopy(BASE_CONFIG)
-        )
+        one_lock = await _async_wedge_adding_lock_2(hass, entry)
         await asyncio.wait_for(entered.wait(), timeout=5)
-        # Released by a second pass while the first still awaits its setup.
+        # The release of the lock the first pass is still adding.
         hass.config_entries.async_update_entry(entry, options=one_lock)
-        for _ in range(100):
-            if LOCK_2_ENTITY_ID not in runtime_data.locks:
-                break
-            await asyncio.sleep(0)
-        assert LOCK_2_ENTITY_ID not in runtime_data.locks
+        await _async_let_the_loop_run()
+        assert LOCK_2_ENTITY_ID in runtime_data.locks
         release.set()
         await hass.async_block_till_done()
 
@@ -1684,6 +1690,72 @@ async def test_a_lock_released_while_its_setup_awaits_gets_no_managers(
         )
         is None
     )
+
+
+async def test_unload_waits_for_the_pass_in_flight(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """An unload never overlaps a pass, and a pass queued behind it does nothing."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    wedged, entered, release = async_blocking_stub(BaseLock.async_setup_internal)
+    with patch.object(BaseLock, "async_setup_internal", wedged):
+        await _async_wedge_adding_lock_2(hass, entry)
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        # Queued behind the wedged pass: a new user.
+        with_slot_3 = copy.deepcopy(BASE_CONFIG)
+        with_slot_3[CONF_SLOTS][3] = {
+            CONF_NAME: "test3",
+            ATTR_CODE: "4321",
+            CONF_ENABLED: True,
+        }
+        assert write_entry_config(hass, entry, with_slot_3)
+        unload = hass.async_create_task(
+            hass.config_entries.async_unload(entry.entry_id)
+        )
+        await _async_let_the_loop_run()
+        assert not unload.done()
+        assert LOCK_2_ENTITY_ID in runtime_data.locks
+        release.set()
+        assert await unload
+        await hass.async_block_till_done()
+
+    assert runtime_data.locks == {}
+    assert runtime_data.slot_coordinators == {}
+    assert (
+        er.async_get(hass).async_get_entity_id(
+            BINARY_SENSOR_DOMAIN,
+            DOMAIN,
+            build_slot_unique_id(entry.entry_id, 3, ATTR_IN_SYNC, LOCK_1_ENTITY_ID),
+        )
+        is None
+    )
+
+
+async def test_unload_cancels_a_pass_that_does_not_finish(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A pass that never ends is cancelled rather than holding up the unload."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    wedged, entered, _ = async_blocking_stub()
+    with (
+        patch.object(BaseLock, "async_setup_internal", wedged),
+        patch("custom_components.lock_code_manager.PASS_DRAIN_SECONDS", 0.05),
+    ):
+        await _async_wedge_adding_lock_2(hass, entry)
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert runtime_data.pass_task is None
+    assert not runtime_data.pass_lock.locked()
+    assert runtime_data.locks == {}
+    assert runtime_data.slot_coordinators == {}
 
 
 async def test_removing_a_lock_purges_its_disabled_entities(
