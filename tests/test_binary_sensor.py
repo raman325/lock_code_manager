@@ -4,7 +4,7 @@ import asyncio
 import copy
 from datetime import timedelta
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -37,7 +37,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
-    ATTR_SYNC_STATUS,
+    ATTR_IN_SYNC,
     CONF_LOCKS,
     CONF_SLOTS,
     CONFIRM_READ_INTERVAL,
@@ -46,6 +46,7 @@ from custom_components.lock_code_manager.const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
@@ -2434,22 +2435,28 @@ async def test_disabling_the_in_sync_sensor_does_not_stop_the_sync(
     assert manager._started
 
 
-async def test_in_sync_folds_over_every_manager(
+async def test_in_sync_added_without_a_slot_coordinator_reads_unknown(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
-):
-    """One credential out of sync makes the user out of sync, with its status."""
-    aggregate_id = in_sync_entity_id(hass, lock_code_manager_config_entry, 1)
-    await async_initial_tick(hass, aggregate_id)
-    entity_obj = get_in_sync_entity_obj(hass, aggregate_id)
-    assert entity_obj.is_on is True
+) -> None:
+    """With no coordinator to fold, the sensor has nothing to say and says so."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    assert 99 not in runtime_data.slot_coordinators
+    ent_reg = er.async_get(hass)
 
-    second = MagicMock()
-    second.in_sync = False
-    second.sync_status = SyncState.SUSPENDED.value
-    entity_obj._managers.append(second)
-    entity_obj._fold()
+    runtime_data.callbacks.invoke_lock_slot_adders(
+        runtime_data.locks[LOCK_1_ENTITY_ID], 99, ent_reg
+    )
+    await hass.async_block_till_done()
 
-    assert entity_obj.is_on is False
-    assert entity_obj.extra_state_attributes[ATTR_SYNC_STATUS] == "suspended"
+    entity_id = ent_reg.async_get_entity_id(
+        "binary_sensor",
+        DOMAIN,
+        build_slot_unique_id(entry.entry_id, 99, ATTR_IN_SYNC, LOCK_1_ENTITY_ID),
+    )
+    assert entity_id is not None
+    entity_obj = get_in_sync_entity_obj(hass, entity_id)
+    assert entity_obj.is_on is None
+    assert entity_obj.extra_state_attributes == {}

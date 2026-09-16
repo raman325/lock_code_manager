@@ -172,8 +172,10 @@ class SlotSyncManager:
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
         address: CredentialAddress,
+        *,
+        on_change: Callable[[], None],
     ) -> None:
-        """Initialize the sync manager."""
+        """Initialize the sync manager; ``on_change`` runs after every state change."""
         self._hass = hass
         self._ent_reg = ent_reg
         self._config_entry = config_entry
@@ -185,7 +187,7 @@ class SlotSyncManager:
         # IS the slot number; the lease lookup replaces this once users are
         # named.
         self._slot_num = slot_num = int(address.user_ref)
-        self._listeners: set[Callable[[], None]] = set()
+        self._on_change = on_change
 
         self._log_prefix = (
             f"{config_entry.entry_id} ({config_entry.title}): "
@@ -272,12 +274,6 @@ class SlotSyncManager:
     def log_prefix(self) -> str:
         """Return the structured log prefix identifying this manager's slot."""
         return self._log_prefix
-
-    @callback
-    def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
-        """Call ``listener`` after every state change until the returned unsubscribe runs."""
-        self._listeners.add(listener)
-        return lambda: self._listeners.discard(listener)
 
     @property
     def in_sync(self) -> bool | None:
@@ -680,11 +676,10 @@ class SlotSyncManager:
     def _write_state(self) -> None:
         """Notify the entity to write Home Assistant state."""
         # Skip if stopped: a tick mid-await may still call _write_state after
-        # async_stop has begun, and the listeners are entities on their way out.
+        # async_stop has begun, and the views are entities on their way out.
         if not self._started:
             return
-        for listener in list(self._listeners):
-            listener()
+        self._on_change()
 
     @callback
     def request_sync_check(self, *_args: Any) -> None:
