@@ -1,0 +1,210 @@
+<task-notification>
+<task-id>a5e391f6df2574783</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a5e391f6df2574783.output</output-file>
+<status>completed</status>
+<summary>Agent "Conventions angle finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Nothing left to fetch. `MANAGED_CREDENTIAL_TYPES` contains only `PIN`, so no real second manager can exist through setup; the `MagicMock` stand-in is the pure-logic path AGENTS.md explicitly permits ("Pure-logic tests: Fine to use mocks"). That closes my last candidate.
+
+## Result
+
+```json
+[]
+```
+
+## What was checked
+
+**Governing files read** (no nested ones exist under `custom_components/`, `domain/`, `tests/`, or `tests/properties/`; the worktree has no `.claude/CLAUDE.md`):
+- `/Users/raman/.claude/CLAUDE.md`
+- `/Users/raman/projects/lock_code_manager/.worktrees/sync-ownership/CLAUDE.md` → `/Users/raman/projects/lock_code_manager/.worktrees/sync-ownership/AGENTS.md` (Code Style, Testing Notes, Test philosophy/conventions sections)
+
+**Rules checked against both diffs, and why each came up clean:**
+
+| Rule (AGENTS.md unless noted) | Finding |
+|---|---|
+| No inline/local imports | Only indented import is `from ..providers import BaseLock` inside `if TYPE_CHECKING:` in `domain/slot_coordinator.py`; that is a top-of-file guard block, not a local import. `SlotSyncManager` moved from `TYPE_CHECKING` to a real top-level import. |
+| No `nonlocal`/`global` | None added. |
+| No Google-style `Args:`/`Returns:` | None added; all new docstrings are prose. |
+| Docstrings required for public functions | Every added source `def`/property has one (`managed_addresses`, `fold_in_sync`, `fold_sync_status`, `async_start_sync`, `async_stop_sync`, `sync_managers`, `sync_managers_for`, `sync_manager`, `async_add_listener`, `_fold`, and the three private `__init__.py` helpers). Ruff exempts `tests/**` from `D`. |
+| Spell out acronyms in comments | "PIN" in the new `tests/common.py:77` docstring is used 113 times in existing source comments and 119 in test comments, so it is the repo's established term, not a violation. "reauth" is Home Assistant's own flow name, not an acronym. |
+| Comments state intent, not history | All added comments describe current behavior ("A setup that runs twice keeps the first", "Registry-only, so it runs whether or not the entry ever loaded"). The PR actually *removes* a historical narrative from a `test_slot_coordinator.py` docstring ("a pre-existing D-design limitation..."). |
+| Minimize caplog text assertions | No `caplog` lines added; the one in `test_slot_coordinator.py` is pre-existing context. |
+| Don't manually inject `hass.data` | No `hass.data` references added. |
+| Don't `MagicMock()` coordinators | The two `MagicMock()` additions (`tests/test_binary_sensor.py:2448` mock manager, `tests/test_slot_sync_lifecycle.py:20` mock lock) are not coordinators; both tests otherwise run the real `lock_code_manager_config_entry` setup. The mock manager is unavoidable since only PIN is managed. |
+| Prefer idiomatic Python (`next()` over `for`/`break`) | No `break` added; `fold_sync_status` uses `next()`, comprehensions throughout. |
+| Canonical-module imports (user CLAUDE.md) | Added imports use `homeassistant.config_entries`, `homeassistant.helpers.entity_registry`, `homeassistant.core`, all canonical. |
+
+The private-attribute writes in the test diff (`sync_manager_of(...)._state = ...`) are mechanical rewrites of pre-existing `entity_obj._sync_manager._state = ...` lines to the new accessor, not a new practice introduced by this PR.</result>
+<usage><subagent_tokens>100754</subagent_tokens><tool_uses>12</tool_uses><duration_ms>149284</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a670a37334c497e8b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a670a37334c497e8b.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency angle finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed: `async_unload_entry` stops everything at line 1173, then line 1218 calls `async_unload_lock(hass, config_entry)` which at line 1098 issues a second `_async_stop_slot_sync` across all locks against already-emptied coordinators. I have everything needed for the findings.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 313,
+    "summary": "The awaited first tick can no longer do any work on any caller path, because the per-lock `code` sensor it requires is added only after async_start_sync returns; drop the eager first tick (or schedule it fire-and-forget) and let the catch-all state tracker / 2s TICK_INTERVAL run the real first evaluation.",
+    "failure_scenario": "Both new callers (_async_setup_new_locks and _async_apply_entry_update) call coordinator.async_start_sync BEFORE callbacks.invoke_lock_slot_adders, so when the first tick runs, _resolve_credential_snapshot -&gt; _ensure_entities_ready finds no hass.states entry for ATTR_CODE (the per-lock sensor, built at sync.py:~214 with lock_entity_id in its unique_id) and returns None; the tick bails before touching the lock. Before the PR the tick ran from the in_sync entity's async_added_to_hass, after the code sensor existed in the same add batch. Net cost per (lock x slot x managed address): one task creation + one awaited round-trip through the loop that yields nothing, on every entry setup, every reload, every options-flow lock/slot add. Wasted-only, never useful; the entities' own add events then hit _request_sync_check_if_relevant and the timer does the real first check anyway."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 1861,
+    "summary": "The per-lock `await asyncio.gather(async_start_sync...)` sits inside the sequential `for lock_entity_id, result in zip(...)` loop, so locks are started one after another; hoist a single gather over `added_locks` (or accumulate the coroutines and gather once after the loop) so the comment's 'started together' is true across locks, not just across a lock's slots.",
+    "failure_scenario": "With L locks and S slots, each lock's S first ticks are awaited to completion before lock N+1's managers even start and before lock N's per-lock entities are added; today each tick is cheap (see the sync.py:313 finding) so the cost is L serialized loop round-trips plus a delayed entity add for later locks, but any future first tick that does I/O (the code path was written for lock writes + coordinator.async_refresh) would turn this into L x S serial lock round-trips inside the update-listener task, which services block on via runtime_data.settled (services.py:67, bounded by _SETTLE_TIMEOUT). The old entity-add path was scheduled via config_entry.async_create_task (entity_platform.py:623) and never blocked this task at all."
+  },
+  {
+    "file": "custom_components/lock_code_manager/binary_sensor.py",
+    "line": 184,
+    "summary": "`self._fold()` at the end of async_added_to_hass writes HA state, then HA's add_to_platform_finish writes it again immediately; split _fold into a pure recompute (set _attr_is_on / _attr_sync_status) and call only that here, leaving the write to the platform.",
+    "failure_scenario": "entity.py:1441-1446 (HA add_to_platform_finish) runs async_added_to_hass and then unconditionally async_write_ha_state; the new _fold call inside async_added_to_hass produces a second, identical state write per in_sync entity per add. That is one redundant state-machine write plus a state_changed/recorder event per (lock x slot) on every entry setup, reload, and options-flow lock/slot add. Cheap but pure duplication introduced by the PR."
+  },
+  {
+    "file": "custom_components/lock_code_manager/binary_sensor.py",
+    "line": 152,
+    "summary": "`managed_addresses(int(self.slot_num))` rebuilds sorted(MANAGED_CREDENTIAL_TYPES) + a tuple of CredentialAddress on every `available` read; compute the tuple once in __init__ (slot_num is fixed for the entity's lifetime) and iterate that.",
+    "failure_scenario": "HA reads `self.available` once per async_write_ha_state (entity.py:1118), and this entity now writes state from every manager listener callback (each _write_state in a tick, several per tick on the SYNCING-&gt;IN_SYNC path), every CoordinatorEntity update, and every lock availability change; each of those now pays an int() parse, a sorted() over the frozenset, and N NamedTuple constructions. With MANAGED_CREDENTIAL_TYPES == {PIN} it is microseconds, but it is per-write work in the hottest path the entity has, and pin_address() was a single constructor call before."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 1141,
+    "summary": "`for lock_entity_id in lock_entity_ids: _async_purge_dropped_lock(...)` re-walks every registry row of the entry once per dropped lock; do one _async_purge_entities pass with a set of dropped lock ids, exactly as _async_purge_dropped_slots does with its `slots` set.",
+    "failure_scenario": "Each _async_purge_dropped_lock call runs er.async_entries_for_config_entry and tests every row, so removing L locks from an entry with R registry rows costs L x R predicate evaluations (each parsing unique_id via _lock_of) instead of R. Path is the options-flow lock removal and reauth swap (rare), and R is typically tens to low hundreds, so the absolute cost is small; flagged because the sibling helper in the same diff already does it the cheap way and the two are now inconsistent."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 1098,
+    "summary": "async_unload_entry already awaited `_async_stop_slot_sync(runtime_data)` (line 1173) before it reaches `async_unload_lock(hass, config_entry)` (line 1218), whose new line 1098 gathers a second `async_stop_sync` per (coordinator x lock) over now-empty dicts; skip the stop in async_unload_lock when called from the unload path (or have async_unload_entry rely on async_unload_lock's stop alone).",
+    "failure_scenario": "On every entry unload/reload, C coordinators x L locks coroutine objects for async_stop_sync are created and gathered, each doing a list comprehension over an empty dict and returning; nothing is stopped by the second pass. Cost is O(C x L) trivial coroutines per unload, not I/O, so this is a cleanup rather than a hot-path issue, but it is redundant work the PR introduced."
+  }
+]
+```</result>
+<usage><subagent_tokens>110121</subagent_tokens><tool_uses>16</tool_uses><duration_ms>188211</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a66437ec12da434ca</task-id>
+<tool-use-id>toolu_018pXdbdzJayHbwXBJbdHkwU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a66437ec12da434ca.output</output-file>
+<status>completed</status>
+<summary>Agent "Altitude angle finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```json
+[
+  {
+    "file": "custom_components/lock_code_manager/domain/slot_coordinator.py",
+    "line": 151,
+    "summary": "The three start guards (coordinator None, not _started, entry UNLOAD_IN_PROGRESS/NOT_LOADED) plus the two caller-side `.get(slot_num)` skips at __init__.py:1865 and :2133 all fence one race -- an update-listener pass still awaiting while unload runs -- and the general fix already has its hooks: `runtime_data.passes_in_flight`/`settled` exist (models.py:158-166, __init__.py:1899-1910), so `async_unload_entry` should cancel or bound-await the in-flight pass at its top (schedule the pass with `config_entry.async_create_task` and keep the handle in runtime_data, or `await asyncio.wait_for(runtime_data.settled.wait(), ...)` before `_async_stop_slot_sync`) instead of every leaf checking whether it is running after its own teardown.",
+    "failure_scenario": "The guards only stop managers from starting; the pass they belong to keeps running. Trace the reauth race the PR describes: the pass is inside `_async_setup_new_locks` awaiting a slow lock poll; unload stops sync, clears `slot_coordinators`, pops and unloads `runtime_data.locks`; the pass resumes, `_setup_one_lock` writes a freshly built lock with a live `LockUsercodeUpdateCoordinator` back into `runtime_data.locks`, then the `slots_to_add` loop at __init__.py:2115 finds `slot_coordinators` empty (the `in` check does not help here), constructs new `SlotEntityCoordinator`s and calls `async_start()` on each -- subscribing `async_track_state_change_event` on condition entities with nothing left to unsubscribe them. `async_start_sync` then refuses (state guard), so managers are not leaked, but coordinators, lock instances and their provider subscriptions are. Every future step added to the pass (the second PR's per-credential sensors, any new adder) has to grow its own copy of the same 'am I already torn down' check, and the `_started` guard is already redundant with the caller's `.get` skip since there is no await between them and every registered coordinator is started on creation.",
+    "note_on_state_guard": "`NOT_LOADED` in the guard is safe today: HA sets SETUP_IN_PROGRESS before calling `async_setup_entry` (config_entries.py:743) and LOADED without yielding after it returns (:933), and `_async_apply_entry_update` yields on the platform gather before reaching any `async_start_sync`; the EVENT_HOMEASSISTANT_STARTED path runs on a LOADED entry. It is only wrong for a test that drives `async_setup_entry` on a MockConfigEntry never set up through the manager, where it silently starts nothing -- another reason to fence at the pass rather than at the leaf."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 2115,
+    "summary": "The 'setup runs twice keeps the first coordinator' skip guards a path production cannot take -- `_setup_entry_after_start` is invoked exactly once per runtime_data (synchronously from `async_setup_entry` when HA is running, else once from the STARTED listener that `_safe_unsub` tears down on unload; HA raises OperationNotAllowed on a second setup of a LOADED/SETUP_IN_PROGRESS entry, config_entries.py:729) -- and the only caller that does it twice is `tests/test_init.py:1585`; the right-altitude change is to keep the test's precondition honest (assert `_setup_entry_after_start` is idempotent on the listener flag only, or have the second call be a fresh-runtime_data reload) rather than teach the entity-building loop to tolerate a re-entry the framework forbids.",
+    "failure_scenario": "The skip makes half of the function idempotent and leaves the other half not: a repeated pass with `old_config=EntryConfig.empty()` still re-runs `invoke_standard_adders` and `invoke_lock_slot_adders` for every slot (HA logs duplicate-unique_id errors and drops them) and re-enters `_async_setup_new_locks`, which happens to have its own `existing_lock` early return (line ~1780). So the codebase now carries three separate 'already exists' guards for one impossible re-entry, each written independently, and the next adder someone adds to this loop will lack one. If the double-run were ever real, the cure is a single `if runtime_data.setup_pass_started: return` at the top of `_setup_entry_after_start` next to the existing `update_listener_registered` flag -- one guard at the entry point, not one per data structure downstream."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 1477,
+    "summary": "Filtering on `entity.disabled_by is not None` splits one invariant ('a per-lock row whose lock is not in config must not exist') along an accidental axis (was the entity loaded?); the general fix is a setup-time reconciliation next to `_async_reclaim_entities_from_foreign_devices` and `_async_prune_orphaned_slot_devices` (__init__.py:1300, :1650, both already sweep the registry against config at `async_setup_entry`) -- `_async_purge_entities(hass, entry, lambda e: (lock := _lock_of(entry_id, e.unique_id)) is not None and lock not in config.locks)` -- and then the release-time purge can drop the `disabled_by` filter entirely, because a registry removal is itself what removes a loaded entity in HA.",
+    "failure_scenario": "The PR body concedes the gap: reauth on an entry that failed setup drops the disabled rows here but leaves the enabled rows of the swapped-out lock in the registry, so after the swap the user sees `binary_sensor.&lt;user&gt;_&lt;old_lock&gt;_in_sync` still listed (unavailable) until something else deletes it. Any other way a lock leaves config while the entry is down -- a manual `.storage` edit, a future flow step, a migration that drops a lock -- hits the same hole, and each will need its own purge call. Meanwhile the release-time path is order-sensitive: the purge runs before `async_unload_lock`, so the filter is required only because loaded entities are about to remove themselves via `_internal_async_remove` (entity.py:117); a sweep that runs once at setup by config membership has no such ordering to reason about, and mirrors exactly what `_async_prune_orphaned_slot_devices` already does for slot devices ('sweeps by identifier rather than by diffing against a previous config, so it also catches slots removed while the entry was unloaded')."
+  },
+  {
+    "file": "custom_components/lock_code_manager/binary_sensor.py",
+    "line": 183,
+    "summary": "`SlotSyncManager.async_add_listener` (sync.py:277) is a second pub/sub beside `SlotEntityCoordinator.register_state_subscriber`, and the entity has to snapshot `sync_managers_for(lock)` at add time and subscribe to each; since the coordinator constructs every manager it can hand each one `on_change=self._notify_state_subscribers` (the parameter the PR just removed as `state_writer`) and expose `in_sync_for(lock_entity_id)` / `sync_status_for(lock_entity_id)` that apply the fold -- then the in-sync sensor becomes a pure read-only view over the coordinator exactly like `LockCodeManagerActiveEntity` (`register_active_view` / `is_active`), subscribing in one place through the base class hook at entity.py:302.",
+    "failure_scenario": "Two subscription mechanisms for the same entity family means two lifecycles to keep consistent. The entity's `_managers` list is a snapshot taken in `async_added_to_hass`: any manager the coordinator starts or restarts for that lock after the entity is added (the second PR's per-credential managers arriving on a later `async_start_sync`, a provider that re-runs setup and re-registers its coordinator) is invisible to the sensor until it is removed and re-added, and there is no code path that re-syncs the snapshot. With the fold on the coordinator, `_poke_sync_managers`, the fold, and the fan-out all live where the managers live, `SlotSyncManager` loses `_listeners` and `_write_state`'s 'listeners are entities on their way out' reasoning, and the next per-credential sensor reads `coordinator.sync_manager(lock, address)` and subscribes to the same `register_state_subscriber` the text and switch entities already use."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/sync.py",
+    "line": 1160,
+    "summary": "`fold_in_sync` / `fold_sync_status` / `_STATUS_PRECEDENCE` are pure rules about what a set of credentials reads as for one user on one lock; that is the slot coordinator's derived-state job (it already computes `is_active` / `inactive_because_of` from config for the sibling entity), so they belong as methods or module-neighbours of `SlotEntityCoordinator` that consume the managers it owns, not as module-level helpers appended to the per-credential state machine's file and imported only by `binary_sensor.py`.",
+    "failure_scenario": "Placed in sync.py the fold is a free function over abstract iterables, so the only thing that can call it correctly is a caller that has already gone and collected the right managers -- today the entity, tomorrow the websocket/dashboard payload that wants the same user-level in-sync value and will either re-collect managers itself or import from binary_sensor. Placed on the coordinator as `sync_state_for(lock_entity_id) -&gt; tuple[bool | None, str | None]` there is exactly one collection-and-fold, and `_STATUS_PRECEDENCE` sits beside the code that decides when each `SyncState` is entered rather than 900 lines below it."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 1483,
+    "summary": "`_async_stop_slot_sync(runtime_data, *, lock_entity_ids=None, slot_nums=None)` is a two-axis filter over a cross product that exists because the caller does not know which axis the coordinator keys on; if unload stops per-slot (`coordinator.async_stop_sync()` for the slots it is about to pop, which it already iterates at __init__.py:1200) and lock teardown stops per-lock (`async_unload_lock` calling `coordinator.async_stop_sync(lock_entity_id)` across all coordinators), the helper collapses to one comprehension at each call site and no caller passes two orthogonal optional collections to the same function.",
+    "failure_scenario": "Three call sites use three different shapes of the same helper (no filter at :1173, `lock_entity_ids=` at :1098, `slot_nums=` at :2032) and nothing prevents a fourth from passing both, which the docstring does not define (it silently intersects). The slot-removal call at :2032 is also followed twenty lines later by the very `pop` + `async_stop()` loop that could have done the stop inline, so slot teardown is now split across two places that must stay in the same order -- exactly the 'release must invert acquire' drift the coordinator's `async_stop` comment ('the managers are stopped by async_stop_sync, which every teardown path awaits before this') is asking every future caller to remember by hand."
+  }
+]
+```</result>
+<usage><subagent_tokens>134499</subagent_tokens><tool_uses>24</tool_uses><duration_ms>234058</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>btqzb23uz</task-id>
+<tool-use-id>toolu_016SqDRCWZvZVauATi23K1oS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/btqzb23uz.output</output-file>
+<status>completed</status>
+<summary>Background command "Run PR 2's full suite with coverage" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6bc1402a2902ad74</task-id>
+<tool-use-id>toolu_0138t4dYS7auKs3zd8SaQwqL</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a6bc1402a2902ad74.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle B: removed-behavior audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything I need; no further lookups are required.
+
+Audit summary before the JSON: I traced every deleted line to its replacement. Most invariants are re-established cleanly:
+
+- Unload "config migrated to options" concern: the new stop iterates `runtime_data.slot_coordinators`, not entry config, so it is independent of data/options placement and strictly better than the old entity-driven path.
+- Entity-removal paths: slot removal (`__init__.py:2048`), lock removal via options (`async_release_locks` -&gt; `async_unload_lock:1098`), reauth (`config_flow.py:784` -&gt; same), entry unload (`:1173`), entry removal (unload first), subentry removal (HA `_async_update_entry` fires the update listener -&gt; slot-removal path). Registry deletion and entity disable now deliberately leave the manager running (tested).
+- `_sync_managers.clear()` removal: both `coordinator.async_stop()` callers await `async_stop_sync` first.
+- `state_writer` -&gt; `_fold`: listeners fire on every `_write_state`, and `_recompute()` at add covers state set before the entity existed.
+- `lock.coordinator is None` early return: the old adder (`binary_sensor.py:add_code_slot_entities`) already returned for a `None` coordinator, so no manager was ever created there either. Equivalent.
+- Deleted tests: all `_sync_manager` references were mechanical rewrites; no removed test covered a case that lacks a new one.
+
+Note: the worktree has uncommitted edits on top of `09832383` that postdate `/tmp/pr1572_*.diff` (helpers renamed to `_async_start_slot_sync`/`_slot_coordinators`, entity now overrides `_register_slot_coordinator_subscription` and calls `_recompute()` on add). Line numbers below are for the current worktree files.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 2048,
+    "summary": "This call is now the only thing that stops a removed slot's sync managers (the entity's async_will_remove_from_hass stop is gone), and no test asserts a removed slot's managers are stopped; a regression here leaks managers that nothing can ever reach again.",
+    "failure_scenario": "Options flow removes slot 2 -&gt; if this line is dropped/mis-scoped, the coordinator for slot 2 is popped from runtime_data.slot_coordinators while its managers keep their 2s timer subscription. async_unload_entry and async_unload_lock both iterate slot_coordinators, so the orphaned managers survive unload and reload. User re-adds slot 2 -&gt; entities recreated with identical unique IDs -&gt; the zombie manager's cached _entity_id_map resolves again and it performs writes to the lock concurrently with the new manager. Verify by mutation: delete line 2048 and run tests/ -- expect green."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 1509,
+    "summary": "_async_start_slot_sync gathers manager.async_start() (which awaits the first tick) with no return_exceptions, so an exception from one manager's start now aborts the whole setup/update pass, where the old code confined it to a single HA entity-add task.",
+    "failure_scenario": "Entry with locks A,B and slots 1..N; manager (A,1)'s first tick raises (SlotSyncManager._async_tick has try/finally only; the LOADING branch of _async_tick_impl and _try_upgrade_state_tracking sit outside any except). The gather at line 1509 (and slot_coordinator.py:166) propagates -&gt; _async_apply_entry_update aborts before invoke_standard_adders / invoke_lock_slot_adders / _async_settle_options. Result: no in_sync/code entities for any slot on that pass, options left staged, while every sibling manager (already in _sync_managers with _started=True and its interval timer registered) keeps ticking headless. Old code: the raise was inside async_added_to_hass of one entity; other entities and the pass completed."
+  },
+  {
+    "file": "custom_components/lock_code_manager/domain/slot_coordinator.py",
+    "line": 151,
+    "summary": "async_start_sync returns silently (no log) when the entry is unloading/not loaded or the coordinator is stopped, but the callers still run invoke_lock_slot_adders, so an in_sync entity can be added with _managers=[] and sit at 'unknown' forever with no diagnostic.",
+    "failure_scenario": "Update-listener pass is in _async_setup_new_locks awaiting _setup_one_lock when a reload begins (entry state -&gt; UNLOAD_IN_PROGRESS). The pass resumes: async_start_sync returns at line 151 without logging, then invoke_lock_slot_adders adds LockCodeManagerCodeSlotInSyncEntity, whose _register_slot_coordinator_subscription (binary_sensor.py:180) snapshots zero managers. If unload_ok ends up False (FAILED_UNLOAD keeps platforms), the entity persists reporting unknown/no sync_status with nothing in the log, and no manager runs for that (lock, slot). Old code always created and started the manager inside the entity regardless of entry state, so the slot still synced."
+  },
+  {
+    "file": "custom_components/lock_code_manager/binary_sensor.py",
+    "line": 180,
+    "summary": "The entity binds to the managers that exist at add time only; managers started later for the same (lock, slot) never get a listener, and there is no re-attach hook.",
+    "failure_scenario": "Any sequence where async_stop_sync then async_start_sync runs for a (lock, slot) while the in_sync entity stays loaded leaves the entity permanently frozen on its last fold: _fold is only registered on the snapshotted managers, and _recompute is only called in async_added_to_hass. Today every stop is paired with entity removal (lock-removed handlers, slot removers, unload), so this is latent rather than live; it becomes live the first time a caller (e.g. a future lock-reconnect path or a test helper calling coordinator.async_stop_sync/async_start_sync directly, as tests/test_slot_sync_lifecycle.py already does) restarts managers without recycling entities. Old design could not drift this way because entity and manager were the same object."
+  }
+]
+```</result>
+<usage><subagent_tokens>192430</subagent_tokens><tool_uses>41</tool_uses><duration_ms>642610</duration_ms></usage>
+</task-notification>

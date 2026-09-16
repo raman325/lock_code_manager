@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "aa0398357410",
+  "strategy": "manual-commit",
+  "branch": "refactor/slot-coordinator-owns-sync-managers",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/domain/slot_coordinator.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "tests/common.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_init.py",
+    "tests/test_slot_sync_lifecycle.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/aa/0398357410/0/metadata.json",
+      "transcript": "/aa/0398357410/0/full.jsonl",
+      "compact_transcript": "/aa/0398357410/0/transcript.jsonl",
+      "content_hash": "/aa/0398357410/0/content_hash.txt",
+      "prompt": "/aa/0398357410/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 400,
+    "cache_creation_tokens": 36731,
+    "cache_read_tokens": 15199793,
+    "output_tokens": 20892,
+    "api_call_count": 17
+  }
+}
