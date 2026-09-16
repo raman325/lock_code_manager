@@ -380,6 +380,12 @@ class TestAddingThroughTheUserInterface:
             assert read_health(hass, mqtt_lock_discovered.entity_id) is (
                 ReadHealth.UNANSWERED
             )
+            # Nothing manages the lock yet, so a flow abandoned here leaves
+            # no repair behind.
+            assert not ir.async_get(hass).async_get_issue(
+                DOMAIN,
+                per_lock_issue_id(UNANSWERED_ISSUE, mqtt_lock_discovered.entity_id),
+            )
 
             result = await async_configure_flow(
                 hass, flow_id, {CONF_NAME: "Guest", CONF_PIN: "1234"}

@@ -158,7 +158,13 @@ def async_record_read_health(
 def async_forget_read_health(
     hass: HomeAssistant, entry: ConfigEntry, lock_entity_id: str
 ) -> None:
-    """Drop what an entry remembers about a lock it no longer manages."""
+    """
+    Drop what an entry remembers about a lock it no longer manages.
+
+    Once no other entry manages it, what this run learned goes too, so a lock
+    added again starts from nothing rather than from a verdict whose repair
+    went with it.
+    """
     if (registry_id := _registry_id(hass, lock_entity_id)) is None:
         return
     stored = _stored(entry)
@@ -168,6 +174,12 @@ def async_forget_read_health(
             entry,
             {key: value for key, value in stored.items() if key != registry_id},
         )
+    if not [
+        other
+        for other in _entries_managing(hass, lock_entity_id)
+        if other.entry_id != entry.entry_id
+    ]:
+        _cache(hass).pop(registry_id, None)
 
 
 @callback
@@ -204,9 +216,16 @@ def async_persist_read_health(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 @callback
 def async_sync_issue(hass: HomeAssistant, lock_entity_id: str) -> None:
-    """Raise the repair while a lock does not answer reads; clear it otherwise."""
+    """
+    Raise the repair while a managed lock does not answer reads; clear it otherwise.
+
+    A lock read by a config flow is not managed until its entry is set up,
+    which raises the repair then; a flow that is abandoned leaves none.
+    """
     issue_id = per_lock_issue_id(UNANSWERED_ISSUE, lock_entity_id)
-    if read_health(hass, lock_entity_id) is not ReadHealth.UNANSWERED:
+    if read_health(
+        hass, lock_entity_id
+    ) is not ReadHealth.UNANSWERED or not _entries_managing(hass, lock_entity_id):
         async_delete_issue(hass, DOMAIN, issue_id)
         return
     async_create_issue(

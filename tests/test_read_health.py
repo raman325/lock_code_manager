@@ -196,6 +196,8 @@ async def test_removing_the_lock_forgets_it_and_clears_the_repair(
 
     assert _stored(entry) == {}
     assert _issue(hass, LOCK_2_ENTITY_ID) is None
+    # Added again, it starts from nothing rather than from the old verdict.
+    assert read_health(hass, LOCK_2_ENTITY_ID) is None
 
 
 async def test_diagnostics_say_whether_the_lock_answers(

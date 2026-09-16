@@ -68,6 +68,13 @@ class BaseMqttLock(BaseLock):
     # 60s API bound, which must always be the one to claim a silent slot.
     per_exchange_budget: ClassVar[float | None] = 70.0
 
+    # Whether a lock on this bridge may be one that cannot answer code reads
+    # at all, so that its silences can decide it is one. Off unless the
+    # protocol allows such a lock and the provider can tell one from a lock
+    # out of reach (``_async_device_responds``): Z-Wave, for one, requires
+    # locks to answer User Code Get, so a silent Z-Wave lock is always gone.
+    code_reads_may_be_unsupported: ClassVar[bool] = False
+
     # When a lock that does not answer reads was last asked again, on the
     # monotonic clock; ``None`` until it has been asked on this instance.
     _last_unanswered_probe: float | None = field(init=False, default=None)
@@ -319,7 +326,7 @@ class BaseMqttLock(BaseLock):
                     if health is None:
                         health = self._note_answered()
                     continue
-                if health is not None:
+                if health is not None or not self.code_reads_may_be_unsupported:
                     continue
                 silences += 1
                 if silences >= SILENT_READS_TO_CLASSIFY:

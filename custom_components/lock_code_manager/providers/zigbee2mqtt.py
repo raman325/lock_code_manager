@@ -130,6 +130,9 @@ def _z2m_status_says_nothing(user_info: dict[str, Any]) -> bool:
 class Zigbee2MQTTLock(BaseMqttLock):
     """Class to represent Zigbee2MQTT lock."""
 
+    # Zigbee door locks may implement PIN Set without PIN Get, and this
+    # provider asks the device itself whether it is there.
+    code_reads_may_be_unsupported: ClassVar[bool] = True
     # How long `_async_read_slot` waits for one slot before calling it silent.
     slot_read_timeout: ClassVar[float] = 10.0
     # Above the wait for one slot, so that bound always speaks first.

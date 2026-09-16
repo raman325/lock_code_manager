@@ -1470,3 +1470,17 @@ class TestUnansweredReads:
         with patch.object(lock, "_get_topic", return_value=None):
             assert await lock._async_device_responds() is False
         assert lock._heard_from_device == []
+
+    async def test_by_default_a_lock_responds_while_its_entity_is_available(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """The base answer, for a provider whose entity follows its device."""
+        lock = zigbee2mqtt_lock_connected
+        with patch.object(
+            lock, "async_is_device_available", AsyncMock(return_value=False)
+        ):
+            assert await BaseMqttLock._async_device_responds(lock) is False
+        with patch.object(
+            lock, "async_is_device_available", AsyncMock(return_value=True)
+        ):
+            assert await BaseMqttLock._async_device_responds(lock) is True
