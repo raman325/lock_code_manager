@@ -111,6 +111,11 @@ def _lock_diagnostic(
                 coordinator.last_update_success if coordinator else None
             ),
             "lock_unreachable": (coordinator.unreachable if coordinator else None),
+            # Slots whose last write the lock accepted without being able to
+            # confirm, and has not shown since.
+            "unconfirmed_writes": (
+                coordinator.unconfirmed_slots if coordinator else None
+            ),
             "data": coordinator_data,
         },
     }

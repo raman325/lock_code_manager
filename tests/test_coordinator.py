@@ -1464,6 +1464,7 @@ async def test_an_unverifiable_write_absent_at_the_deadline_is_kept_unconfirmed(
     assert out[pin_address(1)] == SlotCredential.unreadable()
     assert push_coordinator.is_verified(pin_address(1)) is True
     assert push_coordinator.take_failed_write(pin_address(1)) is False
+    assert push_coordinator.unconfirmed_slots == [1]
 
     # Later reads through the same path that still show nothing change nothing.
     out = push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})

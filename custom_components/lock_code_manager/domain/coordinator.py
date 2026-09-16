@@ -291,6 +291,11 @@ class LockUsercodeUpdateCoordinator(
             return observed
         return SlotCredential.unreadable()
 
+    @property
+    def unconfirmed_slots(self) -> list[int]:
+        """Return the slots whose last write stands without the lock showing it."""
+        return sorted(address.user_ref for address in self._unconfirmed)
+
     def is_verified(self, address: CredentialAddress) -> bool:
         """
         Return whether the address's credential is the lock's word.

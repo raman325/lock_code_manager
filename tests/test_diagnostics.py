@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import copy
+from datetime import timedelta
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from custom_components.lock_code_manager.const import CONF_SLOTS, DOMAIN
+from custom_components.lock_code_manager.const import (
+    CONF_SLOTS,
+    DOMAIN,
+    PENDING_WRITE_TTL,
+)
 from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
@@ -49,6 +54,7 @@ async def test_config_entry_diagnostics(
     assert lock_diag["entity_id"] == LOCK_1_ENTITY_ID
     assert "coordinator" in lock_diag
     assert "data" in lock_diag["coordinator"]
+    assert lock_diag["coordinator"]["unconfirmed_writes"] == []
 
     # PINs should be masked (not raw values)
     for code in lock_diag["coordinator"]["data"].values():
@@ -65,6 +71,27 @@ async def test_config_entry_diagnostics(
     # Configured PINs should also be masked
     if slot_diag["pin"] not in _SENTINEL_VALUES:
         assert slot_diag["pin"].startswith("pin#")
+
+
+async def test_diagnostics_name_writes_the_lock_could_not_confirm(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    freezer,
+) -> None:
+    """A slot trusted on the strength of its write is said to be so."""
+    coordinator = lock_code_manager_config_entry.runtime_data.locks[
+        LOCK_1_ENTITY_ID
+    ].coordinator
+    coordinator.record_write(pin_address(2), "5678", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    coordinator._apply_read({pin_address(2): SlotCredential.empty()})
+
+    result = await async_get_config_entry_diagnostics(
+        hass, lock_code_manager_config_entry
+    )
+
+    assert result["locks"][LOCK_1_ENTITY_ID]["coordinator"]["unconfirmed_writes"] == [2]
 
 
 async def test_device_diagnostics_slot_device(
