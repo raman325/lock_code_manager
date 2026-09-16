@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "46c836050ebe",
+  "strategy": "manual-commit",
+  "branch": "fix/unconfirmable-writes",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "tests/test_coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/46/c836050ebe/0/metadata.json",
+      "transcript": "/46/c836050ebe/0/full.jsonl",
+      "compact_transcript": "/46/c836050ebe/0/transcript.jsonl",
+      "content_hash": "/46/c836050ebe/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 8939,
+    "cache_read_tokens": 769370,
+    "output_tokens": 3290,
+    "api_call_count": 5
+  }
+}
