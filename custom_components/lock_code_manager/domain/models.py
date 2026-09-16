@@ -10,10 +10,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
 
 from .callbacks import EntityCallbackRegistry
 from .config import EntryConfig
@@ -138,7 +137,6 @@ class LockCodeManagerConfigEntryRuntimeData:
     """Runtime data for a Lock Code Manager config entry."""
 
     locks: dict[str, BaseLock] = field(default_factory=dict)
-    setup_tasks: dict[str | Platform, asyncio.Task[Any]] = field(default_factory=dict)
     callbacks: EntityCallbackRegistry = field(default_factory=EntityCallbackRegistry)
     # Cached typed view of the entry's current config; refreshed by the
     # update listener on every change. Readers should prefer this over
@@ -164,6 +162,14 @@ class LockCodeManagerConfigEntryRuntimeData:
     # ``settled`` while the pass that is building the entities is still
     # awaiting, which is precisely what waiting was supposed to prevent.
     passes_in_flight: int = 0
+    # Update passes run one at a time under this lock, and an unload takes it
+    # too, so a pass never sees a half-torn entry and an unload never
+    # overlaps a pass. Once ``unloading`` is set, a pass that gets the lock
+    # returns without touching anything; ``pass_task`` is the pass holding it,
+    # for an unload that has waited long enough to cancel it.
+    pass_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    unloading: bool = False
+    pass_task: asyncio.Task[None] | None = None
     # (lock, slot) pairs whose credential is to be left on the lock when the
     # slot leaves the configuration, set by the delete-user service and drained
     # by the update listener. A hand-off cannot be expressed in the new

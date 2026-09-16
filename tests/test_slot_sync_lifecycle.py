@@ -16,9 +16,6 @@ from custom_components.lock_code_manager.domain.credentials import (
     pin_address,
 )
 from custom_components.lock_code_manager.domain.models import SyncState
-from custom_components.lock_code_manager.domain.slot_coordinator import (
-    SlotEntityCoordinator,
-)
 
 from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 
@@ -59,21 +56,6 @@ async def test_a_stopped_coordinator_starts_no_manager(
     await coordinator.async_start_sync(lock)
 
     assert coordinator.sync_managers == []
-
-
-async def test_a_coordinator_the_entry_no_longer_runs_starts_no_manager(
-    hass: HomeAssistant, stopped_slot, lock_code_manager_config_entry
-) -> None:
-    """A pass that built its coordinator on runtime data the entry replaced starts nothing."""
-    _, lock = stopped_slot
-    stale = SlotEntityCoordinator(hass, lock_code_manager_config_entry, 1)
-    stale.async_start()
-    try:
-        await stale.async_start_sync(lock)
-    finally:
-        stale.async_stop()
-
-    assert stale.sync_managers == []
 
 
 async def test_sync_state_folds_over_every_credential(

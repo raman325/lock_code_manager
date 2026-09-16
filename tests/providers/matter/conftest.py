@@ -13,14 +13,16 @@ from matter_server.common.models import ServerInfoMessage
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.const import (
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
-    CONF_ENABLED,
     CONF_LOCKS,
-    CONF_NAME,
-    CONF_PIN,
     CONF_SLOTS,
     DOMAIN,
 )

@@ -82,8 +82,8 @@ from .const import (
     DOMAIN,
     EVENT_CREDENTIAL_USED,
     LEGACY_EVENT_PIN_USED,
+    PASS_DRAIN_SECONDS,
     PER_LOCK_ENTITY_SUFFIX,
-    PLATFORM_MAP,
     PLATFORMS,
     RENAMES_KEY,
     SERVICE_ADD_USER,
@@ -101,7 +101,6 @@ from .const import (
     STRATEGY_FILENAME,
     STRATEGY_PATH,
     SUBENTRY_TYPE_USER,
-    Platform,
 )
 from .domain.config import (
     EntryConfig,
@@ -1096,10 +1095,8 @@ async def async_unload_lock(
     lock_entity_ids = (
         list(runtime_data.locks) if lock_entity_ids is None else list(lock_entity_ids)
     )
-    # Popped before anything awaits, so a pass that reads the entry's locks
-    # meanwhile does not find these (one already holding an instance checks it
-    # is still the entry's before starting on it); the managers are then
-    # stopped together, one grace for all of them.
+    # Popped first, then the managers are stopped together: one grace for all
+    # of them.
     locks = {
         _lock_entity_id: lock
         for _lock_entity_id in lock_entity_ids
@@ -1124,6 +1121,19 @@ async def async_unload_lock(
 
 
 async def async_release_locks(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_ids: Iterable[str],
+) -> None:
+    """Take locks out of an entry for good, from outside an update pass."""
+    if (runtime_data := getattr(config_entry, "runtime_data", None)) is None:
+        await _async_release_locks(hass, config_entry, lock_entity_ids)
+        return
+    async with runtime_data.pass_lock:
+        await _async_release_locks(hass, config_entry, lock_entity_ids)
+
+
+async def _async_release_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     lock_entity_ids: Iterable[str],
@@ -1166,6 +1176,30 @@ async def async_release_locks(
     )
 
 
+async def _async_drain_passes(
+    runtime_data: LockCodeManagerConfigEntryRuntimeData,
+) -> None:
+    """
+    Take the pass lock for an unload, once the pass in flight is done.
+
+    Marked as unloading first, so the passes queued behind this one return
+    without acting. A pass still running after ``PASS_DRAIN_SECONDS`` is
+    cancelled rather than left to hold up a reload for good.
+    """
+    runtime_data.unloading = True
+    try:
+        async with asyncio.timeout(PASS_DRAIN_SECONDS):
+            await runtime_data.pass_lock.acquire()
+    except TimeoutError:
+        if (task := runtime_data.pass_task) is not None:
+            _LOGGER.warning(
+                "Update pass still running after %ss; cancelling it to unload",
+                PASS_DRAIN_SECONDS,
+            )
+            task.cancel()
+        await runtime_data.pass_lock.acquire()
+
+
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
@@ -1174,27 +1208,30 @@ async def async_unload_entry(
     runtime_data = config_entry.runtime_data
     callbacks = runtime_data.callbacks
 
-    # The slots go first, so no tick or entity of theirs reaches a lock once
-    # its teardown begins.
-    await _async_shutdown_slots(runtime_data, sorted(runtime_data.slot_coordinators))
+    await _async_drain_passes(runtime_data)
+    try:
+        # The slots go first, so no tick or entity of theirs reaches a lock
+        # once its teardown begins.
+        await _async_shutdown_slots(
+            runtime_data, sorted(runtime_data.slot_coordinators)
+        )
 
-    # Fire lock-removed callbacks so per-lock entities are notified
-    lock_ids = list(runtime_data.locks)
-    if lock_ids:
-        _LOGGER.debug("Unload: removing locks %s", lock_ids)
-        for lock_entity_id in lock_ids:
-            callbacks.invoke_lock_removed_handlers(lock_entity_id)
+        # Fire lock-removed callbacks so per-lock entities are notified
+        lock_ids = list(runtime_data.locks)
+        if lock_ids:
+            _LOGGER.debug("Unload: removing locks %s", lock_ids)
+            for lock_entity_id in lock_ids:
+                callbacks.invoke_lock_removed_handlers(lock_entity_id)
 
-    unload_ok = await hass.config_entries.async_unload_platforms(
-        config_entry,
-        {
-            *PLATFORMS,
-            *runtime_data.setup_tasks.keys(),
-        },
-    )
+        unload_ok = await hass.config_entries.async_unload_platforms(
+            config_entry,
+            PLATFORMS,
+        )
 
-    if unload_ok:
-        await async_unload_lock(hass, config_entry)
+        if unload_ok:
+            await async_unload_lock(hass, config_entry)
+    finally:
+        runtime_data.pass_lock.release()
 
     # Only clean up the strategy resource if no other Lock Code Manager
     # entries remain loaded. The current entry is still listed (in
@@ -1470,8 +1507,7 @@ async def _async_start_slot_sync(
     not there yet (a new lock on a slot whose standard entities this pass adds
     later) waits for them and resolves on a later tick; the in-sync sensors
     are views and read unknown until then. Started together, so no slot or
-    lock waits on another. A slot whose coordinator is gone belongs to an
-    unload that overtook this pass.
+    lock waits on another.
     """
     await asyncio.gather(
         *(
@@ -1490,10 +1526,9 @@ async def _async_shutdown_slots(
     """
     Take slots out of the entry's runtime: coordinators, managers, entities.
 
-    The coordinators are popped and stopped before anything awaits, so a
-    pass racing this one finds nothing to start a manager on; the entities
-    keep their own reference for unsubscribing. One raising stop must not
-    keep the rest running. The managers' stop and the entities' removal then
+    The coordinators are popped and stopped first, so nothing new starts on
+    them while the stops run; the entities keep their own reference for
+    unsubscribing. One raising stop must not keep the rest running. The managers' stop and the entities' removal then
     run together, so the grace an in-flight tick gets does not keep the
     entities alive for its length.
     """
@@ -1873,14 +1908,6 @@ async def _async_setup_new_locks(
                 result.lock.entity_id,
             )
 
-    # A lock a concurrent pass released while its setup was awaited is no
-    # longer this entry's; managers and entities for it would have no
-    # teardown left.
-    added_locks = [
-        lock
-        for lock in added_locks
-        if runtime_data.locks.get(lock.lock.entity_id) is lock
-    ]
     for lock in added_locks:
         for slot_num in new_config.slot_numbers:
             _LOGGER.debug(
@@ -1934,7 +1961,6 @@ async def async_update_listener(
 def _async_settle_options(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
-    config: EntryConfig,
 ) -> None:
     """
     Fold a staged options submission into the entry's own data.
@@ -1950,13 +1976,20 @@ def _async_settle_options(
     the configuration it had read -- undoing the half that had already landed.
     Those callers clear `options` themselves, so this is a no-op for them.
 
+    What is folded is what the entry stages now, read at the fold rather than
+    taken from the pass: passes run one at a time, so another submission may
+    have been staged while this pass worked, and folding the pass's own copy
+    over it would discard that submission before its pass ever saw it.
+
     ``to_dict()`` is what makes the stored data plain dicts rather than the
     read-only ``MappingProxyType`` wrappers ``EntryConfig`` uses internally,
     which Home Assistant's storage layer cannot serialize.
     """
     if config_entry.options:
         hass.config_entries.async_update_entry(
-            config_entry, data=config.to_dict(), options={}
+            config_entry,
+            data=EntryConfig.from_entry(config_entry).to_dict(),
+            options={},
         )
 
 
@@ -1965,13 +1998,38 @@ async def _async_apply_entry_update(
     config_entry: LockCodeManagerConfigEntry,
     old_config: EntryConfig | None = None,
 ) -> None:
+    """
+    Bring entities, devices and locks into line with the entry, one pass at a time.
+
+    Home Assistant schedules a pass per entry write without awaiting any, so
+    passes would otherwise overlap each other and the entry's unload. A pass
+    that gets the lock after an unload began finds nothing of its to do.
+    """
+    runtime_data = config_entry.runtime_data
+    async with runtime_data.pass_lock:
+        if runtime_data.unloading:
+            return
+        runtime_data.pass_task = asyncio.current_task()
+        try:
+            await _async_apply_entry_update_locked(
+                hass, config_entry, runtime_data, old_config
+            )
+        finally:
+            runtime_data.pass_task = None
+
+
+async def _async_apply_entry_update_locked(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    runtime_data: LockCodeManagerConfigEntryRuntimeData,
+    old_config: EntryConfig | None,
+) -> None:
     """Bring entities, devices and locks into line with the entry."""
     # Refresh the cached EntryConfig on EVERY update — including entity-driven
     # writes that go straight to data with empty options (e.g. a slot's name or
     # PIN being edited via its text entity). The early-return below skips the
     # entity-creation pass for those cases, but downstream readers via
     # runtime_data.config still need to see the current data.
-    runtime_data = config_entry.runtime_data
     # What the entry looked like when this pass started, captured before the
     # refresh below overwrites it. Users live in subentries and locks may be
     # on either side, so comparing the cached view against the current one
@@ -2003,7 +2061,7 @@ async def _async_apply_entry_update(
         # this return, and leaving it staged would strand it in `options` for
         # good -- read in preference to `data` for as long as the entry
         # exists, then cleared by the next write that touches the entry.
-        _async_settle_options(hass, config_entry, new_config)
+        _async_settle_options(hass, config_entry)
         return
 
     ent_reg = er.async_get(hass)
@@ -2011,28 +2069,6 @@ async def _async_apply_entry_update(
     entry_id = config_entry.entry_id
     entry_title = config_entry.title
     _LOGGER.info("%s (%s): Creating and/or updating entities", entry_id, entry_title)
-
-    setup_tasks = runtime_data.setup_tasks
-
-    new_slots = new_config.slots
-
-    # Set up any platforms that the new slot configs need that haven't
-    # already been set up. The number_of_uses deprecation cleanup runs
-    # in async_setup_entry before platform forwarding, not here.
-    for platform in {
-        platform
-        for slot_config in new_slots.values()
-        for key, platform in PLATFORM_MAP.items()
-        if key in slot_config
-        and platform not in setup_tasks
-        and platform != Platform.CALENDAR
-    }:
-        setup_tasks[platform] = config_entry.async_create_task(
-            hass,
-            hass.config_entries.async_forward_entry_setups(config_entry, [platform]),
-            "setup_new_platforms",
-        )
-    await asyncio.gather(*setup_tasks.values())
 
     slots_to_add = diff.slots_added
     slots_to_remove = diff.slots_removed
@@ -2099,7 +2135,7 @@ async def _async_apply_entry_update(
         _LOGGER.debug(
             "%s (%s): Removing locks %s", entry_id, entry_title, locks_to_remove
         )
-    await async_release_locks(hass, config_entry, locks_to_remove)
+    await _async_release_locks(hass, config_entry, locks_to_remove)
 
     # Create per-slot coordinators for new slots BEFORE setting up new
     # locks. _async_setup_new_locks awaits per-lock connection checks,
@@ -2150,7 +2186,7 @@ async def _async_apply_entry_update(
     _LOGGER.info(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
-    _async_settle_options(hass, config_entry, new_config)
+    _async_settle_options(hass, config_entry)
 
     # Notify Lovelace dashboards to re-render when structure changes
     # (slots or locks added/removed), so strategy-generated cards update
