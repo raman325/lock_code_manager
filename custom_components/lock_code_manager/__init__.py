@@ -1467,10 +1467,12 @@ async def _async_start_slot_sync(
     """
     Start sync managers together for ``locks`` on ``slot_nums``.
 
-    Started after the entity adders, so the first tick finds the entities it
-    reads; the in-sync sensors are views and read unknown until it does.
-    Started together, so no slot or lock waits on another. A slot whose
-    coordinator is gone belongs to an unload that overtook this pass.
+    Started after the per-lock entity adders. A manager whose entities are
+    not there yet (a new lock on a slot whose standard entities this pass adds
+    later) waits for them and resolves on a later tick; the in-sync sensors
+    are views and read unknown until then. Started together, so no slot or
+    lock waits on another. A slot whose coordinator is gone belongs to an
+    unload that overtook this pass.
     """
     await asyncio.gather(
         *(
