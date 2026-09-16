@@ -162,7 +162,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
     def _recompute(self) -> None:
         """Take the coordinator's fold as this sensor's state."""
         if self._slot_coordinator is None:
-            self._attr_is_on, self._attr_sync_status = None, None
             return
         self._attr_is_on, self._attr_sync_status = (
             self._slot_coordinator.sync_state_for(
@@ -178,8 +177,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     def _register_slot_coordinator_subscription(self) -> None:
         """Recompute on every change the coordinator reports, managers included."""
+        assert self._slot_coordinator is not None
         self.async_on_remove(
-            self._require_slot_coordinator().register_state_subscriber(self._fold)
+            self._slot_coordinator.register_state_subscriber(self._fold)
         )
 
     async def async_added_to_hass(self) -> None:
