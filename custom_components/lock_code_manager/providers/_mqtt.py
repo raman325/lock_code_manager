@@ -255,9 +255,12 @@ class BaseMqttLock(BaseLock):
           that exposes the PIN as write-only, firmware with PIN Set but no
           PIN Get. Their writes land, so silence is the answer rather than an
           outage. After ``SILENT_READS_TO_CLASSIFY`` silences in a row the
-          lock is recorded as not answering and the read stops there -- a
-          lock that times out each slot would otherwise cost minutes per read,
-          and allocation walks up to every slot it has. A read naming fewer
+          read stops -- a lock that times out each slot would otherwise cost
+          minutes per read, and allocation walks up to every slot it has --
+          and the lock is asked something it can always answer
+          (``_async_device_responds``). If it answers, it is recorded as not
+          answering code reads. If not, it is simply out of reach, which is
+          not a verdict about the lock, so the read fails as a disconnect. A read naming fewer
           slots asks again until it has heard that many silences, so an entry
           with one user classifies its lock as surely as one with ten.
         - **Recorded as not answering.** Nothing is asked except, at most once
@@ -320,6 +323,11 @@ class BaseMqttLock(BaseLock):
                     continue
                 silences += 1
                 if silences >= SILENT_READS_TO_CLASSIFY:
+                    if not await self._async_device_responds():
+                        raise LockDisconnected(
+                            f"{self.lock.entity_id}: answered none of "
+                            f"{silences} code reads, nor anything else"
+                        )
                     async_record_read_health(
                         self.hass, self.lock.entity_id, ReadHealth.UNANSWERED
                     )
@@ -347,6 +355,17 @@ class BaseMqttLock(BaseLock):
             )
             for slot_num in ordered
         ]
+
+    async def _async_device_responds(self) -> bool:
+        """
+        Return whether the lock answers something other than a code read.
+
+        What separates a lock that cannot report its codes from one that is
+        out of reach. The entity's availability is the default answer; a
+        provider whose entity stays available while its device is gone
+        should ask the device itself.
+        """
+        return await self.async_is_device_available()
 
     def _note_answered(self) -> ReadHealth:
         """Record that the lock answered a read, and return that it does."""

@@ -28,8 +28,10 @@ the config flow, which reads locks before its entry exists.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from enum import StrEnum
 import logging
+from types import MappingProxyType
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -229,7 +231,10 @@ def _async_store(
     Write an entry's read health, keeping its cached view in step.
 
     Other writers build the entry's data from that cached view, so a write
-    made only to the entry would be undone by the next one of theirs.
+    made only to the entry would be undone by the next one of theirs. Only
+    the internal section of the view is replaced: the rest is what the next
+    update pass diffs against, and refreshing it from the entry would hide a
+    change that pass has not applied yet.
     """
     internal: dict[str, Any] = dict(entry.data.get(CONF_INTERNAL) or {})
     if lock_reads:
@@ -241,4 +246,10 @@ def _async_store(
         data[CONF_INTERNAL] = internal
     hass.config_entries.async_update_entry(entry, data=data)
     if (runtime_data := getattr(entry, "runtime_data", None)) is not None:
-        runtime_data.config = EntryConfig.from_entry(entry)
+        cached = runtime_data.config
+        extra = {
+            key: value for key, value in cached.extra.items() if key != CONF_INTERNAL
+        }
+        if internal:
+            extra[CONF_INTERNAL] = internal
+        runtime_data.config = replace(cached, extra=MappingProxyType(extra))

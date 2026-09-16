@@ -605,7 +605,9 @@ async def _async_cleanup_strategy_resource(
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
-    hass.data.setdefault(DOMAIN, {"resources": False})
+    # Something may have created this before setup ran -- a config flow, a
+    # migration -- so the key is set on its own rather than with the dict.
+    hass.data.setdefault(DOMAIN, {}).setdefault("resources", False)
     hass.data[DOMAIN]["instance_id"] = await instance_id.async_get(hass)
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
@@ -983,7 +985,9 @@ async def async_setup_entry(
             f"Unable to start because lock {entity_id} can't be found"
         )
 
-    hass.data.setdefault(DOMAIN, {"resources": False})
+    # Something may have created this before setup ran -- a config flow, a
+    # migration -- so the key is set on its own rather than with the dict.
+    hass.data.setdefault(DOMAIN, {}).setdefault("resources", False)
     await _async_register_strategy_resource(hass)
 
     config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData(

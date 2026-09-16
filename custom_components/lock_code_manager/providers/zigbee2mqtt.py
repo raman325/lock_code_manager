@@ -138,6 +138,10 @@ class Zigbee2MQTTLock(BaseMqttLock):
     _pending_codes: dict[int, asyncio.Future[SlotCredential | None]] = field(
         init=False, default_factory=dict
     )
+    # Waiting for the device to say anything at all; see _async_device_responds.
+    _heard_from_device: list[asyncio.Future[None]] = field(
+        init=False, default_factory=list
+    )
     # Last projected state per slot from the most recent users payload;
     # the delta gate in _process_z2m_device_payload compares against this
     # so full-cached-state republications don't repush stale entries.
@@ -233,6 +237,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
     @callback
     def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
         """Apply device-topic JSON on the Home Assistant event loop."""
+        for waiter in self._heard_from_device:
+            if not waiter.done():
+                waiter.set_result(None)
         action = payload.get("action")
 
         # Handle lock/unlock actions with user identification (keypad PIN usage)
@@ -689,6 +696,29 @@ class Zigbee2MQTTLock(BaseMqttLock):
         finally:
             self._pending_codes.pop(slot_num, None)
         return credential
+
+    async def _async_device_responds(self) -> bool:
+        """
+        Ask the lock for its lock state and say whether anything came back.
+
+        Zigbee2MQTT keeps a lock's entity available while the device is out
+        of range unless availability tracking is turned on, which it is not
+        by default, so the entity cannot tell a lock that will not report its
+        codes from one that is gone. Every lock reports whether it is locked.
+        """
+        get_topic = self._get_topic("get")
+        if not get_topic:
+            return False
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._heard_from_device.append(waiter)
+        try:
+            await async_publish(self.hass, get_topic, json.dumps({"state": ""}))
+            await asyncio.wait_for(waiter, timeout=self.slot_read_timeout)
+        except HomeAssistantError, OSError, TimeoutError:
+            return False
+        finally:
+            self._heard_from_device.remove(waiter)
+        return True
 
     async def async_get_max_slot(self) -> int | None:
         """

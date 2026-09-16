@@ -65,6 +65,17 @@ def _fire_device_payload(hass: HomeAssistant, payload: dict[str, Any]) -> None:
     async_fire_mqtt_message(hass, Z2M_FULL_TOPIC, json.dumps(payload))
 
 
+def _answering_only_its_state(hass: HomeAssistant):
+    """Stand in for a lock that reports whether it is locked, and nothing else."""
+
+    def _respond(topic: str, payload: str, *args: Any, **kwargs: Any) -> Any:
+        if topic == Z2M_GET_TOPIC and "state" in json.loads(payload):
+            _fire_device_payload(hass, {"state": "LOCKED"})
+        return DEFAULT
+
+    return _respond
+
+
 class TestFullSetupLifecycle:
     """Verify LCM correctly discovers and sets up the Z2M provider."""
 
@@ -346,6 +357,7 @@ class TestAddingThroughTheUserInterface:
         occupied, so allocation walked every number the lock has -- ten
         seconds each -- and then refused for want of a free one.
         """
+        mqtt_mock.async_publish.side_effect = _answering_only_its_state(hass)
         with patch.object(Zigbee2MQTTLock, "slot_read_timeout", 0.01):
             result = await hass.config_entries.flow.async_init(
                 DOMAIN, context={"source": SOURCE_USER}
@@ -359,7 +371,11 @@ class TestAddingThroughTheUserInterface:
             await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
             result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 1})
             assert result["step_id"] == "code_slot"
-            asked = _published_payloads(mqtt_mock, Z2M_GET_TOPIC)
+            asked = [
+                payload
+                for payload in _published_payloads(mqtt_mock, Z2M_GET_TOPIC)
+                if "pin_code" in payload
+            ]
             assert len(asked) == SILENT_READS_TO_CLASSIFY
             assert read_health(hass, mqtt_lock_discovered.entity_id) is (
                 ReadHealth.UNANSWERED
@@ -391,7 +407,9 @@ class TestAddingThroughTheUserInterface:
         """A user status the lock will not give is not an answer to the read."""
 
         def not_supported(topic: str, payload: str, *args: Any, **kwargs: Any):
-            if topic == Z2M_GET_TOPIC:
+            if topic == Z2M_GET_TOPIC and "state" in json.loads(payload):
+                _fire_device_payload(hass, {"state": "LOCKED"})
+            elif topic == Z2M_GET_TOPIC:
                 slot = json.loads(payload)["pin_code"]["user"]
                 _fire_device_payload(
                     hass, {"users": {str(slot): {"status": "not_supported_255"}}}
@@ -414,4 +432,31 @@ class TestAddingThroughTheUserInterface:
         assert result["step_id"] == "code_slot"
         assert read_health(hass, mqtt_lock_discovered.entity_id) is (
             ReadHealth.UNANSWERED
+        )
+
+    async def test_a_lock_out_of_reach_is_not_mistaken_for_one_that_cannot_read(
+        self,
+        hass: HomeAssistant,
+        mqtt_lock_discovered,
+        mqtt_mock,
+    ) -> None:
+        """Nothing answered at all: the flow says it could not read the lock."""
+        with patch.object(Zigbee2MQTTLock, "slot_read_timeout", 0.01):
+            result = await hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": SOURCE_USER}
+            )
+            flow_id = result["flow_id"]
+            await async_configure_flow(
+                hass,
+                flow_id,
+                {CONF_NAME: "z2m", CONF_LOCKS: [mqtt_lock_discovered.entity_id]},
+            )
+            await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+            result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 1})
+
+        assert result["errors"] == {"base": "occupancy_unknown"}
+        assert read_health(hass, mqtt_lock_discovered.entity_id) is None
+        assert not ir.async_get(hass).async_get_issue(
+            DOMAIN,
+            per_lock_issue_id(UNANSWERED_ISSUE, mqtt_lock_discovered.entity_id),
         )

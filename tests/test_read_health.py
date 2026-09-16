@@ -6,13 +6,14 @@ import copy
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.const import CONF_ENABLED
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
 from custom_components.lock_code_manager.const import (
     CONF_INTERNAL,
     CONF_LOCKS,
+    CONF_SLOTS,
     DOMAIN,
     INTERNAL_LOCK_READS,
 )
@@ -244,3 +245,45 @@ async def test_setup_drops_verdicts_for_locks_the_entry_no_longer_has(
     await hass.async_block_till_done()
 
     assert _stored(entry) == {kept: ReadHealth.ANSWERED.value}
+
+
+async def test_a_verdict_does_not_hide_a_change_waiting_for_its_pass(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    The cached view is what the next pass diffs against.
+
+    A verdict stored while a change waits for the lock an earlier pass holds
+    must not refresh that view to include the change, or the pass that comes
+    for it finds nothing to do.
+    """
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    with_slot_3 = copy.deepcopy(BASE_CONFIG)
+    with_slot_3[CONF_SLOTS][3] = {CONF_NAME: "test3", CONF_PIN: "4321"}
+
+    await runtime_data.pass_lock.acquire()
+    try:
+        assert write_entry_config(hass, entry, with_slot_3)
+        async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    finally:
+        runtime_data.pass_lock.release()
+    await hass.async_block_till_done()
+
+    assert 3 in runtime_data.slot_coordinators
+
+
+async def test_setup_after_a_flow_still_prepares_its_own_data(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A config flow reads locks before setup runs, and creates the data first."""
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    assert "resources" not in hass.data[DOMAIN]
+
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "resources" in hass.data[DOMAIN]
+    assert await hass.config_entries.async_unload(entry.entry_id)
