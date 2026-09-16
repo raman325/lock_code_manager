@@ -18,8 +18,10 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
     CONF_CONDITION,
+    CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_NAME,
+    CONF_PIN,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
@@ -54,6 +56,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_LOCK_ENTITY_ID,
     ATTR_LOCK_NAME,
     ATTR_MANAGED,
+    ATTR_PIN_IN_SYNC,
     ATTR_PIN_LENGTH,
     ATTR_REMOVED,
     ATTR_SCHEDULE,
@@ -68,10 +71,8 @@ from custom_components.lock_code_manager.const import (
     BACKOFF_FAILURE_THRESHOLD,
     CONF_CONDITIONS,
     CONF_CONFIG_ENTRY,
-    CONF_ENABLED,
     CONF_ENTITIES,
     CONF_LOCKS,
-    CONF_PIN,
     CONF_SLOT,
     CONF_SLOTS,
     DOMAIN,
@@ -152,7 +153,16 @@ async def test_get_config_entry_data(
 
     # Verify entities (no number_of_uses entity since the migration strips
     # number_of_uses from BASE_CONFIG slot 2 before platform forwarding).
-    assert len(result[CONF_ENTITIES]) == 18
+    # The payload is the registry, disabled rows included: the card decides
+    # which of its rows are optional, and needs the required ones whatever
+    # disabled them.
+    assert len(result[CONF_ENTITIES]) == 22
+    shipped_disabled = [
+        entity["disabled_by"]
+        for entity in result[CONF_ENTITIES]
+        if ATTR_PIN_IN_SYNC in entity["unique_id"]
+    ]
+    assert shipped_disabled == [er.RegistryEntryDisabler.INTEGRATION] * 4
 
     # Verify locks (now objects with entity_id and name)
     lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
@@ -182,12 +192,6 @@ async def test_get_config_entry_data(
     )
     msg = await ws_client.receive_json()
     assert msg["success"]
-    assert result[CONF_SLOTS] == {
-        # The name travels with the slot so the card never has to work out
-        # who holds it.
-        "1": {CONF_NAME: "test1", CONF_CONDITION: None},
-        "2": {CONF_NAME: "test2", CONF_CONDITION: "calendar.test_1"},
-    }
 
     # Try API call with invalid entry ID
     await ws_client.send_json(

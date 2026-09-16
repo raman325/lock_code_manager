@@ -44,6 +44,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    pin_address,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_coordinator import (
@@ -932,15 +933,15 @@ async def test_poke_sync_managers_isolates_individual_failures(
 
     failing = _StandIn(raise_on_call=True)
     healthy = _StandIn(raise_on_call=False)
-    coordinator._sync_managers.add(failing)  # type: ignore[arg-type]
-    coordinator._sync_managers.add(healthy)  # type: ignore[arg-type]
+    coordinator._sync_managers[("lock.failing", pin_address(1))] = failing  # type: ignore[assignment]
+    coordinator._sync_managers[("lock.healthy", pin_address(1))] = healthy  # type: ignore[assignment]
 
     try:
         with caplog.at_level(logging.ERROR):
             coordinator._poke_sync_managers()
     finally:
-        coordinator._sync_managers.discard(failing)  # type: ignore[arg-type]
-        coordinator._sync_managers.discard(healthy)  # type: ignore[arg-type]
+        coordinator._sync_managers.pop(("lock.failing", pin_address(1)))
+        coordinator._sync_managers.pop(("lock.healthy", pin_address(1)))
 
     assert healthy_called["value"] is True
     assert any(
@@ -994,12 +995,9 @@ async def test_hook_dispatch_routes_each_entity_kind_to_the_right_collection(
     Pins the polymorphic ``_register_slot_coordinator_subscription`` hook
     for the slot-scoped entities. A regression that broke either
     subclass's override would route the entity into the wrong
-    collection. (In-sync per-lock entities go through a separate
-    lock-slot adder path that fires before the slot coordinator exists
-    on initial setup -- a pre-existing D-design limitation; their
-    ``register_sync_manager`` registration is exercised only via the
-    options-flow ``_async_setup_new_locks`` path, covered by the slot
-    add/remove lifecycle tests.)
+    collection. (The in-sync per-lock sensor subscribes to its lock's sync
+    changes instead; its managers are started by the coordinator itself,
+    covered by the slot add/remove lifecycle tests.)
     """
     runtime_data = lock_code_manager_config_entry.runtime_data
     coordinator = runtime_data.slot_coordinators[1]

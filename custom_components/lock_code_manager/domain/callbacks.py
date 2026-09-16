@@ -186,10 +186,8 @@ class EntityCallbackRegistry:
         """
         Invoke entity removal callbacks for an entire slot.
 
-        Removers are independent and run concurrently: each may stop a sync
-        manager, and on the slot-removal path those stops are not gathered
-        anywhere else, so in sequence a slot on several unanswering locks
-        would pay one stop grace per lock.
+        Removers are independent and run concurrently; one that raises is
+        logged and does not keep the rest from running.
         """
         prefix = f"{slot_num}|"
         to_remove = [uid for uid in self.remove_entity if uid.startswith(prefix)]

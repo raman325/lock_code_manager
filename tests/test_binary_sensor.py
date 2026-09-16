@@ -37,6 +37,9 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
+    ATTR_IN_SYNC,
+    ATTR_PIN_IN_SYNC,
+    ATTR_SYNC_STATUS,
     CONF_LOCKS,
     CONF_SLOTS,
     CONFIRM_READ_INTERVAL,
@@ -45,6 +48,7 @@ from custom_components.lock_code_manager.const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
@@ -73,9 +77,13 @@ from .common import (
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
     async_blocking_stub,
+    async_disable_and_reload,
+    async_enable_and_reload,
     in_sync_entity_id,
+    pin_in_sync_entity_id,
     short_stop_grace,
     slot_entity_id,
+    sync_manager_of,
     write_entry_config,
 )
 from .conftest import (
@@ -84,6 +92,7 @@ from .conftest import (
     async_trigger_sync_tick,
     async_trigger_sync_tick_for_manager,
     get_in_sync_entity_obj,
+    sync_manager_for,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -286,7 +295,7 @@ async def test_startup_detects_out_of_sync_code(
 
     # Force out-of-sync state: reset code on the lock to mismatch
     lock_provider.codes[1] = "1234"
-    in_sync_entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
+    sync_manager_of(in_sync_entity_obj)._state = SyncState.OUT_OF_SYNC
 
     # Trigger a tick to perform the sync operation
     await async_trigger_sync_tick(hass, in_sync_entity)
@@ -353,7 +362,10 @@ async def test_startup_out_of_sync_slots_sync_once(
     # Trigger ticks to perform sync operations.
     # Each slot needs up to two ticks: one to load initial state (if not already
     # loaded during async_start), and another to perform the actual sync.
-    for mgr in (in_sync_entity_obj_1._sync_manager, in_sync_entity_obj_2._sync_manager):
+    for mgr in (
+        sync_manager_of(in_sync_entity_obj_1),
+        sync_manager_of(in_sync_entity_obj_2),
+    ):
         await async_trigger_sync_tick_for_manager(hass, mgr)
         # Second tick needed if first tick only did initial state load
         await async_trigger_sync_tick_for_manager(hass, mgr)
@@ -365,7 +377,10 @@ async def test_startup_out_of_sync_slots_sync_once(
     assert (2, "0000", "test2") in set_calls
 
     # Further ticks should not issue extra operations once in sync
-    for mgr in (in_sync_entity_obj_1._sync_manager, in_sync_entity_obj_2._sync_manager):
+    for mgr in (
+        sync_manager_of(in_sync_entity_obj_1),
+        sync_manager_of(in_sync_entity_obj_2),
+    ):
         await async_trigger_sync_tick_for_manager(hass, mgr)
 
     assert len(service_calls["set_usercode"]) == 2
@@ -412,7 +427,7 @@ async def test_startup_waits_for_valid_active_state(
     in_sync_entity_obj = get_in_sync_entity_obj(hass, in_sync_entity)
 
     # Reset to simulate pre-initial-load state
-    in_sync_entity_obj._sync_manager._state = SyncState.LOADING
+    sync_manager_of(in_sync_entity_obj)._state = SyncState.LOADING
 
     # Set the active entity to unavailable
     hass.states.async_set(active_entity_id, STATE_UNAVAILABLE)
@@ -420,11 +435,11 @@ async def test_startup_waits_for_valid_active_state(
 
     # Trigger tick with unavailable active state
     await async_trigger_sync_tick_for_manager(
-        hass, in_sync_entity_obj._sync_manager, set_dirty=False
+        hass, sync_manager_of(in_sync_entity_obj), set_dirty=False
     )
 
     # Verify initial state is still not loaded (still LOADING)
-    assert in_sync_entity_obj._sync_manager._state is SyncState.LOADING
+    assert sync_manager_of(in_sync_entity_obj)._state is SyncState.LOADING
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
@@ -438,18 +453,18 @@ async def test_in_sync_waits_for_missing_pin_state(
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
     # Simulate pre-initialization state
-    in_sync_entity_obj._sync_manager._state = SyncState.LOADING
+    sync_manager_of(in_sync_entity_obj)._state = SyncState.LOADING
 
     # Remove the PIN entity state so _ensure_entities_ready() fails
     hass.states.async_remove(SLOT_1_PIN_ENTITY)
     await hass.async_block_till_done()
 
     await async_trigger_sync_tick_for_manager(
-        hass, in_sync_entity_obj._sync_manager, set_dirty=False
+        hass, sync_manager_of(in_sync_entity_obj), set_dirty=False
     )
 
     # Entity should still be waiting on initial state
-    assert in_sync_entity_obj._sync_manager._state is SyncState.LOADING, (
+    assert sync_manager_of(in_sync_entity_obj)._state is SyncState.LOADING, (
         "In-sync sensor should not initialize when PIN state is missing"
     )
 
@@ -458,10 +473,10 @@ async def test_in_sync_waits_for_missing_pin_state(
     await hass.async_block_till_done()
 
     await async_trigger_sync_tick_for_manager(
-        hass, in_sync_entity_obj._sync_manager, set_dirty=False
+        hass, sync_manager_of(in_sync_entity_obj), set_dirty=False
     )
 
-    assert in_sync_entity_obj._sync_manager._state is SyncState.IN_SYNC, (
+    assert sync_manager_of(in_sync_entity_obj)._state is SyncState.IN_SYNC, (
         "In-sync sensor should initialize once dependent states are available"
     )
 
@@ -545,7 +560,7 @@ async def test_handles_disconnected_lock_on_set(
 
     # Trigger a tick - sync will fail due to disconnected lock
     await async_trigger_sync_tick_for_manager(
-        hass, in_sync_entity_obj._sync_manager, set_dirty=False
+        hass, sync_manager_of(in_sync_entity_obj), set_dirty=False
     )
 
     # Synced state should now be off (out of sync)
@@ -561,13 +576,13 @@ async def test_handles_disconnected_lock_on_set(
     await hass.async_block_till_done()
 
     # Directly trigger the tick to perform sync
-    await in_sync_entity_obj._sync_manager._async_tick()
+    await sync_manager_of(in_sync_entity_obj)._async_tick()
     await hass.async_block_till_done()
 
     assert lock_provider.codes[1] == "9999"
 
     # Trigger another tick to detect "back in sync"
-    await in_sync_entity_obj._sync_manager._async_tick()
+    await sync_manager_of(in_sync_entity_obj)._async_tick()
     await hass.async_block_till_done()
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
@@ -611,7 +626,7 @@ async def test_handles_disconnected_lock_on_clear(
 
     # Directly trigger the update state method to perform sync
     await async_trigger_sync_tick_for_manager(
-        hass, in_sync_entity_obj._sync_manager, set_dirty=False
+        hass, sync_manager_of(in_sync_entity_obj), set_dirty=False
     )
 
     assert lock_provider.codes.get(1) is None
@@ -839,7 +854,7 @@ async def test_sync_disables_slot_on_duplicate_code(
         await hass.async_block_till_done()
 
         # Trigger tick to attempt sync (will fail with DuplicateCodeError)
-        await in_sync_entity_obj._sync_manager._async_tick()
+        await sync_manager_of(in_sync_entity_obj)._async_tick()
         await hass.async_block_till_done()
 
     # Slot should be disabled (enabled switch turned off)
@@ -876,7 +891,7 @@ async def test_sync_attempts_exceeded_suspends_slot(
     )
     await hass.async_block_till_done()
 
-    sync_mgr = in_sync_entity_obj._sync_manager
+    sync_mgr = sync_manager_of(in_sync_entity_obj)
 
     # Pre-load the breaker to simulate repeated failures on the same PIN.
     # The PIN change above will have set _breaker_reset_requested via
@@ -933,15 +948,15 @@ async def test_sync_tracker_resets_when_back_in_sync(
 
     # Tick performs sync → coordinator refreshes → detects back in sync
     # and resets tracker immediately
-    in_sync_entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
-    await in_sync_entity_obj._sync_manager._async_tick()
+    sync_manager_of(in_sync_entity_obj)._state = SyncState.OUT_OF_SYNC
+    await sync_manager_of(in_sync_entity_obj)._async_tick()
     await hass.async_block_till_done()
 
     # Slot should be back in sync after the sync operation, and the
     # tracker should not be at the circuit breaker threshold
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
-    assert not in_sync_entity_obj._sync_manager._slot_breaker.tripped
+    assert not sync_manager_of(in_sync_entity_obj)._slot_breaker.tripped
 
 
 async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
@@ -958,7 +973,7 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
 
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    sync_mgr = in_sync_entity_obj._sync_manager
+    sync_mgr = sync_manager_of(in_sync_entity_obj)
 
     # Verify in sync
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
@@ -1007,13 +1022,13 @@ async def test_sync_tracker_expired_window_resets(
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
     # Set up breaker with max attempts but with an expired window
-    in_sync_entity_obj._sync_manager._slot_breaker._failure_count = MAX_SYNC_ATTEMPTS
-    in_sync_entity_obj._sync_manager._slot_breaker._first_failure = (
+    sync_manager_of(in_sync_entity_obj)._slot_breaker._failure_count = MAX_SYNC_ATTEMPTS
+    sync_manager_of(in_sync_entity_obj)._slot_breaker._first_failure = (
         dt_util.utcnow() - SYNC_ATTEMPT_WINDOW * 2
     )
 
     # tripped should be False since the breaches fall outside the window
-    assert not in_sync_entity_obj._sync_manager._slot_breaker.tripped
+    assert not sync_manager_of(in_sync_entity_obj)._slot_breaker.tripped
 
 
 async def test_clear_operation_does_not_increment_tracker(
@@ -1029,7 +1044,7 @@ async def test_clear_operation_does_not_increment_tracker(
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
     # Verify starting at zero
-    assert in_sync_entity_obj._sync_manager._slot_breaker.failure_count == 0
+    assert sync_manager_of(in_sync_entity_obj)._slot_breaker.failure_count == 0
 
     # Disable slot to trigger a clear sync cycle
     await hass.services.async_call(
@@ -1042,7 +1057,7 @@ async def test_clear_operation_does_not_increment_tracker(
     await _async_force_sync_cycle(hass, coordinator)
 
     # Clear operation should NOT have incremented the tracker
-    assert in_sync_entity_obj._sync_manager._slot_breaker.failure_count == 0
+    assert sync_manager_of(in_sync_entity_obj)._slot_breaker.failure_count == 0
 
 
 async def test_invalid_active_state_during_initial_load(
@@ -1054,8 +1069,8 @@ async def test_invalid_active_state_during_initial_load(
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
     # Reset to simulate pre-initial-load state
-    in_sync_entity_obj._sync_manager._state = SyncState.LOADING
-    in_sync_entity_obj._sync_manager._logged_invalid_state = False
+    sync_manager_of(in_sync_entity_obj)._state = SyncState.LOADING
+    sync_manager_of(in_sync_entity_obj)._logged_invalid_state = False
 
     # Set active entity to an invalid state (not ON or OFF)
     hass.states.async_set(SLOT_1_ACTIVE_ENTITY, "unknown_invalid_state")
@@ -1063,14 +1078,14 @@ async def test_invalid_active_state_during_initial_load(
 
     # Trigger multiple ticks — should keep retrying without crashing
     for _ in range(5):
-        await in_sync_entity_obj._sync_manager._async_tick()
+        await sync_manager_of(in_sync_entity_obj)._async_tick()
         await hass.async_block_till_done()
 
     # Warning logged once
-    assert in_sync_entity_obj._sync_manager._logged_invalid_state is True
+    assert sync_manager_of(in_sync_entity_obj)._logged_invalid_state is True
 
     # Initial state is still not loaded due to invalid state
-    assert in_sync_entity_obj._sync_manager._state is SyncState.LOADING
+    assert sync_manager_of(in_sync_entity_obj)._state is SyncState.LOADING
 
 
 async def test_unexpected_error_during_sync_suspends_slot(
@@ -1089,22 +1104,22 @@ async def test_unexpected_error_during_sync_suspends_slot(
         raise ValueError("Unexpected programming error")
 
     with patch.object(
-        in_sync_entity_obj._sync_manager,
+        sync_manager_of(in_sync_entity_obj),
         "_perform_sync",
         new=mock_perform_sync_unexpected_error,
     ):
         # Force out-of-sync state
-        in_sync_entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
-        in_sync_entity_obj._sync_manager._coordinator.data[pin_address(1)] = (
+        sync_manager_of(in_sync_entity_obj)._state = SyncState.OUT_OF_SYNC
+        sync_manager_of(in_sync_entity_obj)._coordinator.data[pin_address(1)] = (
             SlotCredential.known("wrong_code")
         )
 
         # Trigger tick to attempt sync (which will fail with unexpected error)
-        await in_sync_entity_obj._sync_manager._async_tick()
+        await sync_manager_of(in_sync_entity_obj)._async_tick()
         await hass.async_block_till_done()
 
         # Verify that the slot was suspended without marking the lock unreachable
-        assert in_sync_entity_obj._sync_manager._state is SyncState.SUSPENDED
+        assert sync_manager_of(in_sync_entity_obj)._state is SyncState.SUSPENDED
         assert coordinator.unreachable is False
 
 
@@ -1115,7 +1130,7 @@ async def test_sync_manager_handles_string_slot_num(
 ):
     """Test sync manager normalizes string slot keys to int before coordinator lookup."""
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    manager = in_sync_entity_obj._sync_manager
+    manager = sync_manager_of(in_sync_entity_obj)
 
     assert isinstance(manager._slot_num, int)
     assert pin_address(manager._slot_num) in manager._coordinator.data
@@ -1289,8 +1304,8 @@ async def test_slot_suspension_isolated_from_other_slots(
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
 
-    mgr_1 = get_in_sync_entity_obj(hass, in_sync_slot_1)._sync_manager
-    mgr_2 = get_in_sync_entity_obj(hass, in_sync_slot_2)._sync_manager
+    mgr_1 = sync_manager_for(hass, in_sync_slot_1)
+    mgr_2 = sync_manager_for(hass, in_sync_slot_2)
 
     # Only slot 2's sync hits an unexpected error; slot 1 is left in sync.
     with patch.object(
@@ -1480,7 +1495,7 @@ async def test_sync_manager_handles_code_sensor_unknown_state_on_startup(
 
     in_sync_entity = in_sync_entity_id(hass, config_entry, 1)
     entity_obj = get_in_sync_entity_obj(hass, in_sync_entity)
-    mgr = entity_obj._sync_manager
+    mgr = sync_manager_of(entity_obj)
 
     # Sync manager should still be in LOADING since code sensor has no data
     assert mgr._state is SyncState.LOADING, f"Expected LOADING state, got {mgr._state}"
@@ -1528,7 +1543,7 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
     coordinator = lock_provider.coordinator
     assert coordinator is not None
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    mgr = in_sync_entity_obj._sync_manager
+    mgr = sync_manager_of(in_sync_entity_obj)
 
     # Verify starting in sync
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
@@ -1614,7 +1629,7 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
 
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     in_sync_entity_obj = get_in_sync_entity_obj(hass, in_sync_entity)
-    mgr = in_sync_entity_obj._sync_manager
+    mgr = sync_manager_of(in_sync_entity_obj)
 
     # Make slot out of sync
     lock_provider.codes[1] = "1234"
@@ -1665,7 +1680,7 @@ async def test_pin_change_during_sync_uses_snapshot(
     coordinator = lock_provider.coordinator
     assert coordinator is not None
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    mgr = in_sync_entity_obj._sync_manager
+    mgr = sync_manager_of(in_sync_entity_obj)
 
     # Make the lock code different so sync needs to set "1234"
     lock_provider.codes[1] = "0000"
@@ -1769,8 +1784,8 @@ async def test_multiple_slots_sync_sequentially_not_concurrently(
 
     entity_obj_1 = get_in_sync_entity_obj(hass, in_sync_slot_1)
     entity_obj_2 = get_in_sync_entity_obj(hass, in_sync_slot_2)
-    mgr_1 = entity_obj_1._sync_manager
-    mgr_2 = entity_obj_2._sync_manager
+    mgr_1 = sync_manager_of(entity_obj_1)
+    mgr_2 = sync_manager_of(entity_obj_2)
 
     # Make both slots out of sync
     lock_provider.codes[1] = "0000"
@@ -1844,7 +1859,7 @@ async def test_slot_disabled_during_sync_resolves_correctly(
     coordinator = lock_provider.coordinator
     assert coordinator is not None
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    mgr = in_sync_entity_obj._sync_manager
+    mgr = sync_manager_of(in_sync_entity_obj)
 
     # Verify initially in sync with code on the lock
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
@@ -1908,7 +1923,7 @@ async def test_rapid_coordinator_updates_coalesce(
     coordinator = lock_provider.coordinator
     assert coordinator is not None
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    mgr = in_sync_entity_obj._sync_manager
+    mgr = sync_manager_of(in_sync_entity_obj)
 
     # Verify starting in sync
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
@@ -2325,7 +2340,7 @@ async def test_confirmation_read_failure_leaves_the_write_pending_and_uncharged(
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
-    mgr = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+    mgr = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
 
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -2367,7 +2382,7 @@ async def test_the_next_confirmation_read_settles_a_pending_write_without_a_seco
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
-    mgr = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+    mgr = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
 
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -2402,3 +2417,101 @@ async def test_the_next_confirmation_read_settles_a_pending_write_without_a_seco
 
     assert mgr._state is SyncState.IN_SYNC
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
+
+
+async def test_disabling_the_in_sync_sensor_does_not_stop_the_sync(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The sensors are views: the manager runs whether or not anyone watches it."""
+    entry = lock_code_manager_config_entry
+    aggregate_id = in_sync_entity_id(hass, entry, 1)
+    await async_disable_and_reload(hass, entry, aggregate_id)
+    manager = entry.runtime_data.slot_coordinators[1].sync_manager(
+        LOCK_1_ENTITY_ID, pin_address(1)
+    )
+    assert manager is not None
+    assert manager._started
+
+
+@pytest.mark.parametrize("key", [ATTR_IN_SYNC, ATTR_PIN_IN_SYNC])
+async def test_an_in_sync_sensor_added_without_a_slot_coordinator_reads_unknown(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    key: str,
+) -> None:
+    """With no coordinator to fold, the sensor has nothing to say and says so."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    assert 99 not in runtime_data.slot_coordinators
+    ent_reg = er.async_get(hass)
+    # Registered enabled ahead of time, so the platform adds the sensor
+    # whatever its class default.
+    unique_id = build_slot_unique_id(entry.entry_id, 99, key, LOCK_1_ENTITY_ID)
+    ent_reg.async_get_or_create(
+        BINARY_SENSOR_DOMAIN, DOMAIN, unique_id, config_entry=entry, disabled_by=None
+    )
+
+    runtime_data.callbacks.invoke_lock_slot_adders(
+        runtime_data.locks[LOCK_1_ENTITY_ID], 99, ent_reg
+    )
+    await hass.async_block_till_done()
+
+    entity_id = ent_reg.async_get_entity_id(BINARY_SENSOR_DOMAIN, DOMAIN, unique_id)
+    assert entity_id is not None
+    # Added without raising; with no manager behind it there is nothing to
+    # fold, and no credential at that slot to be available for.
+    entity_obj = get_in_sync_entity_obj(hass, entity_id)
+    assert entity_obj.is_on is None
+    assert entity_obj.extra_state_attributes == {}
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == STATE_UNAVAILABLE
+
+
+async def test_pin_in_sync_is_registered_but_disabled_by_default(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The per-credential sensor exists for whoever wants the split, off until asked."""
+    entity_id = pin_in_sync_entity_id(hass, lock_code_manager_config_entry, 1)
+    entry = er.async_get(hass).async_get(entity_id)
+    assert entry is not None
+    assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.states.get(entity_id) is None
+
+
+async def test_pin_in_sync_mirrors_the_manager_once_enabled(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Enabled, the PIN sensor reads exactly what the aggregate reads for a PIN-only user."""
+    entry = lock_code_manager_config_entry
+    pin_entity_id = pin_in_sync_entity_id(hass, entry, 1)
+    await async_enable_and_reload(hass, entry, pin_entity_id)
+
+    aggregate_id = in_sync_entity_id(hass, entry, 1)
+    await async_initial_tick(hass, aggregate_id)
+    aggregate = hass.states.get(aggregate_id)
+    pin = hass.states.get(pin_entity_id)
+    assert aggregate is not None and pin is not None
+    assert pin.state == aggregate.state == STATE_ON
+    assert pin.attributes[ATTR_SYNC_STATUS] == aggregate.attributes[ATTR_SYNC_STATUS]
+
+    # A change the manager publishes reaches both views.
+    manager = sync_manager_of(get_in_sync_entity_obj(hass, aggregate_id))
+    lock_provider = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock_provider.codes[1] = "0000"
+    await lock_provider.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    with patch.object(manager, "_perform_sync", side_effect=LockOperationFailed("no")):
+        await async_trigger_sync_tick_for_manager(hass, manager)
+    aggregate = hass.states.get(aggregate_id)
+    pin = hass.states.get(pin_entity_id)
+    assert aggregate is not None and pin is not None
+    assert pin.state == aggregate.state == STATE_OFF
+    assert pin.attributes[ATTR_SYNC_STATUS] == aggregate.attributes[ATTR_SYNC_STATUS]

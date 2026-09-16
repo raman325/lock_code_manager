@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
+from homeassistant.const import Platform
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
-PLATFORMS = (Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR)
+PLATFORMS = (
+    Platform.BINARY_SENSOR,
+    Platform.EVENT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TEXT,
+)
 
 FILES_URL_BASE = f"/{DOMAIN}_files"
 STRATEGY_FILENAME = "generated/lock-code-manager.js"
@@ -50,12 +56,6 @@ ATTR_MANAGED = "managed"
 # Any entity of the user being addressed. Distinct from ``entity_id``,
 # which on the condition commands means the condition entity itself.
 ATTR_USER_ENTITY_ID = "user_entity_id"
-
-# What a per-lock entity is called after the lock's name. Mirrors the
-# ``entity`` names in strings.json, which the migration cannot read: it has to
-# build the id the running integration would generate. test_frontend_contract
-# holds the two together.
-PER_LOCK_ENTITY_SUFFIX = {"code": "PIN", "in_sync": "in sync"}
 
 # One repair for the whole entity-ID rename, however many entries moved.
 ENTITY_IDS_RENAMED_ISSUE = "entity_ids_renamed"
@@ -169,6 +169,37 @@ ATTR_CODE = "code"
 ATTR_IN_SYNC = "in_sync"
 ATTR_SYNC_STATUS = "sync_status"
 
+
+def credential_in_sync_key(credential_type: str) -> str:
+    """Return the entity key of the in-sync sensor for one credential type."""
+    return f"{credential_type}_{ATTR_IN_SYNC}"
+
+
+# How each credential type is named in an entity's name, keyed by the type's
+# value (strings, so this module stays below the domain package). The
+# frontend carries the same map for its card rows; test_frontend_contract
+# holds the two together and to the managed credential types.
+CREDENTIAL_LABELS = {"pin": "PIN"}
+
+ATTR_PIN_IN_SYNC = credential_in_sync_key("pin")
+
+# What a per-lock entity is called after the lock's name. Mirrors the
+# ``entity`` names in strings.json, which the migration cannot read: it has to
+# build the id the running integration would generate. test_frontend_contract
+# holds the two together.
+PER_LOCK_ENTITY_SUFFIX = {
+    ATTR_CODE: "PIN",
+    ATTR_IN_SYNC: "in sync",
+    **{
+        credential_in_sync_key(credential_type): f"{label} in sync"
+        for credential_type, label in CREDENTIAL_LABELS.items()
+    },
+}
+
+# The entity keys whose state is a credential: redacted from diagnostics. A
+# value entity is keyed by its credential type.
+SENSITIVE_ENTITY_KEYS = frozenset({ATTR_CODE, *CREDENTIAL_LABELS})
+
 # Code slot properties
 CONF_CALENDAR = "calendar"
 
@@ -238,11 +269,3 @@ DEFAULT_NUM_USERS = 3
 # Bounds only the SEARCH: a number a user already holds above it keeps
 # working, and a lock reporting a larger range is believed up to it.
 MAX_SEARCHED_SLOT = 255
-
-PLATFORM_MAP = {
-    CONF_CALENDAR: Platform.CALENDAR,
-    CONF_ENABLED: Platform.SWITCH,
-    CONF_NAME: Platform.TEXT,
-    CONF_PIN: Platform.TEXT,
-    EVENT_CREDENTIAL_USED: Platform.EVENT,
-}

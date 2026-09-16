@@ -10,10 +10,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
 
 from .callbacks import EntityCallbackRegistry
 from .config import EntryConfig
@@ -21,7 +20,6 @@ from .config import EntryConfig
 if TYPE_CHECKING:
     from ..providers import BaseLock
     from .slot_coordinator import SlotEntityCoordinator
-    from .sync import SlotSyncManager
 
 
 class SyncState(StrEnum):
@@ -139,23 +137,17 @@ class LockCodeManagerConfigEntryRuntimeData:
     """Runtime data for a Lock Code Manager config entry."""
 
     locks: dict[str, BaseLock] = field(default_factory=dict)
-    setup_tasks: dict[str | Platform, asyncio.Task[Any]] = field(default_factory=dict)
     callbacks: EntityCallbackRegistry = field(default_factory=EntityCallbackRegistry)
     # Cached typed view of the entry's current config; refreshed by the
     # update listener on every change. Readers should prefer this over
     # parsing config_entry.data/options directly. See data.EntryConfig.
     config: EntryConfig = field(default_factory=EntryConfig.empty)
-    # Active per-slot sync managers, registered by the in-sync binary sensor
-    # on add and discarded on remove. Tracked so async_unload_entry can stop
-    # them up front -- before lock-removed callbacks fire and before platforms
-    # unload -- so an in-flight tick cannot keep running against torn-down
-    # state.
-    sync_managers: set[SlotSyncManager] = field(default_factory=set)
+    # Per-slot coordinators; each owns that slot's sync managers.
     slot_coordinators: dict[int, SlotEntityCoordinator] = field(default_factory=dict)
     # True once the options update listener has been registered for this
     # entry. Guards against stacking when _setup_entry_after_start runs more
     # than once (for example, a reload racing with EVENT_HOMEASSISTANT_STARTED).
-    update_listener_registered: bool = False
+    post_start_setup_done: bool = False
     # Set whenever the update listener finishes a pass. Home Assistant runs
     # update listeners as a task rather than awaiting them, so a caller that
     # writes to the entry returns before the entry has reacted -- before the
@@ -170,6 +162,12 @@ class LockCodeManagerConfigEntryRuntimeData:
     # ``settled`` while the pass that is building the entities is still
     # awaiting, which is precisely what waiting was supposed to prevent.
     passes_in_flight: int = 0
+    # Update passes run one at a time under this lock, and an unload takes it
+    # too, so a pass never sees a half-torn entry and an unload never
+    # overlaps a pass. Once ``unloading`` is set, a pass that gets the lock
+    # returns without touching anything.
+    pass_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    unloading: bool = False
     # (lock, slot) pairs whose credential is to be left on the lock when the
     # slot leaves the configuration, set by the delete-user service and drained
     # by the update listener. A hand-off cannot be expressed in the new

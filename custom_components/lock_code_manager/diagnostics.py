@@ -8,8 +8,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import DOMAIN
-from .domain.config import build_slot_device_identifier
+from .const import DOMAIN, SENSITIVE_ENTITY_KEYS
+from .domain.config import build_slot_device_identifier, slot_unique_id_key
 from .domain.credentials import pin_address
 from .domain.models import SlotCode, SlotCredential
 from .domain.queries import get_entry_config
@@ -36,14 +36,11 @@ def _mask_code(
     return mask_pin(label, slot_num, instance_id)
 
 
-_SENSITIVE_UNIQUE_ID_MARKERS = ("|pin", "|code")
-
-
 def _is_sensitive(entry: er.RegistryEntry) -> bool:
-    """Return True if the entity may expose a PIN or code in its state."""
-    uid = entry.unique_id or ""
-    return entry.platform == DOMAIN and any(
-        m in uid for m in _SENSITIVE_UNIQUE_ID_MARKERS
+    """Return True if the entity may expose a credential in its state."""
+    return (
+        entry.platform == DOMAIN
+        and slot_unique_id_key(entry.unique_id or "") in SENSITIVE_ENTITY_KEYS
     )
 
 

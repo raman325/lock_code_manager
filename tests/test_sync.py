@@ -50,9 +50,11 @@ from .common import (
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_IN_SYNC_ENTITY,
     async_blocking_stub,
+    recording_listener,
     short_stop_grace,
+    sync_manager_of,
 )
-from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj
+from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj, sync_manager_for
 
 
 def _slot(
@@ -288,7 +290,7 @@ class TestTryUpgradeStateTracking:
     ) -> None:
         """Catch-all tracking upgrades to targeted when entities become available."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         # The manager starts in catch-all mode because the code sensor entity
         # is not yet registered when _setup_state_tracking runs during setup.
@@ -312,7 +314,7 @@ class TestTryUpgradeStateTracking:
     ) -> None:
         """Catch-all tracking stays when entities are still missing."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         # Force back into catch-all with a mock unsub and clear entity map
         catch_all_unsub = MagicMock()
@@ -339,7 +341,7 @@ class TestTryUpgradeStateTracking:
     ) -> None:
         """No-op when already using targeted tracking."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         # First tick upgrades from catch-all to targeted
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
@@ -364,7 +366,7 @@ class TestDisableSlotExceptionHandling:
     ) -> None:
         """A failed disable still requests a breaker reset for the next tick."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         for _ in range(5):
             manager._slot_breaker.record_failure()
@@ -398,7 +400,7 @@ class TestDisableSlotExceptionHandling:
     ) -> None:
         """A successful disable requests a breaker reset for the next tick."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         for _ in range(5):
             manager._slot_breaker.record_failure()
@@ -425,7 +427,7 @@ class TestSlotDisabledIssueCleanup:
     ) -> None:
         """slot_disabled_ repair issue is deleted when slot comes back in sync."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         entry_id = lock_code_manager_config_entry.entry_id
         slot_num = manager._slot_num
 
@@ -477,7 +479,7 @@ class TestSlotDisabledIssueCleanup:
         clears them.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         entry_id = lock_code_manager_config_entry.entry_id
         slot_num = manager._slot_num
         lock_entity_id = manager._lock.lock.entity_id
@@ -532,7 +534,7 @@ class TestLockOperationFailedRetry:
     ) -> None:
         """LockOperationFailed during sync sets dirty for retry instead of disabling slot."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         # Force out-of-sync state so _perform_sync is called:
         # set coordinator data to EMPTY so the slot appears to need a set
@@ -558,7 +560,7 @@ class TestLockOperationFailedRetry:
         lock_code_manager_config_entry,
     ) -> None:
         """Repeated LockOperationFailed suspends the slot, not the whole lock."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
 
         with patch.object(
@@ -622,7 +624,7 @@ class TestSuspensionRepairLinkHealth:
         lock_code_manager_config_entry,
     ) -> None:
         """A provider that can measure its transport gets quoted verbatim."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
 
         with patch.object(
             manager._lock,
@@ -645,7 +647,7 @@ class TestSuspensionRepairLinkHealth:
         lock_code_manager_config_entry,
     ) -> None:
         """Providers with no transport insight keep the original wording."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
 
         with patch.object(manager._lock, "describe_link_health", return_value=None):
             await self._suspend_via_breaker(hass, manager)
@@ -670,7 +672,7 @@ class TestLockOperationUnsupportedSuspend:
         breaker would only delay a vaguer message by three ticks.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
 
@@ -700,7 +702,7 @@ class TestLockOperationUnsupportedSuspend:
     ) -> None:
         """The driver's own explanation reaches the repair, not a generic one."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
         lock_entity_id = manager._lock.lock.entity_id
@@ -735,7 +737,7 @@ class TestSyncStateMachine:
     ) -> None:
         """Manager starts in LOADING then transitions after a tick resolves entities."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         # The initial tick during async_start may not resolve entities yet
         # (they may not be registered), but after full setup + a tick,
         # the manager should transition out of LOADING.
@@ -750,7 +752,7 @@ class TestSyncStateMachine:
     ) -> None:
         """LOADING transitions to OUT_OF_SYNC when slot is not in sync on startup."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         manager._state = SyncState.LOADING
         # Make coordinator data mismatch (slot active but lock has empty code)
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
@@ -765,7 +767,7 @@ class TestSyncStateMachine:
     ) -> None:
         """Disabled slot with unknown PIN/code transitions out of LOADING."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         manager._state = SyncState.LOADING
 
         # Simulate disabled slot: active=off, PIN unknown
@@ -787,7 +789,7 @@ class TestSyncStateMachine:
     ) -> None:
         """Slot stays in LOADING when active entity is STATE_UNKNOWN."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         manager._state = SyncState.LOADING
 
         hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_UNKNOWN)
@@ -804,7 +806,7 @@ class TestSyncStateMachine:
     ) -> None:
         """Enabled slot with unknown PIN stays in LOADING (needs PIN to sync)."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         manager._state = SyncState.LOADING
 
         # Active=on but PIN unknown — can't sync without knowing what PIN to set
@@ -823,7 +825,7 @@ class TestSyncStateMachine:
     ) -> None:
         """LOADING transitions to IN_SYNC when already in sync."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         # The mock lock has code "1234" in slot 1, and the config also has "1234".
         # Trigger a tick to complete initial loading.
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
@@ -837,7 +839,7 @@ class TestSyncStateMachine:
     ) -> None:
         """IN_SYNC transitions to OUT_OF_SYNC when coordinator data changes."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
         assert manager._state is SyncState.IN_SYNC
 
@@ -853,7 +855,7 @@ class TestSyncStateMachine:
     ) -> None:
         """OUT_OF_SYNC transitions through SYNCING to IN_SYNC on success."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         # First get out of LOADING state
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
@@ -874,7 +876,7 @@ class TestSyncStateMachine:
     ) -> None:
         """SYNCING transitions to OUT_OF_SYNC on LockDisconnected."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
@@ -908,7 +910,7 @@ class TestSyncStateMachine:
         request_sync_check once validation succeeds.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
@@ -937,7 +939,7 @@ class TestSyncStateMachine:
     ) -> None:
         """request_sync_check keeps an unvalidated lock suspended even when reachable."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.SUSPENDED
         manager._code_suspend_target = None
@@ -955,7 +957,7 @@ class TestSyncStateMachine:
     ) -> None:
         """SYNCING transitions to SUSPENDED on generic exception."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
@@ -980,7 +982,7 @@ class TestSyncStateMachine:
     ) -> None:
         """Circuit breaker trips transitions to SUSPENDED."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
@@ -1001,7 +1003,7 @@ class TestSyncStateMachine:
     ) -> None:
         """SUSPENDED state skips tick processing."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.SUSPENDED
 
@@ -1017,7 +1019,7 @@ class TestSyncStateMachine:
     ) -> None:
         """SUSPENDED transitions to OUT_OF_SYNC when the lock becomes reachable."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         # Lock unreachable suspends the slot.
         for _ in range(BACKOFF_FAILURE_THRESHOLD):
@@ -1038,7 +1040,7 @@ class TestSyncStateMachine:
     ) -> None:
         """SUSPENDED stays SUSPENDED while the lock is still unreachable."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         for _ in range(BACKOFF_FAILURE_THRESHOLD):
             manager._coordinator._lock_breaker.record_failure()
@@ -1055,7 +1057,7 @@ class TestSyncStateMachine:
     ) -> None:
         """CodeRejectedError still calls _disable_slot (profile-wide)."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
@@ -1087,7 +1089,7 @@ class TestSyncStateMachine:
     ) -> None:
         """Suspension creates a per-slot slot_suspended repair issue."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
@@ -1119,7 +1121,7 @@ class TestSyncStateMachine:
     ) -> None:
         """slot_suspended repair issue is deleted when slot comes back in sync."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         entry_id = lock_code_manager_config_entry.entry_id
         lock_entity_id = manager._lock.lock.entity_id
         slot_num = manager._slot_num
@@ -1161,7 +1163,7 @@ class TestSyncStateMachine:
     ) -> None:
         """Sync succeeds but post-sync check shows still out of sync."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
@@ -1194,8 +1196,8 @@ class TestSyncStateMachine:
         lock_code_manager_config_entry,
     ) -> None:
         """A code that won't converge suspends its own slot, not siblings."""
-        failing = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
-        sibling = get_in_sync_entity_obj(hass, SLOT_2_IN_SYNC_ENTITY)._sync_manager
+        failing = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
+        sibling = sync_manager_for(hass, SLOT_2_IN_SYNC_ENTITY)
         # Both slots are on the same lock and share one coordinator.
         assert failing._coordinator is sibling._coordinator
 
@@ -1221,7 +1223,7 @@ class TestSyncStateMachine:
         lock_code_manager_config_entry,
     ) -> None:
         """Repeated LockDisconnected on set trips the lock breaker and suspends the tick."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
 
         with patch.object(
@@ -1251,7 +1253,7 @@ class TestSyncStateMachine:
         lock_code_manager_config_entry,
     ) -> None:
         """A code-suspended slot stays suspended until its desired target changes."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
 
         # Trip the slot breaker so the tick suspends for a non-converging code.
         manager._state = SyncState.OUT_OF_SYNC
@@ -1304,7 +1306,7 @@ class TestSyncStatusAttribute:
     ) -> None:
         """sync_status is 'out_of_sync' when out of sync."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._write_state()
@@ -1322,7 +1324,7 @@ class TestSyncStatusAttribute:
     ) -> None:
         """sync_status is 'suspended' when suspended."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         # Make the lock unreachable so the suspended state is not immediately
         # cleared by a sync check.
@@ -1349,7 +1351,7 @@ class TestSyncStatusAttribute:
         show "unknown" rather than a stale guess before the first tick.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.LOADING
         manager._write_state()
@@ -1372,7 +1374,7 @@ class TestAsyncStopCancelsInFlightTick:
     ) -> None:
         """A provider call that outlasts the grace is cancelled, not waited out."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
@@ -1406,7 +1408,7 @@ class TestAsyncStopCancelsInFlightTick:
     ) -> None:
         """A write that answers within the grace lands, and its tick is not cancelled."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID
@@ -1429,7 +1431,7 @@ class TestAsyncStopCancelsInFlightTick:
             await asyncio.wait_for(entered.wait(), timeout=5)
 
             stop_task = hass.async_create_task(manager.async_stop())
-            with patch.object(manager, "_state_writer", writes_after_stop.append):
+            with recording_listener(manager, writes_after_stop):
                 # Long enough that a stop which cancelled at once would be done.
                 await asyncio.sleep(0.1)
                 assert not stop_task.done()
@@ -1453,7 +1455,7 @@ class TestAsyncStopCancelsInFlightTick:
     ) -> None:
         """A tick that gets the turn late in the window still gets a whole grace."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID
@@ -1502,7 +1504,7 @@ class TestAsyncStopCancelsInFlightTick:
         lock_code_manager_config_entry,
     ) -> None:
         """A stop that cancels the first tick returns start normally to its caller."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await manager.async_stop()
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
@@ -1532,7 +1534,7 @@ class TestAsyncStopCancelsInFlightTick:
         lock_code_manager_config_entry,
     ) -> None:
         """A start cancelled by its caller propagates, since no stop absorbed it."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await manager.async_stop()
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
@@ -1561,7 +1563,7 @@ class TestAsyncStopCancelsInFlightTick:
     ) -> None:
         """A stop cancelled during the grace takes its in-flight tick with it."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
@@ -1597,7 +1599,7 @@ class TestAsyncStopCancelsInFlightTick:
         lock_code_manager_config_entry,
     ) -> None:
         """The initial tick must not register the caller's task for cancellation."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await manager.async_stop()
 
         seen: list[set[asyncio.Task[None]]] = []
@@ -1618,7 +1620,7 @@ class TestAsyncStopCancelsInFlightTick:
     ) -> None:
         """Calling async_stop twice in succession is a no-op the second time."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         await manager.async_stop()
         assert not manager._started
@@ -1635,12 +1637,12 @@ class TestAsyncStopCancelsInFlightTick:
     ) -> None:
         """_write_state does not invoke the state writer once the manager is stopped."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         await manager.async_stop()
 
         writes: list[bool | None] = []
-        with patch.object(manager, "_state_writer", writes.append):
+        with recording_listener(manager, writes):
             manager._write_state()
 
         assert writes == []
@@ -1653,7 +1655,7 @@ class TestAsyncStopCancelsInFlightTick:
     ) -> None:
         """A quick-return tick must not orphan an in-flight tick from async_stop tracking."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
@@ -1688,7 +1690,7 @@ class TestAsyncStopCancelsInFlightTick:
     ) -> None:
         """An in-flight tick raising while unwinding is logged at WARNING with exc_info."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         manager._state = SyncState.OUT_OF_SYNC
 
         boom = RuntimeError("simulated tick failure")
@@ -1739,7 +1741,7 @@ class TestBreakerTickSoleMutatorInvariant:
         the tick is about to read.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
@@ -1799,7 +1801,7 @@ class TestBreakerTickSoleMutatorInvariant:
     ) -> None:
         """``_suspend_slot`` sets the flag; the breaker is reset by the next tick."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         for _ in range(MAX_SYNC_ATTEMPTS):
             manager._slot_breaker.record_failure()
@@ -1830,7 +1832,7 @@ class TestBreakerTickSoleMutatorInvariant:
         sets caused by a failing refresh path would retry forever.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._coordinator.data[pin_address(1)] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
@@ -1854,7 +1856,7 @@ class TestBreakerTickSoleMutatorInvariant:
     ) -> None:
         """All three transition branches in _request_sync_check use the flag."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         # Branch 1: IN_SYNC -> OUT_OF_SYNC when target diverges.
         manager._state = SyncState.IN_SYNC
@@ -1881,7 +1883,7 @@ class TestBreakerTickSoleMutatorInvariant:
     ) -> None:
         """SUSPENDED -> OUT_OF_SYNC when the suspend target diverges uses the flag."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.SUSPENDED
         # Pin a target that does not match the current resolved state.
@@ -1908,7 +1910,7 @@ class TestBreakerTickSoleMutatorInvariant:
     ) -> None:
         """SUSPENDED (lock unreachable) -> OUT_OF_SYNC when reachable again uses the flag."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.SUSPENDED
         # No code-suspend target means the slot is suspended only because
@@ -1939,7 +1941,7 @@ class TestBreakerTickSoleMutatorInvariant:
     ) -> None:
         """async_stop must NOT reset the breaker -- the manager is being torn down."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         for _ in range(2):
             manager._slot_breaker.record_failure()
@@ -1964,7 +1966,7 @@ class TestBreakerTickSoleMutatorInvariant:
         failed write -- and the next tick takes the one charge and re-syncs.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID
         ]
@@ -1995,7 +1997,7 @@ class TestBreakerTickSoleMutatorInvariant:
     ) -> None:
         """A clear-then-verification-miss must NOT increment the breaker (was_set=False)."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_2_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         manager._state = SyncState.OUT_OF_SYNC
         # Slot 2 in the standard fixture is currently configured with a PIN
@@ -2033,7 +2035,7 @@ class TestAsyncTickDefensiveGuards:
     ) -> None:
         """_async_tick is a no-op if the manager has already been stopped."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         manager._started = False
         try:
             with patch.object(
@@ -2062,7 +2064,7 @@ class TestAsyncTickDefensiveGuards:
         assume every entry in ``_tick_tasks`` is a real task.
         """
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         with patch(
             "custom_components.lock_code_manager.domain.sync.asyncio.current_task",
@@ -2084,7 +2086,7 @@ class TestAsyncStartIdempotent:
     ) -> None:
         """A second async_start call does not re-subscribe or re-tick."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         assert manager._started is True
 
         with (
@@ -2108,7 +2110,7 @@ class TestEntityStateHelpers:
     ) -> None:
         """_get_entity_state returns None for a role key with no discovered entity ID."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
 
         assert manager._get_entity_state("nonexistent_role") is None
 
@@ -2120,7 +2122,7 @@ class TestEntityStateHelpers:
     ) -> None:
         """_ensure_entities_ready returns False if a required role wasn't discovered."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-        manager = entity_obj._sync_manager
+        manager = sync_manager_of(entity_obj)
         # A full setup tick has already populated the map; simulate a role
         # whose entity was never found (e.g. platform not loaded yet).
         manager._entity_id_map.pop(CONF_PIN, None)
@@ -2162,7 +2164,7 @@ class TestPendingWritesOwnedByCoordinator:
         lock_code_manager_config_entry,
     ) -> None:
         """A wanted pending write parks the slot; the tick neither writes nor reads."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         manager._coordinator.record_write(pin_address(1), "1234", believed=True)
         manager.request_sync_check()
@@ -2188,7 +2190,7 @@ class TestPendingWritesOwnedByCoordinator:
         lock_code_manager_config_entry,
     ) -> None:
         """A push confirming the write settles the slot on the next tick."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         manager._coordinator.record_write(pin_address(1), "1234", believed=True)
         manager.request_sync_check()
@@ -2216,7 +2218,7 @@ class TestPendingWritesOwnedByCoordinator:
         NEXT tick so a confirming push landing in between still counts first,
         and never charges the same write twice.
         """
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         manager._lock.codes.pop(1, None)  # the lock never holds it
         manager._coordinator.record_write(pin_address(1), "1234", believed=False)
@@ -2247,7 +2249,7 @@ class TestPendingWritesOwnedByCoordinator:
         lock_code_manager_config_entry,
     ) -> None:
         """A write for a PIN nobody wants any more is forgotten, not charged."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         manager._coordinator.record_write(pin_address(1), "0000", believed=True)
         manager.request_sync_check()
@@ -2272,7 +2274,7 @@ class TestPendingWritesOwnedByCoordinator:
         The tick issues no read of its own after the set; the coordinator's
         immediate look confirms the write and the next tick finds it settled.
         """
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         lock = manager._lock
         assert lock.supports_push is False
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
@@ -2307,7 +2309,7 @@ class TestPendingWritesOwnedByCoordinator:
         Nothing is pending, so the observation is the lock's word, and an
         active slot the lock says is empty must not stay in sync.
         """
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.IN_SYNC
 
@@ -2335,7 +2337,7 @@ class TestPendingWritesOwnedByCoordinator:
         judged and discarded now, rather than lingering to be charged to the
         next sync that happens to run.
         """
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.IN_SYNC
         assert manager._lock.codes[1] == "1234"
@@ -2356,7 +2358,7 @@ class TestPendingWritesOwnedByCoordinator:
         lock_code_manager_config_entry,
     ) -> None:
         """The push-path twin: a push showing the configured PIN fails the stray write."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.IN_SYNC
 
@@ -2375,7 +2377,7 @@ class TestPendingWritesOwnedByCoordinator:
         freezer,
     ) -> None:
         """A direct write that failed before the slot was managed is nobody's strike."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         await manager.async_stop()
 
         manager._coordinator.record_write(pin_address(1), "0000", believed=False)
@@ -2396,7 +2398,7 @@ class TestLockBusy:
         lock_code_manager_config_entry,
     ) -> None:
         """LockBusy returns the slot to OUT_OF_SYNC and charges neither breaker."""
-        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[pin_address(1)] = SlotCredential.empty()
         lock_failures = manager._coordinator._lock_breaker.failure_count

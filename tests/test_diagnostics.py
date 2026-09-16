@@ -16,7 +16,13 @@ from custom_components.lock_code_manager.diagnostics import (
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, write_entry_config
+from .common import (
+    BASE_CONFIG,
+    LOCK_1_ENTITY_ID,
+    async_enable_and_reload,
+    pin_in_sync_entity_id,
+    write_entry_config,
+)
 
 # SlotCode sentinel values as they appear after _mask_code
 _SENTINEL_VALUES = {"empty", "unreadable_code", None}
@@ -181,14 +187,35 @@ async def test_sensitive_entities_redacted(
     for lock_diag in result["locks"].values():
         all_entities.extend(lock_diag.get("entities", []))
 
-    # _is_sensitive checks unique_id for |pin and |code markers, which
-    # results in **REDACTED** state. Verify at least one entity is redacted.
+    # An entity keyed by a credential (the PIN text, the code sensor) reads
+    # **REDACTED**. Verify at least one entity is redacted.
     redacted = [e for e in all_entities if e["state"] == "**REDACTED**"]
     assert len(redacted) > 0, "Expected at least one redacted entity"
 
     for entity in redacted:
         assert entity["attributes"] == {}
         assert entity["platform"] == DOMAIN
+
+
+async def test_the_pin_in_sync_sensor_is_not_redacted(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A sensor whose key starts with ``pin`` holds no PIN; it is what the download is for."""
+    entry = lock_code_manager_config_entry
+    entity_id = pin_in_sync_entity_id(hass, entry, 1)
+    await async_enable_and_reload(hass, entry, entity_id)
+
+    result = await async_get_config_entry_diagnostics(hass, entry)
+    reported = next(
+        entity
+        for section in ("slots", "locks")
+        for diag in result[section].values()
+        for entity in diag.get("entities", [])
+        if entity["entity_id"] == entity_id
+    )
+    assert reported["state"] != "**REDACTED**"
 
 
 async def test_mask_code_covers_missing_and_edge_case_credentials(

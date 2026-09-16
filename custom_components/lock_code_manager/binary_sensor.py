@@ -11,12 +11,11 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
+from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS, credential_in_sync_key
 from .domain.coordinator import LockUsercodeUpdateCoordinator
-from .domain.credentials import pin_address
+from .domain.credentials import CredentialAddress, managed_addresses
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import subentry_id_for_slot
-from .domain.sync import SlotSyncManager
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .providers import BaseLock
 
@@ -51,13 +50,25 @@ async def async_setup_entry(
         coordinator = lock.coordinator
         if coordinator is None:
             return
+        addresses = managed_addresses(slot_num)
+        # The aggregate over every managed credential, then one sensor per
+        # credential.
         async_add_entities(
             [
                 LockCodeManagerCodeSlotInSyncEntity(
-                    hass, ent_reg, config_entry, coordinator, lock, slot_num
+                    hass, ent_reg, config_entry, coordinator, lock, slot_num, *props
+                )
+                for props in (
+                    (ATTR_IN_SYNC, addresses),
+                    *(
+                        (
+                            credential_in_sync_key(address.credential_type.value),
+                            (address,),
+                        )
+                        for address in addresses
+                    ),
                 )
             ],
-            True,
             config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
 
@@ -116,7 +127,16 @@ class LockCodeManagerCodeSlotInSyncEntity(
     CoordinatorEntity[LockUsercodeUpdateCoordinator],
     BinarySensorEntity,
 ):
-    """PIN synced binary sensor entity for lock code manager."""
+    """
+    In-sync binary sensor over some credentials of the user on this lock.
+
+    A read-only view over the slot coordinator's fold of those credentials:
+    on when all are in sync, reporting the worst of their statuses. The
+    aggregate ``in_sync`` sensor covers every managed credential; a
+    per-credential sensor covers one. The coordinator owns the managers and
+    notifies its subscribers when one changes; this entity neither starts
+    nor stops them, so disabling it never stops a sync.
+    """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -128,69 +148,58 @@ class LockCodeManagerCodeSlotInSyncEntity(
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
         slot_num: int,
+        key: str,
+        addresses: tuple[CredentialAddress, ...],
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
-            self, hass, ent_reg, config_entry, lock, slot_num, ATTR_IN_SYNC
+            self, hass, ent_reg, config_entry, lock, slot_num, key
         )
         CoordinatorEntity.__init__(self, coordinator)
-
-        self._attr_sync_status: str | None = None
-
-        @callback
-        def _sync_and_write_state(in_sync: bool | None) -> None:
-            """Sync _attr_is_on from manager and write HA state."""
-            self._attr_is_on = in_sync
-            self._attr_sync_status = self._sync_manager.sync_status
-            self.async_write_ha_state()
-
-        self._sync_manager = SlotSyncManager(
-            hass,
-            ent_reg,
-            config_entry,
-            coordinator,
-            lock,
-            pin_address(slot_num),
-            state_writer=_sync_and_write_state,
-        )
+        self._addresses = addresses
+        # With a single credential type a per-credential sensor reads the same
+        # as the aggregate, so only the aggregate ships enabled; enabling a
+        # per-credential one splits the view for whoever wants it.
+        self._attr_entity_registry_enabled_default = key == ATTR_IN_SYNC
 
     @property
     def available(self) -> bool:
         """Return whether binary sensor is available or not."""
-        return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
-            self.coordinator.has_credential(pin_address(int(self.slot_num)))
+        return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and all(
+            self.coordinator.has_credential(address) for address in self._addresses
         )
+
+    @property
+    def _sync_state(self) -> tuple[bool | None, str | None]:
+        """The coordinator's fold for this lock, or unknown without a coordinator."""
+        if self._slot_coordinator is None:
+            return None, None
+        return self._slot_coordinator.sync_state_for(
+            self.lock.lock.entity_id, self._addresses
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether every credential this sensor covers is in sync."""
+        return self._sync_state[0]
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
         """Return extra state attributes."""
-        if self._attr_sync_status is None:
-            return {}
-        return {ATTR_SYNC_STATUS: self._attr_sync_status}
+        status = self._sync_state[1]
+        return {} if status is None else {ATTR_SYNC_STATUS: status}
+
+    def _register_slot_coordinator_subscription(self) -> None:
+        """Write state when a manager of this lock changes; config writes are not this sensor's."""
+        assert self._slot_coordinator is not None
+        self.async_on_remove(
+            self._slot_coordinator.register_sync_subscriber(
+                self.lock.lock.entity_id, self.async_write_ha_state
+            )
+        )
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
-
-        self.config_entry.runtime_data.sync_managers.add(self._sync_manager)
-        await self._sync_manager.async_start()
-
-    def _register_slot_coordinator_subscription(self) -> None:
-        """Register the per-lock sync manager with the per-slot coordinator."""
-        # Type narrowing; the base only calls this hook when set.
-        assert self._slot_coordinator is not None
-        self.async_on_remove(
-            self._slot_coordinator.register_sync_manager(self._sync_manager)
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Stop the sync manager and await its in-flight tick before removal."""
-        # async_unload_entry stops sync managers up front so this is normally
-        # a no-op (idempotent); the explicit stop here protects against entity
-        # removal paths that do not flow through async_unload_entry, such as
-        # a slot being removed via the options update listener.
-        self.config_entry.runtime_data.sync_managers.discard(self._sync_manager)
-        await self._sync_manager.async_stop()
-        await CoordinatorEntity.async_will_remove_from_hass(self)

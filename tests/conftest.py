@@ -37,10 +37,17 @@ from homeassistant.util import dt as dt_util
 from custom_components.lock_code_manager import config_flow, repairs
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.domain.models import SyncState
+from custom_components.lock_code_manager.domain.sync import SlotSyncManager
 from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
 from custom_components.lock_code_manager.providers._base import BaseLock
 
-from .common import BASE_CONFIG, MockCalendarEntity, MockLCMLock, MockLockEntity
+from .common import (
+    BASE_CONFIG,
+    MockCalendarEntity,
+    MockLCMLock,
+    MockLockEntity,
+    sync_manager_of,
+)
 
 pytest_plugins = ["pytest_homeassistant_custom_component"]
 
@@ -305,6 +312,11 @@ def get_in_sync_entity_obj(hass: HomeAssistant, entity_id: str):
     return entity_obj
 
 
+def sync_manager_for(hass: HomeAssistant, entity_id: str) -> SlotSyncManager:
+    """Return the PIN sync manager behind an in-sync entity, by entity ID."""
+    return sync_manager_of(get_in_sync_entity_obj(hass, entity_id))
+
+
 async def async_trigger_sync_tick(
     hass: HomeAssistant, entity_id: str, set_dirty: bool = True
 ) -> None:
@@ -315,13 +327,10 @@ async def async_trigger_sync_tick(
     triggering an immediate tick, useful for testing tick-based sync behavior
     without waiting for the natural 5-second tick interval.
     """
-    entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    if set_dirty and entity_obj._sync_manager._state not in (
-        SyncState.LOADING,
-        SyncState.OUT_OF_SYNC,
-    ):
-        entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
-    await entity_obj._sync_manager._async_tick()
+    manager = sync_manager_for(hass, entity_id)
+    if set_dirty and manager._state not in (SyncState.LOADING, SyncState.OUT_OF_SYNC):
+        manager._state = SyncState.OUT_OF_SYNC
+    await manager._async_tick()
     await hass.async_block_till_done()
 
 
@@ -334,9 +343,9 @@ async def async_initial_tick(hass: HomeAssistant, entity_id: str) -> None:
     a tick to complete initial state loading, but only if the entity hasn't
     been initialized yet (state is LOADING).
     """
-    entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    if entity_obj._sync_manager._state is SyncState.LOADING:
-        await entity_obj._sync_manager._async_tick()
+    manager = sync_manager_for(hass, entity_id)
+    if manager._state is SyncState.LOADING:
+        await manager._async_tick()
         await hass.async_block_till_done()
 
 
