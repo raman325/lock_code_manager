@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b6ywgu8r2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/b6ywgu8r2.output</output-file>
+<status>completed</status>
+<summary>Background command "Lint and run PR 1's full suite with coverage" completed (exit code 0)</summary>
+</task-notification>
