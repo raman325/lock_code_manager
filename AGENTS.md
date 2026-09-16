@@ -100,7 +100,9 @@ entities.
 ### Entities
 
 - `binary_sensor.py`: PIN active status (enabled + conditions met) and per-lock in-sync status
-  with `sync_status` extra state attribute (`in_sync`, `out_of_sync`, `syncing`, `suspended`)
+  with `sync_status` extra state attribute (`in_sync`, `out_of_sync`, `syncing`, `suspended`).
+  `in_sync` is the aggregate over every managed credential; one `<type>_in_sync` sensor per
+  credential type (`pin_in_sync` today) views a single credential and is disabled by default
 - `sensor.py`: Per-lock slot PIN sensors showing current codes on each lock
 - `text.py`: Name and PIN configuration entities
 - `number.py`: Number of uses tracking (decrements on PIN use)

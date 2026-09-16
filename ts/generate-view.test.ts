@@ -372,7 +372,7 @@ describe('getSlotMapping per-credential in-sync sensors', () => {
         slots: { 1: { condition: null, name: 'Raman' } }
     };
 
-    it('groups an enabled pin_in_sync sensor with the in-sync entities', () => {
+    it('groups a pin_in_sync sensor with the in-sync entities', () => {
         const entities = [
             createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front'),
             createTestEntity(1, PIN_IN_SYNC_KEY, 'binary_sensor.pin_in_sync', 'lock.front')
@@ -385,32 +385,18 @@ describe('getSlotMapping per-credential in-sync sensors', () => {
         expect(result.mainEntities).toHaveLength(0);
     });
 
-    it('leaves a disabled entity out of every group', () => {
-        const disabled = {
-            ...createTestEntity(1, PIN_IN_SYNC_KEY, 'binary_sensor.pin_in_sync', 'lock.front'),
-            disabled_by: 'integration'
-        } as LockCodeManagerEntityEntry;
-        const entities = [
-            createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front'),
-            disabled
-        ];
-        const result = getSlotMapping(1, entities, configEntryData);
-        expect(result.inSyncEntities.map((e) => e.entity_id)).toEqual(['binary_sensor.in_sync']);
-    });
-
-    it('names a pin_in_sync card after its lock', () => {
+    it('names a pin_in_sync card after its lock and the credential', () => {
         const hass = createMockHass({
-            states: {
-                'lock.front': {
-                    attributes: { friendly_name: 'Front' },
-                    state: 'locked'
-                }
-            }
+            states: { 'lock.front': { attributes: { friendly_name: 'Front' }, state: 'locked' } }
         });
         const entities = [
+            createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front'),
             createTestEntity(1, PIN_IN_SYNC_KEY, 'binary_sensor.pin_in_sync', 'lock.front')
         ];
-        expect(generateEntityCards(hass, mockConfigEntry, entities)[0].name).toBe('Front');
+        expect(generateEntityCards(hass, mockConfigEntry, entities).map((c) => c.name)).toEqual([
+            'Front',
+            'Front PIN'
+        ]);
     });
 });
 
@@ -595,10 +581,7 @@ describe('generateSlotCard', () => {
     it('includes in_sync sensors when include_in_sync_sensors is true', () => {
         const hass = createMockHass({
             states: {
-                'lock.front': {
-                    attributes: { friendly_name: 'Front Lock' },
-                    state: 'locked'
-                }
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
             }
         });
         const slotMapping = createMinimalSlotMapping(1);
@@ -634,10 +617,7 @@ describe('generateSlotCard', () => {
     it('includes code slot sensors when include_code_slot_sensors is true', () => {
         const hass = createMockHass({
             states: {
-                'lock.front': {
-                    attributes: { friendly_name: 'Front Lock' },
-                    state: 'locked'
-                }
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
             }
         });
         const slotMapping = createMinimalSlotMapping(1);
@@ -839,10 +819,7 @@ describe('generateView', () => {
                 return undefined;
             },
             states: {
-                'lock.front': {
-                    attributes: { friendly_name: 'Front Lock' },
-                    state: 'locked'
-                }
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
             }
         });
 
@@ -1070,14 +1047,8 @@ describe('generateView lock codes cards', () => {
                 return undefined;
             },
             states: {
-                'lock.front': {
-                    attributes: { friendly_name: 'Front Lock' },
-                    state: 'locked'
-                },
-                'lock.back': {
-                    attributes: { friendly_name: 'Back Lock' },
-                    state: 'locked'
-                }
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' },
+                'lock.back': { attributes: { friendly_name: 'Back Lock' }, state: 'locked' }
             }
         });
 
@@ -1118,10 +1089,7 @@ describe('generateView lock codes cards', () => {
                 return undefined;
             },
             states: {
-                'lock.front': {
-                    attributes: { friendly_name: 'Front Lock' },
-                    state: 'locked'
-                }
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
             }
         });
 
@@ -1211,18 +1179,9 @@ describe('generateView lock codes cards', () => {
                 return undefined;
             },
             states: {
-                'lock.z_garage': {
-                    attributes: { friendly_name: 'Garage' },
-                    state: 'locked'
-                },
-                'lock.a_front': {
-                    attributes: { friendly_name: 'Front Door' },
-                    state: 'locked'
-                },
-                'lock.m_back': {
-                    attributes: { friendly_name: 'Back Door' },
-                    state: 'locked'
-                }
+                'lock.z_garage': { attributes: { friendly_name: 'Garage' }, state: 'locked' },
+                'lock.a_front': { attributes: { friendly_name: 'Front Door' }, state: 'locked' },
+                'lock.m_back': { attributes: { friendly_name: 'Back Door' }, state: 'locked' }
             }
         });
 

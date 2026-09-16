@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import logging
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -11,9 +12,9 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
+from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS, credential_in_sync_key
 from .domain.coordinator import LockUsercodeUpdateCoordinator
-from .domain.credentials import CredentialAddress, managed_addresses, pin_address
+from .domain.credentials import CredentialAddress, managed_addresses
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import subentry_id_for_slot
 from .domain.sync import SlotSyncManager, fold_in_sync, fold_sync_status
@@ -51,19 +52,36 @@ async def async_setup_entry(
         coordinator = lock.coordinator
         if coordinator is None:
             return
+        addresses = managed_addresses(slot_num)
+        # The aggregate over every managed credential, then one sensor per
+        # credential. With a single credential type the two read the same,
+        # so the per-credential sensors ship disabled; enabling one splits
+        # the view for whoever wants it.
         async_add_entities(
             [
                 LockCodeManagerCodeSlotInSyncEntity(
-                    hass, ent_reg, config_entry, coordinator, lock, slot_num
-                ),
-                LockCodeManagerCredentialInSyncEntity(
                     hass,
                     ent_reg,
                     config_entry,
                     coordinator,
                     lock,
                     slot_num,
-                    pin_address(slot_num),
+                    ATTR_IN_SYNC,
+                    addresses,
+                ),
+                *(
+                    LockCodeManagerCodeSlotInSyncEntity(
+                        hass,
+                        ent_reg,
+                        config_entry,
+                        coordinator,
+                        lock,
+                        slot_num,
+                        credential_in_sync_key(address.credential_type.value),
+                        (address,),
+                        enabled_default=False,
+                    )
+                    for address in addresses
                 ),
             ],
             True,
@@ -126,12 +144,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
     BinarySensorEntity,
 ):
     """
-    In-sync binary sensor for the user's whole record on this lock.
+    In-sync binary sensor over some credentials of the user on this lock.
 
-    A view over every sync manager for this user on this lock: on when all
-    of them are, and reporting the worst of their statuses. The slot
-    coordinator owns the managers; this entity neither starts nor stops
-    them, so disabling it never stops a sync.
+    A view over the sync managers for those credentials: on when all of
+    them are, reporting the worst of their statuses. The aggregate
+    ``in_sync`` sensor covers every managed credential; a per-credential
+    sensor covers one. The slot coordinator owns the managers; this entity
+    neither starts nor stops them, so disabling it never stops a sync.
     """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -144,12 +163,18 @@ class LockCodeManagerCodeSlotInSyncEntity(
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
         slot_num: int,
+        key: str,
+        addresses: Iterable[CredentialAddress],
+        *,
+        enabled_default: bool = True,
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
-            self, hass, ent_reg, config_entry, lock, slot_num, ATTR_IN_SYNC
+            self, hass, ent_reg, config_entry, lock, slot_num, key
         )
         CoordinatorEntity.__init__(self, coordinator)
+        self._addresses = tuple(addresses)
+        self._attr_entity_registry_enabled_default = enabled_default
         self._attr_sync_status: str | None = None
         self._managers: list[SlotSyncManager] = []
 
@@ -157,8 +182,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
     def available(self) -> bool:
         """Return whether binary sensor is available or not."""
         return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and all(
-            self.coordinator.has_credential(address)
-            for address in managed_addresses(int(self.slot_num))
+            self.coordinator.has_credential(address) for address in self._addresses
         )
 
     @property
@@ -183,92 +207,16 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
         coordinator = self._slot_coordinator
+        lock_entity_id = self.lock.lock.entity_id
         self._managers = (
-            coordinator.sync_managers_for(self.lock.lock.entity_id)
+            [
+                manager
+                for address in self._addresses
+                if (manager := coordinator.sync_manager(lock_entity_id, address))
+            ]
             if coordinator is not None
             else []
         )
         for manager in self._managers:
             self.async_on_remove(manager.async_add_listener(self._fold))
         self._fold()
-
-
-class LockCodeManagerCredentialInSyncEntity(
-    BaseLockCodeManagerCodeSlotPerLockEntity,
-    CoordinatorEntity[LockUsercodeUpdateCoordinator],
-    BinarySensorEntity,
-):
-    """
-    In-sync binary sensor for one credential type of the user on this lock.
-
-    A view over one sync manager. With only PINs managed it reads the same
-    as the ``in_sync`` sensor, so it is disabled by default: the split is
-    there for whoever wants it, and a second credential type arrives as
-    another sensor of this class rather than a new shape.
-    """
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        ent_reg: er.EntityRegistry,
-        config_entry: LockCodeManagerConfigEntry,
-        coordinator: LockUsercodeUpdateCoordinator,
-        lock: BaseLock,
-        slot_num: int,
-        address: CredentialAddress,
-    ) -> None:
-        """Initialize entity."""
-        BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
-            self,
-            hass,
-            ent_reg,
-            config_entry,
-            lock,
-            slot_num,
-            f"{address.credential_type.value}_{ATTR_IN_SYNC}",
-        )
-        CoordinatorEntity.__init__(self, coordinator)
-        self._address = address
-        self._manager: SlotSyncManager | None = None
-        self._attr_sync_status: str | None = None
-
-    @property
-    def available(self) -> bool:
-        """Return whether binary sensor is available or not."""
-        return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
-            self.coordinator.has_credential(self._address)
-        )
-
-    @property
-    def extra_state_attributes(self) -> dict[str, str]:
-        """Return extra state attributes."""
-        if self._attr_sync_status is None:
-            return {}
-        return {ATTR_SYNC_STATUS: self._attr_sync_status}
-
-    @callback
-    def _mirror(self) -> None:
-        """Take the manager's state as this sensor's own."""
-        assert self._manager is not None
-        self._attr_is_on = self._manager.in_sync
-        self._attr_sync_status = self._manager.sync_status
-        self.async_write_ha_state()
-
-    async def async_added_to_hass(self) -> None:
-        """Handle entity added to hass."""
-        await BinarySensorEntity.async_added_to_hass(self)
-        await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
-        await CoordinatorEntity.async_added_to_hass(self)
-        coordinator = self._slot_coordinator
-        self._manager = (
-            coordinator.sync_manager(self.lock.lock.entity_id, self._address)
-            if coordinator is not None
-            else None
-        )
-        if self._manager is None:
-            return
-        self.async_on_remove(self._manager.async_add_listener(self._mirror))
-        self._mirror()

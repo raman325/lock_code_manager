@@ -75,9 +75,9 @@ from .common import (
     SLOT_2_IN_SYNC_ENTITY,
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
-    _per_lock_entity_id,
     async_blocking_stub,
     in_sync_entity_id,
+    pin_in_sync_entity_id,
     short_stop_grace,
     slot_entity_id,
     sync_manager_of,
@@ -2415,23 +2415,13 @@ async def test_the_next_confirmation_read_settles_a_pending_write_without_a_seco
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
-def _pin_in_sync_entity_id(
-    hass, config_entry, slot_num: int, lock_entity_id: str
-) -> str:
-    return _per_lock_entity_id(
-        hass, "binary_sensor", config_entry, slot_num, ATTR_PIN_IN_SYNC, lock_entity_id
-    )
-
-
 async def test_pin_in_sync_is_registered_but_disabled_by_default(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
     """The per-credential sensor exists for whoever wants the split, off until asked."""
-    entity_id = _pin_in_sync_entity_id(
-        hass, lock_code_manager_config_entry, 1, LOCK_1_ENTITY_ID
-    )
+    entity_id = pin_in_sync_entity_id(hass, lock_code_manager_config_entry, 1)
     entry = er.async_get(hass).async_get(entity_id)
     assert entry is not None
     assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
@@ -2445,7 +2435,7 @@ async def test_pin_in_sync_mirrors_the_manager_once_enabled(
 ):
     """Enabled, the PIN sensor reads exactly what the aggregate reads for a PIN-only user."""
     entry = lock_code_manager_config_entry
-    pin_entity_id = _pin_in_sync_entity_id(hass, entry, 1, LOCK_1_ENTITY_ID)
+    pin_entity_id = pin_in_sync_entity_id(hass, entry, 1)
     er.async_get(hass).async_update_entity(pin_entity_id, disabled_by=None)
     await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
@@ -2545,9 +2535,11 @@ async def test_pin_in_sync_added_without_a_slot_coordinator_has_nothing_to_mirro
 
     entity_id = ent_reg.async_get_entity_id("binary_sensor", DOMAIN, unique_id)
     assert entity_id is not None
-    # Added without raising; with no manager behind it there is no sync
-    # status to report, and no credential to be available for.
+    # Added without raising; with no manager behind it there is nothing to
+    # fold, and no credential at that slot to be available for.
+    entity_obj = get_in_sync_entity_obj(hass, entity_id)
+    assert entity_obj._managers == []
+    assert entity_obj.extra_state_attributes == {}
     state = hass.states.get(entity_id)
     assert state is not None
     assert state.state == STATE_UNAVAILABLE
-    assert ATTR_SYNC_STATUS not in state.attributes

@@ -438,11 +438,13 @@ async def get_config_entry_data(
         msg["id"],
         {
             CONF_CONFIG_ENTRY: config_entry.as_json_fragment,
+            # A disabled entity has no state for a card to show.
             CONF_ENTITIES: [
                 entity.as_partial_dict
                 for entity in er.async_entries_for_config_entry(
                     er.async_get(hass), config_entry.entry_id
                 )
+                if entity.disabled_by is None
             ],
             CONF_LOCKS: [
                 {

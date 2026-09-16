@@ -4,9 +4,9 @@ import {
     CODE_SENSOR_KEY,
     CONDITION_KEYS,
     DIVIDER_CARD,
-    IN_SYNC_KEY,
     IN_SYNC_KEYS,
-    KEY_ORDER
+    KEY_ORDER,
+    PIN_IN_SYNC_KEY
 } from './const';
 import {
     EntityRegistryEntry,
@@ -187,11 +187,13 @@ export function generateEntityCards(
 ): { entity: string; name?: string }[] {
     return entities.map((entity) => {
         if ([...IN_SYNC_KEYS, CODE_SENSOR_KEY].includes(entity.key)) {
+            const lockName =
+                hass.states[entity.lockEntityId]?.attributes?.friendly_name ?? entity.lockEntityId;
+            // A per-credential row sits beside the aggregate's for the same
+            // lock, so it carries the credential's name too.
             return {
                 entity: entity.entity_id,
-                name:
-                    hass.states[entity.lockEntityId]?.attributes?.friendly_name ??
-                    entity.lockEntityId
+                name: entity.key === PIN_IN_SYNC_KEY ? `${lockName} PIN` : lockName
             };
         }
         return {
@@ -334,9 +336,7 @@ export function getSlotMapping(
     const codeSensorEntities: LockCodeManagerEntityEntry[] = [];
     const inSyncEntities: LockCodeManagerEntityEntry[] = [];
     lockCodeManagerEntities
-        // A disabled entity has no state to show; the per-credential in-sync
-        // sensors ship disabled and appear here once someone enables them.
-        .filter((entity) => entity.slotNum === slotNum && !entity.disabled_by)
+        .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
             if (entity.key === CODE_SENSOR_KEY) {
                 codeSensorEntities.push(entity);
@@ -344,7 +344,7 @@ export function getSlotMapping(
                 inSyncEntities.push(entity);
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntities.push(entity);
-            } else if (![ACTIVE_KEY, IN_SYNC_KEY, CODE_EVENT_KEY].includes(entity.key)) {
+            } else if (![ACTIVE_KEY, CODE_EVENT_KEY].includes(entity.key)) {
                 mainEntities.push(entity);
             }
         });

@@ -152,8 +152,14 @@ async def test_get_config_entry_data(
 
     # Verify entities (no number_of_uses entity since the migration strips
     # number_of_uses from BASE_CONFIG slot 2 before platform forwarding).
-    # Two slots on two locks each carry a pin_in_sync sensor beside in_sync.
-    assert len(result[CONF_ENTITIES]) == 22
+    # The pin_in_sync sensors ship disabled, and a disabled entity has no
+    # state for a card to show, so the payload leaves them out.
+    assert len(result[CONF_ENTITIES]) == 18
+    assert not [
+        entity
+        for entity in result[CONF_ENTITIES]
+        if "pin_in_sync" in entity["unique_id"]
+    ]
 
     # Verify locks (now objects with entity_id and name)
     lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
