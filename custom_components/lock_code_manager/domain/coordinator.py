@@ -598,6 +598,15 @@ class LockUsercodeUpdateCoordinator(
                 err,
             )
             return
+        except Exception:
+            # Its caller is a sync tick mid-operation; an escape would leave
+            # the slot stuck where the tick was.
+            _LOGGER.exception(
+                "Unexpected error reading slot %s back from %s",
+                checked.user_ref,
+                self._lock.lock.entity_id,
+            )
+            return
         if new_data != self.data:
             self.async_set_updated_data(new_data)
 

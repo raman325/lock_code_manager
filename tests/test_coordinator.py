@@ -1675,13 +1675,14 @@ async def test_reading_one_slot_back(
     assert push_coordinator.credential(pin_address(1)) == SlotCredential.empty()
 
     push_coordinator.push_update({1: SlotCredential.known("1111")})
-    with patch.object(
-        push_lock,
-        "async_hard_refresh_codes",
-        AsyncMock(side_effect=LockDisconnected("offline")),
-    ):
-        await push_coordinator.async_read_back(pin_address(1))
-    assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("1111")
+    for failure in (LockDisconnected("offline"), RuntimeError("unexpected")):
+        with patch.object(
+            push_lock, "async_hard_refresh_codes", AsyncMock(side_effect=failure)
+        ):
+            await push_coordinator.async_read_back(pin_address(1))
+        assert push_coordinator.credential(pin_address(1)) == SlotCredential.known(
+            "1111"
+        )
 
 
 @pytest.mark.parametrize("ending", ["drop_pending", "record_write"])

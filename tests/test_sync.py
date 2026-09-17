@@ -35,6 +35,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockBusy,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnconfirmed,
     LockOperationUnsupported,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
@@ -2613,3 +2614,33 @@ class TestUnconfirmedWrites:
 
         assert written == [SyncState.IN_SYNC]
         assert manager._coordinator.take_unconfirmed_write(pin_address(1)) is None
+
+    async def test_an_unconfirmed_clear_is_read_back_before_it_waits(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """The slot stays syncing while it reads, so no other tick starts meanwhile."""
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        manager._lock.codes[1] = "9999"
+        await manager._coordinator.async_refresh()
+        manager.request_sync_check()
+        seen: list[SyncState] = []
+
+        async def _read_back(_address: object) -> None:
+            seen.append(manager._state)
+
+        with (
+            patch.object(
+                manager,
+                "_perform_sync",
+                AsyncMock(side_effect=LockOperationUnconfirmed("not confirmed")),
+            ),
+            patch.object(manager._coordinator, "async_read_back", _read_back),
+        ):
+            await manager._async_tick()
+
+        assert seen == [SyncState.SYNCING]
+        assert manager._state is SyncState.UNCONFIRMED

@@ -1005,10 +1005,11 @@ class SlotSyncManager:
             return
         except LockOperationUnconfirmed as err:
             _LOGGER.info("%s: %s", self._log_prefix, err)
-            self._note_unconfirmed(snapshot, "clear")
             # Nothing is pending to be read back for a clear, so look now: one
             # that landed settles on this read instead of waiting its turn.
+            # Still syncing while it reads, so no other tick starts meanwhile.
             await self._coordinator.async_read_back(self._address)
+            self._note_unconfirmed(snapshot, "clear")
             return
         except LockOperationUnsupported as err:
             # Permanent: the lock can never accept this request as configured,
