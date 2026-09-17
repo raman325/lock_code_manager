@@ -129,6 +129,12 @@ class LockUsercodeUpdateCoordinator(
         # displaced by a different code -- awaiting the sync tick's one charge
         # to the slot breaker. Consumed by ``take_failed_write``.
         self._failed_writes: set[CredentialAddress] = set()
+        # Addresses whose pending write the lock's stack accepted without being
+        # able to verify, and that no read showed by the deadline. Not a
+        # failure: the stack's own read-back is what did not arrive, so a
+        # later read through the same path showing nothing proves nothing.
+        # Consumed by ``take_unconfirmed_write``.
+        self._unconfirmed_writes: set[CredentialAddress] = set()
         # The single confirmation look for this lock: a task for the immediate
         # first look, then a timer while anything stays pending. One per
         # coordinator, not per write: N pending slots on one lock are one read
@@ -234,8 +240,7 @@ class LockUsercodeUpdateCoordinator(
                 else:
                     out[address] = SlotCredential.known(pending.pin)
             elif now >= pending.deadline:
-                del self._pending[address]
-                self._failed_writes.add(address)
+                self._give_up(address)
                 out[address] = cred
             elif pending.believed:
                 # Still waiting, and the write was believed: keep showing it
@@ -291,6 +296,7 @@ class LockUsercodeUpdateCoordinator(
         checked = _checked(address)
         self._pending[checked] = PendingWrite(pin, time.monotonic(), believed)
         self._failed_writes.discard(checked)
+        self._unconfirmed_writes.discard(checked)
         if believed:
             new_data = {**self.data, checked: SlotCredential.known(pin)}
             if new_data != self.data:
@@ -309,6 +315,7 @@ class LockUsercodeUpdateCoordinator(
         checked = _checked(address)
         self._pending.pop(checked, None)
         self._failed_writes.discard(checked)
+        self._unconfirmed_writes.discard(checked)
 
     @callback
     def take_failed_write(self, address: CredentialAddress) -> bool:
@@ -323,6 +330,21 @@ class LockUsercodeUpdateCoordinator(
         checked = _checked(address)
         if checked in self._failed_writes:
             self._failed_writes.discard(checked)
+            return True
+        return False
+
+    @callback
+    def take_unconfirmed_write(self, address: CredentialAddress) -> bool:
+        """
+        Return, once, whether a write to ``address`` went unconfirmed.
+
+        Set when a write the stack could not verify was not seen by its
+        deadline; cleared by this call. The sync tick retries it without
+        charging the slot breaker.
+        """
+        checked = _checked(address)
+        if checked in self._unconfirmed_writes:
+            self._unconfirmed_writes.discard(checked)
             return True
         return False
 
@@ -475,7 +497,7 @@ class LockUsercodeUpdateCoordinator(
             # Replace, as the poll and drift paths do: the read names every
             # managed and pending slot plus whatever else the lock holds, so a
             # slot it no longer reports is one the lock no longer has.
-            failed_before = len(self._failed_writes)
+            judged_before = len(self._failed_writes) + len(self._unconfirmed_writes)
             new_data = self._apply_read(self._normalize_keys(raw))
             # A completed read that does not name a pending address is the
             # lock not holding it: a poller's read is scoped to name every
@@ -506,10 +528,10 @@ class LockUsercodeUpdateCoordinator(
             return
         if new_data != self.data:
             self.async_set_updated_data(new_data)
-        elif len(self._failed_writes) > failed_before:
-            # The data did not move, but a write just failed against it: a
-            # slot left in sync must judge that now, not be charged for it by
-            # some later, unrelated sync.
+        elif len(self._failed_writes) + len(self._unconfirmed_writes) > judged_before:
+            # The data did not move, but a write was just given up against it:
+            # a slot left in sync must judge that now, not be charged for it
+            # by some later, unrelated sync.
             self.async_update_listeners()
 
     @callback
@@ -522,9 +544,17 @@ class LockUsercodeUpdateCoordinator(
             address for address in addresses if now >= self._pending[address].deadline
         ]
         for address in overdue:
-            del self._pending[address]
-            self._failed_writes.add(address)
+            self._give_up(address)
         return overdue
+
+    @callback
+    def _give_up(self, address: CredentialAddress) -> None:
+        """End a pending write not seen by its deadline, judged by what it was."""
+        pending = self._pending.pop(address)
+        if pending.believed:
+            self._unconfirmed_writes.add(address)
+        else:
+            self._failed_writes.add(address)
 
     @callback
     def _give_up_overdue(self, err: BaseException) -> None:
@@ -811,6 +841,7 @@ class LockUsercodeUpdateCoordinator(
         # cancelled, and an empty pending set arms no timer after it.
         self._pending.clear()
         self._failed_writes.clear()
+        self._unconfirmed_writes.clear()
         if self._confirm_task is not None:
             self._confirm_task.cancel()
             self._confirm_task = None
