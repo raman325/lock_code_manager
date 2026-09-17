@@ -385,7 +385,8 @@ class TestAddingThroughTheUserInterface:
                 for payload in _published_payloads(mqtt_mock, Z2M_GET_TOPIC)
                 if "pin_code" in payload
             ]
-            assert len(asked) == SILENT_READS_TO_CLASSIFY
+            # Five silences, and once more once the lock is known to be there.
+            assert len(asked) == SILENT_READS_TO_CLASSIFY + 1
             assert read_health(hass, mqtt_lock_discovered.entity_id) is (
                 ReadHealth.UNANSWERED
             )
@@ -589,7 +590,7 @@ class TestAddingThroughTheUserInterface:
 
         # Judged after the fifth silence; a lock that answers is then read on.
         assert asked[:SILENT_READS_TO_CLASSIFY] == [1] * SILENT_READS_TO_CLASSIFY
-        assert (len(asked) > SILENT_READS_TO_CLASSIFY) is (
+        assert (len(asked) > SILENT_READS_TO_CLASSIFY + 1) is (
             expected is ReadHealth.ANSWERED
         )
         assert read_health(hass, mqtt_lock_discovered.entity_id) is expected

@@ -260,8 +260,9 @@ class BaseMqttLock(BaseLock):
           read stops -- a lock that times out each slot would otherwise cost
           minutes per read, and allocation walks up to every slot it has --
           and the lock is asked something it can always answer
-          (``_async_device_responds``). If it answers, it is recorded as not
-          answering code reads. If not, it is simply out of reach, which is
+          (``_async_device_responds``). If it answers, the last slot is asked
+          once more, since the silences may have come while the path was
+          down; still silent, it is recorded as not answering code reads. If not, it is simply out of reach, which is
           not a verdict about the lock, so the read fails as a disconnect. A read naming fewer
           slots asks again until it has heard that many silences, so an entry
           with one user classifies its lock as surely as one with ten.
@@ -333,6 +334,17 @@ class BaseMqttLock(BaseLock):
                             f"{self.lock.entity_id}: answered none of "
                             f"{silences} code reads, nor anything else"
                         )
+                    if self._answered_since_read_began():
+                        health = ReadHealth.ANSWERED
+                        continue
+                    # The path works now; the silences may have come while it
+                    # did not (a bridge restarting mid-read). Ask once more
+                    # before deciding the lock cannot answer.
+                    state = await read_slot(slot)
+                    if state is not None:
+                        reads[slot] = state
+                        health = self._note_answered()
+                        continue
                     if self._answered_since_read_began():
                         health = ReadHealth.ANSWERED
                         continue

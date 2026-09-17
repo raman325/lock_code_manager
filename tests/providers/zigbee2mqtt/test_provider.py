@@ -1329,7 +1329,7 @@ class TestUnansweredReads:
 
         with self._reading(lock, silent), self._reading(other, silent):
             codes = await lock.async_get_usercodes([3])
-            assert silent.await_count == SILENT_READS_TO_CLASSIFY
+            assert silent.await_count == SILENT_READS_TO_CLASSIFY + 1
             assert codes == {3: SlotCredential.unreadable()}
             assert read_health(hass, lock.lock.entity_id) is ReadHealth.UNANSWERED
 
@@ -1345,6 +1345,56 @@ class TestUnansweredReads:
             await lock.async_get_usercodes([1, 2, 3])
             assert [c.args[0] for c in silent.await_args_list] == [1]
 
+    async def test_a_bridge_that_was_down_for_the_silences_is_not_a_verdict(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """
+        Zigbee2MQTT restarting mid-read loses every request it was sent.
+
+        By the lock-state check it is back, and so is the lock's answer to the
+        code read asked once more: the lock answers, and the read goes on.
+        """
+        lock = zigbee2mqtt_lock_connected
+        read = AsyncMock(
+            side_effect=[None] * SILENT_READS_TO_CLASSIFY
+            + [SlotCredential.known("1234")] * 10
+        )
+
+        with (
+            self._reading(lock, read),
+            patch.object(lock, "_async_device_responds", AsyncMock(return_value=True)),
+        ):
+            codes = await lock.async_get_usercodes(range(1, 8))
+
+        assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
+        assert codes[SILENT_READS_TO_CLASSIFY] == SlotCredential.known("1234")
+        assert [c.args[0] for c in read.await_args_list] == [1, 2, 3, 4, 5, 5, 6, 7]
+
+    async def test_a_late_answer_during_the_last_look_is_still_an_answer(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """A slow lock's reply to an earlier slot can land while the last slot waits."""
+        lock = zigbee2mqtt_lock_connected
+        calls: list[int] = []
+
+        async def _read(slot: int, **_kwargs: object) -> SlotCredential | None:
+            calls.append(slot)
+            if len(calls) == SILENT_READS_TO_CLASSIFY + 1:
+                lock._late_reads.add(1)
+                lock._process_z2m_device_payload(
+                    {"users": {"1": {"status": "available"}}}
+                )
+            return None
+
+        with (
+            self._reading(lock, AsyncMock(side_effect=_read)),
+            patch.object(lock, "_async_device_responds", AsyncMock(return_value=True)),
+        ):
+            await lock.async_get_usercodes(range(1, 8))
+
+        assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
+        assert calls == [1, 2, 3, 4, 5, 5, 6, 7]
+
     async def test_a_long_read_stops_at_the_verdict(
         self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
     ) -> None:
@@ -1355,7 +1405,7 @@ class TestUnansweredReads:
         with self._reading(lock, silent):
             codes = await lock.async_get_usercodes(range(1, 251))
 
-        assert silent.await_count == SILENT_READS_TO_CLASSIFY
+        assert silent.await_count == SILENT_READS_TO_CLASSIFY + 1
         assert set(codes) == set(range(1, 251))
         assert all(code is SlotCredential.unreadable() for code in codes.values())
 
