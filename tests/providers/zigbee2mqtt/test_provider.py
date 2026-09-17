@@ -7,7 +7,6 @@ from collections.abc import Callable, Coroutine
 from contextlib import AbstractContextManager, ExitStack
 from datetime import timedelta
 import json
-import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +15,7 @@ import pytest
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.domain.credentials import (
@@ -1305,18 +1305,29 @@ class TestUnansweredReads:
         return stack
 
     async def test_a_lock_never_seen_to_answer_is_classified_and_left_alone(
-        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+        freezer,
     ) -> None:
         """
         One slot to read still takes the full count of silences to judge.
 
-        Then nothing is asked until the probe is due, and the probe asks one
-        slot.
+        Classifying it asked it, so nothing more is asked until the probe is
+        due -- by any instance for that lock, as allocation and the config
+        flow build their own -- and the probe asks one slot.
         """
         lock = zigbee2mqtt_lock_connected
+        other = Zigbee2MQTTLock(
+            hass,
+            dr.async_get(hass),
+            er.async_get(hass),
+            lock.lock_config_entry,
+            lock.lock,
+        )
         silent = AsyncMock(return_value=None)
 
-        with self._reading(lock, silent):
+        with self._reading(lock, silent), self._reading(other, silent):
             codes = await lock.async_get_usercodes([3])
             assert silent.await_count == SILENT_READS_TO_CLASSIFY
             assert codes == {3: SlotCredential.unreadable()}
@@ -1326,17 +1337,12 @@ class TestUnansweredReads:
             assert await lock.async_get_usercodes([1, 2, 3]) == {
                 slot: SlotCredential.unreadable() for slot in (1, 2, 3)
             }
-            assert silent.await_count == 1
-
-            silent.reset_mock()
-            await lock.async_get_usercodes([1, 2, 3])
+            await other.async_get_usercodes([1, 2, 3])
             assert silent.await_count == 0
 
-            with patch(
-                "custom_components.lock_code_manager.providers._mqtt.time.monotonic",
-                return_value=time.monotonic() + UNANSWERED_PROBE_INTERVAL + 1,
-            ):
-                await lock.async_get_usercodes([1, 2, 3])
+            freezer.tick(timedelta(seconds=UNANSWERED_PROBE_INTERVAL + 1))
+            await other.async_get_usercodes([1, 2, 3])
+            await lock.async_get_usercodes([1, 2, 3])
             assert [c.args[0] for c in silent.await_args_list] == [1]
 
     async def test_a_long_read_stops_at_the_verdict(
@@ -1371,11 +1377,15 @@ class TestUnansweredReads:
         assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
 
     async def test_a_probe_that_is_answered_reads_the_rest(
-        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+        freezer,
     ) -> None:
         """The lock started answering: it is read normally from then on."""
         lock = zigbee2mqtt_lock_connected
         async_record_read_health(hass, lock.lock.entity_id, ReadHealth.UNANSWERED)
+        freezer.tick(timedelta(seconds=UNANSWERED_PROBE_INTERVAL + 1))
         read = AsyncMock(return_value=SlotCredential.known("1234"))
 
         with self._reading(lock, read):

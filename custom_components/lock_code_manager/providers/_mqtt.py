@@ -34,9 +34,8 @@ its own lifetime), the payload projections, and the api client.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
-import time
 from typing import ClassVar, NoReturn, final
 
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
@@ -48,8 +47,8 @@ from ..domain.exceptions import LockDisconnected
 from ..domain.models import SlotCredential
 from ..domain.read_health import (
     SILENT_READS_TO_CLASSIFY,
-    UNANSWERED_PROBE_INTERVAL,
     ReadHealth,
+    async_claim_probe,
     async_record_read_health,
     read_health,
 )
@@ -74,10 +73,6 @@ class BaseMqttLock(BaseLock):
     # out of reach (``_async_device_responds``): Z-Wave, for one, requires
     # locks to answer User Code Get, so a silent Z-Wave lock is always gone.
     code_reads_may_be_unsupported: ClassVar[bool] = False
-
-    # When a lock that does not answer reads was last asked again, on the
-    # monotonic clock; ``None`` until it has been asked on this instance.
-    _last_unanswered_probe: float | None = field(init=False, default=None)
 
     @property
     def domain(self) -> str:
@@ -304,16 +299,12 @@ class BaseMqttLock(BaseLock):
         ordered = sorted(code_slots)
         health = read_health(self.hass, self.lock.entity_id)
         reads: dict[int, SlotCredential | None] = {}
-        if health is ReadHealth.UNANSWERED:
-            now = time.monotonic()
-            if (
-                self._last_unanswered_probe is None
-                or now - self._last_unanswered_probe >= UNANSWERED_PROBE_INTERVAL
-            ):
-                self._last_unanswered_probe = now
-                reads[ordered[0]] = await read_slot(ordered[0])
-                if reads[ordered[0]] is not None:
-                    health = self._note_answered()
+        if health is ReadHealth.UNANSWERED and async_claim_probe(
+            self.hass, self.lock.entity_id
+        ):
+            reads[ordered[0]] = await read_slot(ordered[0])
+            if reads[ordered[0]] is not None:
+                health = self._note_answered()
 
         silences = 0
         if health is not ReadHealth.UNANSWERED:

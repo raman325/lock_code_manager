@@ -38,6 +38,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from enum import StrEnum
 import logging
+import time
 from types import MappingProxyType
 from typing import Any
 
@@ -72,6 +73,10 @@ SILENT_READS_TO_CLASSIFY = 5
 UNANSWERED_PROBE_INTERVAL = 3600.0
 
 _CACHE_KEY = "lock_reads"
+# When each lock that does not answer was last asked, on the monotonic clock.
+# Per lock rather than per provider instance: allocation and the config flow
+# build an instance for every read.
+_PROBES_KEY = "lock_read_probes"
 
 # What is kept for a lock that does not answer once the user has allowed
 # allocation to treat the slots it cannot see as free.
@@ -176,6 +181,26 @@ def _kept_value(hass: HomeAssistant, lock_entity_id: str) -> str | None:
 
 
 @callback
+def async_claim_probe(hass: HomeAssistant, lock_entity_id: str) -> bool:
+    """
+    Return whether a lock that does not answer is due to be asked again.
+
+    Claims the turn when it is, so another read of the same lock inside the
+    interval does not ask as well.
+    """
+    probes: dict[str, float] = hass.data.setdefault(DOMAIN, {}).setdefault(
+        _PROBES_KEY, {}
+    )
+    key = _registry_id(hass, lock_entity_id) or lock_entity_id
+    now = time.monotonic()
+    last = probes.get(key)
+    if last is not None and now - last < UNANSWERED_PROBE_INTERVAL:
+        return False
+    probes[key] = now
+    return True
+
+
+@callback
 def async_record_read_health(
     hass: HomeAssistant, lock_entity_id: str, health: ReadHealth
 ) -> None:
@@ -194,6 +219,9 @@ def async_record_read_health(
         _cache(hass)[registry_id] = _kept_value(hass, lock_entity_id) or health
         return
     _cache(hass)[registry_id] = health
+    if health is ReadHealth.UNANSWERED:
+        # Classifying it was asking it: the next probe is an interval away.
+        hass.data[DOMAIN].setdefault(_PROBES_KEY, {})[registry_id] = time.monotonic()
     for entry in _entries_managing(hass, lock_entity_id):
         _async_store(hass, entry, {**_stored(entry), registry_id: health.value})
     async_sync_read_health_issue(hass, lock_entity_id)
