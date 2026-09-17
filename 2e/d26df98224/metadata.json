@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "2ed26df98224",
+  "strategy": "manual-commit",
+  "branch": "fix/unanswered-reads",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "tests/providers/zigbee2mqtt/test_e2e.py",
+    "tests/providers/zigbee2mqtt/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2e/d26df98224/0/metadata.json",
+      "transcript": "/2e/d26df98224/0/full.jsonl",
+      "compact_transcript": "/2e/d26df98224/0/transcript.jsonl",
+      "content_hash": "/2e/d26df98224/0/content_hash.txt",
+      "prompt": "/2e/d26df98224/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 27048,
+    "cache_read_tokens": 8434147,
+    "output_tokens": 17557,
+    "api_call_count": 11
+  }
+}
