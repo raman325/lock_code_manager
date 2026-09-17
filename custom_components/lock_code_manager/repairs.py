@@ -13,6 +13,7 @@ from homeassistant.helpers import issue_registry as ir
 from .const import DOMAIN
 from .domain.exceptions import LockCodeManagerError
 from .domain.locks import get_managed_lock
+from .domain.read_health import UNANSWERED_ISSUE, async_allow_unseen_slots
 from .domain.unmanaged import UNMANAGED_ISSUE_KEY, unmanaged_issue_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -104,10 +105,45 @@ class UnmanagedCodeRepairFlow(RepairsFlow):
         )
 
 
+class UnansweredReadsRepairFlow(RepairsFlow):
+    """Ask whether slots a lock cannot report may be given to new users."""
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        """Record which lock this flow asks about."""
+        self._lock_entity_id: str = data["lock_entity_id"]
+
+    async def async_step_init(
+        self, user_input: dict[str, str] | None = None
+    ) -> data_entry_flow.FlowResult:
+        """
+        Go straight to the question.
+
+        Home Assistant passes the issue to this step as its input, so the
+        answer has to be taken by a step of its own.
+        """
+        return await self.async_step_confirm()
+
+    async def async_step_confirm(
+        self, user_input: dict[str, str] | None = None
+    ) -> data_entry_flow.FlowResult:
+        """Explain the risk, and allow it on confirmation."""
+        if user_input is not None:
+            async_allow_unseen_slots(self.hass, self._lock_entity_id)
+            return self.async_create_entry(title="", data={})
+        issue = ir.async_get(self.hass).async_get_issue(DOMAIN, self.issue_id)
+        return self.async_show_form(
+            step_id="confirm",
+            description_placeholders=issue.translation_placeholders if issue else None,
+        )
+
+
 async def async_create_fix_flow(
     hass: HomeAssistant, issue_id: str, data: dict[str, str] | None
 ) -> RepairsFlow:
     """Create a fix flow for a repair issue."""
+    if issue_id.startswith(UNANSWERED_ISSUE):
+        assert data is not None
+        return UnansweredReadsRepairFlow(data)
     if issue_id.startswith(UNMANAGED_ISSUE_KEY):
         assert data is not None
         return UnmanagedCodeRepairFlow(data)

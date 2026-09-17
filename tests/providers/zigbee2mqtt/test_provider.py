@@ -33,6 +33,7 @@ from custom_components.lock_code_manager.domain.read_health import (
     SILENT_READS_TO_CLASSIFY,
     UNANSWERED_PROBE_INTERVAL,
     ReadHealth,
+    async_allow_unseen_slots,
     async_record_read_health,
     read_health,
 )
@@ -1478,11 +1479,21 @@ class TestUnansweredReads:
     async def test_an_unanswering_lock_offers_its_indices_to_allocation(
         self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
     ) -> None:
-        """Counting every silent index as taken would leave no number free, ever."""
+        """
+        Counting every silent index as taken would leave no number free, ever.
+
+        Only once the user has allowed it: until then they stay taken, and
+        allocation asks rather than guessing.
+        """
         lock = zigbee2mqtt_lock_connected
         silent = AsyncMock(return_value=None)
 
         with self._reading(lock, silent):
+            assert await lock.async_internal_get_occupied_indices([1, 2]) == frozenset(
+                {1, 2}
+            )
+            assert read_health(hass, lock.lock.entity_id) is ReadHealth.UNANSWERED
+            async_allow_unseen_slots(hass, lock.lock.entity_id)
             assert await lock.async_internal_get_occupied_indices([1, 2]) == frozenset()
 
     async def test_a_lock_that_answers_keeps_its_unreadable_indices_taken(

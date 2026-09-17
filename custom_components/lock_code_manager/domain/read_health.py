@@ -20,6 +20,13 @@ learned, never configured:
   replies routinely and a lock misjudged this way would have its keypad
   codes overwritten.
 
+Knowing it does not change what allocation does on its own. A lock that
+does not answer has every slot read as unreadable, which allocation counts as
+taken; treating those slots as free could overwrite a code set at the
+keypad, so it waits for the user to allow it, from the repair that says the
+lock does not report its codes. The allowance is kept with the verdict, and
+goes with it if the lock ever answers.
+
 It is remembered in an internal section of each managing entry's data, keyed
 by the lock's entity registry id, which survives renames, and in memory for
 the config flow, which reads locks before its entry exists.
@@ -66,6 +73,10 @@ UNANSWERED_PROBE_INTERVAL = 3600.0
 
 _CACHE_KEY = "lock_reads"
 
+# What is kept for a lock that does not answer once the user has allowed
+# allocation to treat the slots it cannot see as free.
+_UNANSWERED_ALLOWED = "unanswered_allowed"
+
 
 class ReadHealth(StrEnum):
     """What a lock has shown about answering requests to read its codes."""
@@ -80,7 +91,14 @@ def _registry_id(hass: HomeAssistant, lock_entity_id: str) -> str | None:
     return entry.id if entry else None
 
 
-def _cache(hass: HomeAssistant) -> dict[str, ReadHealth]:
+def _health(value: str | None) -> ReadHealth | None:
+    """Return the verdict a kept value records, or ``None`` for anything else."""
+    if value == _UNANSWERED_ALLOWED:
+        return ReadHealth.UNANSWERED
+    return ReadHealth(value) if value in set(ReadHealth) else None
+
+
+def _cache(hass: HomeAssistant) -> dict[str, str]:
     """Return what this run of Home Assistant has learned, by registry id."""
     return hass.data.setdefault(DOMAIN, {}).setdefault(_CACHE_KEY, {})
 
@@ -117,22 +135,44 @@ def read_health(hass: HomeAssistant, lock_entity_id: str) -> ReadHealth | None:
     Answered anywhere wins: one entry having seen the lock answer settles it
     for all of them.
     """
-    if (registry_id := _registry_id(hass, lock_entity_id)) is None:
-        return None
-    known = {
-        ReadHealth(value)
-        for value in (
-            _cache(hass).get(registry_id),
-            *(
-                _stored(entry).get(registry_id)
-                for entry in hass.config_entries.async_entries(DOMAIN)
-            ),
-        )
-        if value in set(ReadHealth)
-    }
+    known = {_health(value) for value in _kept(hass, lock_entity_id)} - {None}
     if ReadHealth.ANSWERED in known:
         return ReadHealth.ANSWERED
     return ReadHealth.UNANSWERED if known else None
+
+
+def _kept(hass: HomeAssistant, lock_entity_id: str) -> list[str | None]:
+    """Return every value kept for a lock, in memory and on every entry."""
+    if (registry_id := _registry_id(hass, lock_entity_id)) is None:
+        return []
+    return [
+        _cache(hass).get(registry_id),
+        *(
+            _stored(entry).get(registry_id)
+            for entry in hass.config_entries.async_entries(DOMAIN)
+        ),
+    ]
+
+
+@callback
+def unseen_slots_allowed(hass: HomeAssistant, lock_entity_id: str) -> bool:
+    """
+    Return whether allocation may treat the slots of this lock it cannot see as free.
+
+    Only for a lock that does not answer, and only once the user has allowed
+    it; allowed on any entry counts.
+    """
+    return read_health(
+        hass, lock_entity_id
+    ) is ReadHealth.UNANSWERED and _UNANSWERED_ALLOWED in _kept(hass, lock_entity_id)
+
+
+def _kept_value(hass: HomeAssistant, lock_entity_id: str) -> str | None:
+    """Return the value to keep for a lock: its verdict, and whether it is allowed."""
+    if unseen_slots_allowed(hass, lock_entity_id):
+        return _UNANSWERED_ALLOWED
+    health = read_health(hass, lock_entity_id)
+    return None if health is None else health.value
 
 
 @callback
@@ -150,7 +190,8 @@ def async_record_read_health(
         return
     current = read_health(hass, lock_entity_id)
     if current is ReadHealth.ANSWERED or current is health:
-        _cache(hass)[registry_id] = current or health
+        # Nothing new; the cache only catches up on what an entry kept.
+        _cache(hass)[registry_id] = _kept_value(hass, lock_entity_id) or health
         return
     _cache(hass)[registry_id] = health
     for entry in _entries_managing(hass, lock_entity_id):
@@ -160,6 +201,28 @@ def async_record_read_health(
         "%s %s requests to read its codes",
         lock_entity_id,
         "answers" if health is ReadHealth.ANSWERED else "does not answer",
+    )
+
+
+@callback
+def async_allow_unseen_slots(hass: HomeAssistant, lock_entity_id: str) -> None:
+    """
+    Let allocation treat the slots it cannot see on this lock as free.
+
+    The user's answer to the repair, kept with the verdict on every entry
+    that manages the lock, and in memory for one that does not yet.
+    """
+    if (registry_id := _registry_id(hass, lock_entity_id)) is None or read_health(
+        hass, lock_entity_id
+    ) is not ReadHealth.UNANSWERED:
+        return
+    _cache(hass)[registry_id] = _UNANSWERED_ALLOWED
+    for entry in _entries_managing(hass, lock_entity_id):
+        _async_store(hass, entry, {**_stored(entry), registry_id: _UNANSWERED_ALLOWED})
+    async_sync_read_health_issue(hass, lock_entity_id)
+    _LOGGER.info(
+        "%s: slots it cannot report may now be assigned to new users",
+        lock_entity_id,
     )
 
 
@@ -234,9 +297,9 @@ def async_persist_read_health(hass: HomeAssistant, entry: ConfigEntry) -> None:
         # Everything known, not only what this run learned: a lock that does
         # not answer is not read again, so after a restart what is known about
         # it is on the entries that already manage it.
-        known = read_health(hass, lock_entity_id)
+        known = _kept_value(hass, lock_entity_id)
         if known is not None and stored.get(registry_id) != ReadHealth.ANSWERED:
-            stored[registry_id] = known.value
+            stored[registry_id] = known
     if stored != dict(_stored(entry)):
         _async_store(hass, entry, stored)
     for lock_entity_id in locks:
@@ -246,16 +309,21 @@ def async_persist_read_health(hass: HomeAssistant, entry: ConfigEntry) -> None:
 @callback
 def async_sync_read_health_issue(hass: HomeAssistant, lock_entity_id: str) -> None:
     """
-    Raise the repair while a managed lock does not answer reads; clear it otherwise.
+    Ask about a managed lock that does not answer reads until the user has answered.
 
-    A lock read by a config flow is not managed until its entry is set up,
-    which raises the repair then; a flow that is abandoned leaves none.
+    The repair is where allocation is allowed to treat the slots the lock
+    cannot report as free. A lock a config flow has read is not managed yet,
+    and that flow asks the question itself: Home Assistant only offers an
+    integration's own fix for a repair once the integration is loaded, which
+    the flow creating its first entry does not do. A flow that is abandoned
+    leaves nothing behind. A lock only disabled entries manage is not being
+    written to, so it is not asked about until one of them is enabled.
     """
     issue_id = per_lock_issue_id(UNANSWERED_ISSUE, lock_entity_id)
-    if read_health(
-        hass, lock_entity_id
-    ) is not ReadHealth.UNANSWERED or not _entries_managing(
-        hass, lock_entity_id, active_only=True
+    if (
+        read_health(hass, lock_entity_id) is not ReadHealth.UNANSWERED
+        or unseen_slots_allowed(hass, lock_entity_id)
+        or not _entries_managing(hass, lock_entity_id, active_only=True)
     ):
         async_delete_issue(hass, DOMAIN, issue_id)
         return
@@ -263,7 +331,8 @@ def async_sync_read_health_issue(hass: HomeAssistant, lock_entity_id: str) -> No
         hass,
         DOMAIN,
         issue_id,
-        is_fixable=False,
+        data={"lock_entity_id": lock_entity_id},
+        is_fixable=True,
         severity=IssueSeverity.WARNING,
         translation_key=UNANSWERED_ISSUE,
         translation_placeholders={

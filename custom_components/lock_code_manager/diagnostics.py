@@ -13,7 +13,7 @@ from .domain.config import build_slot_device_identifier, slot_unique_id_key
 from .domain.credentials import pin_address
 from .domain.models import SlotCode, SlotCredential
 from .domain.queries import get_entry_config
-from .domain.read_health import read_health
+from .domain.read_health import read_health, unseen_slots_allowed
 from .domain.util import mask_pin
 from .providers._base import BaseLock
 
@@ -110,6 +110,8 @@ def _lock_diagnostic(
         # Whether the lock answers requests to read its codes: "answered",
         # "unanswered", or None while that is not yet known.
         "reads": read_health(hass, lock.lock.entity_id),
+        # Whether the user allowed new users on slots it cannot report.
+        "unseen_slots_allowed": unseen_slots_allowed(hass, lock.lock.entity_id),
         "coordinator": {
             "last_update_success": (
                 coordinator.last_update_success if coordinator else None

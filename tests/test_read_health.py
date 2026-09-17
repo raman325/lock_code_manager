@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import copy
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.repairs import repairs_flow_manager
 from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
+from homeassistant.setup import async_setup_component
 
 from custom_components.lock_code_manager import async_release_locks
 from custom_components.lock_code_manager.const import (
@@ -18,6 +22,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
     INTERNAL_LOCK_READS,
+    SERVICE_ADD_USER,
 )
 from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -30,9 +35,11 @@ from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.read_health import (
     UNANSWERED_ISSUE,
     ReadHealth,
+    async_allow_unseen_slots,
     async_forget_read_health,
     async_record_read_health,
     read_health,
+    unseen_slots_allowed,
 )
 from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 
@@ -457,3 +464,145 @@ async def test_disabling_the_only_managing_entry_clears_the_repair(
     await hass.async_block_till_done()
     assert _issue(hass, LOCK_1_ENTITY_ID) is not None
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_the_repair_allows_unseen_slots_and_the_allowance_is_kept(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    Answering the repair is what lets allocation treat unseen slots as free.
+
+    Kept with the verdict, it survives the lock staying silent, and goes
+    with the verdict when the lock answers.
+    """
+    entry = lock_code_manager_config_entry
+    registry_id = _registry_id(hass, LOCK_1_ENTITY_ID)
+    assert await async_setup_component(hass, "repairs", {})
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    issue = _issue(hass, LOCK_1_ENTITY_ID)
+    assert issue is not None and issue.is_fixable
+    assert not unseen_slots_allowed(hass, LOCK_1_ENTITY_ID)
+
+    manager = repairs_flow_manager(hass)
+    assert manager is not None
+    result = await manager.async_init(DOMAIN, data={"issue_id": issue.issue_id})
+    assert result["step_id"] == "confirm"
+    assert result["description_placeholders"]["lock_entity_id"] == LOCK_1_ENTITY_ID
+    result = await manager.async_configure(result["flow_id"], {})
+    assert result["type"] == "create_entry"
+
+    assert unseen_slots_allowed(hass, LOCK_1_ENTITY_ID)
+    assert _stored(entry) == {registry_id: "unanswered_allowed"}
+    assert _issue(hass, LOCK_1_ENTITY_ID) is None
+    assert read_health(hass, LOCK_1_ENTITY_ID) is ReadHealth.UNANSWERED
+
+    # Still silent: the verdict is not news, and the answer stands.
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    assert unseen_slots_allowed(hass, LOCK_1_ENTITY_ID)
+    assert _issue(hass, LOCK_1_ENTITY_ID) is None
+
+    # It answered: the allowance goes with the verdict, and a later
+    # classification asks again.
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.ANSWERED)
+    assert not unseen_slots_allowed(hass, LOCK_1_ENTITY_ID)
+    assert _stored(entry) == {registry_id: ReadHealth.ANSWERED.value}
+
+
+async def test_allowing_a_lock_that_answers_does_nothing(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Only a lock that does not answer has slots nobody can see."""
+    async_allow_unseen_slots(hass, LOCK_1_ENTITY_ID)
+    assert read_health(hass, LOCK_1_ENTITY_ID) is None
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.ANSWERED)
+    async_allow_unseen_slots(hass, LOCK_1_ENTITY_ID)
+    async_allow_unseen_slots(hass, "lock.gone")
+    assert not unseen_slots_allowed(hass, LOCK_1_ENTITY_ID)
+    assert _stored(lock_code_manager_config_entry) == {
+        _registry_id(hass, LOCK_1_ENTITY_ID): ReadHealth.ANSWERED.value
+    }
+
+
+async def test_adding_a_user_waits_for_the_answer(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Until the repair is answered, no number is chosen on the lock."""
+    add = {
+        "config_entry_id": lock_code_manager_config_entry.entry_id,
+        CONF_NAME: "Guest",
+        CONF_PIN: "4321",
+    }
+    async_record_read_health(hass, LOCK_2_ENTITY_ID, ReadHealth.UNANSWERED)
+    with pytest.raises(
+        ServiceValidationError, match="does not report the codes stored on it"
+    ):
+        await hass.services.async_call(DOMAIN, SERVICE_ADD_USER, add, blocking=True)
+
+    async_allow_unseen_slots(hass, LOCK_2_ENTITY_ID)
+    await hass.services.async_call(DOMAIN, SERVICE_ADD_USER, add, blocking=True)
+    await hass.async_block_till_done()
+    assert "Guest" in get_entry_config(lock_code_manager_config_entry).users
+
+
+async def test_a_lock_added_to_a_second_entry_takes_the_allowance_too(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """The answer belongs to the lock, like the verdict."""
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    async_allow_unseen_slots(hass, LOCK_1_ENTITY_ID)
+    hass.data[DOMAIN].pop("lock_reads")
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {5: {CONF_NAME: "test5", CONF_PIN: "5555"}},
+        },
+        unique_id="other",
+    )
+    other.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(other.entry_id)
+    await hass.async_block_till_done()
+
+    assert _stored(other) == {
+        _registry_id(hass, LOCK_1_ENTITY_ID): "unanswered_allowed"
+    }
+    result = await async_get_config_entry_diagnostics(hass, other)
+    assert result["locks"][LOCK_1_ENTITY_ID]["unseen_slots_allowed"] is True
+    assert await hass.config_entries.async_unload(other.entry_id)
+
+
+async def test_an_allowance_made_before_any_entry_survives_the_lock_staying_silent(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Only in memory until an entry takes it, so memory must not lose it."""
+    one_lock = copy.deepcopy(BASE_CONFIG)
+    one_lock[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    assert write_entry_config(hass, lock_code_manager_config_entry, one_lock)
+    await hass.async_block_till_done()
+
+    async_record_read_health(hass, LOCK_2_ENTITY_ID, ReadHealth.UNANSWERED)
+    async_allow_unseen_slots(hass, LOCK_2_ENTITY_ID)
+    async_record_read_health(hass, LOCK_2_ENTITY_ID, ReadHealth.UNANSWERED)
+
+    assert unseen_slots_allowed(hass, LOCK_2_ENTITY_ID)
+
+
+async def test_an_allowance_does_not_outlive_an_answer_elsewhere(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """A lock another entry has seen answer has no unseen slots to allow."""
+    registry_id = _registry_id(hass, LOCK_1_ENTITY_ID)
+    async_record_read_health(hass, LOCK_1_ENTITY_ID, ReadHealth.UNANSWERED)
+    async_allow_unseen_slots(hass, LOCK_1_ENTITY_ID)
+    MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_INTERNAL: {
+                INTERNAL_LOCK_READS: {registry_id: ReadHealth.ANSWERED.value}
+            },
+        },
+    ).add_to_hass(hass)
+
+    assert read_health(hass, LOCK_1_ENTITY_ID) is ReadHealth.ANSWERED
+    assert not unseen_slots_allowed(hass, LOCK_1_ENTITY_ID)

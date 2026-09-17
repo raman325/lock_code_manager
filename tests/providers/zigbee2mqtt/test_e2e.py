@@ -10,7 +10,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
 from homeassistant.config_entries import SOURCE_USER
-from homeassistant.const import CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
@@ -18,6 +18,7 @@ from custom_components.lock_code_manager.const import (
     CONF_INTERNAL,
     CONF_LOCKS,
     CONF_NUM_USERS,
+    CONF_USERS,
     DOMAIN,
     INTERNAL_LOCK_READS,
 )
@@ -29,12 +30,13 @@ from custom_components.lock_code_manager.domain.read_health import (
     ReadHealth,
     async_record_read_health,
     read_health,
+    unseen_slots_allowed,
 )
 from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
-from tests.common import async_configure_flow
+from tests.common import async_configure_flow, flow_users
 
 from .conftest import Z2M_FULL_TOPIC, Z2M_GET_TOPIC, Z2M_SET_TOPIC, get_z2m_lock
 
@@ -345,19 +347,22 @@ class TestAddingThroughTheUserInterface:
         assert result["step_id"] == "code_slot"
         assert result["description_placeholders"]["user_num"] == 1
 
-    async def test_a_lock_that_never_answers_reads_can_still_be_added(
+    async def test_a_lock_that_never_answers_reads_can_be_added_once_allowed(
         self,
         hass: HomeAssistant,
         mqtt_lock_discovered,
         mqtt_mock,
     ) -> None:
         """
-        A write-only lock is found out quickly, and its slots are usable.
+        A write-only lock is found out quickly, and its slots are usable once allowed.
 
         The lock answers no read at all. Every silent slot used to read as
         occupied, so allocation walked every number the lock has -- ten
-        seconds each -- and then refused for want of a free one.
+        seconds each -- and then refused for want of a free one. Now it is
+        found out in a few reads, and the flow asks before treating slots
+        nobody can see as free: that is the user's call.
         """
+        issue_id = per_lock_issue_id(UNANSWERED_ISSUE, mqtt_lock_discovered.entity_id)
         mqtt_mock.async_publish.side_effect = _answering_only_its_state(hass)
         with patch.object(Zigbee2MQTTLock, "slot_read_timeout", 0.01):
             result = await hass.config_entries.flow.async_init(
@@ -371,7 +376,10 @@ class TestAddingThroughTheUserInterface:
             )
             await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
             result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 1})
-            assert result["step_id"] == "code_slot"
+            assert result["step_id"] == "allow_unseen_slots"
+            assert result["description_placeholders"] == {
+                "locks": mqtt_lock_discovered.entity_id
+            }
             asked = [
                 payload
                 for payload in _published_payloads(mqtt_mock, Z2M_GET_TOPIC)
@@ -381,29 +389,66 @@ class TestAddingThroughTheUserInterface:
             assert read_health(hass, mqtt_lock_discovered.entity_id) is (
                 ReadHealth.UNANSWERED
             )
+            assert not unseen_slots_allowed(hass, mqtt_lock_discovered.entity_id)
             # Nothing manages the lock yet, so a flow abandoned here leaves
             # no repair behind.
-            assert not ir.async_get(hass).async_get_issue(
-                DOMAIN,
-                per_lock_issue_id(UNANSWERED_ISSUE, mqtt_lock_discovered.entity_id),
-            )
+            assert not ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
 
+            result = await async_configure_flow(hass, flow_id, {})
+            assert result["step_id"] == "code_slot"
+            assert unseen_slots_allowed(hass, mqtt_lock_discovered.entity_id)
             result = await async_configure_flow(
                 hass, flow_id, {CONF_NAME: "Guest", CONF_PIN: "1234"}
             )
             assert result["type"] == "create_entry"
             await hass.async_block_till_done()
 
-        # The verdict reached before the entry existed is now stored with it.
+        # What was learned and allowed before the entry existed is kept with
+        # it, and nothing is left to ask.
         entry = result["result"]
         assert entry.data[CONF_INTERNAL][INTERNAL_LOCK_READS] == {
-            mqtt_lock_discovered.id: ReadHealth.UNANSWERED.value
+            mqtt_lock_discovered.id: "unanswered_allowed"
         }
-        assert ir.async_get(hass).async_get_issue(
-            DOMAIN,
-            per_lock_issue_id(UNANSWERED_ISSUE, mqtt_lock_discovered.entity_id),
-        )
+        assert not ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_block_of_users_waits_for_the_same_answer(
+        self,
+        hass: HomeAssistant,
+        mqtt_lock_discovered,
+        mqtt_mock,
+    ) -> None:
+        """The YAML route asks the same question, and keeps the block it was given."""
+        mqtt_mock.async_publish.side_effect = _answering_only_its_state(hass)
+        with patch.object(Zigbee2MQTTLock, "slot_read_timeout", 0.01):
+            result = await hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": SOURCE_USER}
+            )
+            flow_id = result["flow_id"]
+            await async_configure_flow(
+                hass,
+                flow_id,
+                {CONF_NAME: "z2m", CONF_LOCKS: [mqtt_lock_discovered.entity_id]},
+            )
+            await async_configure_flow(hass, flow_id, {"next_step_id": "yaml"})
+            result = await async_configure_flow(
+                hass,
+                flow_id,
+                {
+                    CONF_USERS: {
+                        "Guest": {CONF_ENABLED: True, CONF_PIN: "1234"},
+                        "Cleaner": {CONF_ENABLED: True, CONF_PIN: "5678"},
+                    }
+                },
+            )
+            assert result["step_id"] == "allow_unseen_slots"
+
+            result = await async_configure_flow(hass, flow_id, {})
+            assert result["type"] == "create_entry"
+            await hass.async_block_till_done()
+
+        assert set(flow_users(result)) == {"Guest", "Cleaner"}
+        assert await hass.config_entries.async_unload(result["result"].entry_id)
 
     @pytest.mark.parametrize(
         ("status", "expected"),

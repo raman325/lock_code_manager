@@ -13,6 +13,7 @@
       "name_required": "Every user needs a name. The name identifies them on your locks.",
       "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
+      "lock_reads_unanswered": "{locks} does not report the codes stored on it, so Lock Code Manager cannot see which slots are free. Open **Settings > System > Repairs** and answer the question about this lock, then try again.",
       "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
       "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
@@ -22,6 +23,10 @@
       "allocation_failed": "Reading the locks failed unexpectedly. Check the Home Assistant logs, then try again."
     },
     "step": {
+      "allow_unseen_slots": {
+        "title": "The lock does not report its codes",
+        "description": "{locks} does not answer requests to read the codes stored on it, so Lock Code Manager cannot see which slots are free.\n\nIf you continue, Lock Code Manager treats the slots it cannot see as free, and **may overwrite a code that was set at the keypad**. If you have such codes on this lock, clear them at the lock and add those people to Lock Code Manager instead.\n\nSelect **Submit** to continue, or close this dialog to stop."
+      },
       "choose_path": {
         "description": "Some locks mask stored PINs, making them invisible to external tools. Once LCM is managing your locks, do not set codes using other tools or manually at the lock. Clear all slots before setup. For permanent access codes, configure them through LCM without a condition entity.\n\nChoose whether you want to configure each slot via the UI or if you want to configure all slots in a YAML config.",
         "menu_options": {
@@ -457,7 +462,14 @@
     },
     "lock_reads_unanswered": {
       "title": "{lock} does not report its codes",
-      "description": "`{lock_entity_id}` does not answer requests to read the codes stored on it. Lock Code Manager still writes and clears codes on it, and treats a code as in sync once it has written it.\n\nIt cannot see codes that were set at the keypad or by another app, so when it chooses a slot for a new user it may overwrite one of them. If you have such codes on this lock, clear them at the lock and add those people to Lock Code Manager instead.\n\nThis goes away on its own if the lock starts answering."
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "{lock} does not report its codes",
+            "description": "`{lock_entity_id}` does not answer requests to read the codes stored on it. Lock Code Manager still writes and clears codes on it, and treats a code as in sync once it has written it.\n\nIt cannot see codes that were set at the keypad or by another app, so it cannot tell which slots are free. Until you allow it here, it will not add new users to this lock.\n\nIf you allow it, Lock Code Manager treats the slots it cannot see as free, and **may overwrite a code that was set at the keypad**. If you have such codes on this lock, clear them at the lock and add those people to Lock Code Manager instead.\n\nThis goes away on its own if the lock starts answering. Select **Submit** to allow Lock Code Manager to assign slots it cannot see."
+          }
+        }
+      }
     }
   },
   "exceptions": {
@@ -475,6 +487,9 @@
     },
     "occupancy_unknown": {
       "message": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it cannot verify are free."
+    },
+    "lock_reads_unanswered": {
+      "message": "{locks} does not report the codes stored on it. Answer the repair about it before adding users."
     },
     "search_limit_reached": {
       "message": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager searches."
@@ -548,6 +563,7 @@
         "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
         "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
         "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
+        "lock_reads_unanswered": "{locks} does not report the codes stored on it, so Lock Code Manager cannot see which slots are free. Open **Settings > System > Repairs** and answer the question about this lock, then try again.",
         "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
         "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
         "allocation_failed": "Reading the locks failed unexpectedly. Check the Home Assistant logs, then try again.",
