@@ -1,0 +1,43 @@
+<task-notification>
+<task-id>accfa34ce1f4aa9be</task-id>
+<tool-use-id>toolu_01B3WKge7m3tS8CtCbJZJVgU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/accfa34ce1f4aa9be.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 1577 round 8" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I waited the 240 seconds and then ran the code-review skill on PR #1577 at high effort. It found one low-severity issue and no correctness bugs of medium severity or higher. No files were changed, and no virtualenv was created. The skill read the diff but did not run the tests (the worktree has no `.venv`, and it didn't use the shared one). Its findings could not be posted to the PR from this session, so they exist only in the result below.
+
+Full result, verbatim:
+
+---
+
+PR #1577 (checked at high effort): one low-severity finding, and no correctness bugs of medium severity or higher. The ReportFindings tool isn't available in this session (only a GitHub connector failed to connect, which isn't the same tool), so the finding is listed here only. I read the source diff against `origin/main` and the surrounding code in the coordinator, the sync manager, the base provider and the Z-Wave provider. I didn't run the tests: this worktree has no `.venv`.
+
+**Finding**
+
+- `custom_components/lock_code_manager/domain/coordinator.py:655` (low) — a slot the lock had already confirmed can be pulled out of sync by a same-PIN direct write whose check read fails.
+  - **Scenario:** A slot is in sync; the lock has confirmed PIN A. Someone calls `set_usercode` directly on it with the same A on a Z-Wave lock without Supervision. The driver reports the outcome as unknown, so the write is recorded as unconfirmed with A. Stored data doesn't change, so the slot stays in sync while that write waits for confirmation.
+  - **Failure:** If the check read fails past the deadline (common on the lossy links this PR targets), the address is marked unverified. `calculate_in_sync` then returns false and the tick picks up the unconfirmed-write flag. The slot shows "Unconfirmed" and A is rewritten on the backoff until some read succeeds.
+  - **On `main`:** the failed write was simply discarded, because the slot was still verified.
+  - **Why it's wrong:** a same-PIN write can't have left the slot holding anything but A. Checking whether the believed value differs from what the lock last reported before marking it unverified would avoid this.
+
+**Checked and found correct**
+- **Exception order:** `LockOperationUnconfirmed` is caught before `LockOperationFailed` in the sync tick. No other handler in the set or clear path swallows it or re-wraps it.
+- **Tick scheduling:** the tick still runs while the slot is in the new `UNCONFIRMED` state, so the wait always ends.
+- **Z-Wave read-back:** reading one slot back doesn't wipe other slots' data. The provider's scoped refresh still returns every managed slot.
+- **Other providers:** only Z-Wave returns an optimistic write result or populates the new unverified-value set, so their behaviour is unchanged.
+- **Returning to in sync:** the wait state is reset on both paths into in sync. The breaker check still runs before the wait.
+- **Give-ups on deadline:** the return-type change in `_fail_overdue` works with both callers, and its dict comprehension checks each deadline before giving the write up.
+
+**Residual risks (not reported as bugs)**
+- **Stale cache counts as a report:** on Z-Wave, a read scoped to one slot still reports every other slot from the driver's stale cache. That counts as the lock "reporting" an unverified slot. On a lock that hides its codes this can mark a given-up write in sync, but a fresh read of a hidden code carries no more information, so it's mostly an existing weakness.
+- **Double read on an unconfirmed clear:** the Z-Wave provider already reads the slot once before raising, and sync then reads it back again. That's two device reads per unconfirmed clear on a lossy link. It's slower, not wrong.
+
+Restated:
+- `custom_components/lock_code_manager/domain/coordinator.py:655` — a same-PIN direct write whose check read fails marks an already-confirmed in-sync slot unverified, so it shows "Unconfirmed" and is rewritten needlessly (a regression from `main`).
+
+---
+
+The file is at `/Users/raman/projects/lock_code_manager/.worktrees/unconfirmed-retry/custom_components/lock_code_manager/domain/coordinator.py`.</result>
+<usage><subagent_tokens>66473</subagent_tokens><tool_uses>2</tool_uses><duration_ms>626909</duration_ms></usage>
+</task-notification>
