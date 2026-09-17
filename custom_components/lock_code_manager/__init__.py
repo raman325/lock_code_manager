@@ -124,6 +124,13 @@ from .domain.pin_generator import (
     generate_pin,
 )
 from .domain.queries import get_entry_config, subentry_id_for_slot
+from .domain.read_health import (
+    UNANSWERED_ISSUE,
+    async_forget_read_health,
+    async_forget_unmanaged_read_health,
+    async_persist_read_health,
+    async_sync_read_health_issue,
+)
 from .domain.references import async_notify_moved
 from .domain.services import (
     async_add_users,
@@ -600,7 +607,9 @@ async def _async_cleanup_strategy_resource(
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
-    hass.data.setdefault(DOMAIN, {"resources": False})
+    # Something may have created this before setup ran -- a config flow, a
+    # migration -- so the key is set on its own rather than with the dict.
+    hass.data.setdefault(DOMAIN, {}).setdefault("resources", False)
     hass.data[DOMAIN]["instance_id"] = await instance_id.async_get(hass)
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
@@ -978,7 +987,9 @@ async def async_setup_entry(
             f"Unable to start because lock {entity_id} can't be found"
         )
 
-    hass.data.setdefault(DOMAIN, {"resources": False})
+    # Something may have created this before setup ran -- a config flow, a
+    # migration -- so the key is set on its own rather than with the dict.
+    hass.data.setdefault(DOMAIN, {}).setdefault("resources", False)
     await _async_register_strategy_resource(hass)
 
     config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData(
@@ -987,6 +998,7 @@ async def async_setup_entry(
 
     _async_reclaim_entities_from_foreign_devices(hass, config_entry)
     _async_prune_orphaned_slot_devices(hass, config_entry)
+    async_persist_read_health(hass, config_entry)
     _async_prune_orphaned_lock_entities(hass, config_entry)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
@@ -1158,6 +1170,14 @@ async def _async_release_locks(
     if not (lock_entity_ids := list(lock_entity_ids)):
         return
     _async_purge_dropped_locks(hass, config_entry, lock_entity_ids)
+    for lock_entity_id in lock_entity_ids:
+        async_forget_read_health(hass, config_entry, lock_entity_id)
+        # Whether or not anything is loaded: the lock may have lost its
+        # registry entry, which leaves no record to forget it by.
+        if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
+            async_delete_issue(
+                hass, DOMAIN, per_lock_issue_id(UNANSWERED_ISSUE, lock_entity_id)
+            )
     if (runtime_data := getattr(config_entry, "runtime_data", None)) is None:
         return
     for lock_entity_id in lock_entity_ids:
@@ -1229,6 +1249,11 @@ async def async_unload_entry(
     if not other_loaded_entries:
         await _async_cleanup_strategy_resource(hass, hass_data)
 
+    # Disabling an entry unloads it, and a disabled entry writes nothing to
+    # its locks, so a repair it alone was keeping up no longer applies.
+    for lock_entity_id in get_entry_config(config_entry).locks:
+        async_sync_read_health_issue(hass, lock_entity_id)
+
     return unload_ok
 
 
@@ -1250,6 +1275,7 @@ async def async_remove_entry(
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
+        async_forget_unmanaged_read_health(hass, lock_entity_id)
         # Only delete per-lock issues if no other LCM entry manages this lock.
         if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
             for issue_key in PER_LOCK_ISSUE_KEYS:
@@ -2163,6 +2189,7 @@ async def _async_apply_entry_update_locked(
         await _async_setup_new_locks(
             hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
         )
+        async_persist_read_health(hass, config_entry)
 
     # For each new slot: add the standard entities and, for the locks that
     # already had their per-lock entities, the ones that view them; then start

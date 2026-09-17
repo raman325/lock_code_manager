@@ -25,6 +25,7 @@ from .exceptions import LockCodeManagerError
 from .locks import borrowed_lock_instance
 from .occupancy import LockOccupancy, Occupancy
 from .queries import get_managed_slots
+from .read_health import ReadHealth, read_health, unseen_slots_allowed
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -479,6 +480,18 @@ async def async_allocate_for(
                 # credential programmed by hand on a lock that did not answer.
                 raise SlotAllocationError(
                     "occupancy_unknown", {"locks": ", ".join(occupancy.unreadable)}
+                )
+            # Classified while being read, perhaps: a lock that cannot report
+            # its codes reads every slot as unreadable, and treating those as
+            # free is the user's call, made from the repair about it.
+            if waiting := [
+                lock_entity_id
+                for lock_entity_id in locks
+                if read_health(hass, lock_entity_id) is ReadHealth.UNANSWERED
+                and not unseen_slots_allowed(hass, lock_entity_id)
+            ]:
+                raise SlotAllocationError(
+                    "lock_reads_unanswered", {"locks": ", ".join(waiting)}
                 )
             unavailable |= occupancy.unavailable
             reported[0] += reported[1]

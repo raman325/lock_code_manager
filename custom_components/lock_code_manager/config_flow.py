@@ -46,7 +46,11 @@ from .domain.allocation import (
     async_allocate_for,
     async_check_slot_capacity,
 )
-from .domain.config import EntryConfig, async_write_entry_config
+from .domain.config import (
+    EntryConfig,
+    async_write_entry_config,
+    with_live_internal,
+)
 from .domain.names import (
     identity,
     name_error,
@@ -54,6 +58,7 @@ from .domain.names import (
     validate_user_names,
 )
 from .domain.queries import get_entry_config
+from .domain.read_health import async_allow_unseen_slots
 from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
@@ -473,6 +478,9 @@ class LockCodeManagerFlowHandler(
         # The numbers allocation must avoid, settled when the user said how
         # many users they wanted.
         self._unavailable: frozenset[int] = frozenset()
+        # The allocation to run again once the user allows the slots a lock
+        # cannot report to be used: the step, its submission, and its count.
+        self._unseen_retry: tuple[str, dict[str, Any], int] | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -547,6 +555,10 @@ class LockCodeManagerFlowHandler(
     ) -> dict[str, Any]:
         """Take the finished allocation: on to the users, or back to the count."""
         submission, (unavailable, errors, placeholders) = self._take_allocation()
+        if errors.get("base") == "lock_reads_unanswered":
+            return self._ask_to_allow_unseen_slots(
+                "ui", submission, submission[CONF_NUM_USERS], placeholders
+            )
         if unavailable is None:
             return self._show_ui_form(submission, errors, placeholders)
         self._users_to_configure = submission[CONF_NUM_USERS]
@@ -685,6 +697,10 @@ class LockCodeManagerFlowHandler(
     async def async_step_yaml_allocated(self, user_input: dict[str, Any] | None = None):
         """Take the finished allocation: create the entry, or back to the editor."""
         submission, (unavailable, errors, placeholders) = self._take_allocation()
+        if errors.get("base") == "lock_reads_unanswered":
+            return self._ask_to_allow_unseen_slots(
+                "yaml", submission, len(submission[CONF_USERS]), placeholders
+            )
         if unavailable is None:
             return self.async_show_form(
                 step_id="yaml",
@@ -699,6 +715,40 @@ class LockCodeManagerFlowHandler(
             users, start=1, unavailable=unavailable
         )
         return self._async_create_entry(assignment)
+
+    def _ask_to_allow_unseen_slots(
+        self,
+        step_id: str,
+        submission: dict[str, Any],
+        count: int,
+        placeholders: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Ask whether slots a lock cannot report may be given to the new users.
+
+        Asked here rather than through the repair that asks it for a managed
+        lock: nothing manages this one yet, and Home Assistant only offers an
+        integration's fix for a repair once the integration is loaded.
+        """
+        self._unseen_retry = (step_id, submission, count)
+        return self.async_show_form(
+            step_id="allow_unseen_slots",
+            description_placeholders=placeholders,
+            last_step=False,
+        )
+
+    async def async_step_allow_unseen_slots(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Allow it, and place the users again."""
+        assert self._unseen_retry is not None
+        step_id, submission, count = self._unseen_retry
+        self._unseen_retry = None
+        for lock_entity_id in self.data[CONF_LOCKS]:
+            async_allow_unseen_slots(self.hass, lock_entity_id)
+        return self._start_allocation(
+            step_id, None, self.data[CONF_LOCKS], count, submission
+        )
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any] | None = None):
         """
@@ -784,10 +834,10 @@ class LockCodeManagerFlowHandler(
                 await async_release_locks(self.hass, config_entry, dropped)
                 self.hass.config_entries.async_update_entry(
                     config_entry,
-                    data={
-                        **get_entry_config(config_entry).to_dict(),
-                        **user_input,
-                    },
+                    data=with_live_internal(
+                        config_entry,
+                        {**get_entry_config(config_entry).to_dict(), **user_input},
+                    ),
                     options={},
                 )
                 self.hass.async_create_task(

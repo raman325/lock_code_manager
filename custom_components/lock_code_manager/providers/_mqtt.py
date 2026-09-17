@@ -34,7 +34,7 @@ its own lifetime), the payload projections, and the api client.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import ClassVar, NoReturn, final
 
@@ -45,6 +45,13 @@ from homeassistant.core import callback
 from ..domain.credentials import User, user_from_slot
 from ..domain.exceptions import LockDisconnected
 from ..domain.models import SlotCredential
+from ..domain.read_health import (
+    SILENT_READS_TO_CLASSIFY,
+    ReadHealth,
+    async_claim_probe,
+    async_record_read_health,
+    read_health,
+)
 from ._base import BaseLock
 from .const import LOGGER
 
@@ -60,11 +67,12 @@ class BaseMqttLock(BaseLock):
     # 60s API bound, which must always be the one to claim a silent slot.
     per_exchange_budget: ClassVar[float | None] = 70.0
 
-    # Whether any slot read on this instance has ever come back with something
-    # the lock said, rather than silence. Latched on, never cleared: what it
-    # records is a property of the bridge and the lock's firmware, and neither
-    # stops being able to answer reads because a poll went badly.
-    _reads_have_succeeded: bool = field(init=False, default=False)
+    # Whether a lock on this bridge may be one that cannot answer code reads
+    # at all, so that its silences can decide it is one. Off unless the
+    # protocol allows such a lock and the provider can tell one from a lock
+    # out of reach (``_async_device_responds``): Z-Wave, for one, requires
+    # locks to answer User Code Get, so a silent Z-Wave lock is always gone.
+    code_reads_may_be_unsupported: ClassVar[bool] = False
 
     @property
     def domain(self) -> str:
@@ -242,50 +250,41 @@ class BaseMqttLock(BaseLock):
         the code is gone and storm reprogramming once the lock answers again
         -- but only the silences decide whether the read was worth anything.
 
-        Every slot failing at the transport is a different thing from every
-        slot reading unreadable, and only the first can raise. An all-unreadable
-        return is a successful poll as far as the coordinator is concerned:
-        it resets the connectivity breaker, un-suspends the slots, and lets
-        them re-fail on the next tick -- an oscillation on the order of
-        seconds, flipping every slot in and out of sync. A lock configured to
-        withhold its codes answers every request and is perfectly healthy, so
-        its reads are data and must not count towards this.
+        What the silences decide depends on whether the lock has ever
+        answered (``domain/read_health.py``):
 
-        One silent slot among answered ones stays merely unreadable. A lock
-        that answers most requests and drops one is a weak link rather than a
-        lost transport, and the caller's ``transport_failure`` phrase names
-        what silence means on its own bridge.
+        - **Never seen to answer.** Some locks cannot: a Zigbee2MQTT converter
+          that exposes the PIN as write-only, firmware with PIN Set but no
+          PIN Get. Their writes land, so silence is the answer rather than an
+          outage. After ``SILENT_READS_TO_CLASSIFY`` silences in a row the
+          read stops -- a lock that times out each slot would otherwise cost
+          minutes per read, and allocation walks up to every slot it has --
+          and the lock is asked something it can always answer
+          (``_async_device_responds``). If it answers, the last slot is asked
+          once more, since the silences may have come while the path was
+          down; still silent, it is recorded as not answering code reads. If not, it is simply out of reach, which is
+          not a verdict about the lock, so the read fails as a disconnect. A read naming fewer
+          slots asks again until it has heard that many silences, so an entry
+          with one user classifies its lock as surely as one with ten.
+        - **Recorded as not answering.** Nothing is asked except, at most once
+          per ``UNANSWERED_PROBE_INTERVAL``, the first slot, in case the lock
+          has started to answer. Every slot reads unreadable, which sync
+          judges by the last PIN it wrote.
+        - **Seen to answer.** Every slot failing at the transport is an
+          outage and raises, but only for a read of two slots or more, and,
+          on a lock that may decline code reads, only if it answers nothing
+          else either. Asking
+          about one and hearing nothing is a single lost reply, routine on a
+          lossy mesh (issue #1397 had a node dropping about half), and raising
+          there would trip the connectivity breaker for an entry with one user
+          while an entry with two on the same lock polled on untroubled. One
+          silent slot among answered ones stays merely unreadable, and one
+          silent poll is absorbed by the coordinator's breaker, which takes
+          three in a row before it suspends anything.
 
-        Silence is only evidence of an outage against a transport that has
-        been shown capable of the opposite, so two conditions both have to
-        hold before this raises.
-
-        Two slots is the smallest read it can judge. Asking about one and
-        hearing nothing is a single lost reply, and on a lossy mesh that is
-        routine -- issue #1397 had a node dropping roughly half its
-        responses. Raising there would trip the connectivity breaker on
-        ordinary noise for an entry with one user, while an entry with two on
-        the same lock, losing replies at the same rate, polled on untroubled.
-        How many people a household has must not decide whether its lock is
-        reported unreachable.
-
-        This instance must also have read something successfully at least
-        once. Some bridges cannot answer a read at all and never could: a
-        Zigbee2MQTT converter that exposes the PIN as write-only, a node whose
-        firmware implements User Code Set without Get. Those locks worked --
-        every poll came back all-unreadable and every write landed -- until an
-        all-silent rule that did not ask whether reading was ever possible
-        started declaring them gone, tripping the breaker and suspending the
-        writes along with the reads that were never going to work. Until the
-        lock proves it can be read, silence is the answer rather than the
-        absence of one, and a lock that can never prove it is left exactly as
-        it was before this rule existed.
-
-        One silent poll is not by itself an outage, and does not need to be
-        one here: raising records a single connectivity failure, and the
-        coordinator's breaker takes three in a row before it suspends
-        anything. A #1397-class link that loses both replies of one poll is
-        absorbed there, by the mechanism that already exists for it.
+        Every slot reading unreadable because the lock withholds its codes is
+        different again: those are answers, so the lock counts as answering,
+        and the poll counts as a success.
 
         Nothing about a transport that is genuinely gone rests on this
         signal. Every public operation runs ``_async_ensure_operational``
@@ -298,17 +297,108 @@ class BaseMqttLock(BaseLock):
         if not code_slots:
             return []
 
-        reads = {slot_num: await read_slot(slot_num) for slot_num in sorted(code_slots)}
-        if any(state is not None for state in reads.values()):
-            self._reads_have_succeeded = True
-        elif len(reads) > 1 and self._reads_have_succeeded:
+        ordered = sorted(code_slots)
+        health = read_health(self.hass, self.lock.entity_id)
+        reads: dict[int, SlotCredential | None] = {}
+        if health is ReadHealth.UNANSWERED and async_claim_probe(
+            self.hass, self.lock.entity_id
+        ):
+            reads[ordered[0]] = await read_slot(ordered[0])
+            if reads[ordered[0]] is not None:
+                health = self._note_answered()
+
+        silences = 0
+        if health is not ReadHealth.UNANSWERED:
+            pending = [slot for slot in ordered if slot not in reads]
+            while pending:
+                slot = pending.pop(0)
+                state = await read_slot(slot)
+                if state is not None or slot not in reads:
+                    reads[slot] = state
+                if state is not None:
+                    silences = 0
+                    if health is None:
+                        health = self._note_answered()
+                    continue
+                if health is not None or not self.code_reads_may_be_unsupported:
+                    continue
+                # A reply that arrived after its read stopped waiting may have
+                # shown the lock answers since this read began.
+                if self._answered_since_read_began():
+                    health = ReadHealth.ANSWERED
+                    continue
+                silences += 1
+                if silences >= SILENT_READS_TO_CLASSIFY:
+                    if not await self._async_device_responds():
+                        raise LockDisconnected(
+                            f"{self.lock.entity_id}: answered none of "
+                            f"{silences} code reads, nor anything else"
+                        )
+                    if self._answered_since_read_began():
+                        health = ReadHealth.ANSWERED
+                        continue
+                    # The path works now; the silences may have come while it
+                    # did not (a bridge restarting mid-read). Ask once more
+                    # before deciding the lock cannot answer.
+                    state = await read_slot(slot)
+                    if state is not None:
+                        reads[slot] = state
+                        health = self._note_answered()
+                        continue
+                    if self._answered_since_read_began():
+                        health = ReadHealth.ANSWERED
+                        continue
+                    async_record_read_health(
+                        self.hass, self.lock.entity_id, ReadHealth.UNANSWERED
+                    )
+                    health = ReadHealth.UNANSWERED
+                    break
+                if not pending:
+                    # Fewer slots than it takes to judge: ask them again.
+                    pending = list(ordered)
+
+        if (
+            health is ReadHealth.ANSWERED
+            and len(ordered) > 1
+            and all(reads.get(slot) is None for slot in ordered)
+            # A lock that may decline code reads can decline every slot asked
+            # about while talking perfectly well; only one that answers
+            # nothing else is gone.
+            and not (
+                self.code_reads_may_be_unsupported
+                and await self._async_device_responds()
+            )
+        ):
             raise LockDisconnected(
-                f"{self.lock.entity_id}: every one of the {len(reads)} requested "
+                f"{self.lock.entity_id}: every one of the {len(ordered)} requested "
                 f"slot reads {transport_failure}"
             )
         return [
             user_from_slot(
-                slot_num, SlotCredential.unreadable() if state is None else state
+                slot_num,
+                SlotCredential.unreadable()
+                if (state := reads.get(slot_num)) is None
+                else state,
             )
-            for slot_num, state in reads.items()
+            for slot_num in ordered
         ]
+
+    async def _async_device_responds(self) -> bool:
+        """
+        Return whether the lock answers something other than a code read.
+
+        What separates a lock that cannot report its codes from one that is
+        out of reach. The entity's availability is the default answer; a
+        provider whose entity stays available while its device is gone
+        should ask the device itself.
+        """
+        return await self.async_is_device_available()
+
+    def _answered_since_read_began(self) -> bool:
+        """Return whether the lock is now known to answer code reads."""
+        return read_health(self.hass, self.lock.entity_id) is ReadHealth.ANSWERED
+
+    def _note_answered(self) -> ReadHealth:
+        """Record that the lock answered a read, and return that it does."""
+        async_record_read_health(self.hass, self.lock.entity_id, ReadHealth.ANSWERED)
+        return ReadHealth.ANSWERED

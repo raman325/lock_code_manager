@@ -62,6 +62,7 @@ from ..domain.queries import (
     get_entry_config,
     get_managed_slots,
 )
+from ..domain.read_health import unseen_slots_allowed
 from ..domain.util import (
     lock_display_name,
     mask_pin,
@@ -2191,7 +2192,13 @@ class BaseLock:
 
         An index whose value could not be read still counts as occupied: it
         holds something, and over-reserving costs a user a slot number, while
-        under-reserving costs them the code on their door.
+        under-reserving costs them the code on their door. The exception is a
+        lock recorded as not answering reads at all (see
+        ``domain/read_health.py``): every index reads unreadable there, so
+        counting them would leave no number free, ever. Its indices are
+        treated as free once the user has allowed it from the repair that
+        says what that risks; until then allocation refuses to place users on
+        it.
 
         ``None`` means the lock could not be read at all, which callers must
         treat as unknown rather than free.
@@ -2210,10 +2217,13 @@ class BaseLock:
                 err,
             )
             return None
+        unseen_free = unseen_slots_allowed(self.hass, self.lock.entity_id)
         return frozenset(
             slot
             for slot, credential in codes.items()
-            if credential.is_present and slot in wanted
+            if credential.is_present
+            and slot in wanted
+            and (credential.is_readable or not unseen_free)
         )
 
     @final

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from functools import partial
 import json
 from typing import Any, ClassVar, Literal, NoReturn
@@ -18,6 +19,7 @@ from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
 
 from ..domain.credentials import Credential, CredentialRef, User, WriteResult
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
@@ -113,18 +115,73 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
     return SlotCredential.unreadable()
 
 
+def _z2m_status_says_nothing(user_info: dict[str, Any]) -> bool:
+    """
+    Return whether a user entry is the lock declining to say anything.
+
+    The converter reports any user status outside its map as
+    ``not_supported_<n>``. Only 0xFF is the Zigbee Door Lock cluster's "not
+    supported", the lock saying it cannot be read, so only that counts as
+    silence; any other number is a status the lock did report.
+    """
+    return user_info.get("status") == "not_supported_255"
+
+
+# How far Zigbee2MQTT's clock may run behind Home Assistant's before a reply
+# dated by ``last_seen`` looks older than the request it answers. Only used
+# while nothing earlier from the device can date it instead.
+_CLOCK_SLACK = timedelta(seconds=5)
+
+
+def _z2m_last_seen(payload: dict[str, Any]) -> datetime | None:
+    """
+    Return when Zigbee2MQTT last heard from the device, if the payload says.
+
+    Sent only when ``last_seen`` is turned on, as an ISO 8601 string or as
+    milliseconds since the epoch; anything else reads as not said.
+    """
+    value = payload.get("last_seen")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(value / 1000, UTC)
+    if isinstance(value, str) and (parsed := dt_util.parse_datetime(value)):
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
+
+
 @dataclass(repr=False, eq=False)
 class Zigbee2MQTTLock(BaseMqttLock):
     """Class to represent Zigbee2MQTT lock."""
 
-    # `_async_read_slot` waits 10s per slot before giving up on that slot.
-    # Above the 10s this provider itself allows a slot read before calling it
-    # silent, so that bound always speaks first.
+    # Zigbee door locks may implement PIN Set without PIN Get, and this
+    # provider asks the device itself whether it is there.
+    code_reads_may_be_unsupported: ClassVar[bool] = True
+    # How long `_async_read_slot` waits for one slot before calling it silent.
+    slot_read_timeout: ClassVar[float] = 10.0
+    # Above the wait for one slot, so that bound always speaks first.
     per_exchange_budget: ClassVar[float | None] = 15.0
 
-    _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
+    _pending_codes: dict[int, asyncio.Future[SlotCredential | None]] = field(
         init=False, default_factory=dict
     )
+    # Slots whose last read gave up waiting. A reply for one arriving later
+    # still shows the lock answers, only slowly.
+    _late_reads: set[int] = field(default_factory=set, init=False)
+    # The last entry the device's topic carried for each slot, by the form it
+    # came in, and the forms it has carried at all. Zigbee2MQTT republishes
+    # its cached state with every message, so only an entry that changed, or
+    # that an earlier message did not have, can be a late reply.
+    _seen_entries: dict[tuple[str, int], Any] = field(default_factory=dict, init=False)
+    _seen_forms: set[str] = field(default_factory=set, init=False)
+    # Waiting for the device to say anything, with what dates an answer as
+    # newer than the question: the last ``last_seen`` the device had sent, or
+    # failing that, when it was asked. See _async_device_responds.
+    _heard_from_device: list[tuple[datetime | None, datetime, asyncio.Future[None]]] = (
+        field(init=False, default_factory=list)
+    )
+    # The last ``last_seen`` the device sent, in Zigbee2MQTT's own clock.
+    _last_seen: datetime | None = field(init=False, default=None)
     # Last projected state per slot from the most recent users payload;
     # the delta gate in _process_z2m_device_payload compares against this
     # so full-cached-state republications don't repush stale entries.
@@ -211,6 +268,25 @@ class Zigbee2MQTTLock(BaseMqttLock):
         self._maybe_raise_wrong_bridge_disconnect()
         super()._raise_not_connected()
 
+    def _is_news(self, key: tuple[str, int], entry: Any, replayed: bool) -> bool:
+        """
+        Record what the device's topic said for a slot; return whether it is new.
+
+        New is an entry that changed, or that an earlier message in the same
+        form did not have. The first message in a form is not news: it may be
+        Zigbee2MQTT's cache, which it resends with every message, and taking
+        a stale entry for a late reply would record a lock that cannot report
+        its codes as one that does, for good. A replayed message says nothing
+        new and is not recorded.
+        """
+        if replayed:
+            return False
+        form = key[0]
+        known = form in self._seen_forms
+        prior = self._seen_entries.get(key)
+        self._seen_entries[key] = entry
+        return known and prior != entry
+
     async def async_is_integration_connected(self) -> bool:
         """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
@@ -218,8 +294,33 @@ class Zigbee2MQTTLock(BaseMqttLock):
         return bool(self._resolve_device_topic())
 
     @callback
-    def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
-        """Apply device-topic JSON on the Home Assistant event loop."""
+    def _process_z2m_device_payload(
+        self, payload: dict[str, Any], replayed: bool = False
+    ) -> None:
+        """
+        Apply device-topic JSON on the Home Assistant event loop.
+
+        ``replayed`` is a retained message the broker handed over again, which
+        says nothing about the device now; neither does a payload whose
+        ``last_seen`` is older than the question.
+        """
+        last_seen = None if replayed else _z2m_last_seen(payload)
+        for seen_before, asked_at, waiter in self._heard_from_device:
+            if (
+                not waiter.done()
+                and not replayed
+                and (
+                    last_seen is None
+                    or (
+                        last_seen > seen_before
+                        if seen_before is not None
+                        else last_seen >= asked_at - _CLOCK_SLACK
+                    )
+                )
+            ):
+                waiter.set_result(None)
+        if last_seen is not None:
+            self._last_seen = last_seen
         action = payload.get("action")
 
         # Handle lock/unlock actions with user identification (keypad PIN usage)
@@ -261,6 +362,8 @@ class Zigbee2MQTTLock(BaseMqttLock):
         users_data = payload.get("users")
         if users_data and isinstance(users_data, dict):
             states: dict[int, SlotCredential] = {}
+            unanswered: set[int] = set()
+            news: set[int] = set()
             for user_id_str, user_info in users_data.items():
                 user_id = parse_slot_num(user_id_str)
                 if user_id is None:
@@ -281,6 +384,12 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     continue
 
                 states[user_id] = _project_z2m_user_state(user_info)
+                if _z2m_status_says_nothing(user_info):
+                    unanswered.add(user_id)
+                if self._is_news(("users", user_id), user_info, replayed):
+                    news.add(user_id)
+            if not replayed:
+                self._seen_forms.add("users")
 
             # The converter answers GetPinCode through the users object
             # (fz.lock_pin_code_response), not through a pin_code response
@@ -293,7 +402,14 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 if (
                     future := self._pending_codes.pop(user_id, None)
                 ) is not None and not future.done():
-                    future.set_result(state)
+                    future.set_result(None if user_id in unanswered else state)
+                elif (
+                    user_id in self._late_reads
+                    and user_id not in unanswered
+                    and user_id in news
+                ):
+                    self._late_reads.discard(user_id)
+                    self._note_answered()
 
             # Zigbee2MQTT republishes its full cached state on every
             # attribute change, so most users payloads restate old entries
@@ -343,7 +459,15 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 )
                 return
 
-            if user_id in self._pending_codes:
+            is_news = self._is_news(("pin_code", user_id), pin_code_data, replayed)
+            if not replayed:
+                self._seen_forms.add("pin_code")
+            if user_id not in self._pending_codes:
+                # An answer in this form is one however late, if it is new.
+                if user_id in self._late_reads and is_news:
+                    self._late_reads.discard(user_id)
+                    self._note_answered()
+            else:
                 future = self._pending_codes.pop(user_id)
                 if not future.done():
                     user_enabled = pin_code_data.get("user_enabled", False)
@@ -407,7 +531,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 )
                 return
 
-            self.hass.add_job(self._process_z2m_device_payload, payload)
+            self.hass.add_job(self._process_z2m_device_payload, payload, msg.retain)
 
         try:
             unsub = await async_subscribe(self.hass, topic, message_received)
@@ -645,13 +769,14 @@ class Zigbee2MQTTLock(BaseMqttLock):
             return None
 
         try:
-            result = await asyncio.wait_for(future, timeout=10.0)
+            result = await asyncio.wait_for(future, timeout=self.slot_read_timeout)
         except TimeoutError:
             LOGGER.debug(
                 "Timeout waiting for PIN code response for %s slot %s",
                 self.lock.entity_id,
                 slot_num,
             )
+            self._late_reads.add(slot_num)
             credential = None
         except Exception as err:
             # Broad catch is intentional: the future is resolved by the MQTT
@@ -670,9 +795,43 @@ class Zigbee2MQTTLock(BaseMqttLock):
             credential = SlotCredential.unreadable()
         else:
             credential = result
+            self._late_reads.discard(slot_num)
         finally:
             self._pending_codes.pop(slot_num, None)
         return credential
+
+    async def _async_device_responds(self) -> bool:
+        """
+        Ask the lock for its lock state and say whether anything came back.
+
+        Zigbee2MQTT keeps a lock's entity available while the device is out
+        of range unless availability tracking is turned on, which it is not
+        by default, so the entity cannot tell a lock that will not report its
+        codes from one that is gone. Every lock reports whether it is locked.
+
+        Zigbee2MQTT also republishes a device's cached state without asking
+        it: retained replays are told apart, and so is any payload dated by
+        ``last_seen``: a fresh answer carries a later one than the device last
+        sent. Until the device has sent one, Home Assistant's clock stands in,
+        and a Zigbee2MQTT clock running behind can make one answer look stale.
+        With ``last_seen`` off, the republish Zigbee2MQTT makes when Home
+        Assistant comes online cannot be told apart, and lands here only if it
+        falls in this wait.
+        """
+        get_topic = self._get_topic("get")
+        if not get_topic:
+            return False
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        entry = (self._last_seen, dt_util.utcnow(), waiter)
+        self._heard_from_device.append(entry)
+        try:
+            await async_publish(self.hass, get_topic, json.dumps({"state": ""}))
+            await asyncio.wait_for(waiter, timeout=self.slot_read_timeout)
+        except HomeAssistantError, OSError, TimeoutError:
+            return False
+        finally:
+            self._heard_from_device.remove(entry)
+        return True
 
     async def async_get_max_slot(self) -> int | None:
         """

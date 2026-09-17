@@ -23,6 +23,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.read_health import read_health
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 
 from .conftest import ZUI_API_BASE, ZUI_NODE_ID, ZWaveJSUIApiResponder
@@ -262,6 +263,9 @@ class TestAsyncGetUsers:
             with patch(MANAGED_SLOTS, return_value={1, 2}):
                 users = await lock.async_get_users()
             assert _slot_state(users, 1) is SlotCredential.unreadable()
+        # User Code Get is mandatory in Z-Wave: silence is never taken as a
+        # lock that cannot report its codes.
+        assert read_health(hass, lock.lock.entity_id) is None
 
     async def test_a_lone_slot_losing_its_reply_is_not_a_dead_transport(
         self,
