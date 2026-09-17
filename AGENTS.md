@@ -427,9 +427,12 @@ with a comment citing the contract. Never silence one by rerunning.
    way, because every slot would read occupied and allocation could never
    place anyone. That is decided per lock, not per read, in
    `domain/read_health.py`: a provider whose reads can go unanswered reports
-   the silence (the MQTT base's `_async_read_slots` does), and once a lock
-   is recorded as not answering, allocation treats its unreadable slots as
-   free and a repair says what that risks.
+   the silence (the MQTT base's `_async_read_slots` does). Once a lock is
+   recorded as not answering, allocation refuses to place users on it
+   (`lock_reads_unanswered`) until the user allows its unreadable slots to be
+   treated as free: from the repair's fix flow, or, while the entry is being
+   created, the config flow's `allow_unseen_slots` step. That refusal is the
+   protection for codes set at the keypad, not a bug to remove.
 5. Optionally override `async_is_device_available()` to return `False` when the physical
    device is unresponsive (default returns `True`). Operations are gated on both
    integration connectivity and device availability.
