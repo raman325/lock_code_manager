@@ -1,0 +1,44 @@
+<task-notification>
+<task-id>af89504cba295896b</task-id>
+<tool-use-id>toolu_017DxtrLhxCD88mhkx3sPwZo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/af89504cba295896b.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 1577 round 3" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Here is the code-review skill's result for PR #1577 at "high", word for word. I didn't change any files or create a virtualenv. The skill couldn't use its ReportFindings tool in this session, so it wrote the finding out below instead of submitting it.
+
+---
+
+I reviewed PR #1577 (head `9d2336b0`) and found one real bug. I couldn't submit it through the ReportFindings tool because that tool isn't available in this session, so the finding is written out here.
+
+**Finding (medium severity):** `custom_components/lock_code_manager/domain/coordinator.py:327`
+
+`drop_pending` now also removes the address from `_unobserved`. The problem is who calls it. `async_internal_clear_usercode` (`providers/_base.py:1572`) calls `drop_pending` after every clear that doesn't raise, including one that found nothing and returned `False`. A clear like that sends nothing to the lock and doesn't change `data`. So the PIN that only the write put there becomes "verified" without any read, push or real clear. The PR says a believed value stays unverified until a read or push mentions it "or a clear replaces it"; this no-op clear replaces nothing.
+
+How it goes wrong on Z-Wave, which uses the native-user clear path:
+1. A slot gets an optimistic write of PIN A. The confirmation read fails after the deadline, so `_give_up_overdue` puts the address in `_unobserved`. `data` still shows A, and the driver's cache still shows the slot empty.
+2. The user disables the slot, so the target becomes (OFF, A). The tick calls clear. `async_get_users` reads the stale cache, finds no user owning the slot, and returns `False`, so no command goes to the lock. `drop_pending` still runs and removes the address from `_unobserved`. `data` still shows A, now counted as verified, and the slot stays `out_of_sync`.
+3. The user re-enables the slot. On the next tick `calculate_in_sync` sees ON with A verified and returns True. The slot goes to `in_sync`, the unconfirmed backoff is reset, and repair issues are cleared, although nothing ever showed that the lock holds A.
+4. On a lossy link the drift reads keep timing out, so the slot can show "In sync" indefinitely. That is the #1307 outcome this PR is meant to prevent.
+
+The PR's own tests miss this because they only exercise a clear that actually changes something.
+
+**Possible fix:** only drop `_unobserved` when the clear reported `changed` (or when the clear or its follow-up refresh actually replaces the value in `data`). Keep the pending-drop part as it is.
+
+**Checked, no problem found:**
+- The order of checks in the sync tick (readiness, pending, failed, unconfirmed, in-sync, breaker, backoff gate) is right.
+- The backoff doubles as described, and both the delay and the exponent are capped.
+- The `LockOperationUnconfirmed` handler sits correctly next to `LockOperationUnsupported`.
+- `_give_up` sorts writes correctly: believed ones become unconfirmed, the rest become failed.
+- The give-up count in the confirmation read (`judged_before`) is correct.
+- The status fold now includes the new state, and the translations and slot card handle it.
+- Both ordinary reads and pushes clear `_unobserved`.
+
+**Summary line:**
+- `custom_components/lock_code_manager/domain/coordinator.py:327` — `drop_pending` clears `_unobserved`, but a clear that found nothing (Z-Wave, stale cache) still calls it, so the believed PIN becomes verified without any read. Disabling and re-enabling the user then shows the slot in sync falsely.
+
+---
+
+Both paths are relative to the PR worktree, `/Users/raman/projects/lock_code_manager/.worktrees/unconfirmed-retry`.</result>
+<usage><subagent_tokens>65885</subagent_tokens><tool_uses>1</tool_uses><duration_ms>193517</duration_ms></usage>
+</task-notification>
