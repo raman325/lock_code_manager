@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bscu51t3p</task-id>
+<tool-use-id>toolu_016bQAFSjFVVczUFdEfc2ssX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/bscu51t3p.output</output-file>
+<status>completed</status>
+<summary>Background command "Run mutations for the new fixes" completed (exit code 0)</summary>
+</task-notification>
