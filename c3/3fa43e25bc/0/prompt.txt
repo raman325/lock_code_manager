@@ -1,0 +1,62 @@
+<task-notification>
+<task-id>bu0h1t43c</task-id>
+<tool-use-id>toolu_01EL78jAjtAanBtNzKXPURSA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/bu0h1t43c.output</output-file>
+<status>completed</status>
+<summary>Background command "Run mutations for the new branch" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa25b993266fbfe14</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/aa25b993266fbfe14.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 1577" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The code-review skill (high level) finished on PR #1577. I changed no files and created no virtualenv. The skill read the code but did not run the tests. Its full result, verbatim:
+
+---
+
+I couldn't submit findings through ReportFindings because that tool isn't available in this session, so they're listed here instead.
+
+## Review of PR #1577 (`fix/unconfirmed-writes-retry`, one commit `11b8068e`)
+
+I read every hunk in the integration code and the callers around it: the tick and `request_sync_check` in `sync.py`, the coordinator's give-up, push and confirmation paths, the base provider's set, clear and release paths, and the Z-Wave hard refresh. I did not run the tests. Three findings:
+
+1. **`custom_components/lock_code_manager/domain/coordinator.py:555` (`_give_up`), medium.** When a believed write is given up because the confirmation read *failed*, the slot shows `unconfirmed` for a single tick and then counts as in sync, with no retry.
+   - `_give_up_overdue` never changes `data`, so it still holds the PIN that `record_write(believed=True)` put there.
+   - On the next tick the address is no longer pending, so `is_verified` is true. The stored credential matches the PIN, so `expected_in_sync` is true.
+   - The tick then sets `IN_SYNC` and resets `_unconfirmed_attempts` and the slot breaker.
+   - **Scenario:** a Z-Wave `get_credential` raises a node timeout (mapped to `LockOperationFailed`) past the deadline. The in-sync sensor turns on and nothing is written again, although nothing showed the lock holds the code.
+   - The PR says this case ("read failed") becomes unconfirmed and keeps retrying, but only the completed-read path (where the address's data is replaced with the empty read) behaves that way.
+   - Before this PR the same leftover data led to OUT_OF_SYNC and then IN_SYNC, so the flaw is older. The PR's new claim is what's wrong. The fix is to also put the read value (or unknown) back into `data` when a believed write is given up after a failed read.
+
+2. **`custom_components/lock_code_manager/domain/sync.py:906` (with `request_sync_check` at ~line 717), low.** A leftover unconfirmed flag is charged to a later, unrelated target.
+   - `_note_unconfirmed(snapshot, "write")` takes its target from the *current* snapshot, not from the PIN that was actually given up.
+   - In the `IN_SYNC` branch, `request_sync_check` throws away a stray `take_failed_write`, but not a stray unconfirmed flag.
+   - **Scenario:** a slot is in sync, and a direct `set_usercode` service call on it returns OPTIMISTIC. Its confirmation read fails past the deadline, so the flag is set while the slot stays in sync. Later the user changes the PIN. The first tick takes the old flag, marks the new target unconfirmed, and holds the new PIN's first write for 60 seconds.
+   - This breaks the PR's promise that "a changed PIN … is tried at once".
+   - A smaller version: a give-up followed by a PIN change inside the 2-second tick window.
+   - **Fix:** discard the unconfirmed flag in `request_sync_check` the same way the failed flag is. Also record the target from the given-up pending PIN, or ignore the flag when the target doesn't match.
+
+3. **`custom_components/lock_code_manager/domain/sync.py:947` (the backoff gate), low.** The wait only applies while the state is still `UNCONFIRMED`. Any detour through another state skips it.
+   - **Scenario:** on the lossy link this PR targets, a drift read or a `LockDisconnected` trips the lock breaker. The slot goes to SUSPENDED, and on recovery `request_sync_check` sets OUT_OF_SYNC. The next tick passes the gate, because the state is no longer `UNCONFIRMED`, and writes immediately even though `_unconfirmed_retry_at` is up to an hour away.
+   - The result is one extra write per outage, which is exactly the "hammering" the cap is meant to stop.
+   - **Fix:** base the gate on the target and `_unconfirmed_retry_at` alone, not on the current state.
+
+Checked and fine:
+- The set path can never raise `LockOperationUnconfirmed`: the Z-Wave rollback deletes the user, not the credential.
+- Existing `except LockOperationFailed` callers (repairs, release, the handlers in `_base.py`) still catch the new subclass.
+- The status fold order is correct, and the translations and slot card are consistent with it.
+
+---
+
+The GitHub MCP server failed to connect in this session (HTTP 401, token rejected), so the skill could not post anything to the PR.
+
+Files cited:
+- `/Users/raman/projects/lock_code_manager/.worktrees/unconfirmed-retry/custom_components/lock_code_manager/domain/coordinator.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/unconfirmed-retry/custom_components/lock_code_manager/domain/sync.py`</result>
+<usage><subagent_tokens>66511</subagent_tokens><tool_uses>1</tool_uses><duration_ms>168819</duration_ms></usage>
+</task-notification>

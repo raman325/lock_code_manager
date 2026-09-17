@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "c33fa43e25bc",
+  "strategy": "manual-commit",
+  "branch": "fix/unanswered-reads",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/diagnostics.py",
+    "custom_components/lock_code_manager/domain/allocation.py",
+    "custom_components/lock_code_manager/domain/read_health.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/repairs.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/providers/zigbee2mqtt/test_e2e.py",
+    "tests/providers/zigbee2mqtt/test_provider.py",
+    "tests/test_read_health.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c3/3fa43e25bc/0/metadata.json",
+      "transcript": "/c3/3fa43e25bc/0/full.jsonl",
+      "compact_transcript": "/c3/3fa43e25bc/0/transcript.jsonl",
+      "content_hash": "/c3/3fa43e25bc/0/content_hash.txt",
+      "prompt": "/c3/3fa43e25bc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 6767,
+    "cache_read_tokens": 2339485,
+    "output_tokens": 3593,
+    "api_call_count": 4
+  }
+}
