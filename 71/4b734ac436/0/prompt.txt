@@ -1,0 +1,50 @@
+<task-notification>
+<task-id>a40262b44a11ca73e</task-id>
+<tool-use-id>toolu_01UT62ozwVzBpCiseBZPPysd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a40262b44a11ca73e.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Z2M lock PIN access flags" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Answer: no.** Nothing in Zigbee2MQTT or zigbee-herdsman-converters marks a lock's PINs as unreadable, so you still have to infer it from unanswered reads. I checked zigbee-herdsman-converters at `4ed6cf0e` (2026-09-16) and zigbee2mqtt `master` at `3c3d8c1a`, using shallow clones in `/tmp`; no local project files were touched.
+
+**1. How the PIN expose is defined.** `src/lib/exposes.ts:1387-1396`:
+```ts
+pincode: () =&gt;
+    new Composite("pin_code", "pin_code", access.ALL)
+        .withFeature(new Numeric("user", access.SET)...)
+        ...
+        .withFeature(new Numeric("pin_code", access.SET)...)
+```
+- The bits are defined at `exposes.ts:~805` as STATE=0b001, SET=0b010 and GET=0b100.
+- The `pin_code` composite is always `ALL` (7), and its sub-fields are SET-only (2) on every lock.
+- The shared `lock()` helper (`src/lib/modernExtend.ts:1628-1635`) and Yale's `lockExtend` (`src/devices/yale.ts:158-173`) both use `e.pincode()`. Datek, Danalock, Onesti, Schlage and Kwikset do too.
+- The only other hand-built `pin_code` composite, `shinasystem.ts:887`, also uses `ea.ALL`.
+- No lock declares the PIN expose without GET. The `users` state that read responses fill in has no expose at all.
+- `tz.pincode_lock` (`src/converters/toZigbee.ts:430`) always has a `convertGet` that sends `getPinCode`, looping over every slot up to `pinCodeCount` when no user is given.
+
+**2. Papaiz and the Yale base.**
+- No built-in definition supports the PSL200. A search of the source finds no "papaiz" or "psl200".
+- Its owners run it through external converters: zigbee2mqtt#22090 (converter copied from the Yale YMC420) and #30165 (closed as not planned, 2026-02-19).
+- The exposes JSON pasted in #30165 has `pin_code` with `"access": 7` and SET-only sub-fields, the same as every other lock.
+- YMC420-W (`yale.ts:773`) and SOLIS01 (`yale.ts:827`) both use `lockExtend()`, which brings `tz.pincode_lock` (with the GET handler), `fz.lock_pin_code_response` and `e.pincode()`.
+- `expose_pin` is a per-device user option read in `fromZigbee.ts:395`. It only controls whether a returned PIN is included in the published state; it says nothing about whether the lock answers.
+- `lock_pin_code_response` publishes only when a response actually arrives. A timeout produces no message.
+
+**3. Where the device definitions are published.** `lib/extension/bridge.ts:829-889`: `publishDevices()` builds one entry per device and publishes it retained:
+```ts
+await this.mqtt.publish("bridge/devices", stringify(devices), {clientOptions: {retain: true}, skipLog: true});
+```
+- Each entry's `definition`, built by `getDefinitionPayload` (`bridge.ts:928+`), contains `source`, `model`, `vendor`, `description`, `exposes: device.exposes()`, `supports_ota` and more.
+- So `definition.exposes[].access` is readable there, but for `pin_code` it is always 7.
+- `definition.source` is `"external"` when an external converter is in use, which would be true for the Papaiz. That only says the definition isn't built in, not that reads fail, so it isn't a usable signal.
+
+**4. Home Assistant discovery.**
+- The `lock` discovery case (`lib/extension/homeassistant.ts:929-951`) only sends state/command templates and `state_locked`/`state_unlocked`.
+- The `composite` branch (`homeassistant.ts:1385+`) handles `warning` (siren) and otherwise creates a sensor when the expose has STATE access.
+- `homeassistant.ts` never mentions `pin_code`, so discovery carries nothing about whether PINs can be read.
+
+**How reliable an access-bit check would be:** not at all. The Papaiz definition (the one pasted in #30165) reports GET like every other lock, and the built-in converter always implements GET. A check on `access &amp; 4` would never classify any lock as write-only. The read-health approach you already planned (count unanswered or `not_supported_*` reads, remember the result) remains the only workable option.
+
+**Not confirmed:** I only saw the Papaiz definition as pasted in #30165. I can't see what the Discourse reporter's own converter currently exposes. Both converters in the issues are copies of the Yale code, so they very likely carry access 7 as well.</result>
+<usage><subagent_tokens>94699</subagent_tokens><tool_uses>24</tool_uses><duration_ms>99320</duration_ms></usage>
+</task-notification>
