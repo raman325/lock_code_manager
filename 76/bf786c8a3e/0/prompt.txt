@@ -1,0 +1,35 @@
+<task-notification>
+<task-id>a4424da0209634eb3</task-id>
+<tool-use-id>toolu_019hZZu18AmuZ8F9CYcLAqip</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead/tasks/a4424da0209634eb3.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 1577 round 6" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I waited 90 seconds, then ran `code-review` with args `1577 high`. I didn't change any files or create a virtualenv. The skill said its ReportFindings tool wasn't available in that session, so it returned its findings only as text. It did not report the accepted trade-off from the PR description. Its full result, verbatim:
+
+---
+
+I reviewed PR #1577 (branch `fix/unconfirmed-writes-retry`) against `origin/main` and found two issues. The ReportFindings tool isn't available in this session, so the findings are here only.
+
+1. **Medium: a slot can get stuck in "Syncing" for good.** `/Users/raman/projects/lock_code_manager/.worktrees/unconfirmed-retry/custom_components/lock_code_manager/domain/coordinator.py:574` (`async_read_back`), called from `/Users/raman/projects/lock_code_manager/.worktrees/unconfirmed-retry/custom_components/lock_code_manager/domain/sync.py:1077`
+   - **The issue:** `async_read_back` only catches `LockCodeManagerError`. The confirmation read it copies (`async_confirm_pending_writes`) also catches plain `Exception`.
+   - **When it happens:**
+     - A clear that found nothing to clear runs on a slot whose value is still unverified, so sync takes the `else:` branch and reads the slot back.
+     - The state is still `SYNCING` during that read, because it was set before `_perform_sync`.
+     - If the provider's `async_hard_refresh_codes` or `async_get_usercodes` raises something unmapped, the exception escapes the tick before any state is written. Only Z-Wave's two known error types get mapped.
+   - **Why it sticks:** `_async_tick` skips `SYNCING`, and `request_sync_check` ignores it, so nothing ever runs sync for that slot again.
+   - **Why it's new:** before this PR, every path after `SYNCING` caught `Exception`, including the `async_refresh` in the same branch.
+   - **Fix:** catch `Exception` in `async_read_back`, as the confirmation read does.
+
+2. **Low: a second tick can run while the first is still waiting on the read-back.** `/Users/raman/projects/lock_code_manager/.worktrees/unconfirmed-retry/custom_components/lock_code_manager/domain/sync.py:1006`
+   - **The issue:** in the `except LockOperationUnconfirmed` branch, `_note_unconfirmed` sets the state to `UNCONFIRMED` before the tick awaits `async_read_back`. The 2-second tick doesn't skip `UNCONFIRMED`, so new ticks keep entering `_async_tick_impl` during that wait.
+   - **What protects it now:** only the retry wait, which is 60 seconds on the first attempt.
+   - **Why that isn't enough:** the read-back goes through `_execute_rate_limited`. It can queue for a full wait budget (sized to a walk of every managed slot) and then take its own operation budget. On the slow, lossy links this PR targets, that can run past 60 seconds.
+   - **What goes wrong:** once the wait expires, a concurrent tick sends a second clear while the first tick's read is still in flight. When that read finally returns, its older snapshot can overwrite the data behind the second attempt.
+   - **Fix:** do the read-back before marking the slot unconfirmed, or keep the state at `SYNCING` until the read returns.
+
+**Summary:**
+- `custom_components/lock_code_manager/domain/coordinator.py:574` — `async_read_back` doesn't catch plain `Exception`; after a clear that found nothing to clear, an unexpected read error leaves the slot in `SYNCING` permanently.
+- `custom_components/lock_code_manager/domain/sync.py:1006` — the unconfirmed-clear branch awaits the read-back while in `UNCONFIRMED`; if that read runs past the 60-second wait, another tick sends a second clear at the same time.</result>
+<usage><subagent_tokens>66344</subagent_tokens><tool_uses>2</tool_uses><duration_ms>276216</duration_ms></usage>
+</task-notification>
