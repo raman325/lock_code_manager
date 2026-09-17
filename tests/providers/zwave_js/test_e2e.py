@@ -679,6 +679,15 @@ class TestUnconfirmedWrites:
             assert (state.state == STATE_ON) is clear_reaches_the_lock
 
             if not clear_reaches_the_lock:
+                # Nothing to clear and nothing read: it waits, not a clear
+                # attempt on every tick.
+                await _run_for(hass, freezer, 3)
+                clears = mock_lock_helpers["async_delete_credential"].await_count
+                assert clears == 0
+                assert state.attributes.get(ATTR_SYNC_STATUS) != "in_sync"
+                manager = lcm_entry.runtime_data.slot_coordinators[1].sync_managers[0]
+                attempts = manager._unconfirmed_attempts
+                assert 1 <= attempts <= 3
                 assert write_entry_config(
                     hass,
                     lcm_entry,

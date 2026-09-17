@@ -1070,6 +1070,15 @@ class SlotSyncManager:
                 self._state = SyncState.PENDING_CONFIRMATION
                 self._write_state()
                 return
+            # A clear that found nothing to do says nothing about a value a
+            # write put in place and nobody has confirmed. Look at the lock;
+            # if even that cannot settle it, wait like any unconfirmed clear
+            # rather than trying again on every tick.
+            if not was_set and not self._coordinator.is_verified(self._address):
+                await self._coordinator.async_read_back(self._address)
+                if not self._coordinator.is_verified(self._address):
+                    self._note_unconfirmed(snapshot, "clear")
+                    return
             # Sync succeeded — refresh coordinator to verify.
             # Skip for push providers — they update coordinator optimistically
             # via push_update() and refreshing from cache could read stale data.
