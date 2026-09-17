@@ -51,13 +51,16 @@ class PendingWrite(NamedTuple):
 
     ``believed`` says whether ``data`` carries the written PIN on the strength
     of the write alone (an optimistic write pushes its value before anything
-    confirms it). Either way the address is unverified until a read or push
-    shows the slot present, and given up on at ``deadline``.
+    confirms it), and ``before`` is what ``data`` held in its place, to put
+    back if the write is given up without a read to replace it. Either way
+    the address is unverified until a read or push shows the slot present,
+    and given up on at ``deadline``.
     """
 
     pin: str
     written_at: float
     believed: bool
+    before: SlotCredential | None = None
 
     @property
     def deadline(self) -> float:
@@ -134,7 +137,7 @@ class LockUsercodeUpdateCoordinator(
         # failure: the stack's own read-back is what did not arrive, so a
         # later read through the same path showing nothing proves nothing.
         # Consumed by ``take_unconfirmed_write``.
-        self._unconfirmed_writes: set[CredentialAddress] = set()
+        self._unconfirmed_writes: dict[CredentialAddress, str] = {}
         # The single confirmation look for this lock: a task for the immediate
         # first look, then a timer while anything stays pending. One per
         # coordinator, not per write: N pending slots on one lock are one read
@@ -294,9 +297,15 @@ class LockUsercodeUpdateCoordinator(
             # for; recording it would start a look against a torn-down lock.
             return
         checked = _checked(address)
-        self._pending[checked] = PendingWrite(pin, time.monotonic(), believed)
+        prior = self._pending.get(checked)
+        before = (
+            prior.before
+            if prior is not None and prior.believed
+            else self.data.get(checked)
+        )
+        self._pending[checked] = PendingWrite(pin, time.monotonic(), believed, before)
         self._failed_writes.discard(checked)
-        self._unconfirmed_writes.discard(checked)
+        self._unconfirmed_writes.pop(checked, None)
         if believed:
             new_data = {**self.data, checked: SlotCredential.known(pin)}
             if new_data != self.data:
@@ -315,7 +324,7 @@ class LockUsercodeUpdateCoordinator(
         checked = _checked(address)
         self._pending.pop(checked, None)
         self._failed_writes.discard(checked)
-        self._unconfirmed_writes.discard(checked)
+        self._unconfirmed_writes.pop(checked, None)
 
     @callback
     def take_failed_write(self, address: CredentialAddress) -> bool:
@@ -334,19 +343,15 @@ class LockUsercodeUpdateCoordinator(
         return False
 
     @callback
-    def take_unconfirmed_write(self, address: CredentialAddress) -> bool:
+    def take_unconfirmed_write(self, address: CredentialAddress) -> str | None:
         """
-        Return, once, whether a write to ``address`` went unconfirmed.
+        Return, once, the PIN of a write to ``address`` that went unconfirmed.
 
         Set when a write the stack could not verify was not seen by its
         deadline; cleared by this call. The sync tick retries it without
-        charging the slot breaker.
+        charging the slot breaker, if it is still the PIN it wants.
         """
-        checked = _checked(address)
-        if checked in self._unconfirmed_writes:
-            self._unconfirmed_writes.discard(checked)
-            return True
-        return False
+        return self._unconfirmed_writes.pop(_checked(address), None)
 
     @callback
     def observe_push(
@@ -537,24 +542,24 @@ class LockUsercodeUpdateCoordinator(
     @callback
     def _fail_overdue(
         self, addresses: Iterable[CredentialAddress]
-    ) -> list[CredentialAddress]:
-        """Fail every given pending write that is past its deadline; return them."""
+    ) -> dict[CredentialAddress, PendingWrite]:
+        """Give up every given pending write that is past its deadline; return them."""
         now = time.monotonic()
-        overdue = [
-            address for address in addresses if now >= self._pending[address].deadline
-        ]
-        for address in overdue:
-            self._give_up(address)
-        return overdue
+        return {
+            address: self._give_up(address)
+            for address in list(addresses)
+            if now >= self._pending[address].deadline
+        }
 
     @callback
-    def _give_up(self, address: CredentialAddress) -> None:
+    def _give_up(self, address: CredentialAddress) -> PendingWrite:
         """End a pending write not seen by its deadline, judged by what it was."""
         pending = self._pending.pop(address)
         if pending.believed:
-            self._unconfirmed_writes.add(address)
+            self._unconfirmed_writes[address] = pending.pin
         else:
             self._failed_writes.add(address)
+        return pending
 
     @callback
     def _give_up_overdue(self, err: BaseException) -> None:
@@ -566,6 +571,21 @@ class LockUsercodeUpdateCoordinator(
         record; a failure that leaves everything still waiting is routine.
         """
         overdue = self._fail_overdue(list(self._pending))
+        if withdrawn := {
+            address: pending.before
+            for address, pending in overdue.items()
+            if pending.believed
+        }:
+            # Nothing read replaces the value a believed write put there, and
+            # it stands for nothing now. Set directly: a failed read is not a
+            # successful update.
+            data = dict(self.data)
+            for address, before in withdrawn.items():
+                if before is None:
+                    data.pop(address, None)
+                else:
+                    data[address] = before
+            self.data = data
         if overdue:
             self.async_update_listeners()
             _LOGGER.info(

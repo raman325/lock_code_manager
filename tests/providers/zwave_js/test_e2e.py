@@ -6,7 +6,7 @@ import copy
 from datetime import timedelta
 import time
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -37,6 +37,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
     pin_address,
 )
+from custom_components.lock_code_manager.domain.exceptions import LockOperationFailed
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.common import in_sync_entity_id, write_entry_config
@@ -583,3 +584,33 @@ class TestUnconfirmedWrites:
         assert _gaps(writes, "9999")[0] <= 3 * PENDING_WRITE_TTL
 
         await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+    async def test_a_write_whose_reads_all_fail_is_not_taken_as_in_sync(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+    ) -> None:
+        """No read replaced the value the write put in place, so it is withdrawn."""
+        writes = _timed_unknown_writes(mock_lock_helpers)
+        _cache_holds(mock_access_control, lock_schlage_be469, None)
+        with patch.object(
+            ZWaveJSLock,
+            "async_hard_refresh_codes",
+            AsyncMock(side_effect=LockOperationFailed("node timed out")),
+        ):
+            lcm_entry = await self._setup(hass, lock_entity, ZWAVE_JS_LCM_CONFIG_SLOTS)
+            in_sync = in_sync_entity_id(hass, lcm_entry, 1, lock_entity.entity_id)
+            await _run_for(hass, freezer, 20)
+
+            state = hass.states.get(in_sync)
+            assert state is not None
+            assert state.state == STATE_OFF
+            assert state.attributes.get(ATTR_SYNC_STATUS) == "unconfirmed"
+            assert 3 <= len([pin for _, pin in writes if pin == "9999"]) <= 5
+            assert not _suspended(hass)
+            await hass.config_entries.async_unload(lcm_entry.entry_id)

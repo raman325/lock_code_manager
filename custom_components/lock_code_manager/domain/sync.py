@@ -717,6 +717,7 @@ class SlotSyncManager:
                 # sync's strike. Discard it here, or the next sync to run
                 # would be charged and warned for a write it never made.
                 self._coordinator.take_failed_write(self._address)
+                self._coordinator.take_unconfirmed_write(self._address)
         elif self._state is SyncState.SUSPENDED:
             if self._code_suspend_target is not None:
                 # Suspended for a non-converging code or an unexpected error.
@@ -903,14 +904,19 @@ class SlotSyncManager:
             self._write_state()
             return
 
-        if self._coordinator.take_unconfirmed_write(self._address):
+        unconfirmed_pin = self._coordinator.take_unconfirmed_write(self._address)
+        if (
+            unconfirmed_pin is not None
+            and snapshot.active_state == STATE_ON
+            and snapshot.credential_state == unconfirmed_pin
+        ):
             self._note_unconfirmed(snapshot, "write")
             return
 
         if expected_in_sync:
             # Became in sync without us doing anything (external change)
             self._state = SyncState.IN_SYNC
-            self._unconfirmed_attempts = 0
+            self._forget_unconfirmed()
             self._slot_breaker.reset()
             self._write_state()
             self._clear_resolved_issues(snapshot)
@@ -944,12 +950,15 @@ class SlotSyncManager:
             )
             return
 
+        # Whatever the slot went through meanwhile -- a suspension, a lock
+        # that was out of reach -- the same attempt waits its turn.
         if (
-            self._state is SyncState.UNCONFIRMED
-            and (snapshot.active_state, snapshot.credential_state)
-            == self._unconfirmed_target
-            and time.monotonic() < self._unconfirmed_retry_at
-        ):
+            snapshot.active_state,
+            snapshot.credential_state,
+        ) == self._unconfirmed_target and time.monotonic() < self._unconfirmed_retry_at:
+            if self._state is not SyncState.UNCONFIRMED:
+                self._state = SyncState.UNCONFIRMED
+                self._write_state()
             return
 
         # Perform sync
@@ -1081,7 +1090,7 @@ class SlotSyncManager:
         snapshot = self._resolve_credential_snapshot()
         if snapshot is not None and self.calculate_in_sync(snapshot):
             self._state = SyncState.IN_SYNC
-            self._unconfirmed_attempts = 0
+            self._forget_unconfirmed()
             self._slot_breaker.reset()
             self._write_state()
             self._clear_resolved_issues(snapshot)
@@ -1092,6 +1101,12 @@ class SlotSyncManager:
                 self._slot_breaker.record_failure()
             self._state = SyncState.OUT_OF_SYNC
             self._write_state()
+
+    def _forget_unconfirmed(self) -> None:
+        """Start the next unconfirmed attempt's wait over, from the shortest."""
+        self._unconfirmed_attempts = 0
+        self._unconfirmed_target = None
+        self._unconfirmed_retry_at = 0.0
 
     def _note_unconfirmed(self, snapshot: CredentialSyncState, what: str) -> None:
         """
