@@ -742,3 +742,33 @@ class TestUnconfirmedWrites:
             assert state is not None
             assert state.state == STATE_ON
             await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+    async def test_a_changed_pin_the_cache_never_shows_is_not_suspended(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+    ) -> None:
+        """
+        The driver's cache keeps showing the code the slot held before.
+
+        That is the same read the driver could not complete, so the change is
+        unconfirmed, not a failure three strikes turn into a suspension.
+        """
+        writes = _timed_unknown_writes(mock_lock_helpers)
+        _cache_holds(mock_access_control, lock_schlage_be469, "4444")
+        lcm_entry = await self._setup(hass, lock_entity, ZWAVE_JS_LCM_CONFIG_SLOTS)
+        in_sync = in_sync_entity_id(hass, lcm_entry, 1, lock_entity.entity_id)
+
+        await _run_for(hass, freezer, 20)
+
+        assert 3 <= len([pin for _, pin in writes if pin == "9999"]) <= 5
+        state = hass.states.get(in_sync)
+        assert state is not None
+        assert state.attributes.get(ATTR_SYNC_STATUS) == "unconfirmed"
+        assert not _suspended(hass)
+        await hass.config_entries.async_unload(lcm_entry.entry_id)

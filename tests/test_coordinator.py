@@ -1417,12 +1417,37 @@ async def test_apply_read_takes_differing_readable_external_change(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ) -> None:
     """A readable read of a DIFFERENT code is an external change, and wins."""
-    push_coordinator.record_write(pin_address(1), "1234", believed=True)
+    push_coordinator.record_write(pin_address(1), "1234", believed=False)
     out = push_coordinator._apply_read({pin_address(1): SlotCredential.known("9999")})
     assert out[pin_address(1)] == SlotCredential.known("9999")
     assert push_coordinator.is_verified(pin_address(1)) is True
     # The slot holds something else: our write did not take.
     assert push_coordinator.take_failed_write(pin_address(1)) is True
+
+
+async def test_a_read_of_another_code_is_only_an_absence_for_an_unverifiable_write(
+    push_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """
+    The stack that could not verify the write may still show the old code.
+
+    So it is waited out like an empty read, and at the deadline the write
+    ends unconfirmed -- not failed -- with the read taken as the lock's word.
+    """
+    push_coordinator.push_update({1: SlotCredential.known("9999")})
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
+    stale = {pin_address(1): SlotCredential.known("9999")}
+
+    assert push_coordinator._apply_read(stale) == {
+        pin_address(1): SlotCredential.known("1234")
+    }
+    assert push_coordinator.is_verified(pin_address(1)) is False
+
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    assert push_coordinator._apply_read(stale) == stale
+    assert push_coordinator.is_verified(pin_address(1)) is True
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+    assert push_coordinator.take_unconfirmed_write(pin_address(1)) == "1234"
 
 
 async def test_apply_read_keeps_an_absent_slot_pending_before_the_deadline(

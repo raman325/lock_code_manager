@@ -2644,3 +2644,53 @@ class TestUnconfirmedWrites:
 
         assert seen == [SyncState.SYNCING]
         assert manager._state is SyncState.UNCONFIRMED
+
+    async def test_switching_back_to_a_pin_that_was_waiting_writes_it_at_once(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """Writing another PIN in between ended the old wait."""
+        manager = await self._unconfirmed(hass, freezer, "1234")
+        await manager._async_tick()
+        assert manager._state is SyncState.UNCONFIRMED
+
+        async def set_pin(pin: str) -> None:
+            await hass.services.async_call(
+                "text",
+                "set_value",
+                {"entity_id": SLOT_1_PIN_ENTITY, "value": pin},
+                blocking=True,
+            )
+            await hass.async_block_till_done()
+
+        with patch.object(
+            manager, "_perform_sync", AsyncMock(return_value=False)
+        ) as sync:
+            await set_pin("0000")
+            await manager._async_tick()
+            assert sync.await_count >= 1
+            written = sync.await_count
+
+            await set_pin("1234")
+            await manager._async_tick()
+            assert sync.await_count > written
+
+    async def test_a_new_manager_does_not_wait_on_a_flag_from_before_it(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A direct write that went unconfirmed before this manager is not its wait."""
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
+        await manager.async_stop()
+        manager._started = False
+        manager._coordinator._unconfirmed_writes[pin_address(1)] = "1234"
+
+        await manager.async_start()
+
+        assert manager._coordinator.take_unconfirmed_write(pin_address(1)) is None
+        assert manager._state is not SyncState.UNCONFIRMED

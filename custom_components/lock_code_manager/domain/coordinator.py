@@ -225,7 +225,10 @@ class LockUsercodeUpdateCoordinator(
         purpose is to surface out-of-band changes, would silently overwrite
         one, and count the write as failed. Observing the slot still absent
         before the deadline means the write has not landed yet: keep waiting.
-        Absent at or past the deadline means it is not going to: give the
+        For a write the stack could not verify, a read showing a different
+        code is judged like an absent one: that stack may still be showing the
+        code the slot held. Absent at or past the deadline means it is not
+        going to: give the
         write up and take the observation -- counted failed, or unconfirmed
         for a write the stack could not verify (see ``_give_up``). Either
         leaves the address for the sync tick to judge once. Addresses with
@@ -236,15 +239,21 @@ class LockUsercodeUpdateCoordinator(
         self._unobserved.difference_update(observed)
         for address, cred in observed.items():
             pending = self._pending.get(address)
+            other_code = cred.is_readable and cred.readable_pin != (
+                pending.pin if pending else None
+            )
             if pending is None:
                 out[address] = cred
-            elif cred.is_present:
+            elif cred.is_present and not (other_code and pending.believed):
                 del self._pending[address]
-                if cred.is_readable and cred.readable_pin != pending.pin:
+                if other_code:
                     self._failed_writes.add(address)
                     out[address] = cred
                 else:
                     out[address] = SlotCredential.known(pending.pin)
+            # A write the stack could not verify is judged by a read only as
+            # an absence: the same stack may still be showing the code the
+            # slot held before.
             elif now >= pending.deadline:
                 self._give_up(address)
                 out[address] = cred

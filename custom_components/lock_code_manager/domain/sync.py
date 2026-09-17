@@ -306,6 +306,7 @@ class SlotSyncManager:
         # A write that failed before this manager existed -- a direct write to
         # a slot nobody managed yet -- is not this manager's strike.
         self._coordinator.take_failed_write(self._address)
+        self._coordinator.take_unconfirmed_write(self._address)
         self._setup_state_tracking()
         self._setup_coordinator_listener()
         self._tick_unsub = async_track_time_interval(
@@ -963,6 +964,13 @@ class SlotSyncManager:
                 self._state = SyncState.UNCONFIRMED
                 self._write_state()
             return
+
+        # A different target is a new attempt: the wait for the old one goes.
+        if (
+            snapshot.active_state,
+            snapshot.credential_state,
+        ) != self._unconfirmed_target:
+            self._forget_unconfirmed()
 
         # Perform sync
         self._state = SyncState.SYNCING
