@@ -1320,7 +1320,7 @@ async def test_string_slot_number_still_resolves(push_coordinator) -> None:
     """
     push_coordinator.record_write(pin_address(1), "1234", believed=True)
     assert push_coordinator.is_verified(pin_address("1")) is False
-    push_coordinator.drop_pending(pin_address("1"))
+    push_coordinator.settle_pending(pin_address("1"))
     assert push_coordinator.is_verified(pin_address(1)) is True
 
 
@@ -1602,7 +1602,7 @@ async def test_confirmation_read_failure_past_the_deadline_gives_the_write_up(
     assert push_coordinator.take_unconfirmed_write(pin_address(1)) is None
 
 
-@pytest.mark.parametrize("settled_by", ["read", "push", "write", "drop"])
+@pytest.mark.parametrize("settled_by", ["read", "push", "clear"])
 async def test_a_believed_write_given_up_without_a_read_stays_unverified(
     push_lock: MockLCMPushLock,
     push_coordinator: LockUsercodeUpdateCoordinator,
@@ -1637,12 +1637,19 @@ async def test_a_believed_write_given_up_without_a_read_stays_unverified(
         push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
     elif settled_by == "push":
         push_coordinator.push_update({1: SlotCredential.known("2222")})
-    elif settled_by == "write":
+    else:
+        # Superseding or dropping the write is not the lock's word.
+        push_coordinator.drop_pending(pin_address(1))
         push_coordinator.record_write(pin_address(1), "4444", believed=False)
         push_coordinator.drop_pending(pin_address(1))
-    else:
-        push_coordinator.drop_pending(pin_address(1))
+        assert push_coordinator.is_verified(pin_address(1)) is False
+        push_coordinator.record_clear(pin_address(1))
+        assert push_coordinator.credential(pin_address(1)) == SlotCredential.empty()
     assert push_coordinator.is_verified(pin_address(1)) is True
+    # A clear with no believed value to replace leaves the lock's word alone.
+    push_coordinator.push_update({1: SlotCredential.known("7777")})
+    push_coordinator.record_clear(pin_address(1))
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("7777")
 
 
 @pytest.mark.parametrize("ending", ["drop_pending", "record_write"])

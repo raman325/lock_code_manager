@@ -264,7 +264,8 @@ class LockUsercodeUpdateCoordinator(
         push shows the slot present -- or the deadline passes and the write is
         given up on. An optimistic write given up without a read to replace
         the value it put in place leaves the address unverified until a read
-        or push says anything about it.
+        or push says anything about it, or a clear that did something
+        replaces it.
         """
         checked = _checked(address)
         return checked not in self._pending and checked not in self._unobserved
@@ -318,12 +319,27 @@ class LockUsercodeUpdateCoordinator(
 
         For a write that is no longer wanted -- the slot was cleared, or the
         desired PIN changed while it was outstanding. Not a failure, so it
-        leaves nothing for the tick to charge.
+        leaves nothing for the tick to charge. A believed value the write put
+        in place is still nobody's word, so the address stays unverified
+        until something speaks for it (see ``is_verified``).
         """
         checked = _checked(address)
-        self._pending.pop(checked, None)
+        dropped = self._pending.pop(checked, None)
         self._failed_writes.discard(checked)
         self._unconfirmed_writes.pop(checked, None)
+        if dropped is not None and dropped.believed:
+            self._unobserved.add(checked)
+
+    @callback
+    def settle_pending(self, address: CredentialAddress) -> None:
+        """
+        Forget a pending write the lock's own push has just spoken for.
+
+        For a push provider's confirmed write: the value in ``data`` is the
+        lock's word now, whatever an older write had put there.
+        """
+        checked = _checked(address)
+        self.drop_pending(checked)
         self._unobserved.discard(checked)
 
     @callback
@@ -341,6 +357,20 @@ class LockUsercodeUpdateCoordinator(
             self._failed_writes.discard(checked)
             return True
         return False
+
+    @callback
+    def record_clear(self, address: CredentialAddress) -> None:
+        """
+        Take a clear the lock's stack reported as done as the slot's state.
+
+        Only a believed value left in place is replaced: anything else in
+        ``data`` came from the lock, and its next report settles it.
+        """
+        checked = _checked(address)
+        if checked not in self._unobserved:
+            return
+        self._unobserved.discard(checked)
+        self.async_set_updated_data({**self.data, checked: SlotCredential.empty()})
 
     @callback
     def take_unconfirmed_write(self, address: CredentialAddress) -> str | None:

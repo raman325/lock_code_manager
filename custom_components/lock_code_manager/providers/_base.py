@@ -1440,7 +1440,7 @@ class BaseLock:
             # The provider's own push (or the driver's event) is the lock's
             # word for the write. Any older pending write to the slot is
             # superseded by it.
-            self.coordinator.drop_pending(address)
+            self.coordinator.settle_pending(address)
         else:
             # A polled lock has nothing to vouch for the write but a later
             # read: "confirmed" here is the cloud service accepting it, not
@@ -1575,6 +1575,8 @@ class BaseLock:
         # there.
         if changed:
             self._cleared_slots.add(code_slot)
+            if self.coordinator is not None:
+                self.coordinator.record_clear(pin_address(code_slot))
         else:
             self._cleared_slots.discard(code_slot)
         if changed and self.coordinator and not self.supports_push:

@@ -8,6 +8,7 @@ import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -613,4 +614,82 @@ class TestUnconfirmedWrites:
             assert state.attributes.get(ATTR_SYNC_STATUS) == "unconfirmed"
             assert 3 <= len([pin for _, pin in writes if pin == "9999"]) <= 5
             assert not _suspended(hass)
+            await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+    @pytest.mark.parametrize(
+        ("cache", "clear_reaches_the_lock"),
+        [
+            # The cache never saw the write: the clear finds no owner and
+            # sends nothing.
+            pytest.param(None, False, id="nothing_to_clear"),
+            # The cache shows the old code under its user: the clear goes out.
+            pytest.param("4444", True, id="cleared"),
+        ],
+    )
+    async def test_disabling_a_slot_the_lock_never_confirmed(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+        cache: str | None,
+        clear_reaches_the_lock: bool,
+    ) -> None:
+        """
+        Only a clear that did something speaks for the slot.
+
+        One that found nothing to clear leaves the unconfirmed PIN unverified,
+        so enabling the user again is not taken as in sync on the write alone.
+        """
+        _timed_unknown_writes(mock_lock_helpers)
+        _cache_holds(mock_access_control, lock_schlage_be469, cache)
+        slots = copy.deepcopy(ZWAVE_JS_LCM_CONFIG_SLOTS)
+        with patch.object(
+            ZWaveJSLock,
+            "async_hard_refresh_codes",
+            AsyncMock(side_effect=LockOperationFailed("node timed out")),
+        ):
+            lcm_entry = await self._setup(hass, lock_entity, slots)
+            in_sync = in_sync_entity_id(hass, lcm_entry, 1, lock_entity.entity_id)
+            await _run_for(hass, freezer, 2)
+            coordinator = lcm_entry.runtime_data.locks[
+                lock_entity.entity_id
+            ].coordinator
+            assert not coordinator.is_verified(pin_address(1))
+
+            disabled = copy.deepcopy(slots)
+            disabled[1][CONF_ENABLED] = False
+            assert write_entry_config(
+                hass,
+                lcm_entry,
+                {CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: disabled},
+            )
+            for _ in range(3):
+                freezer.tick(timedelta(seconds=3))
+                async_fire_time_changed(hass)
+                await hass.async_block_till_done()
+            assert mock_lock_helpers["async_delete_credential"].await_count == (
+                1 if clear_reaches_the_lock else 0
+            )
+            state = hass.states.get(in_sync)
+            assert state is not None
+            assert (state.state == STATE_ON) is clear_reaches_the_lock
+
+            if not clear_reaches_the_lock:
+                assert write_entry_config(
+                    hass,
+                    lcm_entry,
+                    {CONF_LOCKS: [lock_entity.entity_id], CONF_SLOTS: slots},
+                )
+                await hass.async_block_till_done()
+                freezer.tick(timedelta(seconds=5))
+                async_fire_time_changed(hass)
+                await hass.async_block_till_done()
+                state = hass.states.get(in_sync)
+                assert state is not None
+                assert state.state == STATE_OFF
+
             await hass.config_entries.async_unload(lcm_entry.entry_id)
