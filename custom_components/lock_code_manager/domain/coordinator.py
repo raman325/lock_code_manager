@@ -51,13 +51,16 @@ class PendingWrite(NamedTuple):
 
     ``believed`` says whether ``data`` carries the written PIN on the strength
     of the write alone (an optimistic write pushes its value before anything
-    confirms it). Either way the address is unverified until a read or push
-    shows the slot present, and given up on at ``deadline``.
+    confirms it), and ``displaced`` whether that value replaced anything the
+    lock had not already reported. Either way the address is unverified
+    until a read or push shows the slot present, and given up on at
+    ``deadline``.
     """
 
     pin: str
     written_at: float
     believed: bool
+    displaced: bool = False
 
     @property
     def deadline(self) -> float:
@@ -313,7 +316,13 @@ class LockUsercodeUpdateCoordinator(
             # for; recording it would start a look against a torn-down lock.
             return
         checked = _checked(address)
-        self._pending[checked] = PendingWrite(pin, time.monotonic(), believed)
+        displaced = believed and (
+            not self.is_verified(checked)
+            or self.data.get(checked) != SlotCredential.known(pin)
+        )
+        self._pending[checked] = PendingWrite(
+            pin, time.monotonic(), believed, displaced
+        )
         self._failed_writes.discard(checked)
         self._unconfirmed_writes.pop(checked, None)
         if believed:
@@ -337,7 +346,7 @@ class LockUsercodeUpdateCoordinator(
         dropped = self._pending.pop(checked, None)
         self._failed_writes.discard(checked)
         self._unconfirmed_writes.pop(checked, None)
-        if dropped is not None and dropped.believed:
+        if dropped is not None and dropped.displaced:
             self._unobserved.add(checked)
 
     @callback
@@ -653,7 +662,7 @@ class LockUsercodeUpdateCoordinator(
         overdue = self._fail_overdue(list(self._pending))
         # Nothing read replaces the value a believed write put in place.
         self._unobserved.update(
-            address for address, pending in overdue.items() if pending.believed
+            address for address, pending in overdue.items() if pending.displaced
         )
         if overdue:
             self.async_update_listeners()

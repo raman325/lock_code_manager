@@ -1710,6 +1710,51 @@ async def test_reading_one_slot_back(
         )
 
 
+@pytest.mark.parametrize("ending", ["given_up", "dropped"])
+async def test_a_believed_write_of_what_the_lock_already_showed_leaves_it_verified(
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    freezer,
+    ending: str,
+) -> None:
+    """Writing the PIN the lock already reported put nothing new in place."""
+    push_coordinator.push_update({1: SlotCredential.known("1234")})
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
+    if ending == "dropped":
+        push_coordinator.drop_pending(pin_address(1))
+    else:
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+        with patch.object(
+            push_lock,
+            "async_hard_refresh_codes",
+            AsyncMock(side_effect=LockDisconnected("offline")),
+        ):
+            await push_coordinator.async_confirm_pending_writes()
+
+    assert push_coordinator.is_verified(pin_address(1)) is True
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("1234")
+
+
+async def test_writing_an_unconfirmed_pin_again_does_not_make_it_the_locks_word(
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    freezer,
+) -> None:
+    """The data shows the PIN only because the first write put it there."""
+    push_coordinator.push_update({1: SlotCredential.empty()})
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=LockDisconnected("offline")),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert push_coordinator.is_verified(pin_address(1)) is False
+
+
 @pytest.mark.parametrize("ending", ["drop_pending", "record_write"])
 async def test_an_unconfirmed_write_is_forgotten_by_what_supersedes_it(
     push_lock: MockLCMPushLock,
