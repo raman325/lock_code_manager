@@ -1122,7 +1122,9 @@ class SlotSyncManager:
         self._unconfirmed_attempts += 1
         self._unconfirmed_target = target
         delay = min(
-            PENDING_WRITE_TTL * 2 ** (self._unconfirmed_attempts - 1),
+            # The exponent is bounded as well: past the cap it changes nothing,
+            # and unbounded it overflows on a lock that never confirms.
+            PENDING_WRITE_TTL * 2 ** min(self._unconfirmed_attempts - 1, 16),
             UNCONFIRMED_RETRY_MAX,
         )
         self._unconfirmed_retry_at = time.monotonic() + delay

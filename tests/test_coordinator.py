@@ -1593,7 +1593,8 @@ async def test_confirmation_read_failure_past_the_deadline_gives_the_write_up(
         AsyncMock(side_effect=LockDisconnected("offline")),
     ):
         await push_coordinator.async_confirm_pending_writes()
-    assert push_coordinator.is_verified(pin_address(1)) is True
+    # Nothing read replaced a believed value, so it is still not the lock's word.
+    assert push_coordinator.is_verified(pin_address(1)) is not believed
     assert push_coordinator.take_failed_write(pin_address(1)) is not believed
     assert push_coordinator.take_unconfirmed_write(pin_address(1)) == (
         "9999" if believed else None
@@ -1601,25 +1602,23 @@ async def test_confirmation_read_failure_past_the_deadline_gives_the_write_up(
     assert push_coordinator.take_unconfirmed_write(pin_address(1)) is None
 
 
-@pytest.mark.parametrize("before", [SlotCredential.known("1111"), None])
-async def test_a_believed_write_given_up_without_a_read_is_withdrawn(
+@pytest.mark.parametrize("settled_by", ["read", "push", "write", "drop"])
+async def test_a_believed_write_given_up_without_a_read_stays_unverified(
     push_lock: MockLCMPushLock,
     push_coordinator: LockUsercodeUpdateCoordinator,
     freezer,
-    before: SlotCredential | None,
+    settled_by: str,
 ) -> None:
     """
-    Nothing read replaces the value a believed write put in place.
+    Nothing read replaced the value a believed write put in place.
 
-    It stood for the write alone, so the slot goes back to what it held
-    before -- including through a second write that replaced the first --
-    and a failed read is still not a successful update.
+    So it is not the lock's word, until a read or push says anything about
+    the slot, or a new write or a clear takes its place. A write the stack
+    vouched for put nothing in place, and is judged as before.
     """
-    if before is not None:
-        push_coordinator.push_update({1: before})
+    push_coordinator.push_update({1: SlotCredential.known("1111")})
     push_coordinator.record_write(pin_address(1), "2222", believed=True)
-    push_coordinator.record_write(pin_address(1), "3333", believed=True)
-    assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("3333")
+    push_coordinator.record_write(pin_address(2), "3333", believed=False)
     push_coordinator.last_update_success = False
     freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
     with patch.object(
@@ -1629,31 +1628,21 @@ async def test_a_believed_write_given_up_without_a_read_is_withdrawn(
     ):
         await push_coordinator.async_confirm_pending_writes()
 
-    assert push_coordinator.credential(pin_address(1)) == before
-    assert push_coordinator.has_credential(pin_address(1)) is (before is not None)
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("2222")
+    assert push_coordinator.is_verified(pin_address(1)) is False
+    assert push_coordinator.is_verified(pin_address(2)) is True
     assert push_coordinator.last_update_success is False
-    assert push_coordinator.take_unconfirmed_write(pin_address(1)) == "3333"
 
-
-async def test_a_vouched_write_given_up_without_a_read_leaves_the_data_alone(
-    push_lock: MockLCMPushLock,
-    push_coordinator: LockUsercodeUpdateCoordinator,
-    freezer,
-) -> None:
-    """Nothing of it was put in place, so whatever the lock last said stands."""
-    push_coordinator.push_update({1: SlotCredential.known("1111")})
-    push_coordinator.record_write(pin_address(1), "2222", believed=False)
-    push_coordinator.push_update({1: SlotCredential.known("5555")})
-    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
-    with patch.object(
-        push_lock,
-        "async_hard_refresh_codes",
-        AsyncMock(side_effect=LockDisconnected("offline")),
-    ):
-        await push_coordinator.async_confirm_pending_writes()
-
-    assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("5555")
-    assert push_coordinator.take_failed_write(pin_address(1)) is True
+    if settled_by == "read":
+        push_coordinator._apply_read({pin_address(1): SlotCredential.empty()})
+    elif settled_by == "push":
+        push_coordinator.push_update({1: SlotCredential.known("2222")})
+    elif settled_by == "write":
+        push_coordinator.record_write(pin_address(1), "4444", believed=False)
+        push_coordinator.drop_pending(pin_address(1))
+    else:
+        push_coordinator.drop_pending(pin_address(1))
+    assert push_coordinator.is_verified(pin_address(1)) is True
 
 
 @pytest.mark.parametrize("ending", ["drop_pending", "record_write"])
