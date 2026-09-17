@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "54fd0bca1fc1",
+  "strategy": "manual-commit",
+  "branch": "fix/unconfirmed-writes-retry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/domain/sync.py",
+    "tests/providers/zwave_js/test_e2e.py",
+    "tests/test_coordinator.py",
+    "tests/test_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/54/fd0bca1fc1/0/metadata.json",
+      "transcript": "/54/fd0bca1fc1/0/full.jsonl",
+      "compact_transcript": "/54/fd0bca1fc1/0/transcript.jsonl",
+      "content_hash": "/54/fd0bca1fc1/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 3852,
+    "cache_read_tokens": 1275596,
+    "output_tokens": 2184,
+    "api_call_count": 2
+  }
+}
