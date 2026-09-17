@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "acffc1286540",
+  "strategy": "manual-commit",
+  "branch": "fix/unconfirmed-writes-retry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/sync.py",
+    "tests/providers/zwave_js/test_e2e.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ac/ffc1286540/0/metadata.json",
+      "transcript": "/ac/ffc1286540/0/full.jsonl",
+      "compact_transcript": "/ac/ffc1286540/0/transcript.jsonl",
+      "content_hash": "/ac/ffc1286540/0/content_hash.txt",
+      "prompt": "/ac/ffc1286540/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 4981,
+    "cache_read_tokens": 2349348,
+    "output_tokens": 3391,
+    "api_call_count": 3
+  }
+}
