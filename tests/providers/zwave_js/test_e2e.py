@@ -693,3 +693,43 @@ class TestUnconfirmedWrites:
                 assert state.state == STATE_OFF
 
             await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+    async def test_a_clear_the_lock_never_confirmed_is_read_back_at_once(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        lock_schlage_be469: Node,
+        freezer,
+    ) -> None:
+        """One that landed settles on that read, with nothing sent again."""
+        mock_lock_helpers["async_delete_credential"].side_effect = HomeAssistantError(
+            translation_key=_UNKNOWN
+        )
+        _cache_holds(mock_access_control, lock_schlage_be469, "9999")
+        slots = copy.deepcopy(ZWAVE_JS_LCM_CONFIG_SLOTS)
+        slots[1][CONF_ENABLED] = False
+        refreshed = AsyncMock(
+            return_value={
+                1: SlotCredential.empty(),
+                2: SlotCredential.known("1234"),
+            }
+        )
+        with patch.object(ZWaveJSLock, "async_hard_refresh_codes", refreshed):
+            lcm_entry = await self._setup(hass, lock_entity, slots)
+            in_sync = in_sync_entity_id(hass, lcm_entry, 1, lock_entity.entity_id)
+            await _run_for(hass, freezer, 20)
+
+            deletes = [
+                call
+                for call in mock_lock_helpers["async_delete_credential"].await_args_list
+                if call.args[3] == 1
+            ]
+            assert len(deletes) == 1
+            assert refreshed.await_args_list[0].args == ({1},)
+            state = hass.states.get(in_sync)
+            assert state is not None
+            assert state.state == STATE_ON
+            await hass.config_entries.async_unload(lcm_entry.entry_id)

@@ -2591,3 +2591,25 @@ class TestUnconfirmedWrites:
         assert manager._unconfirmed_retry_at - time.monotonic() == pytest.approx(
             UNCONFIRMED_RETRY_MAX
         )
+
+    async def test_a_flag_for_a_slot_already_in_sync_is_not_acted_on(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """The lock showed the write before the tick got to it: just in sync."""
+        manager = await self._unconfirmed(hass, freezer, "1234")
+        manager._coordinator.push_update({1: SlotCredential.known("1234")})
+        written: list[SyncState] = []
+
+        with patch.object(
+            manager,
+            "_write_state",
+            side_effect=lambda: written.append(manager._state),
+        ):
+            await manager._async_tick()
+
+        assert written == [SyncState.IN_SYNC]
+        assert manager._coordinator.take_unconfirmed_write(pin_address(1)) is None

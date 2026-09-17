@@ -905,21 +905,24 @@ class SlotSyncManager:
             return
 
         unconfirmed_pin = self._coordinator.take_unconfirmed_write(self._address)
+
+        if expected_in_sync:
+            # Became in sync without us doing anything (external change) --
+            # including a write given up as unconfirmed that the lock has
+            # shown since.
+            self._state = SyncState.IN_SYNC
+            self._forget_unconfirmed()
+            self._slot_breaker.reset()
+            self._write_state()
+            self._clear_resolved_issues(snapshot)
+            return
+
         if (
             unconfirmed_pin is not None
             and snapshot.active_state == STATE_ON
             and snapshot.credential_state == unconfirmed_pin
         ):
             self._note_unconfirmed(snapshot, "write")
-            return
-
-        if expected_in_sync:
-            # Became in sync without us doing anything (external change)
-            self._state = SyncState.IN_SYNC
-            self._forget_unconfirmed()
-            self._slot_breaker.reset()
-            self._write_state()
-            self._clear_resolved_issues(snapshot)
             return
 
         # Circuit breaker check: too many failed sync attempts (a set that
@@ -1003,6 +1006,9 @@ class SlotSyncManager:
         except LockOperationUnconfirmed as err:
             _LOGGER.info("%s: %s", self._log_prefix, err)
             self._note_unconfirmed(snapshot, "clear")
+            # Nothing is pending to be read back for a clear, so look now: one
+            # that landed settles on this read instead of waiting its turn.
+            await self._coordinator.async_read_back(self._address)
             return
         except LockOperationUnsupported as err:
             # Permanent: the lock can never accept this request as configured,

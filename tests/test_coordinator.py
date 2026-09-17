@@ -1652,6 +1652,38 @@ async def test_a_believed_write_given_up_without_a_read_stays_unverified(
     assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("7777")
 
 
+async def test_reading_one_slot_back(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A polled lock is read as usual, a push lock hard-refreshed; a failure changes nothing."""
+    poll_lock.codes[1] = "4321"
+    await poll_coordinator.async_read_back(pin_address(1))
+    assert poll_coordinator.credential(pin_address(1)) == SlotCredential.known("4321")
+
+    push_coordinator.push_update({1: SlotCredential.known("1111")})
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.empty()}),
+    ) as refresh:
+        await push_coordinator.async_read_back(pin_address(1))
+    assert refresh.await_args.args == ({1},)
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.empty()
+
+    push_coordinator.push_update({1: SlotCredential.known("1111")})
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=LockDisconnected("offline")),
+    ):
+        await push_coordinator.async_read_back(pin_address(1))
+    assert push_coordinator.credential(pin_address(1)) == SlotCredential.known("1111")
+
+
 @pytest.mark.parametrize("ending", ["drop_pending", "record_write"])
 async def test_an_unconfirmed_write_is_forgotten_by_what_supersedes_it(
     push_lock: MockLCMPushLock,

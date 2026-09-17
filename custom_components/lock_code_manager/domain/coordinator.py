@@ -226,8 +226,9 @@ class LockUsercodeUpdateCoordinator(
         one, and count the write as failed. Observing the slot still absent
         before the deadline means the write has not landed yet: keep waiting.
         Absent at or past the deadline means it is not going to: give the
-        write up, take the observation, and count it failed. Either failure
-        leaves the address for the sync tick to charge once. Addresses with
+        write up and take the observation -- counted failed, or unconfirmed
+        for a write the stack could not verify (see ``_give_up``). Either
+        leaves the address for the sync tick to judge once. Addresses with
         nothing pending are the lock's word as read.
         """
         now = time.monotonic()
@@ -568,6 +569,37 @@ class LockUsercodeUpdateCoordinator(
             # a slot left in sync must judge that now, not be charged for it
             # by some later, unrelated sync.
             self.async_update_listeners()
+
+    async def async_read_back(self, address: CredentialAddress) -> None:
+        """
+        Read one address back after an operation nothing confirmed.
+
+        For a clear the lock's stack could not verify, which leaves nothing
+        pending for the confirmation look. Read the way that look reads, and
+        taken the same way; a read that fails changes nothing, and the retry
+        that follows covers it.
+        """
+        checked = _checked(address)
+        try:
+            if self._is_push:
+                raw = await self._lock.async_internal_hard_refresh_codes(
+                    {checked.user_ref}
+                )
+            else:
+                raw = await self._lock.async_internal_get_usercodes(
+                    self._lock.managed_slots | {checked.user_ref}
+                )
+            new_data = self._apply_read(self._normalize_keys(raw))
+        except LockCodeManagerError as err:
+            _LOGGER.debug(
+                "Reading slot %s back from %s failed: %s",
+                checked.user_ref,
+                self._lock.lock.entity_id,
+                err,
+            )
+            return
+        if new_data != self.data:
+            self.async_set_updated_data(new_data)
 
     @callback
     def _fail_overdue(
