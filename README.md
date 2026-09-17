@@ -160,6 +160,11 @@ input tables, and import buttons.
 Visit the [Wiki](https://github.com/raman325/lock_code_manager/wiki) for detailed
 documentation including configuration, troubleshooting, dashboard setup, and development guides.
 
+**Upgrading from 5.x?** 6.0 makes each user a config subentry and removes the
+remaining slot-addressed actions and event. Read
+[Upgrading to 6.0](https://github.com/raman325/lock_code_manager/wiki/Upgrading-to-6.0)
+first — the migration is one-way.
+
 **Upgrading from 4.x?** 5.0 is configured by user rather than by slot number,
 and migrating renames every entity ID. Read
 [Upgrading to 5.0](https://github.com/raman325/lock_code_manager/wiki/Upgrading-to-5.0)
