@@ -128,7 +128,8 @@ def _z2m_status_says_nothing(user_info: dict[str, Any]) -> bool:
 
 
 # How far Zigbee2MQTT's clock may run behind Home Assistant's before a reply
-# dated by ``last_seen`` looks older than the request it answers.
+# dated by ``last_seen`` looks older than the request it answers. Only used
+# while nothing earlier from the device can date it instead.
 _CLOCK_SLACK = timedelta(seconds=5)
 
 
@@ -167,11 +168,14 @@ class Zigbee2MQTTLock(BaseMqttLock):
     # Slots whose last read gave up waiting. A reply for one arriving later
     # still shows the lock answers, only slowly.
     _late_reads: set[int] = field(default_factory=set, init=False)
-    # Waiting for the device to say anything, with when it was asked; see
-    # _async_device_responds.
-    _heard_from_device: list[tuple[datetime, asyncio.Future[None]]] = field(
-        init=False, default_factory=list
+    # Waiting for the device to say anything, with what dates an answer as
+    # newer than the question: the last ``last_seen`` the device had sent, or
+    # failing that, when it was asked. See _async_device_responds.
+    _heard_from_device: list[tuple[datetime | None, datetime, asyncio.Future[None]]] = (
+        field(init=False, default_factory=list)
     )
+    # The last ``last_seen`` the device sent, in Zigbee2MQTT's own clock.
+    _last_seen: datetime | None = field(init=False, default=None)
     # Last projected state per slot from the most recent users payload;
     # the delta gate in _process_z2m_device_payload compares against this
     # so full-cached-state republications don't repush stale entries.
@@ -275,14 +279,23 @@ class Zigbee2MQTTLock(BaseMqttLock):
         says nothing about the device now; neither does a payload whose
         ``last_seen`` is older than the question.
         """
-        last_seen = _z2m_last_seen(payload)
-        for asked_at, waiter in self._heard_from_device:
+        last_seen = None if replayed else _z2m_last_seen(payload)
+        for seen_before, asked_at, waiter in self._heard_from_device:
             if (
                 not waiter.done()
                 and not replayed
-                and (last_seen is None or last_seen >= asked_at - _CLOCK_SLACK)
+                and (
+                    last_seen is None
+                    or (
+                        last_seen > seen_before
+                        if seen_before is not None
+                        else last_seen >= asked_at - _CLOCK_SLACK
+                    )
+                )
             ):
                 waiter.set_result(None)
+        if last_seen is not None:
+            self._last_seen = last_seen
         action = payload.get("action")
 
         # Handle lock/unlock actions with user identification (keypad PIN usage)
@@ -761,15 +774,18 @@ class Zigbee2MQTTLock(BaseMqttLock):
 
         Zigbee2MQTT also republishes a device's cached state without asking
         it: retained replays are told apart, and so is any payload dated by
-        ``last_seen``. With ``last_seen`` off, the republish it makes when Home
-        Assistant comes online cannot be, and lands here only if it falls in
-        this wait.
+        ``last_seen``: a fresh answer carries a later one than the device last
+        sent. Until the device has sent one, Home Assistant's clock stands in,
+        and a Zigbee2MQTT clock running behind can make one answer look stale.
+        With ``last_seen`` off, the republish Zigbee2MQTT makes when Home
+        Assistant comes online cannot be told apart, and lands here only if it
+        falls in this wait.
         """
         get_topic = self._get_topic("get")
         if not get_topic:
             return False
         waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        entry = (dt_util.utcnow(), waiter)
+        entry = (self._last_seen, dt_util.utcnow(), waiter)
         self._heard_from_device.append(entry)
         try:
             await async_publish(self.hass, get_topic, json.dumps({"state": ""}))

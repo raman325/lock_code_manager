@@ -1599,6 +1599,40 @@ class TestUnansweredReads:
         ):
             assert await lock._async_device_responds() is responds
 
+    async def test_a_skewed_clock_costs_at_most_one_look(
+        self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
+    ) -> None:
+        """
+        Zigbee2MQTT's clock may be minutes behind; its own dates still order.
+
+        With nothing earlier from the lock to compare with, a reply is dated
+        by Home Assistant's clock, and a skewed one looks stale. From then on
+        a reply counts when it is newer than the last one the lock sent, and
+        the same stale state sent again does not.
+        """
+        lock = zigbee2mqtt_lock_connected
+        behind = dt_util.utcnow() - timedelta(minutes=10)
+        replies = iter(
+            [
+                behind,
+                behind + timedelta(seconds=30),
+                behind + timedelta(seconds=30),
+            ]
+        )
+
+        async def answer_state(_hass: HomeAssistant, topic: str, body: str, **_kw):
+            lock._process_z2m_device_payload(
+                {"state": "LOCKED", "last_seen": next(replies).isoformat()}
+            )
+
+        with (
+            patch.object(lock, "slot_read_timeout", 0.01),
+            patch(_PUBLISH, side_effect=answer_state),
+        ):
+            assert await lock._async_device_responds() is False
+            assert await lock._async_device_responds() is True
+            assert await lock._async_device_responds() is False
+
     async def test_by_default_a_lock_responds_while_its_entity_is_available(
         self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
     ) -> None:
