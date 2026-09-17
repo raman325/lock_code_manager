@@ -556,22 +556,30 @@ class TestAddingThroughTheUserInterface:
         """
         Each reply arrives after its read has stopped waiting.
 
-        The last one lands while the lock is asked for its state, which is
-        what would otherwise settle the lock as unable to report its codes.
+        Zigbee2MQTT sends its whole cached state with every message, so the
+        first late reply looks like that cache; the next one adds a slot the
+        cache did not have, which only an answer can.
         """
         asked: list[int] = []
+        users: dict[str, dict[str, str]] = {}
+        pin_code: dict[str, Any] = {}
 
         def slow(topic: str, payload: str, *args: Any, **kwargs: Any):
             request = json.loads(payload)
-            if topic == Z2M_GET_TOPIC and "state" in request:
-                late = (
-                    {"users": {str(asked[-1]): {"status": late_status}}}
-                    if late_status is not None
-                    else {"pin_code": {"user": asked[-1], "user_enabled": False}}
-                )
-                _fire_device_payload(hass, {"state": "LOCKED", **late})
-            elif topic == Z2M_GET_TOPIC:
-                asked.append(request["pin_code"]["user"])
+            if topic != Z2M_GET_TOPIC:
+                return DEFAULT
+            if "state" in request:
+                _fire_device_payload(hass, {"state": "LOCKED", "users": dict(users)})
+                return DEFAULT
+            if asked:
+                # The answer to the read before this one, only now.
+                if late_status is not None:
+                    users[str(asked[-1])] = {"status": late_status}
+                    _fire_device_payload(hass, {"users": dict(users)})
+                else:
+                    pin_code.update(user=asked[-1], user_enabled=False)
+                    _fire_device_payload(hass, {"pin_code": dict(pin_code)})
+            asked.append(request["pin_code"]["user"])
             return DEFAULT
 
         mqtt_mock.async_publish.side_effect = slow
@@ -586,14 +594,12 @@ class TestAddingThroughTheUserInterface:
                 {CONF_NAME: "z2m", CONF_LOCKS: [mqtt_lock_discovered.entity_id]},
             )
             await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
-            await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 1})
+            await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
 
-        # Judged after the fifth silence; a lock that answers is then read on.
-        assert asked[:SILENT_READS_TO_CLASSIFY] == [1] * SILENT_READS_TO_CLASSIFY
-        assert (len(asked) > SILENT_READS_TO_CLASSIFY + 1) is (
-            expected is ReadHealth.ANSWERED
-        )
+        assert asked[:3] == [1, 2, 1]
         assert read_health(hass, mqtt_lock_discovered.entity_id) is expected
+        if expected is ReadHealth.UNANSWERED:
+            assert len(asked) == SILENT_READS_TO_CLASSIFY + 1
 
     async def test_a_replayed_state_is_not_the_lock_answering(
         self,

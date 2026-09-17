@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterable
 from contextlib import AbstractContextManager, ExitStack
 from datetime import timedelta
 import json
@@ -67,6 +67,13 @@ def _publish_never_leaves() -> AbstractContextManager[Any]:
 def _no_reply_ever_arrives() -> AbstractContextManager[Any]:
     """Let every GET out and answer none of them, the way a silent bridge does."""
     return patch(_WAIT_FOR, new_callable=AsyncMock, side_effect=TimeoutError)
+
+
+def _seen_before(lock: Zigbee2MQTTLock, slots: Iterable[int]) -> None:
+    """Have the device's topic carry an entry for each slot before the reads."""
+    lock._process_z2m_device_payload(
+        {"users": {str(slot): {"status": "disabled"} for slot in slots}}
+    )
 
 
 def _answering_publish(
@@ -1375,6 +1382,7 @@ class TestUnansweredReads:
     ) -> None:
         """A slow lock's reply to an earlier slot can land while the last slot waits."""
         lock = zigbee2mqtt_lock_connected
+        _seen_before(lock, [1])
         calls: list[int] = []
 
         async def _read(slot: int, **_kwargs: object) -> SlotCredential | None:
@@ -1394,6 +1402,66 @@ class TestUnansweredReads:
 
         assert read_health(hass, lock.lock.entity_id) is ReadHealth.ANSWERED
         assert calls == [1, 2, 3, 4, 5, 5, 6, 7]
+
+    @pytest.mark.parametrize(
+        ("before", "after", "replayed", "expected"),
+        [
+            pytest.param(
+                "enabled", "enabled", False, ReadHealth.UNANSWERED, id="unchanged"
+            ),
+            pytest.param(
+                "enabled", "available", True, ReadHealth.UNANSWERED, id="replayed"
+            ),
+            pytest.param(
+                None, "available", False, ReadHealth.UNANSWERED, id="first_message"
+            ),
+            pytest.param(
+                "enabled", "available", False, ReadHealth.ANSWERED, id="changed"
+            ),
+            pytest.param(
+                "absent", "available", False, ReadHealth.ANSWERED, id="new_slot"
+            ),
+        ],
+    )
+    async def test_only_news_on_the_topic_is_a_late_answer(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
+        before: str | None,
+        after: str,
+        replayed: bool,
+        expected: ReadHealth,
+    ) -> None:
+        """
+        Zigbee2MQTT sends its cached users with every message.
+
+        An entry the topic already carried, one the broker replayed, or any
+        entry of the first message may be that cache, so none is taken for a
+        late answer: recording a lock as answering cannot be undone. An entry
+        that changed, or that an earlier message did not have, is news.
+        """
+        lock = zigbee2mqtt_lock_connected
+        if before == "absent":
+            lock._process_z2m_device_payload({"users": {"2": {"status": "enabled"}}})
+        elif before is not None:
+            lock._process_z2m_device_payload({"users": {"1": {"status": before}}})
+
+        async def _responds() -> bool:
+            # The read of slot 1 gave up waiting (the read itself is stood in).
+            lock._late_reads.add(1)
+            lock._process_z2m_device_payload(
+                {"users": {"1": {"status": after}}}, replayed
+            )
+            return True
+
+        silent = AsyncMock(return_value=None)
+        with (
+            self._reading(lock, silent),
+            patch.object(lock, "_async_device_responds", _responds),
+        ):
+            await lock.async_get_usercodes([1])
+
+        assert read_health(hass, lock.lock.entity_id) is expected
 
     async def test_a_long_read_stops_at_the_verdict(
         self, hass: HomeAssistant, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
@@ -1455,6 +1523,7 @@ class TestUnansweredReads:
         rather than stopping at the silences a lock that cannot answer gives.
         """
         lock = zigbee2mqtt_lock_connected
+        _seen_before(lock, range(1, 2 * SILENT_READS_TO_CLASSIFY + 1))
         asked: list[int] = []
 
         async def _late(
@@ -1491,6 +1560,7 @@ class TestUnansweredReads:
     ) -> None:
         """The last silent slot's reply is what the lock sends back first."""
         lock = zigbee2mqtt_lock_connected
+        _seen_before(lock, range(1, 2 * SILENT_READS_TO_CLASSIFY + 1))
         asked: list[int] = []
 
         async def _silent(

@@ -168,6 +168,12 @@ class Zigbee2MQTTLock(BaseMqttLock):
     # Slots whose last read gave up waiting. A reply for one arriving later
     # still shows the lock answers, only slowly.
     _late_reads: set[int] = field(default_factory=set, init=False)
+    # The last entry the device's topic carried for each slot, by the form it
+    # came in, and the forms it has carried at all. Zigbee2MQTT republishes
+    # its cached state with every message, so only an entry that changed, or
+    # that an earlier message did not have, can be a late reply.
+    _seen_entries: dict[tuple[str, int], Any] = field(default_factory=dict, init=False)
+    _seen_forms: set[str] = field(default_factory=set, init=False)
     # Waiting for the device to say anything, with what dates an answer as
     # newer than the question: the last ``last_seen`` the device had sent, or
     # failing that, when it was asked. See _async_device_responds.
@@ -262,6 +268,25 @@ class Zigbee2MQTTLock(BaseMqttLock):
         self._maybe_raise_wrong_bridge_disconnect()
         super()._raise_not_connected()
 
+    def _is_news(self, key: tuple[str, int], entry: Any, replayed: bool) -> bool:
+        """
+        Record what the device's topic said for a slot; return whether it is new.
+
+        New is an entry that changed, or that an earlier message in the same
+        form did not have. The first message in a form is not news: it may be
+        Zigbee2MQTT's cache, which it resends with every message, and taking
+        a stale entry for a late reply would record a lock that cannot report
+        its codes as one that does, for good. A replayed message says nothing
+        new and is not recorded.
+        """
+        if replayed:
+            return False
+        form = key[0]
+        known = form in self._seen_forms
+        prior = self._seen_entries.get(key)
+        self._seen_entries[key] = entry
+        return known and prior != entry
+
     async def async_is_integration_connected(self) -> bool:
         """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
@@ -338,6 +363,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         if users_data and isinstance(users_data, dict):
             states: dict[int, SlotCredential] = {}
             unanswered: set[int] = set()
+            news: set[int] = set()
             for user_id_str, user_info in users_data.items():
                 user_id = parse_slot_num(user_id_str)
                 if user_id is None:
@@ -360,6 +386,10 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 states[user_id] = _project_z2m_user_state(user_info)
                 if _z2m_status_says_nothing(user_info):
                     unanswered.add(user_id)
+                if self._is_news(("users", user_id), user_info, replayed):
+                    news.add(user_id)
+            if not replayed:
+                self._seen_forms.add("users")
 
             # The converter answers GetPinCode through the users object
             # (fz.lock_pin_code_response), not through a pin_code response
@@ -373,7 +403,11 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     future := self._pending_codes.pop(user_id, None)
                 ) is not None and not future.done():
                     future.set_result(None if user_id in unanswered else state)
-                elif user_id in self._late_reads and user_id not in unanswered:
+                elif (
+                    user_id in self._late_reads
+                    and user_id not in unanswered
+                    and user_id in news
+                ):
                     self._late_reads.discard(user_id)
                     self._note_answered()
 
@@ -425,9 +459,12 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 )
                 return
 
+            is_news = self._is_news(("pin_code", user_id), pin_code_data, replayed)
+            if not replayed:
+                self._seen_forms.add("pin_code")
             if user_id not in self._pending_codes:
-                # Every answer in this form is one, however late.
-                if user_id in self._late_reads:
+                # An answer in this form is one however late, if it is new.
+                if user_id in self._late_reads and is_news:
                     self._late_reads.discard(user_id)
                     self._note_answered()
             else:
