@@ -25,8 +25,15 @@ def test_in_sync_folds_like_a_conjunction_with_unknown(values: list[bool | None]
 
 @given(st.lists(st.sampled_from([*STATUSES, None])))
 def test_sync_status_folds_to_the_worst(statuses: list[str | None]):
-    """Suspended beats out of sync beats syncing beats pending beats in sync."""
-    order = ["suspended", "out_of_sync", "syncing", "pending_confirmation", "in_sync"]
+    """Suspended, out of sync, unconfirmed, syncing, pending, in sync: worst first."""
+    order = [
+        "suspended",
+        "out_of_sync",
+        "unconfirmed",
+        "syncing",
+        "pending_confirmation",
+        "in_sync",
+    ]
     present = [status for status in statuses if status is not None]
     expected = next((status for status in order if status in present), None)
     assert fold_sync_status(statuses) == expected

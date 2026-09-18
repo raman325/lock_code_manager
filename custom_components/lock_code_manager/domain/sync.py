@@ -51,9 +51,11 @@ from ..const import (
     ATTR_CODE,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    PENDING_WRITE_TTL,
     STOP_GRACE_SECONDS,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
+    UNCONFIRMED_RETRY_MAX,
 )
 from .config import build_slot_unique_id
 from .credentials import CredentialAddress, CredentialType
@@ -62,6 +64,7 @@ from .exceptions import (
     LockBusy,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnconfirmed,
     LockOperationUnsupported,
 )
 from .models import SlotCredential, SyncState
@@ -139,8 +142,8 @@ class SlotSyncManager:
     Compares desired state (from entity states: active, PIN) against actual
     state (from coordinator data) and drives set/clear operations to reconcile.
 
-    Uses a state machine (SyncState) with five states: LOADING, IN_SYNC,
-    OUT_OF_SYNC, SYNCING, SUSPENDED. State changes mark the slot for
+    Uses a state machine (SyncState): LOADING, IN_SYNC, OUT_OF_SYNC, SYNCING,
+    PENDING_CONFIRMATION, UNCONFIRMED, SUSPENDED. State changes mark the slot for
     re-evaluation; reconciliation happens on the next tick. Includes circuit
     breaker protection that suspends the lock after repeated sync failures.
 
@@ -253,6 +256,12 @@ class SlotSyncManager:
         # suspended, or that is suspended only because the lock is unreachable.
         self._code_suspend_target: tuple[str, str] | None = None
 
+        # Unconfirmed writes or clears in a row, the target they were for, and
+        # when the next attempt may go out. A changed target is tried at once.
+        self._unconfirmed_attempts: int = 0
+        self._unconfirmed_target: tuple[str, str] | None = None
+        self._unconfirmed_retry_at: float = 0.0
+
         # Invalid state tracking (for initial load)
         self._logged_invalid_state: bool = False
 
@@ -297,6 +306,7 @@ class SlotSyncManager:
         # A write that failed before this manager existed -- a direct write to
         # a slot nobody managed yet -- is not this manager's strike.
         self._coordinator.take_failed_write(self._address)
+        self._coordinator.take_unconfirmed_write(self._address)
         self._setup_state_tracking()
         self._setup_coordinator_listener()
         self._tick_unsub = async_track_time_interval(
@@ -708,6 +718,7 @@ class SlotSyncManager:
                 # sync's strike. Discard it here, or the next sync to run
                 # would be charged and warned for a write it never made.
                 self._coordinator.take_failed_write(self._address)
+                self._coordinator.take_unconfirmed_write(self._address)
         elif self._state is SyncState.SUSPENDED:
             if self._code_suspend_target is not None:
                 # Suspended for a non-converging code or an unexpected error.
@@ -894,12 +905,25 @@ class SlotSyncManager:
             self._write_state()
             return
 
+        unconfirmed_pin = self._coordinator.take_unconfirmed_write(self._address)
+
         if expected_in_sync:
-            # Became in sync without us doing anything (external change)
+            # Became in sync without us doing anything (external change) --
+            # including a write given up as unconfirmed that the lock has
+            # shown since.
             self._state = SyncState.IN_SYNC
+            self._forget_unconfirmed()
             self._slot_breaker.reset()
             self._write_state()
             self._clear_resolved_issues(snapshot)
+            return
+
+        if (
+            unconfirmed_pin is not None
+            and snapshot.active_state == STATE_ON
+            and snapshot.credential_state == unconfirmed_pin
+        ):
+            self._note_unconfirmed(snapshot, "write")
             return
 
         # Circuit breaker check: too many failed sync attempts (a set that
@@ -929,6 +953,24 @@ class SlotSyncManager:
                 + (f"\n\n{link_health}" if link_health else ""),
             )
             return
+
+        # Whatever the slot went through meanwhile -- a suspension, a lock
+        # that was out of reach -- the same attempt waits its turn.
+        if (
+            snapshot.active_state,
+            snapshot.credential_state,
+        ) == self._unconfirmed_target and time.monotonic() < self._unconfirmed_retry_at:
+            if self._state is not SyncState.UNCONFIRMED:
+                self._state = SyncState.UNCONFIRMED
+                self._write_state()
+            return
+
+        # A different target is a new attempt: the wait for the old one goes.
+        if (
+            snapshot.active_state,
+            snapshot.credential_state,
+        ) != self._unconfirmed_target:
+            self._forget_unconfirmed()
 
         # Perform sync
         self._state = SyncState.SYNCING
@@ -968,6 +1010,14 @@ class SlotSyncManager:
             # successful poll/push).
             self._coordinator.note_connectivity_failure()
             self._state = SyncState.OUT_OF_SYNC
+            return
+        except LockOperationUnconfirmed as err:
+            _LOGGER.info("%s: %s", self._log_prefix, err)
+            # Nothing is pending to be read back for a clear, so look now: one
+            # that landed settles on this read instead of waiting its turn.
+            # Still syncing while it reads, so no other tick starts meanwhile.
+            await self._coordinator.async_read_back(self._address)
+            self._note_unconfirmed(snapshot, "clear")
             return
         except LockOperationUnsupported as err:
             # Permanent: the lock can never accept this request as configured,
@@ -1029,6 +1079,15 @@ class SlotSyncManager:
                 self._state = SyncState.PENDING_CONFIRMATION
                 self._write_state()
                 return
+            # A clear that found nothing to do says nothing about a value a
+            # write put in place and nobody has confirmed. Look at the lock;
+            # if even that cannot settle it, wait like any unconfirmed clear
+            # rather than trying again on every tick.
+            if not was_set and not self._coordinator.is_verified(self._address):
+                await self._coordinator.async_read_back(self._address)
+                if not self._coordinator.is_verified(self._address):
+                    self._note_unconfirmed(snapshot, "clear")
+                    return
             # Sync succeeded — refresh coordinator to verify.
             # Skip for push providers — they update coordinator optimistically
             # via push_update() and refreshing from cache could read stale data.
@@ -1055,6 +1114,7 @@ class SlotSyncManager:
         snapshot = self._resolve_credential_snapshot()
         if snapshot is not None and self.calculate_in_sync(snapshot):
             self._state = SyncState.IN_SYNC
+            self._forget_unconfirmed()
             self._slot_breaker.reset()
             self._write_state()
             self._clear_resolved_issues(snapshot)
@@ -1065,6 +1125,43 @@ class SlotSyncManager:
                 self._slot_breaker.record_failure()
             self._state = SyncState.OUT_OF_SYNC
             self._write_state()
+
+    def _forget_unconfirmed(self) -> None:
+        """Start the next unconfirmed attempt's wait over, from the shortest."""
+        self._unconfirmed_attempts = 0
+        self._unconfirmed_target = None
+        self._unconfirmed_retry_at = 0.0
+
+    def _note_unconfirmed(self, snapshot: CredentialSyncState, what: str) -> None:
+        """
+        Wait to try a write or clear again that the lock's stack could not verify.
+
+        Not a failure, so the slot breaker is not charged: the stack's own
+        read-back is what did not arrive. Each unconfirmed attempt in a row
+        for the same target doubles the wait, up to UNCONFIRMED_RETRY_MAX.
+        """
+        target = (snapshot.active_state, snapshot.credential_state)
+        if target != self._unconfirmed_target:
+            self._unconfirmed_attempts = 0
+        self._unconfirmed_attempts += 1
+        self._unconfirmed_target = target
+        delay = min(
+            # The exponent is bounded as well: past the cap it changes nothing,
+            # and unbounded it overflows on a lock that never confirms.
+            PENDING_WRITE_TTL * 2 ** min(self._unconfirmed_attempts - 1, 16),
+            UNCONFIRMED_RETRY_MAX,
+        )
+        self._unconfirmed_retry_at = time.monotonic() + delay
+        _LOGGER.info(
+            "%s: the lock could not confirm the %s (attempt %s); trying again "
+            "in %d seconds",
+            self._log_prefix,
+            what,
+            self._unconfirmed_attempts,
+            delay,
+        )
+        self._state = SyncState.UNCONFIRMED
+        self._write_state()
 
     # -- State tracking subscriptions ----------------------------------------
 
@@ -1146,6 +1243,7 @@ class SlotSyncManager:
 _STATUS_PRECEDENCE = (
     SyncState.SUSPENDED,
     SyncState.OUT_OF_SYNC,
+    SyncState.UNCONFIRMED,
     SyncState.SYNCING,
     SyncState.PENDING_CONFIRMATION,
     SyncState.IN_SYNC,

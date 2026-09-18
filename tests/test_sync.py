@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,6 +23,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     PENDING_WRITE_TTL,
+    UNCONFIRMED_RETRY_MAX,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -33,6 +35,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockBusy,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnconfirmed,
     LockOperationUnsupported,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
@@ -2416,3 +2419,278 @@ class TestLockBusy:
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._coordinator._lock_breaker.failure_count == lock_failures
         assert manager._slot_breaker.failure_count == slot_failures
+
+
+class TestUnconfirmedWrites:
+    """A write the stack could not verify waits and retries; it is never charged."""
+
+    async def _unconfirmed(self, hass: HomeAssistant, freezer, pin: str):
+        """Leave slot 1 with a believed write of ``pin`` given up unconfirmed."""
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        manager._lock.codes.pop(1, None)  # the stack's cache never shows it
+        manager._coordinator.record_write(pin_address(1), pin, believed=True)
+        manager.request_sync_check()
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+        await manager._coordinator.async_confirm_pending_writes()
+        return manager
+
+    async def test_the_attempt_waits_its_turn_and_is_not_charged(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """Even after a detour through another state, as a lock outage makes."""
+        manager = await self._unconfirmed(hass, freezer, "1234")
+        before = manager._slot_breaker.failure_count
+
+        with patch.object(
+            manager, "_perform_sync", AsyncMock(return_value=False)
+        ) as sync:
+            await manager._async_tick()
+            assert manager._state is SyncState.UNCONFIRMED
+            assert manager.sync_status == "unconfirmed"
+            assert manager.in_sync is False
+
+            # Out of reach, then back.
+            manager._coordinator._lock_breaker.record_failure()
+            manager._coordinator._lock_breaker.record_failure()
+            manager._coordinator._lock_breaker.record_failure()
+            assert manager._coordinator.unreachable
+            await manager._async_tick()
+            assert manager._state is SyncState.SUSPENDED
+            manager._coordinator._lock_breaker.reset()
+            manager.request_sync_check()
+            assert manager._state is SyncState.OUT_OF_SYNC
+
+            await manager._async_tick()
+            sync.assert_not_called()
+            assert manager._state is SyncState.UNCONFIRMED
+
+            freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+            await manager._async_tick()
+            sync.assert_called_once()
+        assert manager._slot_breaker.failure_count == before
+
+    async def test_a_stale_unconfirmed_write_does_not_hold_the_pin_wanted_now(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """The PIN the flag is for was not the one configured: nothing to wait for."""
+        manager = await self._unconfirmed(hass, freezer, "0000")
+
+        with patch.object(
+            manager, "_perform_sync", AsyncMock(return_value=False)
+        ) as sync:
+            await manager._async_tick()
+
+        sync.assert_called_once()
+        assert manager._state is not SyncState.UNCONFIRMED
+
+    async def test_a_slot_seen_in_sync_forgets_the_wait(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """Losing the code again later is a new attempt, tried at once."""
+        manager = await self._unconfirmed(hass, freezer, "1234")
+        await manager._async_tick()
+        assert manager._state is SyncState.UNCONFIRMED
+
+        manager._lock.codes[1] = "1234"
+        await manager._coordinator.async_refresh()
+        await manager._async_tick()
+        assert manager._state is SyncState.IN_SYNC
+
+        manager._lock.codes.pop(1, None)
+        await manager._coordinator.async_refresh()
+        with patch.object(
+            manager, "_perform_sync", AsyncMock(return_value=False)
+        ) as sync:
+            await manager._async_tick()
+        sync.assert_called_once()
+
+    async def test_a_leftover_flag_is_dropped_while_the_slot_is_in_sync(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A direct write that went unconfirmed is not this sync's to wait on."""
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.IN_SYNC
+        manager._coordinator._unconfirmed_writes[pin_address(1)] = "1234"
+
+        manager.request_sync_check()
+
+        assert manager._coordinator.take_unconfirmed_write(pin_address(1)) is None
+
+    async def test_a_masked_slot_is_not_taken_as_in_sync_on_the_write_alone(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """
+        A lock that hides its codes answers every slot as unreadable.
+
+        That matches the PIN last written, but nothing has said anything about
+        the slot since the write was given up, so it is not in sync.
+        """
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        coordinator = manager._coordinator
+        coordinator.push_update({1: SlotCredential.unreadable()})
+        manager._last_set_pin = "1234"
+        coordinator.record_write(pin_address(1), "1234", believed=True)
+        manager.request_sync_check()
+        freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+        failing = AsyncMock(side_effect=LockOperationFailed("timed out"))
+        with (
+            patch.object(manager._lock, "async_hard_refresh_codes", failing),
+            patch.object(manager._lock, "async_get_usercodes", failing),
+        ):
+            await coordinator.async_confirm_pending_writes()
+        assert coordinator.is_verified(pin_address(1)) is False
+
+        with patch.object(
+            manager, "_perform_sync", AsyncMock(return_value=False)
+        ) as sync:
+            await manager._async_tick()
+            await manager._async_tick()
+            assert manager._state is SyncState.UNCONFIRMED
+            sync.assert_not_called()
+
+            # The lock says so: now it is.
+            coordinator.push_update({1: SlotCredential.unreadable()})
+            await manager._async_tick()
+            assert manager._state is SyncState.IN_SYNC
+
+    async def test_the_wait_stops_growing_at_the_cap(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """A lock that never confirms is retried hourly for as long as it takes."""
+        manager = await self._unconfirmed(hass, freezer, "1234")
+        await manager._async_tick()
+        manager._unconfirmed_attempts = 5000
+
+        manager._note_unconfirmed(manager._resolve_credential_snapshot(), "write")
+
+        assert manager._unconfirmed_retry_at - time.monotonic() == pytest.approx(
+            UNCONFIRMED_RETRY_MAX
+        )
+
+    async def test_a_flag_for_a_slot_already_in_sync_is_not_acted_on(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """The lock showed the write before the tick got to it: just in sync."""
+        manager = await self._unconfirmed(hass, freezer, "1234")
+        manager._coordinator.push_update({1: SlotCredential.known("1234")})
+        written: list[SyncState] = []
+
+        with patch.object(
+            manager,
+            "_write_state",
+            side_effect=lambda: written.append(manager._state),
+        ):
+            await manager._async_tick()
+
+        assert written == [SyncState.IN_SYNC]
+        assert manager._coordinator.take_unconfirmed_write(pin_address(1)) is None
+
+    async def test_an_unconfirmed_clear_is_read_back_before_it_waits(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """The slot stays syncing while it reads, so no other tick starts meanwhile."""
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        manager._lock.codes[1] = "9999"
+        await manager._coordinator.async_refresh()
+        manager.request_sync_check()
+        seen: list[SyncState] = []
+
+        async def _read_back(_address: object) -> None:
+            seen.append(manager._state)
+
+        with (
+            patch.object(
+                manager,
+                "_perform_sync",
+                AsyncMock(side_effect=LockOperationUnconfirmed("not confirmed")),
+            ),
+            patch.object(manager._coordinator, "async_read_back", _read_back),
+        ):
+            await manager._async_tick()
+
+        assert seen == [SyncState.SYNCING]
+        assert manager._state is SyncState.UNCONFIRMED
+
+    async def test_switching_back_to_a_pin_that_was_waiting_writes_it_at_once(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        freezer,
+    ) -> None:
+        """Writing another PIN in between ended the old wait."""
+        manager = await self._unconfirmed(hass, freezer, "1234")
+        await manager._async_tick()
+        assert manager._state is SyncState.UNCONFIRMED
+
+        async def set_pin(pin: str) -> None:
+            await hass.services.async_call(
+                "text",
+                "set_value",
+                {"entity_id": SLOT_1_PIN_ENTITY, "value": pin},
+                blocking=True,
+            )
+            await hass.async_block_till_done()
+
+        with patch.object(
+            manager, "_perform_sync", AsyncMock(return_value=False)
+        ) as sync:
+            await set_pin("0000")
+            await manager._async_tick()
+            assert sync.await_count >= 1
+            written = sync.await_count
+
+            await set_pin("1234")
+            await manager._async_tick()
+            assert sync.await_count > written
+
+    async def test_a_new_manager_does_not_wait_on_a_flag_from_before_it(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A direct write that went unconfirmed before this manager is not its wait."""
+        manager = sync_manager_for(hass, SLOT_1_IN_SYNC_ENTITY)
+        await manager.async_stop()
+        manager._started = False
+        manager._coordinator._unconfirmed_writes[pin_address(1)] = "1234"
+
+        await manager.async_start()
+
+        assert manager._coordinator.take_unconfirmed_write(pin_address(1)) is None
+        assert manager._state is not SyncState.UNCONFIRMED

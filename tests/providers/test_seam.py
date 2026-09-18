@@ -1210,7 +1210,7 @@ async def test_confirmed_set_on_a_push_provider_records_nothing_pending(
     lock, _pushed = _slot_only_lock_with_coordinator(hass)
     await _set_through_seam(lock, WriteResult.CONFIRMED, push=True)
     lock.coordinator.record_write.assert_not_called()
-    lock.coordinator.drop_pending.assert_called_once_with(pin_address(4))
+    lock.coordinator.settle_pending.assert_called_once_with(pin_address(4))
 
 
 async def test_no_change_records_nothing(hass: HomeAssistant) -> None:
@@ -1219,6 +1219,7 @@ async def test_no_change_records_nothing(hass: HomeAssistant) -> None:
     await _set_through_seam(lock, WriteResult.NO_CHANGE)
     lock.coordinator.record_write.assert_not_called()
     lock.coordinator.drop_pending.assert_not_called()
+    lock.coordinator.settle_pending.assert_not_called()
 
 
 async def test_clear_drops_any_pending_write_once_it_has_run(

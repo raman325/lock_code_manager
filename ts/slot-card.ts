@@ -971,6 +971,13 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                 statusText = 'Confirming';
                 icon = 'mdi:progress-clock';
                 break;
+            case 'unconfirmed':
+                // The lock's stack accepted the last write or clear but could
+                // not verify it. Retried on a growing backoff, never suspended.
+                iconClass = 'pending';
+                statusText = 'Unconfirmed';
+                icon = 'mdi:help-circle-outline';
+                break;
             case 'suspended':
                 iconClass = 'suspended';
                 statusText = 'Suspended';

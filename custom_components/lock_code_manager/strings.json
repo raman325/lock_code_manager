@@ -87,6 +87,8 @@
               "in_sync": "In sync",
               "out_of_sync": "Out of sync",
               "syncing": "Syncing",
+              "pending_confirmation": "Confirming",
+              "unconfirmed": "Unconfirmed",
               "suspended": "Suspended"
             }
           }
@@ -100,6 +102,8 @@
               "in_sync": "In sync",
               "out_of_sync": "Out of sync",
               "syncing": "Syncing",
+              "pending_confirmation": "Confirming",
+              "unconfirmed": "Unconfirmed",
               "suspended": "Suspended"
             }
           }

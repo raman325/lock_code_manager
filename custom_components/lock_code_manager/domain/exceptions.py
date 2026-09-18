@@ -111,6 +111,16 @@ class LockOperationFailed(LockCodeManagerProviderError):
     """
 
 
+class LockOperationUnconfirmed(LockOperationFailed):
+    """
+    Raised when the lock's stack accepted an operation it could not verify.
+
+    The command went out, and the read-back that would have confirmed it did
+    not arrive. Not evidence the operation failed, so it is retried without
+    counting toward suspending the slot.
+    """
+
+
 class LockOperationUnsupported(LockOperationFailed):
     """
     Raised when the lock can never complete the operation as specified.

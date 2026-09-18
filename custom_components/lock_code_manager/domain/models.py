@@ -34,6 +34,9 @@ class SyncState(StrEnum):
         write was issued and we are waiting for the lock to confirm it (a push
         event or hard-refresh read). The tick does not re-write while waiting;
         confirmation -> IN_SYNC, timeout -> re-sync.
+    UNCONFIRMED: the lock's stack accepted the last write or clear but could
+        not verify it, and nothing has shown it since. Retried on a growing
+        backoff; never counted toward suspension.
     SUSPENDED: circuit breaker tripped or unexpected error; awaiting
         coordinator recovery (suspended flag cleared).
     """
@@ -43,6 +46,7 @@ class SyncState(StrEnum):
     OUT_OF_SYNC = "out_of_sync"
     SYNCING = "syncing"
     PENDING_CONFIRMATION = "pending_confirmation"
+    UNCONFIRMED = "unconfirmed"
     SUSPENDED = "suspended"
 
 

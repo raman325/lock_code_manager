@@ -66,6 +66,7 @@ from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
+    LockOperationUnconfirmed,
     LockOperationUnsupported,
 )
 from ..domain.models import SlotCredential
@@ -705,6 +706,9 @@ class ZWaveJSLock(BaseLock):
         Delete the credential addressed by ref.
 
         The clear goes through HA's ``lock_helpers.async_delete_credential``.
+        A driver ``ERROR_UNKNOWN`` means what it does for a set: the command
+        went out and the read-back that would confirm it did not arrive, so
+        it is raised as unconfirmed rather than failed.
         """
         try:
             await lock_helpers.async_delete_credential(
@@ -720,6 +724,10 @@ class ZWaveJSLock(BaseLock):
             # driver clears its cached User Code CC values on a
             # successful delete since 15.24.3 (zwave-js/zwave-js#8866).
             await self._async_uc_reconcile_value_db(ref.slot)
+            if getattr(err, "translation_key", None) == "credential_rejected_unknown":
+                raise LockOperationUnconfirmed(
+                    f"delete credential slot {ref.slot} was not confirmed: {err}"
+                ) from err
             raise LockOperationFailed(
                 f"delete credential slot {ref.slot} failed: {err}"
             ) from err

@@ -236,6 +236,11 @@ PENDING_WRITE_TTL: float = 60.0
 # looks inside one time to live, so a write that landed late is seen well
 # before the deadline and a lock that never keeps it is asked, not hammered.
 CONFIRM_READ_INTERVAL: float = PENDING_WRITE_TTL / 4
+# How long, at most, a slot whose last write or clear went unconfirmed waits
+# before trying again. The wait starts at PENDING_WRITE_TTL and doubles with
+# each unconfirmed attempt in a row, so a lock that cannot confirm anything is
+# not written to every minute forever.
+UNCONFIRMED_RETRY_MAX: float = 3600.0
 
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=2)
