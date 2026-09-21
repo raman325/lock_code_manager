@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "021ebb32b5f6",
+  "strategy": "manual-commit",
+  "branch": "feat/credential-confidence",
+  "checkpoints_count": 6,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/02/1ebb32b5f6/0/metadata.json",
+      "transcript": "/02/1ebb32b5f6/0/full.jsonl",
+      "compact_transcript": "/02/1ebb32b5f6/0/transcript.jsonl",
+      "content_hash": "/02/1ebb32b5f6/0/content_hash.txt",
+      "prompt": "/02/1ebb32b5f6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 208,
+    "cache_creation_tokens": 484490,
+    "cache_read_tokens": 19776220,
+    "output_tokens": 120702,
+    "api_call_count": 105,
+    "subagent_tokens": {
+      "input_tokens": 176,
+      "cache_creation_tokens": 394460,
+      "cache_read_tokens": 3437040,
+      "output_tokens": 37829,
+      "api_call_count": 57
+    }
+  }
+}

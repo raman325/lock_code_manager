@@ -1,0 +1,278 @@
+look into #1579
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>a2ad4bab36bccc9e5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/bdd74d4b-1ee5-4028-8ce4-ec45d0a9429f/tasks/a2ad4bab36bccc9e5.output</output-file>
+<status>completed</status>
+<summary>Agent "Search history for #1579" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my comprehensive search of your conversation history, I found information about related work but not a specific prior investigation of issue #1579. Let me document what I found:
+
+### Summary
+
+**No prior investigation of #1579 found.** However, I discovered significant related work on config flow performance that is highly relevant:
+
+**Timeline of related work:**
+- **2026-09-04 to 2026-09-05**: Three deadline/budget issues (#1528, #1535, #1536) were analyzed and fixed through PRs #1551, #1553, #1554. This work directly addresses timeouts during lock reads and scanning.
+  - #1535 (PR #1551): Fixed waiter timeouts charging as disconnects; split deadline into three bounds (probe / wait→LockBusy / operation-from-acquire)
+  - #1528 (PR #1553): Implemented per-exchange budgets for providers (ZHA 720s worst-case, MQTT 70s, z2m 15s) to prevent over-scaling timeouts based on slot count
+  - #1536 (PR #1554): Added progress indicator for config flow allocation/scanning with `async_read_occupancy(progress=)`
+
+**Verdict**: These three PRs were merged to main by 2026-09-05 and directly address config flow hanging. If #1579 is a NEW issue (filed after 2026-09-05), it was not investigated yet. If #1579 is a pre-existing issue about config flow hangs on Matter locks, the cause likely traces to one of:
+1. **Timeout scaling by slot count** (fixed in #1553 via per-exchange budgets)
+2. **getUsers read never completing** (scoped reads optimized in #1554)
+3. **Missing progress UI** on occupancy scan (added in #1554)
+
+**No active worktree or branch for #1579 found** in your conversation archive.
+
+### Sources
+
+**1. [project_deadline_queue_allocation_1528_1535_1536.md, 2026-09-02]** - 100% relevance match
+Conversation summary: Research on deadline/queue/allocation work and the three related issues; verified facts on main, recommended designs, ordering decisions
+File: ~/.claude/projects/-Users-raman-projects-lock-code-manager/memory/project_deadline_queue_allocation_1528_1535_1536.md
+Status: Read in detail (complete research doc; PRs merged by 2026-09-05)
+
+**2. [lock_code_manager, 2026-09-04 to 2026-09-17]** - High relevance for config flow work
+Conversation summary: Multiple work sessions on #1535 / #1536 implementation and reviews; most recent from 2026-09-16
+File: ~/.config/superpowers/conversation-archive/-Users-raman-projects-lock-code-manager/fadb7389-15f9-469d-b9a2-4d12e0c7cead.jsonl (too large to read in full, but 2026-09-17 entries visible)
+Status: Identified but unable to read full content due to file size
+
+### For Follow-Up
+
+If #1579 is new (filed after 2026-09-05):
+1. Check the issue description directly on GitHub to understand the exact failure (timeout vs. API error vs. lock unresponsive)
+2. Determine if it reproduces on the latest main (post-#1553 fix)
+3. If it still hangs, check if Matter-specific provider has different behavior than Z-Wave/MQTT
+
+If #1579 is older:
+1. Search the issue tracker to see when it was filed
+2. Your most recent conversation includes work from 2026-09-17, so if it wasn't addressed by then, it may have been deprioritized</result>
+<usage><subagent_tokens>41127</subagent_tokens><tool_uses>21</tool_uses><duration_ms>49233</duration_ms></usage>
+</task-notification>
+
+---
+
+also create a PR that adds a link to the upgrading to 6.0 docs to the README since we already have one for 5.9
+
+---
+
+5.0
+
+---
+
+<task-notification>
+<task-id>a3c561deef8efa6a9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/bdd74d4b-1ee5-4028-8ce4-ec45d0a9429f/tasks/a3c561deef8efa6a9.output</output-file>
+<status>completed</status>
+<summary>Agent "README link to 6.0 upgrade docs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done.
+
+**PR:** https://github.com/raman325/lock_code_manager/pull/1580
+
+**6.0 page confirmed to exist** — two independent checks:
+- `/Users/raman/projects/lock_code_manager.wiki/Upgrading-to-6.0.md` exists and is committed to the wiki's `origin/master` (commit `34a0800`, `git diff origin/master` on that file is empty, so the local copy matches what's published)
+- `curl -L https://github.com/raman325/lock_code_manager/wiki/Upgrading-to-6.0` returns **200**
+
+**Lines added** to `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a3c561deef8efa6a9/README.md` (inserted at line 163, directly above the existing 4.x/5.0 paragraph in the "Learn More" section):
+
+```
+**Upgrading from 5.x?** 6.0 makes each user a config subentry and removes the
+remaining slot-addressed actions and event. Read
+[Upgrading to 6.0](https://github.com/raman325/lock_code_manager/wiki/Upgrading-to-6.0)
+first — the migration is one-way.
+```
+
+Notes:
+- Branched off freshly fetched `origin/main` (`dd0707da`), branch `docs/link-upgrading-to-6-0`.
+- Style matches the 5.0 block exactly: same bolded `**Upgrading from X?**` lead, same 3-line wrap, same `first — the migration is one-way.` closer. Placed above the 5.0 paragraph so the newest migration notice reads first.
+- `prek run --files README.md` passed (markdownlint, trailing whitespace, EOF all green); pre-commit hooks also ran clean on commit.
+- No "Breaking change" section in the PR body, per the auto-tagger constraint. Checked the "Code quality improvements" box as the closest fit — the template has no docs-only option, so flag if you'd prefer a different box.</result>
+<usage><subagent_tokens>73107</subagent_tokens><tool_uses>19</tool_uses><duration_ms>77177</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a3c561deef8efa6a9</worktreePath><worktreeBranch>worktree-agent-a3c561deef8efa6a9</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>byca0cg49</task-id>
+<tool-use-id>toolu_014TVyTiXRqAJXFjgzEzny7T</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/bdd74d4b-1ee5-4028-8ce4-ec45d0a9429f/tasks/byca0cg49.output</output-file>
+<status>completed</status>
+<summary>Background command "Locate HA matter component source" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+I don't like any of the PRs you've opened. When a PIN gets written and we think it's successful, we should set it to an optimistic state. If we can't read back the PIN, either because the protocol doesn't support it or some other reason, it should just stay optimistic, otherwise it's confirmed. I feel like if we make the state machine simple enough, we can represent these states without false positives
+
+---
+
+<task-notification>
+<task-id>afa90cc84c2d38a3e</task-id>
+<tool-use-id>toolu_015DnCD3U66YEeeUYGR3icEL</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/bdd74d4b-1ee5-4028-8ce4-ec45d0a9429f/tasks/afa90cc84c2d38a3e.output</output-file>
+<status>completed</status>
+<summary>Agent "Map current + proposed state machines" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## 1. Today on `main` — the `SyncState` machine
+
+**Definition:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/domain/models.py:25-46` — 6 states: `LOADING`, `IN_SYNC`, `OUT_OF_SYNC`, `SYNCING`, `PENDING_CONFIRMATION`, `SUSPENDED`.
+
+**Transitions** (all in `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/domain/sync.py`):
+
+| State | Entered when | Left when |
+|---|---|---|
+| `LOADING` | `__init__` (sync.py:223) | first tick with a resolvable snapshot and `active_state ∈ {on, off}` → `IN_SYNC` if `calculate_in_sync` else `OUT_OF_SYNC` (sync.py:806-838) |
+| `IN_SYNC` | tick sees `expected_in_sync` (sync.py:819, 899, 1057) | `request_sync_check` re-evaluates and fails (sync.py:699-704) → `OUT_OF_SYNC` |
+| `OUT_OF_SYNC` | ~9 places: LOADING fallthrough, stale-pending drop (876), `take_failed_write` (893), every caught exception except Unsupported/generic (950/957/970/1004), post-sync verify miss (1066), `request_sync_check` demotions (702/726/735) | next tick runs `_async_tick_impl` |
+| `SYNCING` | immediately before `await _perform_sync` (sync.py:934) | always reassigned in the try/except/else |
+| `PENDING_CONFIRMATION` | (a) after a successful write when `coordinator.has_pending_write` (sync.py:1028-1031); (b) at the top of a later tick while `coordinator.pending_write(...)` still matches the desired target (sync.py:862-875) | pending entry disappears from the coordinator |
+| `SUSPENDED` | `coordinator.unreachable` or `not lock.provider_setup_succeeded` (sync.py:852); breaker tripped (907); `LockOperationUnsupported`; bare `Exception` — last two via `_suspend_slot` (619) | `request_sync_check` (711-736): target changed / became in sync (`_code_suspend_target`), or reachability + provider-setup recovered |
+
+**PENDING_CONFIRMATION specifically — no timeout of its own.** The sync manager only *watches*. The clock and the retry budget live entirely in the coordinator:
+
+- Started by `LockUsercodeUpdateCoordinator.record_write(address, pin, believed=...)` (`domain/coordinator.py:268-298`), called from `providers/_base.py:1438` (`believed=True`, optimistic) and `:1449` (`believed=False`, polled/cloud-confirmed).
+- `PendingWrite(pin, written_at, believed)`; `deadline = written_at + PENDING_WRITE_TTL` where `PENDING_WRITE_TTL = 60.0` (`const.py:234`).
+- The coordinator runs its own confirmation look — one immediate task then a timer every `CONFIRM_READ_INTERVAL = 15.0` (`PENDING_WRITE_TTL/4`) — `async_confirm_pending_writes` (coordinator.py:435).
+- Exits: `_apply_read` (coordinator.py:204-246) or `observe_push` (:330) — slot present → confirmed, data becomes `SlotCredential.known(pending.pin)`; readable *different* code → `_failed_writes.add`. Absent at/past deadline → `_failed_writes.add`. Also `drop_pending` (no judgement) when the sync tick sees the pending PIN no longer matches the desired target (sync.py:876).
+- **On timeout:** address lands in `_failed_writes`; the next tick's `take_failed_write` (sync.py:885) charges `_slot_breaker.record_failure()` **once**, logs a warning, and goes `OUT_OF_SYNC` — so the re-write happens on the *following* tick. Three such failures inside `SYNC_ATTEMPT_WINDOW` (5 min, `MAX_SYNC_ATTEMPTS = 3`) trip the breaker → `SUSPENDED` + `slot_suspended` repair.
+
+**The `in_sync` sensor.** `SlotSyncManager.in_sync` (sync.py:279-283) is `None` while `LOADING`, else `state is IN_SYNC` — so `PENDING_CONFIRMATION`, `SYNCING`, `OUT_OF_SYNC`, `SUSPENDED` all read **off**. `sync_status` (sync.py:286) is the raw enum value. `SlotEntityCoordinator.sync_state_for` (`domain/slot_coordinator.py:247-266`) folds across managers with `fold_in_sync` (all-true, unknown if any `None`) and `fold_sync_status` (worst-first `_STATUS_PRECEDENCE = SUSPENDED, OUT_OF_SYNC, SYNCING, PENDING_CONFIRMATION, IN_SYNC`, sync.py:1146). `LockCodeManagerCodeSlotInSyncEntity` (`binary_sensor.py:125-200`) is a pure view: `is_on = _sync_state[0]`, `extra_state_attributes = {sync_status: ...}`, plus an `available` gate on `coordinator.has_credential`.
+
+## 2. Unverifiable writes today
+
+`SlotCredential.unreadable()` = `SlotCredential(present=True, pin=None)` (models.py:89-91, `_UNREADABLE_CREDENTIAL:132`). Produced by every write-only/masked provider: `matter.py:521,1094,1550`, `zwave_js.py:253,258,315,375,920,933`, `zha.py:413-455`, `zigbee2mqtt.py:101-113,363,670`, `zwave_js_ui.py:309-323`, `schlage.py:353`, `_mqtt.py:311` (silence → unreadable). Label `SlotCode.UNREADABLE_CODE` for diagnostics/websocket.
+
+Consumed almost entirely in `calculate_in_sync` (sync.py:502-555):
+- **Active slot, unreadable credential** → in sync iff `snapshot.credential_state == self._last_set_pin` (sync.py:536). `_last_set_pin` is in-memory only (sync.py:234), set in `_perform_sync`, so **every restart re-writes every write-only slot once**.
+- **Inactive slot, unreadable credential** → in sync iff `self._lock.last_write_was_clear(slot)` (sync.py:552), backed by the provider's `_cleared_slots` set (`providers/_base.py:2270`, also in-memory only).
+- Gate ahead of all of it: `if not self._coordinator.is_verified(address): return False` (sync.py:521) — an address with anything pending is never in sync.
+
+Second consumer: `BaseLock.async_get_occupied_slots` (`providers/_base.py:~2210`) counts `credential.is_present` — so an unreadable slot counts as **occupied** for allocation.
+
+**Does unreadable count as in-sync?** Yes, conditionally — but not on the lock's word; on LCM's own memory of what it last wrote (`_last_set_pin` / `_cleared_slots`), and only once nothing is pending.
+
+## 3. PR #1576 (`fix/unanswered-reads`) — `domain/read_health.py`
+
+402 new lines + 608 lines of tests; total diff 2429 insertions across 19 files. New module at `/Users/raman/projects/lock_code_manager/.worktrees/unanswered-reads/custom_components/lock_code_manager/domain/read_health.py`.
+
+Concepts it introduces:
+- `ReadHealth` StrEnum: `ANSWERED` / `UNANSWERED` — plus an implicit **third** value `None` = "not yet known". `ANSWERED` is latching/final.
+- A **fourth** persisted value `_UNANSWERED_ALLOWED = "unanswered_allowed"` overloaded into the same slot, meaning "UNANSWERED *and* the user granted permission" (`_health()` maps it back to `UNANSWERED`).
+- `SILENT_READS_TO_CLASSIFY = 5` — consecutive-silence counter (`silences`, `_mqtt.py`) before classification; a read naming fewer slots loops the slot list again until it has heard 5.
+- `UNANSWERED_PROBE_INTERVAL = 3600.0` + `async_claim_probe` — a per-lock monotonic timestamp map (`_PROBES_KEY`) claiming the right to re-probe one slot per hour.
+- Two-tier storage: in-memory `hass.data[DOMAIN]["lock_reads"]` (for the config flow, which reads locks before its entry exists) **and** per-entry `data[CONF_INTERNAL][INTERNAL_LOCK_READS]` keyed by **entity registry id** (new consts in `const.py`). `read_health()` ORs across the cache and *every* entry; "answered anywhere wins". Lifecycle: `async_persist_read_health`, `async_forget_read_health`, `async_forget_unmanaged_read_health`, `_async_store` (which must also patch `runtime_data.config.extra`).
+- New provider-level `ClassVar code_reads_may_be_unsupported` (False on base, True on Z2M) and `_async_device_responds()` — "does the lock answer *anything* else" — to separate "can't read codes" from "out of reach". Plus `_answered_since_read_began()` re-check at three points inside the read loop.
+- New repair `lock_reads_unanswered` + `UnansweredReadsRepairFlow` (`repairs.py`), new `SlotAllocationError("lock_reads_unanswered")`.
+
+What it gates: (a) `BaseLock.async_get_occupied_slots` — unreadable slots stop counting as occupied once `unseen_slots_allowed` (`_base.py:2217-2226`); (b) `async_allocate_for` refuses to place users on an UNANSWERED-not-yet-allowed lock (`allocation.py:484-495`); (c) `BaseMqttLock.async_internal_get_usercodes` rewrites its whole silence policy — UNANSWERED locks are barely read at all, and the `LockDisconnected` raise now additionally requires `not (code_reads_may_be_unsupported and await _async_device_responds())`.
+
+**Reader load:** roughly **10 distinct new concepts** (3-valued enum + the allowed-sentinel making it 4 stored values, silence counter, classify threshold, probe interval + probe clock, two-tier storage keyed by registry id, cross-entry OR resolution, the `code_reads_may_be_unsupported` capability flag, `_async_device_responds` liveness probe, the allow-flag, the repair). Notably it does **not** touch `SyncState` or `in_sync` — it is a parallel axis about *reads*, where §1/§2 are about *writes*.
+
+## 4. PR #1577 (`fix/unconfirmed-writes-retry`)
+
+**models.py:** one new state — `SyncState.UNCONFIRMED = "unconfirmed"` (7 states total), inserted into `_STATUS_PRECEDENCE` between `OUT_OF_SYNC` and `SYNCING`.
+
+**exceptions.py:** one new exception — `LockOperationUnconfirmed(LockOperationFailed)`. Raised today only from `zwave_js.py` clear path when the driver error's `translation_key == "credential_rejected_unknown"`.
+
+**const.py:** `UNCONFIRMED_RETRY_MAX = 3600.0`.
+
+**sync.py:** three new instance fields forming a second, independent backoff machine alongside the circuit breaker:
+- `_unconfirmed_attempts: int`
+- `_unconfirmed_target: tuple[str, str] | None` (the `(active_state, credential_state)` pair — a *second* target-tuple alongside the existing `_code_suspend_target`)
+- `_unconfirmed_retry_at: float` (monotonic)
+
+with `_note_unconfirmed()` / `_forget_unconfirmed()`. Backoff = `min(PENDING_WRITE_TTL * 2**min(attempts-1, 16), UNCONFIRMED_RETRY_MAX)` — 60s doubling to 1h, explicitly **not** charged to `_slot_breaker`. Three new entry points into UNCONFIRMED: a `take_unconfirmed_write` PIN still matching the desired PIN (sync.py:~918), the `LockOperationUnconfirmed` except-clause, and a clear that "found nothing to do" while `not is_verified` after a fresh `async_read_back`.
+
+**coordinator.py (200 lines, the bulk):** new *flags and sets*, not states —
+- `PendingWrite.displaced: bool = False` (4th field) — whether a believed write replaced something the lock hadn't reported.
+- `_unconfirmed_writes: dict[address, str]` — given-up **believed** writes (consumed by `take_unconfirmed_write`).
+- `_unobserved: set[address]` — addresses still showing a believed value nobody has spoken for.
+- `is_verified` is now `not in _pending and not in _unobserved` — the "verified ⇔ nothing pending" invariant documented on `main` is broken.
+- `_give_up()` splits the old single failure path in two: `believed` → `_unconfirmed_writes`, else → `_failed_writes`.
+- New API: `settle_pending` (push confirmations, replacing `drop_pending` at `_base.py:1443`), `record_clear` (from `_base.py:1577`), `async_read_back(address)` (a synchronous one-address read from inside a sync tick).
+- `_apply_read` now treats a readable *different* code on a **believed** pending write as an absence, not a failure.
+
+Also: `ts/slot-card.ts` + `strings.json`/`en.json` gain an `unconfirmed` (and, newly exposed, `pending_confirmation`) label.
+
+---
+
+## DISTINCT CONCEPTS A READER MUST HOLD (post-both-PRs)
+
+Answering "is this PIN on the lock?" requires holding all of the following simultaneously:
+
+**Sync state machine (7 values, `SyncState`)**
+1. `LOADING` 2. `IN_SYNC` 3. `OUT_OF_SYNC` 4. `SYNCING` 5. `PENDING_CONFIRMATION` 6. `UNCONFIRMED` *(new, #1577)* 7. `SUSPENDED`
+
+**Credential value shape (`SlotCredential`)**
+8. `present: bool` / 9. `pin: str | None` → three constructors `empty()` / `unreadable()` / `known(pin)`
+10. derived predicates `is_empty`, `is_present`, `is_readable`, `readable_pin`, `matches(pin)`
+11. `SlotCode.EMPTY` / `SlotCode.UNREADABLE_CODE` serialization labels (distinct from HA `STATE_UNKNOWN`/`STATE_UNAVAILABLE`)
+
+**Coordinator write-tracking (per address)**
+12. `_pending: dict[address, PendingWrite]`
+13. `PendingWrite.pin` / 14. `.written_at` / 15. `.believed: bool` / 16. `.displaced: bool` *(new)* / 17. `.deadline` (= `written_at + PENDING_WRITE_TTL`)
+18. `_failed_writes: set` (consumed once by `take_failed_write`)
+19. `_unconfirmed_writes: dict[address, str]` *(new)* (consumed once by `take_unconfirmed_write`)
+20. `_unobserved: set` *(new)*
+21. `is_verified(address)` = `not in _pending and not in _unobserved` *(semantics changed)*
+22. `has_pending_write` / `pending_write` / `drop_pending` / `settle_pending` *(new)* / `record_clear` *(new)* / `async_read_back` *(new)* / `_give_up` *(new)*
+23. `coordinator.unreachable` (lock circuit breaker) and `has_credential(address)`
+
+**Sync-manager per-slot memory**
+24. `_last_set_pin: str | None` (in-memory, lost on restart — the only "is the write-only PIN right?" evidence)
+25. `_slot_breaker: CircuitBreaker` → `failure_count`, `tripped`
+26. `_breaker_reset_requested: bool`
+27. `_code_suspend_target: tuple[active_state, credential_state] | None`
+28. `_unconfirmed_attempts: int` *(new)*
+29. `_unconfirmed_target: tuple[active_state, credential_state] | None` *(new — second target tuple)*
+30. `_unconfirmed_retry_at: float` monotonic *(new)*
+31. `_logged_invalid_state`, `_started`, `_tracking_all_states`, `_tick_tasks` (lifecycle noise that still gates `_write_state`)
+
+**Provider-side memory**
+32. `_cleared_slots` / `last_write_was_clear(slot)` (in-memory; the only evidence a clear landed on a write-only lock)
+33. `supports_push`
+34. `provider_setup_succeeded` (+ `_setup_deferred`)
+35. `_rejected_code_slots`
+36. `code_reads_may_be_unsupported: ClassVar[bool]` *(new, #1576)*
+37. `_async_device_responds()` liveness probe *(new)* and `_answered_since_read_began()` *(new)*
+
+**Read-health axis (#1576)**
+38. `ReadHealth.ANSWERED` / 39. `ReadHealth.UNANSWERED` / 40. `None` = unknown (latching: ANSWERED is permanent)
+41. `_UNANSWERED_ALLOWED` sentinel — a 4th stored value overloading the same field
+42. `unseen_slots_allowed(hass, lock)` bool
+43. per-read `silences` counter vs `SILENT_READS_TO_CLASSIFY = 5`
+44. `UNANSWERED_PROBE_INTERVAL = 3600.0` + per-lock probe timestamp map (`async_claim_probe`)
+45. two-tier storage (`hass.data` cache + `entry.data[CONF_INTERNAL][INTERNAL_LOCK_READS]`, keyed by entity **registry id**) with "answered anywhere wins" cross-entry resolution
+46. repair `lock_reads_unanswered` and `SlotAllocationError("lock_reads_unanswered")`
+
+**Timeouts / counters (7 tunables)**
+47. `TICK_INTERVAL = 2s` 48. `PENDING_WRITE_TTL = 60s` 49. `CONFIRM_READ_INTERVAL = 15s` 50. `MAX_SYNC_ATTEMPTS = 3` 51. `SYNC_ATTEMPT_WINDOW = 5min` 52. `UNCONFIRMED_RETRY_MAX = 3600s` (+ hard exponent cap of 16) 53. `STOP_GRACE_SECONDS = 30s` — plus `UNANSWERED_PROBE_INTERVAL = 3600s` and `SILENT_READS_TO_CLASSIFY = 5` from #1576.
+
+**Presentation fold**
+54. `manager.in_sync: bool | None` (None only while LOADING; **every** non-IN_SYNC state reads as "off" to the user — PENDING_CONFIRMATION and UNCONFIRMED are invisible except via the attribute)
+55. `manager.sync_status: str | None`
+56. `fold_in_sync` (all-true / unknown-if-any-None) + `fold_sync_status` + `_STATUS_PRECEDENCE` (now 7-long)
+57. `LockCodeManagerCodeSlotInSyncEntity.available` (separate gate on `has_credential`)
+58. Exception taxonomy that routes state: `CodeRejectedError`, `LockBusy`, `LockDisconnected`, `LockOperationUnconfirmed` *(new)*, `LockOperationUnsupported`, `LockOperationFailed`, bare `Exception` — 7 distinct outcomes from one `await`.
+
+**Net:** ~58 identifiers, of which the *answer* to "is this PIN on the lock?" is computed by `calculate_in_sync` from 5 mutually-exclusive branches over 4 orthogonal sources of truth: the coordinator's credential, the code-sensor entity state, LCM's own `_last_set_pin`, and the provider's `_cleared_slots` — gated by a verification predicate now backed by two separate sets.</result>
+<usage><subagent_tokens>126700</subagent_tokens><tool_uses>27</tool_uses><duration_ms>154945</duration_ms></usage>
+</task-notification>
+
+---
+
+go for it. Close them
+
+---
+
+1
