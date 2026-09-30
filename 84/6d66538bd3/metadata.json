@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "846d66538bd3",
+  "strategy": "manual-commit",
+  "branch": "fix/1595-migration-device-registry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "tests/conftest.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/84/6d66538bd3/0/metadata.json",
+      "transcript": "/84/6d66538bd3/0/full.jsonl",
+      "compact_transcript": "/84/6d66538bd3/0/transcript.jsonl",
+      "content_hash": "/84/6d66538bd3/0/content_hash.txt",
+      "prompt": "/84/6d66538bd3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 112,
+    "cache_creation_tokens": 149817,
+    "cache_read_tokens": 6514709,
+    "output_tokens": 31229,
+    "api_call_count": 56
+  }
+}

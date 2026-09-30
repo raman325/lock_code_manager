@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "846d66538bd3",
+  "session_id": "54075294-8aec-4743-aa75-1bc82d319c67",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-30T16:07:01.61936Z",
+  "branch": "fix/1595-migration-device-registry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "tests/conftest.py",
+    "tests/test_init.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "3aa408f70e17",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 112,
+    "cache_creation_tokens": 149817,
+    "cache_read_tokens": 6514709,
+    "output_tokens": 31229,
+    "api_call_count": 56
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-30T16:07:01.580891Z",
+    "agent_lines": 49,
+    "agent_removed": 17,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 49,
+    "total_lines_changed": 66,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1081,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/ORIG_HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/config": 17,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/delta/copy-baseline": 5,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/description": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/applypatch-msg.sample": 15,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/commit-msg.sample": 74,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/fsmonitor-watchman.sample": 168,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/post-update.sample": 8,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-applypatch.sample": 14,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-commit.sample": 49,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-merge-commit.sample": 13,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-push.sample": 53,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-rebase.sample": 169,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-receive.sample": 24,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/prepare-commit-msg.sample": 42,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/push-to-checkout.sample": 78,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/sendemail-validate.sample": 77,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/update.sample": 128,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/info/exclude": 6,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/logs/HEAD": 3,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/logs/refs/remotes/origin/HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/objects/info/alternates": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/packed-refs": 132,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/refs/remotes/origin/HEAD": 1
+      }
+    }
+  ]
+}
