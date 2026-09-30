@@ -1,0 +1,1 @@
+let's create a PR for pytest-homeassistant-custom-components that adds this deprecation fixture, it would be useful for all integration
