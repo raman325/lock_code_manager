@@ -158,9 +158,10 @@ def assert_no_deprecation_reports() -> Generator[None]:
     one back. Watching the log is what closes that gap, because the log is the
     only place the warning ever appeared.
 
-    Home Assistant deduplicates these by call site for the life of the
-    process, so the first test to reach a reintroduced call is the one that
-    fails; later tests over the same line stay silent.
+    Every test that reaches the call fails, not just the first: Home
+    Assistant deduplicates these by call site, but the harness clears that
+    set after each test (``reset_globals`` in the plugin), so each test
+    starts able to see its own reports.
     """
     reports: list[str] = []
 
