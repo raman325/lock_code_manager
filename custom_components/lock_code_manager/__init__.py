@@ -457,23 +457,16 @@ async def async_migrate_entry(
             # that somehow lacks one raises here instead of looking up the
             # device named "{entry_id}|None" and quietly finding nothing.
             slot_num = subentry.data[CONF_SLOT]
-            device = dev_reg.async_get_device(
-                identifiers={
-                    (
-                        DOMAIN,
-                        build_slot_device_identifier(config_entry.entry_id, slot_num),
-                    )
-                }
+            device = dev_reg.async_get_device_by_identifier(
+                (
+                    DOMAIN,
+                    build_slot_device_identifier(config_entry.entry_id, slot_num),
+                ),
+                config_entry.entry_id,
             )
-            if device is not None and subentry.subentry_id not in (
-                device.config_entries_subentries.get(config_entry.entry_id) or set()
-            ):
+            if device is not None and device.config_subentry_id != subentry.subentry_id:
                 dev_reg.async_update_device(
-                    device.id,
-                    add_config_entry_id=config_entry.entry_id,
-                    add_config_subentry_id=subentry.subentry_id,
-                    remove_config_entry_id=config_entry.entry_id,
-                    remove_config_subentry_id=None,
+                    device.id, new_config_subentry_id=subentry.subentry_id
                 )
 
         _LOGGER.info(
