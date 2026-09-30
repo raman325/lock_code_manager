@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Generator
 from contextlib import ExitStack
 from datetime import timedelta
+import logging
 import os
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -142,6 +143,44 @@ def assert_flow_forms_serialize() -> Generator[None]:
         for cls in _flow_classes():
             stack.enter_context(checked(cls))
         yield
+
+
+@pytest.fixture(autouse=True)
+def assert_no_deprecation_reports() -> Generator[None]:
+    """
+    Fail a test that makes Home Assistant report this integration.
+
+    A deprecated helper called from a custom integration only logs, while the
+    same call from a test frame raises. So production code can carry one past
+    a green suite and reach users as a warning that becomes a hard failure on
+    the removal version -- issue #1595, where #1540 migrated every
+    ``async_get_device`` call and a block merged from an older branch brought
+    one back. Watching the log is what closes that gap, because the log is the
+    only place the warning ever appeared.
+
+    Home Assistant deduplicates these by call site for the life of the
+    process, so the first test to reach a reintroduced call is the one that
+    fails; later tests over the same line stay silent.
+    """
+    reports: list[str] = []
+
+    class _Collect(logging.Handler):
+        """Keep every frame report, so the filtering below is ours to choose."""
+
+        def emit(self, record: logging.LogRecord) -> None:
+            reports.append(record.getMessage())
+
+    logger = logging.getLogger("homeassistant.helpers.frame")
+    handler = _Collect()
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+    # Reports name the integration they blame, and the mock integrations these
+    # tests register are not ours to fix.
+    if ours := [report for report in reports if f"'{DOMAIN}'" in report]:
+        pytest.fail("\n".join(ours))
 
 
 @pytest.fixture(autouse=True)

@@ -2408,7 +2408,7 @@ async def test_migration_v5_moves_an_existing_slot_device_to_its_user(
         config_entry_id=config_entry.entry_id,
         **build_slot_device_info(config_entry, 1),
     )
-    assert before.config_entries_subentries == {config_entry.entry_id: {None}}
+    assert before.config_subentry_id is None
 
     # The migration alone, not a full setup. Setting the entry up would add
     # this user's entities, and that drags the device across by itself -- so
@@ -2418,7 +2418,7 @@ async def test_migration_v5_moves_an_existing_slot_device_to_its_user(
 
     subentry_id = next(iter(config_entry.subentries))
     after = dev_reg.async_get(before.id)
-    assert after.config_entries_subentries == {config_entry.entry_id: {subentry_id}}
+    assert after.config_subentry_id == subentry_id
 
 
 async def test_migration_v5_drops_a_user_with_no_number(
