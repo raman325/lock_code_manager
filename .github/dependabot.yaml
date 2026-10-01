@@ -22,6 +22,12 @@ updates:
     labels:
       - "dependencies"
       - "python"
+    ignore:
+      # pytest-homeassistant-custom-component pins pytest EXACTLY, because it
+      # carries the whole of HA core's test requirements. Raising our floor past
+      # that pin cannot resolve, however long the pull request stays open, so
+      # the only move is to let phacc bring pytest forward on its own schedule.
+      - dependency-name: pytest
     groups:
       # HA pins these exactly (directly or via integration manifests), so they
       # must move in lockstep with the homeassistant version under test.
