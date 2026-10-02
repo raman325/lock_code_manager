@@ -9,7 +9,7 @@ ha-silabs-firmware-client==0.3.0
 homeassistant>=2026.9.4
 matter-python-client==1.4.0
 pyserial==3.5
-pyudev==0.24.4
+pyudev==0.24.5
 universal-silabs-flasher==1.1.0
 usb-devices>=0.5.1
 uv
