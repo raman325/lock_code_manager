@@ -7,10 +7,10 @@
   resolved "https://registry.npmjs.org/@aashutoshrathi/word-wrap/-/word-wrap-1.2.6.tgz"
   integrity sha512-1Yjs2SvM8TflER/OD3cOjhWWOZb58A2t7wpE2S9XfBYTiIl+XFhQG2bjy4Pu1I+EAlCNUzRDYDdFwFYUKvXcIA==
 
-"@antithesishq/bombadil@0.7.7":
-  version "0.7.7"
-  resolved "https://registry.yarnpkg.com/@antithesishq/bombadil/-/bombadil-0.7.7.tgz#96ccf2a5506524c58b5ab736aaf242122c19f1d7"
-  integrity sha512-TlFKF4BDEUudO6xFxF/gk21VcQ6zscDl7GZbkujRie7JuNH/tDPBr9hM+8TYEk5XojBXqQ/+oKpAzCm9Z44sgg==
+"@antithesishq/bombadil@0.7.8":
+  version "0.7.8"
+  resolved "https://registry.yarnpkg.com/@antithesishq/bombadil/-/bombadil-0.7.8.tgz#d97556a9e6f83317cea03c5836b23a599bf9bf20"
+  integrity sha512-B2o5l4tUauliN8SNQOcQPXsfU0YSyZUP+3HWtHmKIvTPD4fqzEGl+7v7pEx3G5oJf8BYBckxPO0Pxves7yZfyg==
 
 "@asamuzakjp/css-color@^7.0.0":
   version "7.0.1"
