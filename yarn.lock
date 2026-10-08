@@ -3589,10 +3589,10 @@ hasown@^2.0.0, hasown@^2.0.1, hasown@^2.0.2:
   dependencies:
     function-bind "^1.1.2"
 
-home-assistant-js-websocket@^9.7.0:
-  version "9.7.0"
-  resolved "https://registry.yarnpkg.com/home-assistant-js-websocket/-/home-assistant-js-websocket-9.7.0.tgz#99a91362beab8f0284d051f5c6addec2af4f9441"
-  integrity sha512-AE/VtwY+sKi7B3934KuIgvj2g06QY9aFVdd2zh1r5ygbpMo2TZbvN9Zoma8L2wHNYFsngTRiZxYOnLlCysIOzA==
+home-assistant-js-websocket@^9.7.1:
+  version "9.7.1"
+  resolved "https://registry.yarnpkg.com/home-assistant-js-websocket/-/home-assistant-js-websocket-9.7.1.tgz#d8522d50d44d1b18b505e854c650be75e95b6241"
+  integrity sha512-zOAiyF+gUc/IsiswYdWKns6SCBbvWb8iJtMX9+Dk0wlbdfcp+I38T2Vx36krWeWMk/GPwoSiYwCs5hk/+Hsn7w==
 
 html-encoding-sniffer@^7.0.0:
   version "7.0.0"
