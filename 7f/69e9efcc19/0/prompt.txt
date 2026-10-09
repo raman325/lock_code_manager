@@ -1658,3 +1658,39 @@ The new commit is `82f0a0e8`, on top of `37612587`. It is not pushed.
 Ready for Task 2.</result>
 <usage><subagent_tokens>203343</subagent_tokens><tool_uses>3</tool_uses><duration_ms>156265</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a3ab79c3e87e7b0c5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/88689b8f-7a06-4f90-9808-9d17aef5d545/tasks/a3ab79c3e87e7b0c5.output</output-file>
+<status>completed</status>
+<summary>Agent "Quality review PR A Task 2" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Approved.** Commit 90474717 resolves Important #1, and nothing new broke. I checked it in a fresh scratch copy at `/private/tmp/claude-501/review-scratch/t2b` and changed nothing in the repository.
+
+**Important #1 is resolved.** Each new test catches the old behaviour on its own half of the fix:
+
+| What I put in `zha.py` | Result in `test_e2e.py` |
+|---|---|
+| Fixed code (90474717) | 4 passed, and stayed green over 5 repeated runs |
+| Base version from 82f0a0e8 | 2 failed: `test_a_dropped_set_does_not_read_in_sync` and `test_a_dropped_clear_does_not_read_empty` |
+| Only the clear reverted (pushes `empty()` again) | 1 failed: the dropped-clear test |
+| Only the set reverted (pushes `known(pin)` and returns `CONFIRMED`) | 1 failed: the dropped-set test |
+
+**Nothing new broke:**
+- The ZHA tests pass (87 passed, 1 skipped), and so does the full suite (2475 passed, 3 skipped).
+- `lcm_config_entry` still depends on `unconfirming_lock_table`, so the fake lock is in place before setup reads the lock.
+- The dropped-set test checks `codes == {}`, so a write landing before `applies = False` would be caught.
+
+**Minor items:**
+- **#4 is fixed:** the clear test now asserts `== 1`.
+- **#5 is fixed:** the fixture reaches the cluster through the zigpy device, not a throwaway `ZHALock`.
+- **#7 is fixed:** the comment at `zha.py:320` now says the command "was sent", not that it arrived.
+- **#9 is fixed:** each tick loop has a comment saying what its budget covers.
+- **#6 is still open, and it is fine to leave:** `lcm_config_entry` still always installs the unconfirming lock. It is test-structure only.
+
+Important #2 going to PR E and #3 going to the new Task 2b are both acceptable.</result>
+<usage><subagent_tokens>146273</subagent_tokens><tool_uses>3</tool_uses><duration_ms>198258</duration_ms></usage>
+</task-notification>
