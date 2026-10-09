@@ -52,6 +52,7 @@ from ..domain.credentials import (
 from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
+    LockBusy,
     LockDisconnected,
     LockOperationFailed,
 )
@@ -1573,8 +1574,8 @@ class MatterLock(BaseLock):
         """
         Resolve the LCM slot for a LockUserChange and push the update.
 
-        Fetches the lock's current user list, finds the owner by
-        ``user_index``, parses its ``lcm:<slot>:`` tag, and hands the
+        Fetches the lock's current user list in the lock's turn, finds the
+        owner by ``user_index``, parses its ``lcm:<slot>:`` tag, and hands the
         observation to the coordinator. A cleared user is no longer in
         that list, so a CLEAR falls back to the slot the index anchored at
         the last read or write. Events whose owning user isn't LCM-tagged
@@ -1583,8 +1584,12 @@ class MatterLock(BaseLock):
         """
         code_slot: int | None = None
         try:
-            raw_users = await self._raw_lock_users()
-        except (LockDisconnected, LockOperationFailed) as err:
+            # In the lock's turn, like every other read: a read that overlaps
+            # a write can be answered with the users from before it.
+            raw_users = await self._execute_rate_limited(
+                "get", self._raw_lock_users, exchanges=len(self.managed_slots)
+            )
+        except (LockBusy, LockDisconnected, LockOperationFailed) as err:
             LOGGER.debug(
                 "Lock %s: could not read users to resolve LockUserChange "
                 "userIndex %s: %s",

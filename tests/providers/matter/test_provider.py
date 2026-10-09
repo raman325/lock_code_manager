@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import logging
 from typing import Any
@@ -1545,6 +1546,120 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.observe_push.assert_called_once_with(
             pin_address(5), SlotCredential.unreadable()
+        )
+
+    async def test_the_user_read_waits_for_the_locks_turn(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """An event's user read waits while a write holds the lock's turn.
+
+        Issued during the write, the read can be answered with the users from
+        before it -- matterjs-server merges identical in-flight reads -- and
+        that stale answer is what the event would push.
+        """
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
+        matter_lock.coordinator = mock_coordinator
+        matter_lock._min_operation_delay = 0.0
+        get_lock_users = AsyncMock(
+            return_value={
+                "max_users": 10,
+                "users": [
+                    {
+                        "user_index": 42,
+                        "user_name": "lcm:3:Carol",
+                        "credentials": [{"type": "pin", "index": 7}],
+                    },
+                ],
+            }
+        )
+        write_may_finish = asyncio.Event()
+        write = hass.async_create_task(
+            matter_lock._execute_rate_limited("set", write_may_finish.wait)
+        )
+        for _ in range(20):
+            if matter_lock.turn_holder is not None:
+                break
+            await asyncio.sleep(0)
+        assert matter_lock.turn_holder is write
+
+        with patch(f"{_PROVIDER_MODULE}.get_lock_users", get_lock_users):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 6,  # PIN
+                        "dataOperationType": 0,  # Add
+                        "dataIndex": 7,
+                        "userIndex": 42,
+                    },
+                ),
+            )
+            for _ in range(20):
+                await asyncio.sleep(0)
+            get_lock_users.assert_not_awaited()
+
+            write_may_finish.set()
+            await write
+            await hass.async_block_till_done()
+
+        get_lock_users.assert_awaited_once()
+        mock_coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.unreadable()
+        )
+
+    async def test_a_clear_whose_read_never_got_a_turn_resolves_through_the_anchor(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A turn wait that runs out takes the same path as an unreachable lock.
+
+        The event's task is fire-and-forget, so ``LockBusy`` escaping it would
+        drop the event with nothing but a task traceback. A CLEAR still has the
+        slot its user index anchored at the last read.
+        """
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+        with TestLockUserChangeEvent._patch_users(
+            [
+                {
+                    "user_index": 42,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ]
+        ):
+            await matter_lock.async_get_users()
+
+        get_lock_users = AsyncMock(return_value={"max_users": 10, "users": []})
+        write_may_finish = asyncio.Event()
+        write = hass.async_create_task(
+            matter_lock._execute_rate_limited("set", write_may_finish.wait)
+        )
+        for _ in range(20):
+            if matter_lock.turn_holder is not None:
+                break
+            await asyncio.sleep(0)
+        assert matter_lock.turn_holder is write
+
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", get_lock_users),
+            patch.object(
+                type(matter_lock),
+                "operation_timeout_seconds",
+                property(lambda _self: 0.05),
+            ),
+        ):
+            matter_lock._on_node_event(None, _cleared_event(42))
+            await asyncio.sleep(0.2)
+
+        write_may_finish.set()
+        await write
+        await hass.async_block_till_done()
+
+        get_lock_users.assert_not_awaited()
+        mock_coordinator.observe_push.assert_called_once_with(
+            pin_address(3), SlotCredential.empty()
         )
 
     async def test_pin_cleared_pushes_empty(
