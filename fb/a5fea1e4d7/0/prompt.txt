@@ -1428,3 +1428,50 @@ Nothing in the main checkout changed except the plan file (`docs/` is gitignored
 - **The narrow exceptions are all before confirmation:** a contradiction that displaces a write still pending is charged once (`coordinator.py:230-232`). So is one seen by the immediate post-sync refresh of a write that recorded nothing pending (`sync.py:1062-1065`).</result>
 <usage><subagent_tokens>253296</subagent_tokens><tool_uses>71</tool_uses><duration_ms>1790076</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>ad021f0e0286927b1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/88689b8f-7a06-4f90-9808-9d17aef5d545/tasks/ad021f0e0286927b1.output</output-file>
+<status>completed</status>
+<summary>Agent "Write plan PR B (relaunch)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I wrote the PR B plan; the plan file is the only thing created in the repo. Before writing it I built the whole change in a scratch copy of main. The full suite passed there after Task 1 alone (2454) and with every task applied (2463 passed, 3 skipped, `HYPOTHESIS_PROFILE=ci`). Each new test was run once against a reverted copy of the rule it guards, and the ones the plan calls failing did fail.
+
+**Plan:** `/Users/raman/projects/lock_code_manager/docs/superpowers/plans/2026-10-08-pr-b-belief-store.md`
+
+**Tasks:**
+- **Task 0:** create the worktree `.worktrees/belief-store` on `feat/belief-store`, run `yarn install`, record the baseline (2450 passed).
+- **Task 1:** add `domain/belief.py` and load it in `async_setup`. The write path clears a slot's belief before every write and records it when the write returns. The in-sync check reads belief instead of `_last_set_pin`, `_cleared_slots` and `last_write_was_clear`, which are deleted. Tests: the credential machine gets a belief oracle and two "lands then raises" rules, plus an end-to-end test over restart, reload and disable-then-enable. Existing tests are updated and an AGENTS.md bullet is added.
+- **Task 2:** forget belief when a lock leaves an entry (options flow, or reauth whether or not the entry is loaded) or the entry is deleted. Adds `lock_in_any_entry`, which counts disabled entries. Cleanup falls back to the stored `entity_id` when the lock's registry row is gone or renamed. Tests: shared lock, disabled sibling, reauth, rename.
+- **Task 3:** forget a removed user's belief in the `pairs_removed` loop even if the release fails; retained pairs are left alone.
+- **Task 4:** on load, drop records for locks no entry names and delete the file when it is empty.
+- **Task 5:** full suite, `prek`, push, PR from the template.
+
+**Decisions the plan makes that you should know about:**
+- **"Refuse writes" is checked per lock and slot, not per lock.** A write is recorded only if some entry manages that slot on that lock (`find_entry_for_lock_slot`). That one check also keeps out unmanaged-slot writes, release writes, and a late write landing after its lock has left every entry.
+- **Release forgets after teardown.** `_async_release_locks` forgets belief in a `finally` that runs after the teardown, so an entry that never loaded still forgets before returning. It now takes the slot numbers explicitly, because the options-flow listener has already replaced the config by the time it runs.
+- **Tests that build a provider directly** now request a new `belief_store` fixture, which calls the same loader `async_setup` uses. The `lock_code_manager_config_entry` fixture teardown now tolerates an entry the test deleted.
+
+**Deferrals:**
+- **`answered` flag, `retained` value, and repair cleanup on whole-record removal and prune:** PR F. The repair doesn't exist yet, and leaving these out now means no migration later.
+- **Completion times and supersession:** PR E.
+- **Matter-specific restart test:** the change doesn't depend on the provider, and the shared write path and sync manager are tested with `MockLCMLock.write_only`. It fits better with PR E/F's restart tests, where the `answered` flag also has to survive.
+- **"Unload never removes belief"** is a test run once for each of the three unload kinds rather than a Hypothesis property. With only three events that is exhaustive, and Hypothesis with function-scoped HA fixtures is a known trap here.
+- **No timing test for "forget after teardown":** the order is guaranteed by the `finally` in code, not by a test.
+
+**Spec claims found wrong or in tension:**
+1. **Regression review line 61 contradicts the spec.** It says "still managed by another entry" uses `_lock_managed_by_other_entry`, but that helper skips disabled entries (`__init__.py:1028-1031`), and design §4 (around line 270) correctly calls it the wrong check. The plan follows §4.
+2. **Design §3 step 2 ("Returned, including 'no change': set belief") is wrong for clears.** A no-change clear means the provider found nothing to clear. Today that deliberately does not count as cleared (`_base.py:1574-1579`), and `test_a_clear_that_changed_nothing_is_not_evidence` (`tests/test_binary_sensor.py:2246`) pins it. PR B keeps today's behavior for clears and records no-change sets; PR E should settle the spec line.
+3. **The websocket commands at `websocket.py:1246` and `:1272` are not limited to unmanaged slots.** They go through `domain/services.py:80-98` with no managed check, and an existing test (`tests/test_binary_sensor.py:2291`) writes a managed slot through them. Under the per-slot rule, such a write to a managed slot is recorded.
+4. **The regression review's "remove belief after `async_unload_lock`"** is only correct inside `_async_release_locks`, which is a permanent removal. That is where the plan puts it; it does not apply to unload.
+
+**Other things worth knowing:**
+- The restart benefit for Z-Wave depends on PR A. Main currently reports masked Z-Wave codes (Available + `****`) as readable (#819), so those slots would still be rewritten until A lands. Matter, Schlage, ZHA, Z2M and zwave-js-ui benefit from PR B alone.
+- In the credential machine, don't add `mock_storage()`: the session's `hass` fixture already mocks storage, and stacking a second one raises `InvalidSpecError`. Each example is isolated by removing the stored file before loading.
+
+Scratch work is in `/private/tmp/claude-501/prb-scratch/repo` (final state) and `/private/tmp/claude-501/prb-scratch/stage1` (state after Task 1 only).</result>
+<usage><subagent_tokens>400524</subagent_tokens><tool_uses>138</tool_uses><duration_ms>2012881</duration_ms></usage>
+</task-notification>
