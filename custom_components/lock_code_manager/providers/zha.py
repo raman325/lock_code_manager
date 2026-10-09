@@ -17,6 +17,7 @@ from datetime import timedelta
 import logging
 from typing import Any, ClassVar, Literal
 
+from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
 
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
@@ -447,10 +448,9 @@ class ZHALock(BaseLock):
             if parsed is None:
                 _LOGGER.debug(
                     "Lock %s: get_pin_code reply is not recognizably slot %s's "
-                    "answer, marking unreadable: %s",
+                    "answer, marking unreadable",
                     self.lock.entity_id,
                     slot_num,
-                    result,
                 )
                 slot_states[slot_num] = SlotCredential.unreadable()
                 continue
@@ -540,15 +540,23 @@ class ZHALock(BaseLock):
         ``None`` for a reply this cannot recognize as that slot's answer: a
         shape it does not know, or one naming another user. zigpy pairs a
         reply with its request by transaction sequence number, not by the
-        user it names, so a reply about another user can arrive here, and
-        reading it as this slot's would report that user's code, or its
-        emptiness, under this slot. Reporting either as ``Available`` would
-        answer "this slot is free" from a reply that was never about it.
+        user it names, and it fills the pending request with any Door Lock
+        command the lock sends back on that sequence number, such as an
+        operation event notification. Reading either as this slot's answer
+        would report another user's code, or its emptiness, under this slot,
+        and reporting that as ``Available`` would say "this slot is free" from
+        a reply that was never about it.
+
+        A decoded reply is accepted only as a Get PIN Code Response. Every
+        zigpy command schema is a tuple, so it must be told apart before the
+        positional form, which only a plain list or tuple is read as.
         """
-        if hasattr(result, "user_status"):
-            user_id = getattr(result, "user_id", None)
-            user_status = result.user_status
-            pin = getattr(result, "code", "")
+        if isinstance(result, foundation.CommandSchema):
+            if not isinstance(
+                result, DoorLock.ClientCommandDefs.get_pin_code_response.schema
+            ):
+                return None
+            user_id, user_status, pin = result.user_id, result.user_status, result.code
         elif isinstance(result, (list, tuple)) and len(result) >= 4:
             user_id, user_status, _user_type, pin = result[:4]
         else:

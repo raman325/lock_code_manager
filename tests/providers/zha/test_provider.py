@@ -665,6 +665,60 @@ def test_parse_pin_response_for_another_user_is_not_an_answer(result: Any) -> No
     assert ZHALock._parse_pin_response(result, 3) is None
 
 
+@pytest.mark.parametrize(
+    ("result", "slot_num"),
+    [
+        pytest.param(
+            DoorLock.ClientCommandDefs.operation_event_notification.schema(
+                operation_event_source=DoorLock.OperationEventSource.Manual,
+                operation_event_code=DoorLock.OperationEvent.UnknownOrMfgSpecific,
+                user_id=1,
+                pin="",
+                local_time=0,
+            ),
+            2,
+            id="operation-event-read-as-an-empty-slot",
+        ),
+        pytest.param(
+            DoorLock.ClientCommandDefs.operation_event_notification.schema(
+                operation_event_source=DoorLock.OperationEventSource.RFID,
+                operation_event_code=DoorLock.OperationEvent.Lock,
+                user_id=1,
+                pin="4321",
+                local_time=0,
+            ),
+            3,
+            id="operation-event-read-as-a-code",
+        ),
+        pytest.param(
+            DoorLock.ClientCommandDefs.programming_event_notification.schema(
+                program_event_source=DoorLock.OperationEventSource.Keypad,
+                program_event_code=DoorLock.ProgrammingEvent.PINCodeAdded,
+                user_id=3,
+                pin="4321",
+                user_type=DoorLock.UserType.Unrestricted,
+                user_status=DoorLock.UserStatus.Enabled,
+                local_time=0,
+            ),
+            3,
+            id="programming-event-about-the-asked-user",
+        ),
+    ],
+)
+def test_parse_pin_response_ignores_other_door_lock_commands(
+    result: Any, slot_num: int
+) -> None:
+    """Another Door Lock command that fills the request is not the slot's answer.
+
+    zigpy fills a pending request with any command the lock sends on its
+    sequence number except attribute reports, and every decoded command is a
+    tuple. An operation event would read positionally as a user's status and
+    code, its source standing in for the user, and a programming event about
+    the asked user carries its code in a field this parser does not read.
+    """
+    assert ZHALock._parse_pin_response(result, slot_num) is None
+
+
 # ---------------------------------------------------------------------------
 # Cluster command / event handling
 # ---------------------------------------------------------------------------
