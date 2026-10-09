@@ -447,28 +447,33 @@ async def simple_lcm_config_entry(
 
 class UnconfirmingDoorLockTable:
     """
-    A lock that applies a set or clear but never says so.
+    A lock that never says whether it applied a set or clear.
 
     Stands in for the Door Lock cluster's PIN commands: ``set_pin_code`` and
-    ``clear_pin_code`` change the table and reply with nothing, and
-    ``get_pin_code`` answers with the real zigpy reply for the slot.
+    ``clear_pin_code`` reply with nothing, and ``get_pin_code`` answers with
+    the real zigpy reply for the slot. While ``applies`` is true they also
+    change the table; set it false and the lock drops the command, which a
+    reply without a status cannot be told apart from.
     """
 
     def __init__(self) -> None:
-        """Start with an empty table and no commands recorded."""
+        """Start with an empty table, applying commands, and none recorded."""
         self.codes: dict[int, str] = {}
         self.clears: list[int] = []
+        self.applies = True
 
     async def set_pin_code(
         self, user_id: int, _status: Any, _user_type: Any, pin: str
     ) -> None:
-        """Hold the code and reply with no status."""
-        self.codes[user_id] = pin
+        """Hold the code if the lock applies it, and reply with no status."""
+        if self.applies:
+            self.codes[user_id] = pin
 
     async def clear_pin_code(self, user_id: int) -> None:
-        """Drop the code and reply with no status."""
+        """Drop the code if the lock applies it, and reply with no status."""
         self.clears.append(user_id)
-        self.codes.pop(user_id, None)
+        if self.applies:
+            self.codes.pop(user_id, None)
 
     async def get_pin_code(self, user_id: int) -> Any:
         """Answer the way the lock does: Enabled with the code, or Available."""
@@ -484,10 +489,11 @@ class UnconfirmingDoorLockTable:
 
 
 @pytest.fixture
-def unconfirming_lock_table(zha_lock: ZHALock) -> UnconfirmingDoorLockTable:
+def unconfirming_lock_table(
+    zigpy_lock_device: zigpy.device.Device,
+) -> UnconfirmingDoorLockTable:
     """Put an unconfirming lock behind the Door Lock cluster's PIN commands."""
-    cluster = zha_lock._get_door_lock_cluster()
-    assert cluster is not None
+    cluster = zigpy_lock_device.endpoints[1].in_clusters[closures.DoorLock.cluster_id]
     table = UnconfirmingDoorLockTable()
     cluster.set_pin_code = AsyncMock(side_effect=table.set_pin_code)
     cluster.clear_pin_code = AsyncMock(side_effect=table.clear_pin_code)

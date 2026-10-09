@@ -43,6 +43,7 @@ async def test_an_unconfirmed_set_ends_in_sync(
     Nothing is pushed on the strength of the write, so the slot reads in sync
     only because the confirmation read saw the lock hold the code.
     """
+    # One tick per slot to write it, plus two for the read-back to land.
     for _ in range(len(CONFIGURED_PINS) + 2):
         await async_advance_time(hass, TICK_INTERVAL)
 
@@ -70,6 +71,7 @@ async def test_an_unconfirmed_clear_ends_in_sync_without_being_reissued(
     The slot must end empty and in sync, and the clear must not repeat while
     the coordinator still shows the old code.
     """
+    # One tick per slot to write it, plus two for the read-back to land.
     for _ in range(len(CONFIGURED_PINS) + 2):
         await async_advance_time(hass, TICK_INTERVAL)
     assert unconfirming_lock_table.codes == CONFIGURED_PINS
@@ -84,6 +86,7 @@ async def test_an_unconfirmed_clear_ends_in_sync_without_being_reissued(
         },
         blocking=True,
     )
+    # The clear, its read-back, and slack to show it is not reissued.
     for _ in range(len(CONFIGURED_PINS) + 4):
         await async_advance_time(hass, TICK_INTERVAL)
 
@@ -95,4 +98,73 @@ async def test_an_unconfirmed_clear_ends_in_sync_without_being_reissued(
     )
     assert in_sync is not None
     assert in_sync.state == STATE_ON
-    assert 1 <= unconfirming_lock_table.clears.count(1) <= 2
+    assert unconfirming_lock_table.clears.count(1) == 1
+
+
+async def test_a_dropped_set_does_not_read_in_sync(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    unconfirming_lock_table: UnconfirmingDoorLockTable,
+) -> None:
+    """
+    A set the lock drops is not reported as landed.
+
+    The reply carries no status, so nothing says the code was applied; the
+    read-back finds the slot empty and the slot must not read in sync.
+    """
+    unconfirming_lock_table.applies = False
+    # Enough ticks for every slot to be written and read back at least once.
+    for _ in range(len(CONFIGURED_PINS) + 4):
+        await async_advance_time(hass, TICK_INTERVAL)
+
+    lock = _zha_lock(lcm_config_entry)
+    assert unconfirming_lock_table.codes == {}
+    in_sync = hass.states.get(
+        in_sync_entity_id(hass, lcm_config_entry, 1, lock.lock.entity_id)
+    )
+    assert in_sync is not None
+    assert in_sync.state != STATE_ON
+
+
+async def test_a_dropped_clear_does_not_read_empty(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    unconfirming_lock_table: UnconfirmingDoorLockTable,
+) -> None:
+    """
+    A clear the lock drops is not reported as done.
+
+    The reply carries no status, so the slot is not pushed empty: the
+    read-back finds the old code still held and the slot must neither read
+    empty nor in sync.
+    """
+    # One tick per slot to write it, plus two for the read-back to land.
+    for _ in range(len(CONFIGURED_PINS) + 2):
+        await async_advance_time(hass, TICK_INTERVAL)
+    assert unconfirming_lock_table.codes == CONFIGURED_PINS
+
+    unconfirming_lock_table.applies = False
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        {
+            ATTR_ENTITY_ID: slot_entity_id(
+                hass, SWITCH_DOMAIN, lcm_config_entry, 1, CONF_ENABLED
+            )
+        },
+        blocking=True,
+    )
+    # The clear and its read-back, with a tick or two to spare.
+    for _ in range(3):
+        await async_advance_time(hass, TICK_INTERVAL)
+
+    lock = _zha_lock(lcm_config_entry)
+    assert unconfirming_lock_table.clears.count(1) >= 1
+    assert lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
+        CONFIGURED_PINS[1]
+    )
+    in_sync = hass.states.get(
+        in_sync_entity_id(hass, lcm_config_entry, 1, lock.lock.entity_id)
+    )
+    assert in_sync is not None
+    assert in_sync.state != STATE_ON

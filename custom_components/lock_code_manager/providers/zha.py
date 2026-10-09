@@ -317,8 +317,8 @@ class ZHALock(BaseLock):
         )
         if (status := getattr(result, "status", None)) is None:
             # Only the lock's status says it applied the code. A reply without
-            # one says the command arrived, so the write is recorded
-            # unconfirmed and the coordinator reads the slot back.
+            # one shows only that the command was sent, so the write is
+            # recorded unconfirmed and the coordinator reads the slot back.
             _LOGGER.debug(
                 "Lock %s slot %s: set_pin_code reply carried no status; "
                 "treating the write as unconfirmed",
