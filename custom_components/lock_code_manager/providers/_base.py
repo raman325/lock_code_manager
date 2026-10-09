@@ -564,13 +564,15 @@ class BaseLock:
         is only fair where the read asks the device after the clear
         (zwave-js-ui, ZHA), not where it can lag behind it.
 
-        A slot nothing manages has no breaker and no sync waiting on it, and
-        a judgment recorded there would be charged to whichever slot is next
-        given the number, so nothing is recorded. No-op without a
-        coordinator.
+        A slot nothing manages is still read back, so it does not go on
+        showing the code it held, but its clear is never charged: it has no
+        breaker, and the verdict would wait for whichever slot is next given
+        the number. No-op without a coordinator.
         """
-        if self.coordinator is not None and self.is_slot_managed(code_slot):
-            self.coordinator.record_clear(pin_address(code_slot))
+        if self.coordinator is not None:
+            self.coordinator.record_clear(
+                pin_address(code_slot), chargeable=self.is_slot_managed(code_slot)
+            )
 
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
@@ -1574,11 +1576,15 @@ class BaseLock:
             code_slot,
             source,
         )
-        started_at = time.monotonic()
+        # Stamped once this clear has the lock's turn, not before it waits for
+        # it: a clear recorded by whoever held the turn meanwhile is one this
+        # clear supersedes.
+        started: list[float] = []
         changed = await self._execute_rate_limited(
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
             code_slot,
+            pre_execute=lambda: started.append(time.monotonic()),
             # A native-user provider reads every user first to find whose
             # credential this is; on a provider that walks the lock that is one
             # exchange per managed slot on top of the clear itself.
@@ -1594,7 +1600,7 @@ class BaseLock:
         # the lock.
         if self.coordinator is not None:
             self.coordinator.drop_superseded_by_clear(
-                pin_address(code_slot), started_at
+                pin_address(code_slot), started[0]
             )
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is

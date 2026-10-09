@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
@@ -233,30 +234,36 @@ async def test_a_clear_the_lock_keeps_ignoring_suspends_the_slot(
     assert unconfirming_lock_table.clears.count(1) == MAX_SYNC_ATTEMPTS
 
 
-async def test_an_ignored_clear_on_an_unmanaged_slot_leaves_nothing_to_charge(
+@pytest.mark.parametrize("applies", [True, False], ids=["applied", "ignored"])
+async def test_a_clear_on_an_unmanaged_slot_is_read_back_but_never_charged(
     hass: HomeAssistant,
     lcm_config_entry: MockConfigEntry,
     unconfirming_lock_table: UnconfirmingDoorLockTable,
+    applies: bool,
 ) -> None:
     """
-    A clear to a slot nothing manages is not judged, so it cannot be charged.
+    A clear to a slot nothing manages is read back, but cannot be charged.
 
-    A failure recorded there would wait for whichever slot is next given the
+    The read is what stops the slot showing a code it may no longer hold. A
+    failure recorded there would wait for whichever slot is next given the
     number, and be charged to it for a write it never made.
     """
     for _ in range(len(CONFIGURED_PINS) + 2):
         await async_advance_time(hass, TICK_INTERVAL)
-    unmanaged_slot = max(CONFIGURED_PINS) + 1
-    unconfirming_lock_table.codes[unmanaged_slot] = "9999"
-    unconfirming_lock_table.applies = False
-
     lock = _zha_lock(lcm_config_entry)
+    unmanaged_slot = max(CONFIGURED_PINS) + 1
+    address = pin_address(unmanaged_slot)
+    await lock.async_internal_set_usercode(unmanaged_slot, "9999")
+    await async_advance_time(hass, TICK_INTERVAL)
+    assert lock.coordinator.data.get(address) == SlotCredential.known("9999")
+
+    unconfirming_lock_table.applies = applies
     await lock.async_internal_clear_usercode(unmanaged_slot)
-    for _ in range(2):
-        await async_advance_time(hass, TICK_INTERVAL)
+    await async_advance_time(hass, TICK_INTERVAL)
 
     assert unconfirming_lock_table.clears.count(unmanaged_slot) == 1
-    assert unconfirming_lock_table.codes[unmanaged_slot] == "9999"
-    address = pin_address(unmanaged_slot)
+    assert lock.coordinator.data.get(address) == (
+        SlotCredential.empty() if applies else SlotCredential.known("9999")
+    )
     assert lock.coordinator.has_pending_write(address) is False
     assert lock.coordinator.take_failed_write(address) is False

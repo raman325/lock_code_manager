@@ -2081,7 +2081,7 @@ async def test_a_read_settles_a_pending_clear(
     charged: bool,
 ) -> None:
     """The first read after a clear settles it; only a readable code fails it, once."""
-    push_coordinator.record_clear(pin_address(1))
+    push_coordinator.record_clear(pin_address(1), chargeable=True)
     out = push_coordinator._apply_read({pin_address(1): observed})
     assert out[pin_address(1)] == observed
     assert push_coordinator.has_pending_write(pin_address(1)) is False
@@ -2097,7 +2097,7 @@ async def test_a_push_settles_a_pending_clear(
 ) -> None:
     """A push after a clear settles it as a read would: taken as the lock's word."""
     push_coordinator.push_update({1: SlotCredential.known("1234")})
-    push_coordinator.record_clear(pin_address(1))
+    push_coordinator.record_clear(pin_address(1), chargeable=True)
     push_coordinator.observe_push(pin_address(1), observed)
     assert push_coordinator.data[pin_address(1)] == observed
     assert push_coordinator.has_pending_write(pin_address(1)) is False
@@ -2109,7 +2109,7 @@ async def test_a_read_that_omits_a_pending_clear_settles_it(
     push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator
 ) -> None:
     """A completed read that does not name the slot is the lock holding nothing there."""
-    push_coordinator.record_clear(pin_address(9))
+    push_coordinator.record_clear(pin_address(9), chargeable=True)
     with patch.object(
         push_lock,
         "async_hard_refresh_codes",
@@ -2129,7 +2129,7 @@ async def test_a_pending_clear_whose_reads_keep_failing_ends_uncharged(
     The clear stops holding the slot at the deadline, as a set does, but only
     a readable code is charged against a clear.
     """
-    push_coordinator.record_clear(pin_address(1))
+    push_coordinator.record_clear(pin_address(1), chargeable=True)
     freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
     with patch.object(
         push_lock,
@@ -2152,10 +2152,10 @@ async def test_a_clear_drops_what_it_superseded_but_not_its_own_record(
     itself and stays to be judged.
     """
     push_coordinator.record_write(pin_address(1), "1234", believed=True)
-    push_coordinator.record_clear(pin_address(2))
+    push_coordinator.record_clear(pin_address(2), chargeable=True)
     freezer.tick(timedelta(seconds=1))
     started_at = time.monotonic()
-    push_coordinator.record_clear(pin_address(3))
+    push_coordinator.record_clear(pin_address(3), chargeable=True)
 
     for slot in (1, 2, 3):
         push_coordinator.drop_superseded_by_clear(pin_address(slot), started_at)
@@ -2170,6 +2170,66 @@ async def test_record_clear_after_shutdown_records_nothing(
 ) -> None:
     """A clear returning after unload starts no look against a torn-down lock."""
     await push_coordinator.async_shutdown()
-    push_coordinator.record_clear(pin_address(1))
+    push_coordinator.record_clear(pin_address(1), chargeable=True)
     assert push_coordinator.has_pending_write(pin_address(1)) is False
     assert push_coordinator._confirm_task is None
+
+
+async def test_an_unchargeable_clear_is_read_back_but_never_failed(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A clear nothing manages shows what the lock holds, and leaves no charge."""
+    push_coordinator.record_clear(pin_address(8), chargeable=False)
+    out = push_coordinator._apply_read({pin_address(8): SlotCredential.known("1234")})
+    assert out[pin_address(8)] == SlotCredential.known("1234")
+    assert push_coordinator.has_pending_write(pin_address(8)) is False
+    assert push_coordinator.take_failed_write(pin_address(8)) is False
+
+    push_coordinator.record_clear(pin_address(9), chargeable=False)
+    push_coordinator.observe_push(pin_address(9), SlotCredential.known("5678"))
+    assert push_coordinator.data[pin_address(9)] == SlotCredential.known("5678")
+    assert push_coordinator.has_pending_write(pin_address(9)) is False
+    assert push_coordinator.take_failed_write(pin_address(9)) is False
+
+
+async def test_a_clear_supersedes_a_clear_recorded_while_it_waited_for_its_turn(
+    hass: HomeAssistant,
+    push_lock: MockLCMPushLock,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    freezer,
+) -> None:
+    """
+    A clear's start is when it gets the lock's turn, not when it asks for it.
+
+    The first clear, unconfirmed, records itself pending while the second is
+    queued behind it. The second then runs and is confirmed: it supersedes
+    the first, so nothing is left pending to hold the slot.
+    """
+    push_lock.coordinator = push_coordinator
+    push_lock._min_operation_delay = 0
+    inside = asyncio.Event()
+    go = asyncio.Event()
+    calls: list[int] = []
+
+    async def clear(code_slot: int, *, adopt_untagged: bool = True) -> bool:
+        calls.append(code_slot)
+        if len(calls) == 1:
+            inside.set()
+            await go.wait()
+            push_lock._record_unconfirmed_clear(code_slot)
+            freezer.tick(timedelta(seconds=1))
+        return True
+
+    with patch.object(push_lock, "async_clear_usercode", clear):
+        first = hass.async_create_task(push_lock.async_internal_clear_usercode(1))
+        await inside.wait()
+        second = hass.async_create_task(push_lock.async_internal_clear_usercode(1))
+        for _ in range(5):
+            await asyncio.sleep(0)  # the second clear queues for the turn
+        assert calls == [1]
+        go.set()
+        await first
+        await second
+
+    assert calls == [1, 1]
+    assert push_coordinator.has_pending_write(pin_address(1)) is False

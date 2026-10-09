@@ -6,11 +6,12 @@ whatever the lock says next: the coordinator's read, or a push that arrives
 first. What the lock holds after each clear is drawn: nothing, a code it will
 not reveal, or a readable code.
 
-Clears may pile up before anything reads them, a set may supersede a clear
-still waiting, and a newer clear supersedes an older one's verdict that no
-sync has taken yet. The oracle is the charge each slot owes when the sync tick
-next asks: the verdict of the last clear there, or nothing once a set has
-replaced it.
+The coordinator's confirmation look is held at its start until the machine
+lets it read, so clears really do pile up before anything reads them, a push
+or a set can reach a clear still waiting, and a newer clear supersedes an
+older one's verdict that no sync has taken yet. The oracle is the charge each
+slot owes when the sync tick next asks: the verdict of the last clear there,
+or nothing once a set has replaced it.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import asyncio
 from datetime import timedelta
 
 from hypothesis import strategies as st
-from hypothesis.stateful import RuleBasedStateMachine, rule
+from hypothesis.stateful import RuleBasedStateMachine, precondition, rule
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -122,14 +123,34 @@ class ClearChargeMachine(RuleBasedStateMachine):
         )
         self.lock.coordinator = self.coordinator
         self._run(self.coordinator.async_refresh())
+        # Held ahead of the lock's turn, not inside it: a look holding the
+        # turn while it waited would stall every clear queued behind it.
+        self.reads_open = asyncio.Event()
+        look = self.coordinator.async_confirm_pending_writes
+
+        async def held_look() -> None:
+            await self.reads_open.wait()
+            await look()
+
+        self.coordinator.async_confirm_pending_writes = held_look  # type: ignore[method-assign]
         # The charge the sync tick would take next, per slot.
         self.owed: dict[int, bool] = {}
+        # Slots with a clear no read or push has answered yet.
+        self.waiting: set[int] = set()
 
     def _run(self, coro):
         return self.loop.run_until_complete(coro)
 
     def _settle(self) -> None:
         """Let every look run, including one a timer is holding back."""
+        self.reads_open.set()
+        self.waiting.clear()
+        try:
+            self._drain()
+        finally:
+            self.reads_open.clear()
+
+    def _drain(self) -> None:
         for _ in range(3):
             async_fire_time_changed(
                 self.hass,
@@ -151,25 +172,47 @@ class ClearChargeMachine(RuleBasedStateMachine):
         self._run(self.lock.async_internal_clear_usercode(slot, source="sync"))
         # Whatever reads it, the lock holds ``held`` until something changes it.
         self.owed[slot] = held.is_readable
+        self.waiting.add(slot)
 
     @rule(slot=SLOTS, kind=KINDS, suffix=SUFFIXES)
     def push(self, slot: int, kind: str, suffix: str) -> None:
         """The lock reports a slot unasked; it settles a clear still waiting there."""
+        self._push(slot, kind, suffix)
+
+    @precondition(lambda self: self.waiting)
+    @rule(data=st.data(), kind=KINDS, suffix=SUFFIXES)
+    def push_to_a_waiting_clear(
+        self, data: st.DataObject, kind: str, suffix: str
+    ) -> None:
+        """The lock reports a slot whose clear nothing has answered yet."""
+        self._push(data.draw(st.sampled_from(sorted(self.waiting))), kind, suffix)
+
+    def _push(self, slot: int, kind: str, suffix: str) -> None:
         observed = credential(kind, slot, suffix)
-        waiting = self.coordinator.has_pending_write(pin_address(slot))
         self.lock.hold(slot, observed)
         self.lock._confirm_slot(slot, observed)
-        if waiting:
+        if slot in self.waiting:
+            self.waiting.discard(slot)
             self.owed[slot] = observed.is_readable
 
     @rule(slot=SLOTS, suffix=SUFFIXES)
     def set_code(self, slot: int, suffix: str) -> None:
         """A confirmed set supersedes the slot's clear, settled or not."""
+        self._set_code(slot, suffix)
+
+    @precondition(lambda self: self.waiting)
+    @rule(data=st.data(), suffix=SUFFIXES)
+    def set_over_a_waiting_clear(self, data: st.DataObject, suffix: str) -> None:
+        """A set reaches a slot whose clear nothing has answered yet."""
+        self._set_code(data.draw(st.sampled_from(sorted(self.waiting))), suffix)
+
+    def _set_code(self, slot: int, suffix: str) -> None:
         pin = f"{slot}{suffix}"
         changed = self.lock.codes.get(slot) != pin
         self.lock.write_only.discard(slot)
         self._run(self.lock.async_internal_set_usercode(slot, pin, name=None))
         if changed:
+            self.waiting.discard(slot)
             self.owed[slot] = False
 
     @rule()

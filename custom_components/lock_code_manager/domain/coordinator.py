@@ -54,12 +54,14 @@ class PendingWrite(NamedTuple):
     alone (an optimistic write pushes its value before anything confirms it).
     Either way a set is unverified until a read or push shows the slot
     present, and given up on at ``deadline``. A clear is settled by the first
-    read or push after it, whatever that shows.
+    read or push after it, whatever that shows, and counts as failed only if
+    ``chargeable``.
     """
 
     pin: str | None
     written_at: float
     believed: bool
+    chargeable: bool = True
 
     @property
     def deadline(self) -> float:
@@ -211,8 +213,8 @@ class LockUsercodeUpdateCoordinator(
 
         A pending clear is settled by the read, which is taken as the lock's
         word. Only a readable code fails it: the lock kept a code this
-        integration cleared. An unreadable one cannot say whether the clear landed, so it
-        is not held against it (see ``last_write_was_clear``).
+        integration cleared. An unreadable one cannot say whether the clear
+        landed, so it is not held against it (see ``last_write_was_clear``).
 
         For an address with a set pending, observing the slot present
         confirms the write: keep the written value, verified. The one
@@ -235,7 +237,7 @@ class LockUsercodeUpdateCoordinator(
                 out[address] = cred
             elif pending.pin is None:
                 del self._pending[address]
-                if cred.is_readable:
+                if cred.is_readable and pending.chargeable:
                     self._failed_writes.add(address)
                 out[address] = cred
             elif cred.is_present:
@@ -310,19 +312,22 @@ class LockUsercodeUpdateCoordinator(
         self._start_look()
 
     @callback
-    def record_clear(self, address: CredentialAddress) -> None:
+    def record_clear(self, address: CredentialAddress, *, chargeable: bool) -> None:
         """
         Record a clear the lock did not confirm, and go look.
 
         Nothing is pushed: the slot keeps showing what it held until the
-        confirmation look reads it. That read settles the clear, and fails it
-        if the slot still holds a readable code, which the sync tick then
-        charges to the slot breaker once (see ``_apply_read``).
+        confirmation look reads it. That read settles the clear, and, when
+        ``chargeable``, fails it if the slot still holds a readable code,
+        which the sync tick then charges to the slot breaker once (see
+        ``_apply_read``).
         """
         if self._shutdown_requested:
             return
         checked = _checked(address)
-        self._pending[checked] = PendingWrite(None, time.monotonic(), believed=False)
+        self._pending[checked] = PendingWrite(
+            None, time.monotonic(), believed=False, chargeable=chargeable
+        )
         self._failed_writes.discard(checked)
         self._start_look()
 
@@ -396,7 +401,7 @@ class LockUsercodeUpdateCoordinator(
         if pending is None:
             failed = False
         elif pending.pin is None:
-            failed = observed.is_readable
+            failed = observed.is_readable and pending.chargeable
         elif observed.is_present and not (
             observed.is_readable and observed.readable_pin != pending.pin
         ):
