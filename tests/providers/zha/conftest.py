@@ -461,6 +461,9 @@ class UnconfirmingDoorLockTable:
         self.codes: dict[int, str] = {}
         self.clears: list[int] = []
         self.applies = True
+        # Asked user -> user the reply names, for a reply paired with the wrong
+        # request.
+        self.misattributed: dict[int, int] = {}
 
     async def set_pin_code(
         self, user_id: int, _status: Any, _user_type: Any, pin: str
@@ -476,15 +479,20 @@ class UnconfirmingDoorLockTable:
             self.codes.pop(user_id, None)
 
     async def get_pin_code(self, user_id: int) -> Any:
-        """Answer the way the lock does: Enabled with the code, or Available."""
-        held = user_id in self.codes
+        """Answer the way the lock does: Enabled with the code, or Available.
+
+        A user listed in ``misattributed`` is answered with the reply for the
+        user it maps to, which names that user rather than the one asked.
+        """
+        named = self.misattributed.get(user_id, user_id)
+        held = named in self.codes
         return closures.DoorLock.ClientCommandDefs.get_pin_code_response.schema(
-            user_id=user_id,
+            user_id=named,
             user_status=closures.DoorLock.UserStatus.Enabled
             if held
             else closures.DoorLock.UserStatus.Available,
             user_type=closures.DoorLock.UserType.Unrestricted,
-            code=self.codes.get(user_id, ""),
+            code=self.codes.get(named, ""),
         )
 
 

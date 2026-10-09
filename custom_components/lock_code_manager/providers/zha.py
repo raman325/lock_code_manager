@@ -414,7 +414,7 @@ class ZHALock(BaseLock):
                     slot_num,
                     result,
                 )
-                parsed = self._parse_pin_response(result)
+                parsed = self._parse_pin_response(result, slot_num)
             except LockDisconnected:
                 raise
             except TimeoutError:
@@ -446,9 +446,11 @@ class ZHALock(BaseLock):
 
             if parsed is None:
                 _LOGGER.debug(
-                    "Lock %s: unrecognized get_pin_code response for slot %s",
+                    "Lock %s: get_pin_code reply is not recognizably slot %s's "
+                    "answer, marking unreadable: %s",
                     self.lock.entity_id,
                     slot_num,
+                    result,
                 )
                 slot_states[slot_num] = SlotCredential.unreadable()
                 continue
@@ -531,25 +533,31 @@ class ZHALock(BaseLock):
     # -- Response parsing ----------------------------------------------------
 
     @staticmethod
-    def _parse_pin_response(result: Any) -> tuple[int, str] | None:
+    def _parse_pin_response(result: Any, slot_num: int) -> tuple[int, str] | None:
         """
-        Extract (user_status, pin_code) from a get_pin_code response.
+        Extract (user_status, pin_code) from slot ``slot_num``'s get_pin_code reply.
 
-        ``None`` for a shape this does not recognize. Reporting such a
-        response as ``Available`` would answer "this slot is free" from a
-        reply that was never understood.
+        ``None`` for a reply this cannot recognize as that slot's answer: a
+        shape it does not know, or one naming another user. zigpy pairs a
+        reply with its request by transaction sequence number, not by the
+        user it names, so a reply about another user can arrive here, and
+        reading it as this slot's would report that user's code, or its
+        emptiness, under this slot. Reporting either as ``Available`` would
+        answer "this slot is free" from a reply that was never about it.
         """
         if hasattr(result, "user_status"):
-            pin = getattr(result, "code", "") or ""
-            if isinstance(pin, bytes):
-                pin = pin.decode("utf-8", errors="ignore")
-            return result.user_status, str(pin)
-        if isinstance(result, (list, tuple)) and len(result) >= 4:
-            pin = result[3]
-            if isinstance(pin, bytes):
-                pin = pin.decode("utf-8", errors="ignore")
-            return result[1], str(pin) if pin else ""
-        return None
+            user_id = getattr(result, "user_id", None)
+            user_status = result.user_status
+            pin = getattr(result, "code", "")
+        elif isinstance(result, (list, tuple)) and len(result) >= 4:
+            user_id, user_status, _user_type, pin = result[:4]
+        else:
+            return None
+        if user_id != slot_num:
+            return None
+        if isinstance(pin, bytes):
+            pin = pin.decode("utf-8", errors="ignore")
+        return user_status, str(pin) if pin else ""
 
     # -- Push updates --------------------------------------------------------
 

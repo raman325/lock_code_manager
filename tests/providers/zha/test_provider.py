@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
 
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
@@ -34,6 +37,18 @@ from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
 from tests.providers.helpers import ProviderNativeTransportContractTests
+
+
+def _pin_reply(
+    user_id: int, user_status: DoorLock.UserStatus, code: str = ""
+) -> foundation.CommandSchema:
+    """Build the Get PIN Code Response zigpy decodes from a lock's reply."""
+    return DoorLock.ClientCommandDefs.get_pin_code_response.schema(
+        user_id=user_id,
+        user_status=user_status,
+        user_type=DoorLock.UserType.Unrestricted,
+        code=code,
+    )
 
 
 @pytest.mark.skip(
@@ -192,16 +207,8 @@ async def test_get_users(
 
     async def mock_get_pin_code(slot_num):
         if slot_num == 1:
-            return type(
-                "Response",
-                (),
-                {"user_status": DoorLock.UserStatus.Enabled, "code": "1234"},
-            )()
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+            return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "1234")
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -223,16 +230,8 @@ async def test_get_usercodes_via_base_projection(
 
     async def mock_get_pin_code(slot_num):
         if slot_num == 1:
-            return type(
-                "Response",
-                (),
-                {"user_status": DoorLock.UserStatus.Enabled, "code": "1234"},
-            )()
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+            return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "1234")
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -374,6 +373,33 @@ async def test_delete_credential_without_a_status_reads_the_slot_back(
 
     zha_lock.coordinator.push_update.assert_not_called()
     record.assert_called_once_with(3)
+
+
+async def test_a_reply_about_another_user_is_unreadable_not_empty(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A reply naming another user is not the asked slot's answer.
+
+    zigpy matches a reply to its request by sequence number, not by the user
+    it names, so a reply about another user can answer this slot's read.
+    Taken at its word it would call slot 1 free; it is handled like a slot
+    zigpy gave up on.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        answered_for = slot_num + 1 if slot_num == 1 else slot_num
+        return _pin_reply(answered_for, DoorLock.UserStatus.Available)
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+
+    codes = await zha_lock.async_get_usercodes(range(1, 3))
+
+    assert codes[1] is SlotCredential.unreadable()
+    assert codes[2].is_empty
 
 
 # ---------------------------------------------------------------------------
@@ -584,30 +610,27 @@ async def test_get_door_lock_cluster_no_matching_endpoint_cluster(
 # ---------------------------------------------------------------------------
 
 
-def test_parse_pin_response_bytes() -> None:
-    """Test parsing PIN response with bytes code."""
-    result = type(
-        "Response",
-        (),
-        {"user_status": DoorLock.UserStatus.Enabled, "code": b"1234"},
-    )()
-    status, pin = ZHALock._parse_pin_response(result)
+def test_parse_pin_response_reads_the_decoded_reply() -> None:
+    """The reply zigpy decodes yields its status and code for the slot it names."""
+    status, pin = ZHALock._parse_pin_response(
+        _pin_reply(3, DoorLock.UserStatus.Enabled, "1234"), 3
+    )
     assert status == DoorLock.UserStatus.Enabled
     assert pin == "1234"
 
 
 def test_parse_pin_response_list_format() -> None:
     """Test parsing PIN response in list format."""
-    result = [0, DoorLock.UserStatus.Enabled, 0, "5678"]
-    status, pin = ZHALock._parse_pin_response(result)
+    result = [3, DoorLock.UserStatus.Enabled, 0, "5678"]
+    status, pin = ZHALock._parse_pin_response(result, 3)
     assert status == DoorLock.UserStatus.Enabled
     assert pin == "5678"
 
 
 def test_parse_pin_response_list_bytes() -> None:
     """Test parsing list-format response with bytes PIN."""
-    result = [0, DoorLock.UserStatus.Enabled, 0, b"5678"]
-    status, pin = ZHALock._parse_pin_response(result)
+    result = [3, DoorLock.UserStatus.Enabled, 0, b"5678"]
+    status, pin = ZHALock._parse_pin_response(result, 3)
     assert status == DoorLock.UserStatus.Enabled
     assert pin == "5678"
 
@@ -618,7 +641,28 @@ def test_parse_pin_response_unknown_format() -> None:
     Reporting it as ``Available`` would say "this slot is free" on the
     strength of a reply that was never understood.
     """
-    assert ZHALock._parse_pin_response("unexpected") is None
+    assert ZHALock._parse_pin_response("unexpected", 3) is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(_pin_reply(4, DoorLock.UserStatus.Available), id="decoded"),
+        pytest.param([4, DoorLock.UserStatus.Available, 0, ""], id="list"),
+        pytest.param(
+            SimpleNamespace(user_status=DoorLock.UserStatus.Available, code=""),
+            id="no-user-id",
+        ),
+    ],
+)
+def test_parse_pin_response_for_another_user_is_not_an_answer(result: Any) -> None:
+    """A reply naming another user, or none, says nothing about the slot asked.
+
+    zigpy matches a reply to its request by sequence number, not by the user
+    it names, so this can happen; read as slot 3's answer it would call slot
+    3 free.
+    """
+    assert ZHALock._parse_pin_response(result, 3) is None
 
 
 # ---------------------------------------------------------------------------
@@ -899,11 +943,7 @@ async def test_hard_refresh_codes(
     assert cluster is not None
 
     async def mock_get_pin_code(slot_num):
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Enabled, "code": "1111"},
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "1111")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -947,16 +987,8 @@ async def test_occupied_indices_sees_slots_no_entry_manages(
     async def mock_get_pin_code(slot_num):
         # Slot 4 is outside anything this entry manages.
         if slot_num == 4:
-            return type(
-                "Response",
-                (),
-                {"user_status": DoorLock.UserStatus.Enabled, "code": "9999"},
-            )()
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+            return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "9999")
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -975,9 +1007,9 @@ async def test_occupied_indices_stops_at_the_limit(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
-        )()
+        side_effect=lambda slot_num: _pin_reply(
+            slot_num, DoorLock.UserStatus.Available, ""
+        )
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 4))
@@ -1002,9 +1034,7 @@ async def test_a_failed_index_is_unreadable_not_empty(
     async def mock_get_pin_code(slot_num):
         if slot_num == 2:
             raise OSError("radio dropped")
-        return type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -1024,9 +1054,9 @@ async def test_occupied_indices_counts_a_write_only_slot(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Enabled, "code": ""}
-        )()
+        side_effect=lambda slot_num: _pin_reply(
+            slot_num, DoorLock.UserStatus.Enabled, ""
+        )
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 3))
@@ -1080,7 +1110,7 @@ async def test_only_available_means_the_slot_is_free(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type("Response", (), {"user_status": user_status, "code": code})()
+        side_effect=lambda slot_num: _pin_reply(slot_num, user_status, code)
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 3))
@@ -1121,11 +1151,9 @@ async def test_a_masked_code_is_unreadable_not_known(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Enabled, "code": code},
-        )()
+        side_effect=lambda slot_num: _pin_reply(
+            slot_num, DoorLock.UserStatus.Enabled, code
+        )
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 2))
@@ -1143,9 +1171,9 @@ async def test_available_is_an_empty_slot(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
-        )()
+        side_effect=lambda slot_num: _pin_reply(
+            slot_num, DoorLock.UserStatus.Available, ""
+        )
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 3))
@@ -1260,11 +1288,7 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
     assert cluster is not None
 
     async def mock_get_pin_code(slot_num):
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -1334,11 +1358,7 @@ async def test_zigpys_own_timeout_marks_the_slot_unreadable_and_walks_on(
     async def mock_get_pin_code(slot_num):
         if slot_num == 1:
             raise TimeoutError("zigpy gave up")
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
     users = await zha_lock.async_get_users()
@@ -1364,9 +1384,7 @@ async def test_scoped_hard_refresh_still_names_every_managed_slot(
 
     async def mock_get_pin_code(slot_num):
         asked.append(slot_num)
-        return type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
     codes = await zha_lock.async_hard_refresh_codes({7})

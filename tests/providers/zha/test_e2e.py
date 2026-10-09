@@ -267,3 +267,31 @@ async def test_a_clear_on_an_unmanaged_slot_is_read_back_but_never_charged(
     )
     assert lock.coordinator.has_pending_write(address) is False
     assert lock.coordinator.take_failed_write(address) is False
+
+
+async def test_a_reply_about_another_user_does_not_read_as_empty(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    unconfirming_lock_table: UnconfirmingDoorLockTable,
+) -> None:
+    """
+    A reply naming another user leaves the slot unreadable, not empty.
+
+    The lock holds slot 1's code, but the reply to its read names an unused
+    user. Taken at its word the coordinator would record the slot empty and
+    sync would write the code again.
+    """
+    # One tick per slot to write it, plus two for the read-back to land.
+    for _ in range(len(CONFIGURED_PINS) + 2):
+        await async_advance_time(hass, TICK_INTERVAL)
+    assert unconfirming_lock_table.codes == CONFIGURED_PINS
+    lock = _zha_lock(lcm_config_entry)
+
+    unused_user = max(CONFIGURED_PINS) + 1
+    unconfirming_lock_table.misattributed[1] = unused_user
+    await lock.coordinator.async_refresh()
+
+    assert lock.coordinator.data.get(pin_address(1)) is SlotCredential.unreadable()
+    assert lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
+        CONFIGURED_PINS[2]
+    )
