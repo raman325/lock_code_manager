@@ -396,9 +396,13 @@ class LockUsercodeUpdateCoordinator(
         cache.
 
         Scheduled rather than awaited, because the caller holds the lock's
-        turn and the read needs it. A read already in flight absorbs the
-        request, and shutdown cancels it, so a read-back never outlives the
-        provider that asked for it.
+        turn and the read needs it. The read is this task's own, not a
+        debounced refresh: the refresh debouncer can answer "a refresh ran
+        recently" by deferring the read to a timer outside this task, leaving
+        the old code on display and the clear reissued meanwhile. A read-back
+        not yet finished absorbs the request, since its read starts only after
+        the caller releases the turn and so sees this clear too. Shutdown
+        cancels it, so it never outlives the provider that asked for it.
         """
         if self._shutdown_requested or self._read_back_task is not None:
             return
@@ -413,7 +417,7 @@ class LockUsercodeUpdateCoordinator(
     async def _async_read_back(self) -> None:
         """Run the requested read, then release the slot for the next request."""
         try:
-            await self.async_request_refresh()
+            await self.async_refresh()
         finally:
             self._read_back_task = None
 

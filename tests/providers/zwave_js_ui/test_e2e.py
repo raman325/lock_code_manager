@@ -498,6 +498,59 @@ class TestUnconfirmedWrites:
         ]
         assert 1 <= len(clears) <= 2
 
+    async def test_a_second_unconfirmed_clear_is_read_back_inside_the_refresh_cooldown(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        user_code_table: UserCodeTable,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        Clears a few ticks apart each settle, though a refresh ran in between.
+
+        Home Assistant's refresh debouncer defers a refresh requested shortly
+        after another one, so a read-back that went through it would leave the
+        second slot showing its old code, and the clear would be reissued each
+        tick until the deferred read ran.
+        """
+        for _ in range(len(E2E_SLOT_PINS) + 2):
+            await async_advance_time(hass, TICK_INTERVAL)
+        assert user_code_table.codes == E2E_SLOT_PINS
+
+        async def disable(slot_num: int) -> None:
+            await hass.services.async_call(
+                SWITCH_DOMAIN,
+                SERVICE_TURN_OFF,
+                {
+                    ATTR_ENTITY_ID: slot_entity_id(
+                        hass, SWITCH_DOMAIN, lcm_config_entry, slot_num, CONF_ENABLED
+                    )
+                },
+                blocking=True,
+            )
+
+        await disable(1)
+        for _ in range(2):
+            await async_advance_time(hass, TICK_INTERVAL)
+        await disable(2)
+        for _ in range(len(E2E_SLOT_PINS) + 4):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        assert user_code_table.codes == {}
+        lock_entity_id = zui_lock.lock.entity_id
+        commands = send_commands(zui_api_responder)
+        for slot_num in E2E_SLOT_PINS:
+            assert zui_lock.coordinator.data.get(pin_address(slot_num)) == (
+                SlotCredential.empty()
+            )
+            in_sync = hass.states.get(
+                in_sync_entity_id(hass, lcm_config_entry, slot_num, lock_entity_id)
+            )
+            assert in_sync is not None
+            assert in_sync.state == STATE_ON
+            assert commands.count(user_code_call("clear", [slot_num])) <= 2
+
 
 class TestPushUpdates:
     """Verify node publications reach the coordinator and the entities."""
