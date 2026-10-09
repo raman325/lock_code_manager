@@ -28,16 +28,20 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
+    ATTR_SYNC_STATUS,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOTS,
+    CONFIRM_READ_INTERVAL,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
+    MAX_SYNC_ATTEMPTS,
     TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
@@ -550,6 +554,158 @@ class TestUnconfirmedWrites:
             assert in_sync is not None
             assert in_sync.state == STATE_ON
             assert commands.count(user_code_call("clear", [slot_num])) <= 2
+
+
+class ReadRefusingUserCodeTable(UnsupervisedUserCodeTable):
+    """A lock without Supervision whose gateway refuses every read while told to."""
+
+    def __init__(self) -> None:
+        """Start answering reads."""
+        super().__init__()
+        self.refuse_reads = False
+
+    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Refuse a read while ``refuse_reads`` is set; answer the rest as before."""
+        _target, method, _method_args = request["args"]
+        if method == "get" and self.refuse_reads:
+            return {"success": False, "message": "Node is dead", "result": None}
+        return super().__call__(api_base, request)
+
+
+class TestClearAwaitingItsReadBack:
+    """A clear the lock did not confirm is the slot's one write until a read settles it."""
+
+    @pytest.fixture
+    def user_code_table(self) -> UserCodeTable:
+        """The stand-in node never supervises, and its reads can be refused."""
+        return ReadRefusingUserCodeTable()
+
+    async def test_the_clear_is_not_reissued_while_its_read_back_fails(
+        self,
+        hass: HomeAssistant,
+        synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        user_code_table: ReadRefusingUserCodeTable,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        Ticks that land before any read has answered wait on the clear.
+
+        The lock applies the clear, but every read after it is refused, so
+        nothing has settled it. Clearing again each tick would be a write per
+        tick that no read has asked for; once reads answer, the next look
+        settles the one clear and the slot reads in sync.
+        """
+        entry = synced_lcm_config_entry
+        assert user_code_table.codes == E2E_SLOT_PINS
+
+        user_code_table.refuse_reads = True
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {
+                ATTR_ENTITY_ID: slot_entity_id(
+                    hass, SWITCH_DOMAIN, entry, 1, CONF_ENABLED
+                )
+            },
+            blocking=True,
+        )
+        for _ in range(5):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        def clears() -> int:
+            return send_commands(zui_api_responder).count(user_code_call("clear", [1]))
+
+        lock_entity_id = zui_lock.lock.entity_id
+        assert user_code_table.codes == {2: E2E_SLOT_PINS[2]}
+        assert clears() == 1
+        in_sync = hass.states.get(in_sync_entity_id(hass, entry, 1, lock_entity_id))
+        assert in_sync is not None
+        assert in_sync.attributes[ATTR_SYNC_STATUS] == "pending_confirmation"
+
+        user_code_table.refuse_reads = False
+        await async_advance_time(hass, timedelta(seconds=CONFIRM_READ_INTERVAL + 1))
+        for _ in range(2):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        assert clears() == 1
+        assert zui_lock.coordinator.data.get(pin_address(1)) == SlotCredential.empty()
+        in_sync = hass.states.get(in_sync_entity_id(hass, entry, 1, lock_entity_id))
+        assert in_sync is not None
+        assert in_sync.state == STATE_ON
+
+
+class ClearIgnoringUserCodeTable(UnsupervisedUserCodeTable):
+    """A lock without Supervision that takes every clear and keeps the code."""
+
+    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Answer a clear without applying it; everything else as before."""
+        _target, method, _method_args = request["args"]
+        if method == "clear":
+            return {"success": True, "message": "", "result": None}
+        return super().__call__(api_base, request)
+
+
+class TestIgnoredClears:
+    """A clear the lock keeps contradicting is not reissued forever."""
+
+    @pytest.fixture
+    def user_code_table(self) -> UserCodeTable:
+        """The stand-in node never supervises, and never applies a clear."""
+        return ClearIgnoringUserCodeTable()
+
+    async def test_a_clear_the_lock_keeps_ignoring_suspends_the_slot(
+        self,
+        hass: HomeAssistant,
+        synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        user_code_table: UserCodeTable,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        A clear the read-back contradicts counts against the slot, so it stops.
+
+        Each clear goes out without a Supervision result and is read back
+        still holding the old code. Charging each one once suspends the slot
+        after the third, instead of clearing again every tick for as long as
+        the lock ignores it.
+        """
+        entry = synced_lcm_config_entry
+        assert user_code_table.codes == E2E_SLOT_PINS
+
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {
+                ATTR_ENTITY_ID: slot_entity_id(
+                    hass, SWITCH_DOMAIN, entry, 1, CONF_ENABLED
+                )
+            },
+            blocking=True,
+        )
+        # Per clear: a tick to issue it and one to charge its read-back; then
+        # the tick that suspends. Doubled for slack.
+        for _ in range(2 * (2 * MAX_SYNC_ATTEMPTS + 1)):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        def clears() -> int:
+            return send_commands(zui_api_responder).count(user_code_call("clear", [1]))
+
+        lock_entity_id = zui_lock.lock.entity_id
+        assert clears() == MAX_SYNC_ATTEMPTS
+        in_sync = hass.states.get(in_sync_entity_id(hass, entry, 1, lock_entity_id))
+        assert in_sync is not None
+        assert in_sync.attributes[ATTR_SYNC_STATUS] == "suspended"
+        assert (
+            async_get_issue_registry(hass).async_get_issue(
+                DOMAIN, f"slot_suspended_{entry.entry_id}_{lock_entity_id}_1"
+            )
+            is not None
+        )
+
+        for _ in range(10):
+            await async_advance_time(hass, TICK_INTERVAL)
+        assert clears() == MAX_SYNC_ATTEMPTS
 
 
 class TestPushUpdates:

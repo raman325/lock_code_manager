@@ -1224,12 +1224,12 @@ async def test_no_change_records_nothing(hass: HomeAssistant) -> None:
 async def test_clear_drops_any_pending_write_once_it_has_run(
     hass: HomeAssistant,
 ) -> None:
-    """A clear that ran supersedes whatever write was pending on the slot."""
+    """A clear that ran supersedes whatever set was pending on the slot."""
     lock, _pushed = _slot_only_lock_with_coordinator(hass)
     lock._min_operation_delay = 0.0
     with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
         await lock.async_internal_clear_usercode(4)
-    lock.coordinator.drop_pending.assert_called_once_with(pin_address(4))
+    lock.coordinator.drop_pending_set.assert_called_once_with(pin_address(4))
 
 
 async def test_clear_that_raises_leaves_the_pending_write_standing(
@@ -1253,7 +1253,7 @@ async def test_clear_that_raises_leaves_the_pending_write_standing(
         pytest.raises(LockDisconnected),
     ):
         await lock.async_internal_clear_usercode(4)
-    lock.coordinator.drop_pending.assert_not_called()
+    lock.coordinator.drop_pending_set.assert_not_called()
 
 
 async def test_confirm_slot_hands_the_observation_to_the_coordinator(

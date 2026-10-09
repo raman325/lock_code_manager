@@ -553,17 +553,20 @@ class BaseLock:
 
     @final
     @callback
-    def _request_read_back(self) -> None:
+    def _request_read_back(self, code_slot: int) -> None:
         """
-        Have the coordinator read the lock again after a clear nobody confirmed.
+        Have the coordinator read a slot back after a clear nobody confirmed.
 
-        The counterpart of recording an unconfirmed set pending. The read goes
-        through this provider's ordinary read, so it is only meaningful for a
-        provider whose ordinary read asks the device (zwave-js-ui, ZHA), not
-        one answering from a cache. No-op without a coordinator.
+        The counterpart of recording an unconfirmed set pending: the clear is
+        recorded pending, and the coordinator's confirmation look reads the
+        slot. A read that still finds a readable code there charges the slot
+        breaker once, so a lock that ignores the clear is not sent it every
+        tick forever. That charge is only fair where the read asks the
+        device after the clear (zwave-js-ui, ZHA), not where it can lag
+        behind it. No-op without a coordinator.
         """
         if self.coordinator is not None:
-            self.coordinator.request_read_back()
+            self.coordinator.record_clear(pin_address(code_slot))
 
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
@@ -1578,12 +1581,13 @@ class BaseLock:
                 len(self.managed_slots) + 1 if self.supports_native_users else 1
             ),
         )
-        # A clear that ran supersedes any write pending on this slot. One that
-        # raised superseded nothing: the write stays pending, so a believed
-        # value it pushed is not taken as verified on the strength of a clear
-        # that never reached the lock.
+        # A clear that ran supersedes any set pending on this slot, and one
+        # the lock did not confirm stays pending itself (``_request_read_back``).
+        # One that raised superseded nothing: the write stays pending, so a
+        # believed value it pushed is not taken as verified on the strength of
+        # a clear that never reached the lock.
         if self.coordinator is not None:
-            self.coordinator.drop_pending(pin_address(code_slot))
+            self.coordinator.drop_pending_set(pin_address(code_slot))
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
         # there.

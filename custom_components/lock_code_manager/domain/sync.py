@@ -862,13 +862,14 @@ class SlotSyncManager:
         pending = self._coordinator.pending_write(self._address)
         if pending is not None:
             # A pending write only gates reconciliation while it still reflects
-            # the desired state. If the user changed the PIN or disabled the slot
-            # while the write was outstanding, it is stale: forget it and
+            # the desired state: the PIN for an active slot, a clear (no PIN)
+            # for an inactive one. If the user changed the PIN or toggled the
+            # slot while the write was outstanding, it is stale: forget it and
             # reconcile the new target instead of waiting on the old one.
-            if (
-                snapshot.active_state == STATE_ON
-                and snapshot.credential_state == pending.pin
-            ):
+            desired_pin = (
+                snapshot.credential_state if snapshot.active_state == STATE_ON else None
+            )
+            if pending.pin == desired_pin:
                 if self._state is not SyncState.PENDING_CONFIRMATION:
                     self._state = SyncState.PENDING_CONFIRMATION
                     self._write_state()
@@ -878,15 +879,17 @@ class SlotSyncManager:
             self._write_state()
             return
 
-        # A write the lock did not keep -- never seen, or displaced by another
-        # code: charged once, then re-synced on the NEXT tick, so a confirming
+        # A write the lock did not keep -- a set never seen, or a slot read
+        # back holding a code other than the one written (for a clear, any
+        # code): charged once, then re-synced on the NEXT tick, so a confirming
         # push that lands between ticks can still settle the slot first and the
         # re-sync's own outcome is judged apart.
         if self._coordinator.take_failed_write(self._address):
             self._slot_breaker.record_failure()
             _LOGGER.warning(
                 "%s: the lock did not keep the write (not seen by the deadline, "
-                "or holding a different code); re-syncing (attempt %s)",
+                "or holding a code other than the one written); re-syncing "
+                "(attempt %s)",
                 self._log_prefix,
                 self._slot_breaker.failure_count,
             )
@@ -1060,7 +1063,10 @@ class SlotSyncManager:
             self._clear_resolved_issues(snapshot)
         else:
             # Count only unverified sets so eventually-consistent providers
-            # don't accumulate spurious failures when the readback lags.
+            # don't accumulate spurious failures when the readback lags. A
+            # clear is charged only once the coordinator has judged one the
+            # lock did not confirm (``take_failed_write`` above), from a read
+            # that asked the lock after the clear.
             if was_set:
                 self._slot_breaker.record_failure()
             self._state = SyncState.OUT_OF_SYNC

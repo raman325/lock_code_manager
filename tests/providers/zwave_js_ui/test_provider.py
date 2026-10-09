@@ -17,6 +17,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     User,
     WriteResult,
     credential_from_slot,
+    pin_address,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
@@ -552,7 +553,7 @@ class TestAsyncDeleteCredential:
         assert await _delete_credential(lock, 7) is True
 
         lock.coordinator.push_update.assert_not_called()
-        lock.coordinator.request_read_back.assert_called_once_with()
+        lock.coordinator.record_clear.assert_called_once_with(pin_address(7))
 
     async def test_an_unconfirmed_clear_without_a_coordinator_still_returns(
         self,

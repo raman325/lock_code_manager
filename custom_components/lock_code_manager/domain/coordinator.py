@@ -49,13 +49,15 @@ class PendingWrite(NamedTuple):
     """
     A write the lock has not yet been seen to hold.
 
-    ``believed`` says whether ``data`` carries the written PIN on the strength
-    of the write alone (an optimistic write pushes its value before anything
-    confirms it). Either way the address is unverified until a read or push
-    shows the slot present, and given up on at ``deadline``.
+    ``pin`` is the code written, or ``None`` for a clear. ``believed`` says
+    whether ``data`` carries the written PIN on the strength of the write
+    alone (an optimistic write pushes its value before anything confirms it).
+    Either way a set is unverified until a read or push shows the slot
+    present, and given up on at ``deadline``. A clear is settled by the first
+    read or push after it, whatever that shows.
     """
 
-    pin: str
+    pin: str | None
     written_at: float
     believed: bool
 
@@ -135,8 +137,6 @@ class LockUsercodeUpdateCoordinator(
         # apart, not N.
         self._confirm_task: asyncio.Task[None] | None = None
         self._confirm_unsub: Callable[[], None] | None = None
-        # The read a clear nobody confirmed asks for; see ``request_read_back``.
-        self._read_back_task: asyncio.Task[None] | None = None
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -209,7 +209,12 @@ class LockUsercodeUpdateCoordinator(
         """
         Resolve a genuine read (poll or hard refresh) against pending writes.
 
-        For an address with a write pending, observing the slot present
+        A pending clear is settled by the read, which is taken as the lock's
+        word. Only a readable code fails it: the lock kept a code LCM
+        cleared. An unreadable one cannot say whether the clear landed, so it
+        is not held against it (see ``last_write_was_clear``).
+
+        For an address with a set pending, observing the slot present
         confirms the write: keep the written value, verified. The one
         exception (mirroring ``observe_push``) is a *readable* observation of
         a different code: the slot holds something else, so the write did not
@@ -227,6 +232,11 @@ class LockUsercodeUpdateCoordinator(
         for address, cred in observed.items():
             pending = self._pending.get(address)
             if pending is None:
+                out[address] = cred
+            elif pending.pin is None:
+                del self._pending[address]
+                if cred.is_readable:
+                    self._failed_writes.add(address)
                 out[address] = cred
             elif cred.is_present:
                 del self._pending[address]
@@ -300,6 +310,36 @@ class LockUsercodeUpdateCoordinator(
         self._start_look()
 
     @callback
+    def record_clear(self, address: CredentialAddress) -> None:
+        """
+        Record a clear the lock did not confirm, and go look.
+
+        Nothing is pushed: the slot keeps showing what it held until the
+        confirmation look reads it. That read settles the clear, and fails it
+        if the slot still holds a readable code, which the sync tick then
+        charges to the slot breaker once (see ``_apply_read``).
+        """
+        if self._shutdown_requested:
+            return
+        checked = _checked(address)
+        self._pending[checked] = PendingWrite(None, time.monotonic(), believed=False)
+        self._failed_writes.discard(checked)
+        self._start_look()
+
+    @callback
+    def drop_pending_set(self, address: CredentialAddress) -> None:
+        """
+        Forget a set pending against ``address``, keeping a pending clear.
+
+        For a clear that ran: it supersedes any set outstanding there, but a
+        clear the lock did not confirm has just recorded itself pending
+        (``record_clear``) to be judged by the read that follows.
+        """
+        pending = self._pending.get(_checked(address))
+        if pending is None or pending.pin is not None:
+            self.drop_pending(address)
+
+    @callback
     def drop_pending(self, address: CredentialAddress) -> None:
         """
         Forget a pending write without judging it.
@@ -336,25 +376,29 @@ class LockUsercodeUpdateCoordinator(
         Resolve a push event for one address against any pending write.
 
         The push-side twin of ``_apply_read``, with one deliberate difference:
-        a push is the lock speaking now, so an absent push ends the pending
-        write and is taken as the lock's word rather than waited out -- and
-        counts the write failed. A present push confirms the write (keeping
-        the written value), unless a readable different code shows the slot
-        holds something else, which counts it failed as well.
+        a push is the lock speaking now, so an absent push ends a pending set
+        and is taken as the lock's word rather than waited out -- and counts
+        the write failed. A present push confirms the set (keeping the
+        written value), unless a readable different code shows the slot
+        holds something else, which counts it failed as well. A pending clear
+        is settled as a read settles it: failed only by a readable code.
         """
         checked = _checked(address)
         pending = self._pending.pop(checked, None)
-        failed = False
+        value = observed
         if pending is None:
-            value = observed
+            failed = False
+        elif pending.pin is None:
+            failed = observed.is_readable
         elif observed.is_present and not (
             observed.is_readable and observed.readable_pin != pending.pin
         ):
+            failed = False
             value = SlotCredential.known(pending.pin)
         else:
-            self._failed_writes.add(checked)
             failed = True
-            value = observed
+        if failed:
+            self._failed_writes.add(checked)
         before = self.data
         self.push_update({checked.user_ref: value})
         if failed and self.data is before:
@@ -382,44 +426,6 @@ class LockUsercodeUpdateCoordinator(
             f"{DOMAIN} confirmation read for {self._lock.lock.entity_id}",
             eager_start=False,
         )
-
-    @callback
-    def request_read_back(self) -> None:
-        """
-        Read the lock again, as a task this coordinator owns.
-
-        For a clear the lock did not confirm: an unconfirmed set is recorded
-        pending and looked at, but a clear has no such record, and on a push
-        provider nothing else would refresh the slot afterward. The read goes
-        through the provider's ordinary read, so it tells the truth only for a
-        provider whose ordinary read asks the device, not one answering from a
-        cache.
-
-        Scheduled rather than awaited, because the caller holds the lock's
-        turn and the read needs it. The read is this task's own, not a
-        debounced refresh: the refresh debouncer can answer "a refresh ran
-        recently" by deferring the read to a timer outside this task, leaving
-        the old code on display and the clear reissued meanwhile. A read-back
-        not yet finished absorbs the request, since its read starts only after
-        the caller releases the turn and so sees this clear too. Shutdown
-        cancels it, so it never outlives the provider that asked for it.
-        """
-        if self._shutdown_requested or self._read_back_task is not None:
-            return
-        # Not eager, for the same reason as ``_start_look``: the caller is
-        # inside the provider's write path.
-        self._read_back_task = self.hass.async_create_task(
-            self._async_read_back(),
-            f"{DOMAIN} read back for {self._lock.lock.entity_id}",
-            eager_start=False,
-        )
-
-    async def _async_read_back(self) -> None:
-        """Run the requested read, then release the slot for the next request."""
-        try:
-            await self.async_refresh()
-        finally:
-            self._read_back_task = None
 
     async def _async_confirmation_look(self) -> None:
         """Look once; hand off to the timer while anything is still pending."""
@@ -521,8 +527,13 @@ class LockUsercodeUpdateCoordinator(
             # lock not holding it: a poller's read is scoped to name every
             # pending slot, and a push provider's refresh re-reads the pending
             # slots from the device and then projects everything the lock
-            # holds. So it is judged like an absent slot: waited for until
-            # the deadline, then given up.
+            # holds. That settles a clear. A set is judged like an absent
+            # slot: waited for until the deadline, then given up.
+            self._pending = {
+                address: pending
+                for address, pending in self._pending.items()
+                if address in new_data or pending.pin is not None
+            }
             self._fail_overdue(
                 [address for address in self._pending if address not in new_data]
             )
@@ -556,14 +567,19 @@ class LockUsercodeUpdateCoordinator(
     def _fail_overdue(
         self, addresses: Iterable[CredentialAddress]
     ) -> list[CredentialAddress]:
-        """Fail every given pending write that is past its deadline; return them."""
+        """
+        End every given pending write past its deadline; return them.
+
+        A set ends failed. A clear ends uncharged: no read showed it a
+        readable code, so nothing says the lock kept what was cleared.
+        """
         now = time.monotonic()
         overdue = [
             address for address in addresses if now >= self._pending[address].deadline
         ]
         for address in overdue:
-            del self._pending[address]
-            self._failed_writes.add(address)
+            if self._pending.pop(address).pin is not None:
+                self._failed_writes.add(address)
         return overdue
 
     @callback
@@ -857,9 +873,6 @@ class LockUsercodeUpdateCoordinator(
         if self._confirm_unsub:
             self._confirm_unsub()
             self._confirm_unsub = None
-        if self._read_back_task is not None:
-            self._read_back_task.cancel()
-            self._read_back_task = None
         if self._drift_unsub:
             self._drift_unsub()
             self._drift_unsub = None

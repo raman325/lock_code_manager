@@ -1365,7 +1365,7 @@ class ZWaveJSUILock(BaseMqttLock):
         if result is WriteResult.CONFIRMED:
             self._push_credential_update(ref.slot, SlotCredential.empty())
         else:
-            self._request_read_back()
+            self._request_read_back(ref.slot)
         return True
 
     async def async_get_max_slot(self) -> int | None:

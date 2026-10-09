@@ -12,8 +12,14 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
-from custom_components.lock_code_manager.const import TICK_INTERVAL
+from custom_components.lock_code_manager.const import (
+    ATTR_SYNC_STATUS,
+    DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+    TICK_INTERVAL,
+)
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zha import ZHALock
@@ -168,3 +174,56 @@ async def test_a_dropped_clear_does_not_read_empty(
     )
     assert in_sync is not None
     assert in_sync.state != STATE_ON
+
+
+async def test_a_clear_the_lock_keeps_ignoring_suspends_the_slot(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    unconfirming_lock_table: UnconfirmingDoorLockTable,
+) -> None:
+    """
+    A clear the read-back contradicts counts against the slot, so it stops.
+
+    Each clear is answered without a status and read back still holding the
+    old code. Charging each one once suspends the slot after the third,
+    instead of clearing again every tick for as long as the lock ignores it.
+    """
+    # One tick per slot to write it, plus two for the read-back to land.
+    for _ in range(len(CONFIGURED_PINS) + 2):
+        await async_advance_time(hass, TICK_INTERVAL)
+    assert unconfirming_lock_table.codes == CONFIGURED_PINS
+
+    unconfirming_lock_table.applies = False
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        {
+            ATTR_ENTITY_ID: slot_entity_id(
+                hass, SWITCH_DOMAIN, lcm_config_entry, 1, CONF_ENABLED
+            )
+        },
+        blocking=True,
+    )
+    # Per clear: a tick to issue it and one to charge its read-back; then the
+    # tick that suspends. Doubled for slack.
+    for _ in range(2 * (2 * MAX_SYNC_ATTEMPTS + 1)):
+        await async_advance_time(hass, TICK_INTERVAL)
+
+    lock = _zha_lock(lcm_config_entry)
+    assert unconfirming_lock_table.clears.count(1) == MAX_SYNC_ATTEMPTS
+    in_sync = hass.states.get(
+        in_sync_entity_id(hass, lcm_config_entry, 1, lock.lock.entity_id)
+    )
+    assert in_sync is not None
+    assert in_sync.attributes[ATTR_SYNC_STATUS] == "suspended"
+    assert (
+        async_get_issue_registry(hass).async_get_issue(
+            DOMAIN,
+            f"slot_suspended_{lcm_config_entry.entry_id}_{lock.lock.entity_id}_1",
+        )
+        is not None
+    )
+
+    for _ in range(10):
+        await async_advance_time(hass, TICK_INTERVAL)
+    assert unconfirming_lock_table.clears.count(1) == MAX_SYNC_ATTEMPTS

@@ -1681,74 +1681,6 @@ async def test_shutdown_cancels_a_timer_fired_read_in_flight(
     assert poll_coordinator._confirm_unsub is None
 
 
-async def test_request_read_back_is_one_read_however_often_it_is_asked(
-    hass: HomeAssistant,
-    poll_lock: MockLCMLock,
-    poll_coordinator: LockUsercodeUpdateCoordinator,
-) -> None:
-    """Requests made while a read-back is in flight share that read."""
-    reads = poll_lock.service_calls["get_usercodes"]
-    before = len(reads)
-
-    poll_coordinator.request_read_back()
-    first = poll_coordinator._read_back_task
-    assert first is not None
-    poll_coordinator.request_read_back()
-    assert poll_coordinator._read_back_task is first
-
-    await hass.async_block_till_done()
-    assert len(reads) == before + 1
-    assert poll_coordinator._read_back_task is None
-
-
-async def test_shutdown_cancels_a_read_back_in_flight(
-    hass: HomeAssistant,
-    poll_lock: MockLCMLock,
-    poll_coordinator: LockUsercodeUpdateCoordinator,
-) -> None:
-    """A read-back must not outlive the provider that asked for it."""
-    gate = asyncio.Event()
-    completed: list[int] = []
-
-    async def slow_read(*_args, **_kwargs):
-        await gate.wait()
-        completed.append(1)
-        return {1: SlotCredential.empty()}
-
-    with patch.object(poll_lock, "async_get_usercodes", slow_read):
-        poll_coordinator.request_read_back()
-        for _ in range(3):
-            await asyncio.sleep(0)  # let the task start and enter the read
-        task = poll_coordinator._read_back_task
-        assert task is not None
-
-        await poll_coordinator.async_shutdown()
-        gate.set()
-        await hass.async_block_till_done()
-
-    await asyncio.wait([task])
-    assert task.cancelled()
-    assert poll_coordinator._read_back_task is None
-    assert completed == []
-
-
-async def test_request_read_back_after_shutdown_reads_nothing(
-    hass: HomeAssistant,
-    poll_lock: MockLCMLock,
-    poll_coordinator: LockUsercodeUpdateCoordinator,
-) -> None:
-    """A clear returning after unload has no one left to read for."""
-    reads = poll_lock.service_calls["get_usercodes"]
-    await poll_coordinator.async_shutdown()
-    before = len(reads)
-
-    poll_coordinator.request_read_back()
-    assert poll_coordinator._read_back_task is None
-    await hass.async_block_till_done()
-
-    assert len(reads) == before
-
-
 async def test_record_write_while_the_timer_is_armed_pulls_the_look_forward(
     hass: HomeAssistant,
     poll_lock: MockLCMLock,
@@ -2132,3 +2064,100 @@ async def test_a_busy_poll_after_a_failed_one_does_not_report_a_recovery(
         pytest.raises(UpdateFailed),
     ):
         await poll_coordinator.async_get_usercodes()
+
+
+CLEAR_OUTCOMES = [
+    pytest.param(SlotCredential.empty(), False, id="empty"),
+    pytest.param(SlotCredential.unreadable(), False, id="unreadable"),
+    pytest.param(SlotCredential.known("1234"), True, id="readable"),
+]
+
+
+@pytest.mark.parametrize(("observed", "charged"), CLEAR_OUTCOMES)
+async def test_a_read_settles_a_pending_clear(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    observed: SlotCredential,
+    charged: bool,
+) -> None:
+    """The first read after a clear settles it; only a readable code fails it, once."""
+    push_coordinator.record_clear(pin_address(1))
+    out = push_coordinator._apply_read({pin_address(1): observed})
+    assert out[pin_address(1)] == observed
+    assert push_coordinator.has_pending_write(pin_address(1)) is False
+    assert push_coordinator.take_failed_write(pin_address(1)) is charged
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+@pytest.mark.parametrize(("observed", "charged"), CLEAR_OUTCOMES)
+async def test_a_push_settles_a_pending_clear(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    observed: SlotCredential,
+    charged: bool,
+) -> None:
+    """A push after a clear settles it as a read would: taken as the lock's word."""
+    push_coordinator.push_update({1: SlotCredential.known("1234")})
+    push_coordinator.record_clear(pin_address(1))
+    push_coordinator.observe_push(pin_address(1), observed)
+    assert push_coordinator.data[pin_address(1)] == observed
+    assert push_coordinator.has_pending_write(pin_address(1)) is False
+    assert push_coordinator.take_failed_write(pin_address(1)) is charged
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_a_read_that_omits_a_pending_clear_settles_it(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator
+) -> None:
+    """A completed read that does not name the slot is the lock holding nothing there."""
+    push_coordinator.record_clear(pin_address(9))
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.known("1234")}),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+    assert push_coordinator.has_pending_write(pin_address(9)) is False
+    assert push_coordinator.take_failed_write(pin_address(9)) is False
+
+
+async def test_a_pending_clear_whose_reads_keep_failing_ends_uncharged(
+    push_lock: MockLCMPushLock, push_coordinator: LockUsercodeUpdateCoordinator, freezer
+) -> None:
+    """
+    No read ever answered, so nothing says the lock kept the code.
+
+    The clear stops holding the slot at the deadline, as a set does, but only
+    a readable code is charged against a clear.
+    """
+    push_coordinator.record_clear(pin_address(1))
+    freezer.tick(timedelta(seconds=PENDING_WRITE_TTL + 1))
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=LockDisconnected("offline")),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+    assert push_coordinator.has_pending_write(pin_address(1)) is False
+    assert push_coordinator.take_failed_write(pin_address(1)) is False
+
+
+async def test_drop_pending_set_keeps_a_pending_clear(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A clear that ran drops the set it superseded, not its own pending record."""
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
+    push_coordinator.drop_pending_set(pin_address(1))
+    assert push_coordinator.has_pending_write(pin_address(1)) is False
+
+    push_coordinator.record_clear(pin_address(2))
+    push_coordinator.drop_pending_set(pin_address(2))
+    assert push_coordinator.has_pending_write(pin_address(2)) is True
+
+
+async def test_record_clear_after_shutdown_records_nothing(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A clear returning after unload starts no look against a torn-down lock."""
+    await push_coordinator.async_shutdown()
+    push_coordinator.record_clear(pin_address(1))
+    assert push_coordinator.has_pending_write(pin_address(1)) is False
+    assert push_coordinator._confirm_task is None
