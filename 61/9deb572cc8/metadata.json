@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "619deb572cc8",
+  "strategy": "manual-commit",
+  "branch": "fix/provider-honesty",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/61/9deb572cc8/0/metadata.json",
+      "transcript": "/61/9deb572cc8/0/full.jsonl",
+      "compact_transcript": "/61/9deb572cc8/0/transcript.jsonl",
+      "content_hash": "/61/9deb572cc8/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 15752,
+    "cache_read_tokens": 3300087,
+    "output_tokens": 7897,
+    "api_call_count": 5
+  }
+}
