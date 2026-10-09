@@ -916,13 +916,11 @@ class ZWaveJSLock(BaseLock):
             not self._uc_expects_pin(code_slot)
             and self._uc_slot_status(code_slot) == CodeSlotStatus.AVAILABLE
         ):
-            # The status decides first. An Available slot holds nothing,
-            # whatever the code field carries -- a masked placeholder, zeros,
-            # or a leftover code (#819). Only where the status handler would
-            # not ignore that Available: the driver caches a stale Available
-            # (#863) as readily as a true one, so where a PIN is wanted the
-            # code is read as a code, as before. Whether the paired code half
-            # of a stale Available is also ignored is left open.
+            # An Available slot holds nothing, whatever the code field
+            # carries (#819). Where a PIN is wanted the status handler
+            # ignores Available (#863), and the driver caches a stale
+            # Available as readily as a true one, so the code field is read
+            # as a code there.
             self._confirm_slot(code_slot, SlotCredential.empty())
             return
         if not new_value:
@@ -955,14 +953,14 @@ class ZWaveJSLock(BaseLock):
         self._confirm_slot(code_slot, resolved)
 
     def _uc_expects_pin(self, code_slot: int) -> bool:
-        """Return whether Lock Code Manager wants a PIN on a User Code CC slot."""
+        """Return whether Lock Code Manager wants a PIN on a User Code Command Class slot."""
         return (
             self.coordinator is not None
             and self.coordinator.desired_credential(pin_address(code_slot)).is_present
         )
 
-    def _uc_slot_status(self, code_slot: int) -> Any:
-        """Return a User Code CC slot's cached userIdStatus, None when unknown."""
+    def _uc_slot_status(self, code_slot: int) -> int | None:
+        """Return a User Code Command Class slot's cached userIdStatus, None when unknown."""
         try:
             return get_code_slot_value(
                 self.node, code_slot, LOCK_USERCODE_STATUS_PROPERTY

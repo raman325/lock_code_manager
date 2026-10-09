@@ -748,16 +748,21 @@ async def test_uc_shim_masked_code_pushes_unreadable(
     zwave_js_lock.unsubscribe_push_updates()
 
 
-async def test_uc_shim_zeros_on_available_slot_pushes_empty(
+async def test_uc_shim_zeros_on_available_slot_pushes_empty_when_pin_wanted(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """All-zeros on a slot whose in_use is explicitly False pushes empty."""
+    """All-zeros on a slot whose in_use is explicitly False pushes empty.
+
+    A PIN is wanted, so the cached Available does not decide and the code
+    event reaches the zeros rule.
+    """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}
+    mock_coordinator.desired_credential.return_value = SlotCredential.known("1234")
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
@@ -785,8 +790,7 @@ async def test_uc_shim_masked_code_on_available_slot_pushes_empty(
     """The status decides first: an Available slot is empty, masked code or not.
 
     A lock that masks codes reports asterisks even for a cleared slot. Read as
-    a code, the asterisks became ``known("****")``: a PIN that was never
-    there, and one that never matches (#819, broken since #1327).
+    a code, the asterisks would be a PIN that was never there (#819).
     """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}
@@ -803,6 +807,44 @@ async def test_uc_shim_masked_code_on_available_slot_pushes_empty(
 
     mock_coordinator.observe_push.assert_called_once_with(
         pin_address(3), SlotCredential.empty()
+    )
+
+    zwave_js_lock.unsubscribe_push_updates()
+
+
+async def test_uc_shim_fresh_available_status_then_masked_code_pushes_empty(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A slot cleared on the lock reports Available then a masked code: empty.
+
+    The slot is occupied in the cache until the report arrives, so the status
+    the code event reads is the one the same report just wrote, and no PIN is
+    wanted for the slot.
+    """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
+    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
+    zwave_js_lock.coordinator = mock_coordinator
+
+    zwave_js_lock.subscribe_push_updates()
+
+    # Fixture slot 2 has userIdStatus=ENABLED.
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(
+            lock_schlage_be469.node_id, "userIdStatus", 2, CodeSlotStatus.AVAILABLE
+        )
+    )
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
+    )
+    await hass.async_block_till_done()
+
+    assert mock_coordinator.observe_push.call_args_list[-1] == call(
+        pin_address(2), SlotCredential.empty()
     )
 
     zwave_js_lock.unsubscribe_push_updates()
@@ -828,9 +870,8 @@ async def test_uc_shim_stale_available_keeps_the_code_read_when_pin_wanted(
     """Where a PIN is wanted, a cached Available does not decide the code event.
 
     The status handler ignores a stale Available while a PIN is wanted (#863),
-    but the driver caches it all the same. The paired code event is read as a
-    code there, exactly as before the Available-first rule, until the paired
-    half of #863 is decided.
+    but the driver caches it all the same. The paired code event is therefore
+    read as a code: a real code is known, and a masked one is known too.
     """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}
@@ -851,38 +892,6 @@ async def test_uc_shim_stale_available_keeps_the_code_read_when_pin_wanted(
     await hass.async_block_till_done()
 
     mock_coordinator.observe_push.assert_called_once_with(pin_address(3), expected)
-
-    zwave_js_lock.unsubscribe_push_updates()
-
-
-async def test_uc_shim_zeros_on_a_slot_not_in_use_push_empty(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """All-zeros counts as empty when the cached status says the slot is not in use.
-
-    An Available status decides before this rule is reached, so ``in_use`` is
-    patched on a slot whose status is not Available to pin the rule itself.
-    """
-    mock_coordinator = MagicMock()
-    mock_coordinator.data = {}
-    zwave_js_lock.coordinator = mock_coordinator
-
-    zwave_js_lock.subscribe_push_updates()
-
-    # Fixture slot 2 has userIdStatus=ENABLED.
-    with patch.object(zwave_js_lock, "_uc_slot_in_use", return_value=False):
-        lock_schlage_be469.receive_event(
-            _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "0000")
-        )
-        await hass.async_block_till_done()
-
-    mock_coordinator.observe_push.assert_called_once_with(
-        pin_address(2), SlotCredential.empty()
-    )
 
     zwave_js_lock.unsubscribe_push_updates()
 
