@@ -887,9 +887,9 @@ class SlotSyncManager:
         if self._coordinator.take_failed_write(self._address):
             self._slot_breaker.record_failure()
             _LOGGER.warning(
-                "%s: the lock did not keep the write (not seen by the deadline, "
-                "or holding a code other than the one written); re-syncing "
-                "(attempt %s)",
+                "%s: the lock did not keep the write (a code not seen by the "
+                "deadline or replaced by another, or still holding a code after "
+                "a clear); re-syncing (attempt %s)",
                 self._log_prefix,
                 self._slot_breaker.failure_count,
             )
@@ -914,22 +914,36 @@ class SlotSyncManager:
                 self._slot_breaker.failure_count,
                 SYNC_ATTEMPT_WINDOW,
             )
-            # The sentence below can only guess between a silently rejected
+            # The set sentence can only guess between a silently rejected
             # code and a lock whose replies never arrive. Whatever the
             # provider can measure about its transport goes in verbatim so
             # the reader can settle it at a glance (issue #1397).
             link_health = self._lock.describe_link_health()
+            lock_and_slot = (
+                f"Lock **{self._lock.lock.entity_id}**: slot **{self._slot_num}**"
+            )
+            attempts = self._slot_breaker.failure_count
+            if snapshot.active_state == STATE_ON:
+                reason = (
+                    f"{lock_and_slot} failed to sync after {attempts} "
+                    f"consecutive attempts. The lock may be rejecting the code "
+                    f"silently or experiencing communication issues. Sync has "
+                    f"been suspended for this slot. It will resume "
+                    f"automatically once the lock accepts the code or you "
+                    f"change the PIN for this slot."
+                )
+            else:
+                # The code the user revoked is the one still on the lock:
+                # what this costs them is a door it still opens.
+                reason = (
+                    f"{lock_and_slot} should hold no code, but the lock still "
+                    f"held its code after {attempts} attempts to clear it, so "
+                    f"that code may still open the door. Lock Code Manager has "
+                    f"stopped retrying. Sync resumes once the slot is active "
+                    f"again or the code is removed at the lock."
+                )
             self._suspend_slot(
-                snapshot,
-                f"Lock **{self._lock.lock.entity_id}**: slot "
-                f"**{self._slot_num}** failed to sync after "
-                f"{self._slot_breaker.failure_count} consecutive attempts. "
-                f"The lock may be rejecting the code silently or "
-                f"experiencing communication issues. "
-                f"Sync has been suspended for this slot. It will resume "
-                f"automatically once the lock accepts the code or you change "
-                f"the PIN for this slot."
-                + (f"\n\n{link_health}" if link_health else ""),
+                snapshot, reason + (f"\n\n{link_health}" if link_health else "")
             )
             return
 
@@ -989,7 +1003,8 @@ class SlotSyncManager:
                 snapshot,
                 f"Lock **{self._lock.lock.entity_id}**: slot "
                 f"**{self._slot_num}** cannot be synced because the lock will "
-                f"not accept it.\n\n{err}",
+                f"not accept it. Sync resumes once this slot's PIN or active "
+                f"state changes.\n\n{err}",
             )
             return
         except LockOperationFailed as err:
@@ -1021,7 +1036,8 @@ class SlotSyncManager:
                 f"Lock **{self._lock.lock.entity_id}**: slot **{self._slot_num}** "
                 f"encountered an unexpected error during sync. This may indicate a bug "
                 f"in the lock code manager integration. Check logs for details and "
-                f"report this issue.\n\nError: {type(err).__name__}: {err}",
+                f"report this issue. Sync resumes once this slot's PIN or active "
+                f"state changes.\n\nError: {type(err).__name__}: {err}",
             )
             return
         else:

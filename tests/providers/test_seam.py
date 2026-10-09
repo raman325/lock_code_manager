@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import replace
 from typing import Literal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -1229,7 +1229,9 @@ async def test_clear_drops_any_pending_write_once_it_has_run(
     lock._min_operation_delay = 0.0
     with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
         await lock.async_internal_clear_usercode(4)
-    lock.coordinator.drop_pending_set.assert_called_once_with(pin_address(4))
+    lock.coordinator.drop_superseded_by_clear.assert_called_once_with(
+        pin_address(4), ANY
+    )
 
 
 async def test_clear_that_raises_leaves_the_pending_write_standing(
@@ -1253,7 +1255,7 @@ async def test_clear_that_raises_leaves_the_pending_write_standing(
         pytest.raises(LockDisconnected),
     ):
         await lock.async_internal_clear_usercode(4)
-    lock.coordinator.drop_pending_set.assert_not_called()
+    lock.coordinator.drop_superseded_by_clear.assert_not_called()
 
 
 async def test_confirm_slot_hands_the_observation_to_the_coordinator(

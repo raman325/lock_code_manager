@@ -17,7 +17,6 @@ from custom_components.lock_code_manager.domain.credentials import (
     User,
     WriteResult,
     credential_from_slot,
-    pin_address,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
@@ -550,10 +549,11 @@ class TestAsyncDeleteCredential:
         lock.coordinator = MagicMock()
         zui_api_responder.set_result("sendCommand", result)
 
-        assert await _delete_credential(lock, 7) is True
+        with patch.object(lock, "_record_unconfirmed_clear") as record:
+            assert await _delete_credential(lock, 7) is True
 
         lock.coordinator.push_update.assert_not_called()
-        lock.coordinator.record_clear.assert_called_once_with(pin_address(7))
+        record.assert_called_once_with(7)
 
     async def test_an_unconfirmed_clear_without_a_coordinator_still_returns(
         self,

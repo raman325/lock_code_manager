@@ -20,7 +20,6 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     WriteResult,
     credential_from_slot,
-    pin_address,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -370,10 +369,11 @@ async def test_delete_credential_without_a_status_reads_the_slot_back(
     zha_lock.coordinator = MagicMock()
 
     ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
-    assert await zha_lock.async_delete_credential(ref) is True
+    with patch.object(zha_lock, "_record_unconfirmed_clear") as record:
+        assert await zha_lock.async_delete_credential(ref) is True
 
     zha_lock.coordinator.push_update.assert_not_called()
-    zha_lock.coordinator.record_clear.assert_called_once_with(pin_address(3))
+    record.assert_called_once_with(3)
 
 
 # ---------------------------------------------------------------------------

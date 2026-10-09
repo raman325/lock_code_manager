@@ -210,8 +210,8 @@ class LockUsercodeUpdateCoordinator(
         Resolve a genuine read (poll or hard refresh) against pending writes.
 
         A pending clear is settled by the read, which is taken as the lock's
-        word. Only a readable code fails it: the lock kept a code LCM
-        cleared. An unreadable one cannot say whether the clear landed, so it
+        word. Only a readable code fails it: the lock kept a code this
+        integration cleared. An unreadable one cannot say whether the clear landed, so it
         is not held against it (see ``last_write_was_clear``).
 
         For an address with a set pending, observing the slot present
@@ -327,16 +327,23 @@ class LockUsercodeUpdateCoordinator(
         self._start_look()
 
     @callback
-    def drop_pending_set(self, address: CredentialAddress) -> None:
+    def drop_superseded_by_clear(
+        self, address: CredentialAddress, started_at: float
+    ) -> None:
         """
-        Forget a set pending against ``address``, keeping a pending clear.
+        Forget what a clear that ran has superseded at ``address``.
 
-        For a clear that ran: it supersedes any set outstanding there, but a
-        clear the lock did not confirm has just recorded itself pending
-        (``record_clear``) to be judged by the read that follows.
+        That is everything pending there except a clear recorded since
+        ``started_at`` (monotonic): one the lock did not confirm records
+        itself pending (``record_clear``) to be judged by the read that
+        follows.
         """
         pending = self._pending.get(_checked(address))
-        if pending is None or pending.pin is not None:
+        if (
+            pending is None
+            or pending.pin is not None
+            or pending.written_at < started_at
+        ):
             self.drop_pending(address)
 
     @callback

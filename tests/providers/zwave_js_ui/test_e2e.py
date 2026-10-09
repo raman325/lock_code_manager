@@ -500,7 +500,7 @@ class TestUnconfirmedWrites:
             for command in send_commands(zui_api_responder)
             if command == user_code_call("clear", [1])
         ]
-        assert 1 <= len(clears) <= 2
+        assert len(clears) == 1
 
     async def test_a_second_unconfirmed_clear_is_read_back_inside_the_refresh_cooldown(
         self,
@@ -553,7 +553,7 @@ class TestUnconfirmedWrites:
             )
             assert in_sync is not None
             assert in_sync.state == STATE_ON
-            assert commands.count(user_code_call("clear", [slot_num])) <= 2
+            assert commands.count(user_code_call("clear", [slot_num])) == 1
 
 
 class ReadRefusingUserCodeTable(UnsupervisedUserCodeTable):
@@ -696,12 +696,16 @@ class TestIgnoredClears:
         in_sync = hass.states.get(in_sync_entity_id(hass, entry, 1, lock_entity_id))
         assert in_sync is not None
         assert in_sync.attributes[ATTR_SYNC_STATUS] == "suspended"
-        assert (
-            async_get_issue_registry(hass).async_get_issue(
-                DOMAIN, f"slot_suspended_{entry.entry_id}_{lock_entity_id}_1"
-            )
-            is not None
+        issue = async_get_issue_registry(hass).async_get_issue(
+            DOMAIN, f"slot_suspended_{entry.entry_id}_{lock_entity_id}_1"
         )
+        assert issue is not None
+        assert issue.translation_placeholders is not None
+        reason = issue.translation_placeholders["reason"]
+        # The code the user revoked is still on the lock: the repair must say
+        # so, not ask the lock to accept a code the slot no longer has.
+        assert "still open the door" in reason
+        assert "accepts the code" not in reason
 
         for _ in range(10):
             await async_advance_time(hass, TICK_INTERVAL)

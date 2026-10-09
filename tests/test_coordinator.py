@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from datetime import timedelta
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -2140,17 +2141,28 @@ async def test_a_pending_clear_whose_reads_keep_failing_ends_uncharged(
     assert push_coordinator.take_failed_write(pin_address(1)) is False
 
 
-async def test_drop_pending_set_keeps_a_pending_clear(
-    push_coordinator: LockUsercodeUpdateCoordinator,
+async def test_a_clear_drops_what_it_superseded_but_not_its_own_record(
+    push_coordinator: LockUsercodeUpdateCoordinator, freezer
 ) -> None:
-    """A clear that ran drops the set it superseded, not its own pending record."""
-    push_coordinator.record_write(pin_address(1), "1234", believed=True)
-    push_coordinator.drop_pending_set(pin_address(1))
-    assert push_coordinator.has_pending_write(pin_address(1)) is False
+    """
+    A clear that ran forgets every write pending before it started.
 
+    A set, or an older clear nobody confirmed, is superseded and forgotten
+    uncharged; a clear the lock did not confirm during this one recorded
+    itself and stays to be judged.
+    """
+    push_coordinator.record_write(pin_address(1), "1234", believed=True)
     push_coordinator.record_clear(pin_address(2))
-    push_coordinator.drop_pending_set(pin_address(2))
-    assert push_coordinator.has_pending_write(pin_address(2)) is True
+    freezer.tick(timedelta(seconds=1))
+    started_at = time.monotonic()
+    push_coordinator.record_clear(pin_address(3))
+
+    for slot in (1, 2, 3):
+        push_coordinator.drop_superseded_by_clear(pin_address(slot), started_at)
+
+    assert push_coordinator.has_pending_write(pin_address(1)) is False
+    assert push_coordinator.has_pending_write(pin_address(2)) is False
+    assert push_coordinator.has_pending_write(pin_address(3)) is True
 
 
 async def test_record_clear_after_shutdown_records_nothing(

@@ -553,19 +553,23 @@ class BaseLock:
 
     @final
     @callback
-    def _request_read_back(self, code_slot: int) -> None:
+    def _record_unconfirmed_clear(self, code_slot: int) -> None:
         """
-        Have the coordinator read a slot back after a clear nobody confirmed.
+        Record a clear nobody confirmed, for the coordinator to read back.
 
-        The counterpart of recording an unconfirmed set pending: the clear is
-        recorded pending, and the coordinator's confirmation look reads the
-        slot. A read that still finds a readable code there charges the slot
-        breaker once, so a lock that ignores the clear is not sent it every
-        tick forever. That charge is only fair where the read asks the
-        device after the clear (zwave-js-ui, ZHA), not where it can lag
-        behind it. No-op without a coordinator.
+        The counterpart of recording an unconfirmed set pending: the
+        coordinator's confirmation look reads the slot, and a read that still
+        finds a readable code there charges the slot breaker once, so a lock
+        that ignores the clear is not sent it every tick forever. That charge
+        is only fair where the read asks the device after the clear
+        (zwave-js-ui, ZHA), not where it can lag behind it.
+
+        A slot nothing manages has no breaker and no sync waiting on it, and
+        a judgment recorded there would be charged to whichever slot is next
+        given the number, so nothing is recorded. No-op without a
+        coordinator.
         """
-        if self.coordinator is not None:
+        if self.coordinator is not None and self.is_slot_managed(code_slot):
             self.coordinator.record_clear(pin_address(code_slot))
 
     @final
@@ -1570,6 +1574,7 @@ class BaseLock:
             code_slot,
             source,
         )
+        started_at = time.monotonic()
         changed = await self._execute_rate_limited(
             "clear",
             partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
@@ -1581,13 +1586,16 @@ class BaseLock:
                 len(self.managed_slots) + 1 if self.supports_native_users else 1
             ),
         )
-        # A clear that ran supersedes any set pending on this slot, and one
-        # the lock did not confirm stays pending itself (``_request_read_back``).
-        # One that raised superseded nothing: the write stays pending, so a
-        # believed value it pushed is not taken as verified on the strength of
-        # a clear that never reached the lock.
+        # A clear that ran supersedes any write pending on this slot, though
+        # one the lock did not confirm stays pending itself
+        # (``_record_unconfirmed_clear``). One that raised superseded
+        # nothing: the write stays pending, so a believed value it pushed is
+        # not taken as verified on the strength of a clear that never reached
+        # the lock.
         if self.coordinator is not None:
-            self.coordinator.drop_pending_set(pin_address(code_slot))
+            self.coordinator.drop_superseded_by_clear(
+                pin_address(code_slot), started_at
+            )
         # Only a clear that changed something is evidence about the slot. A
         # provider that found nothing to clear has said nothing about what is
         # there.

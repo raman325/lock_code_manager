@@ -363,7 +363,7 @@ class ZHALock(BaseLock):
                 self.lock.entity_id,
                 code_slot,
             )
-            self._request_read_back(code_slot)
+            self._record_unconfirmed_clear(code_slot)
             return True
         if status != 0:
             raise CodeRejectedError(

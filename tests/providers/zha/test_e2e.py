@@ -216,14 +216,47 @@ async def test_a_clear_the_lock_keeps_ignoring_suspends_the_slot(
     )
     assert in_sync is not None
     assert in_sync.attributes[ATTR_SYNC_STATUS] == "suspended"
-    assert (
-        async_get_issue_registry(hass).async_get_issue(
-            DOMAIN,
-            f"slot_suspended_{lcm_config_entry.entry_id}_{lock.lock.entity_id}_1",
-        )
-        is not None
+    issue = async_get_issue_registry(hass).async_get_issue(
+        DOMAIN,
+        f"slot_suspended_{lcm_config_entry.entry_id}_{lock.lock.entity_id}_1",
     )
+    assert issue is not None
+    assert issue.translation_placeholders is not None
+    reason = issue.translation_placeholders["reason"]
+    # The code the user revoked is still on the lock: the repair must say so,
+    # not ask the lock to accept a code the slot no longer has.
+    assert "still open the door" in reason
+    assert "accepts the code" not in reason
 
     for _ in range(10):
         await async_advance_time(hass, TICK_INTERVAL)
     assert unconfirming_lock_table.clears.count(1) == MAX_SYNC_ATTEMPTS
+
+
+async def test_an_ignored_clear_on_an_unmanaged_slot_leaves_nothing_to_charge(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    unconfirming_lock_table: UnconfirmingDoorLockTable,
+) -> None:
+    """
+    A clear to a slot nothing manages is not judged, so it cannot be charged.
+
+    A failure recorded there would wait for whichever slot is next given the
+    number, and be charged to it for a write it never made.
+    """
+    for _ in range(len(CONFIGURED_PINS) + 2):
+        await async_advance_time(hass, TICK_INTERVAL)
+    unmanaged_slot = max(CONFIGURED_PINS) + 1
+    unconfirming_lock_table.codes[unmanaged_slot] = "9999"
+    unconfirming_lock_table.applies = False
+
+    lock = _zha_lock(lcm_config_entry)
+    await lock.async_internal_clear_usercode(unmanaged_slot)
+    for _ in range(2):
+        await async_advance_time(hass, TICK_INTERVAL)
+
+    assert unconfirming_lock_table.clears.count(unmanaged_slot) == 1
+    assert unconfirming_lock_table.codes[unmanaged_slot] == "9999"
+    address = pin_address(unmanaged_slot)
+    assert lock.coordinator.has_pending_write(address) is False
+    assert lock.coordinator.take_failed_write(address) is False
