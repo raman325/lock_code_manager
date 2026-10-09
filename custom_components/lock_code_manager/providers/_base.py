@@ -553,24 +553,17 @@ class BaseLock:
 
     @final
     @callback
-    def _request_read_back(self, code_slot: int) -> None:
+    def _request_read_back(self) -> None:
         """
         Have the coordinator read the lock again after a clear nobody confirmed.
 
-        An unconfirmed set is recorded pending and the coordinator goes to
-        look; a clear has no such record, and on a push provider the base
-        requests no refresh after one. Without this, the slot would keep
-        showing the code the clear was meant to remove until some unrelated
-        read. Scheduled, not awaited: the caller holds the lock's turn, and
-        the read needs it.
+        The counterpart of recording an unconfirmed set pending. The read goes
+        through this provider's ordinary read, so it is only meaningful for a
+        provider whose ordinary read asks the device (zwave-js-ui, ZHA), not
+        one answering from a cache. No-op without a coordinator.
         """
-        if self.coordinator is None:
-            return
-        self.hass.async_create_task(
-            self.coordinator.async_request_refresh(),
-            f"Read back {self.lock.entity_id} slot {code_slot} after an "
-            "unconfirmed clear",
-        )
+        if self.coordinator is not None:
+            self.coordinator.request_read_back()
 
     @final
     def is_slot_managed(self, code_slot: int) -> bool:

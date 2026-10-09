@@ -327,27 +327,30 @@ def _supervised_write_result(
     operation: str, code_slot: int, result: Any
 ) -> WriteResult:
     """
-    Classify what a User Code CC ``set`` or ``clear`` returned.
+    Classify what a User Code Command Class ``set`` or ``clear`` returned.
 
     zwave-js-ui hands back whatever the driver's command returned: a
     Supervision result when the lock supervised the command, nothing when it
     did not. Success is the lock saying it applied the write. Working means it
     took the command and has not finished, and no result means the command
     went out unsupervised; both say only that the lock received it, so the
-    write is unconfirmed. Fail, and the lock answering that it does not
-    support the command, are refusals and raise. They raise as an operation
-    failure rather than a rejection: the lock gives no reason, so the slot
-    breaker decides, the same as a Supervision Fail on the Z-Wave JS path.
+    write is unconfirmed. NoSupport means the command was not supervised (the
+    driver resends such a command unsupervised, so it does not normally
+    surface), and is unconfirmed for the same reason. Fail is the device
+    rejecting the command (Application Status Rejected) and raises. It raises
+    as an operation failure rather than a rejection: the lock gives no
+    reason, so the slot breaker decides, the same as a Supervision Fail on
+    the Z-Wave JS path.
 
-    A boolean status is no status: ``False == 0`` would otherwise read as the
-    lock refusing, and ``True == 1`` as Working.
+    A boolean status is no status: ``True == 1`` would otherwise read as
+    Working, and ``False == 0`` as NoSupport.
     """
     status = result.get("status") if isinstance(result, dict) else None
     if isinstance(status, bool):
         return WriteResult.OPTIMISTIC
     if status == SupervisionStatus.SUCCESS:
         return WriteResult.CONFIRMED
-    if status in (SupervisionStatus.FAIL, SupervisionStatus.NO_SUPPORT):
+    if status == SupervisionStatus.FAIL:
         raise LockOperationFailed(
             f"User Code {operation} on slot {code_slot} was refused by the lock "
             f"(Supervision status {status})"
@@ -1362,7 +1365,7 @@ class ZWaveJSUILock(BaseMqttLock):
         if result is WriteResult.CONFIRMED:
             self._push_credential_update(ref.slot, SlotCredential.empty())
         else:
-            self._request_read_back(ref.slot)
+            self._request_read_back()
         return True
 
     async def async_get_max_slot(self) -> int | None:

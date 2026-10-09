@@ -135,6 +135,8 @@ class LockUsercodeUpdateCoordinator(
         # apart, not N.
         self._confirm_task: asyncio.Task[None] | None = None
         self._confirm_unsub: Callable[[], None] | None = None
+        # The read a clear nobody confirmed asks for; see ``request_read_back``.
+        self._read_back_task: asyncio.Task[None] | None = None
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -380,6 +382,40 @@ class LockUsercodeUpdateCoordinator(
             f"{DOMAIN} confirmation read for {self._lock.lock.entity_id}",
             eager_start=False,
         )
+
+    @callback
+    def request_read_back(self) -> None:
+        """
+        Read the lock again, as a task this coordinator owns.
+
+        For a clear the lock did not confirm: an unconfirmed set is recorded
+        pending and looked at, but a clear has no such record, and on a push
+        provider nothing else would refresh the slot afterward. The read goes
+        through the provider's ordinary read, so it tells the truth only for a
+        provider whose ordinary read asks the device, not one answering from a
+        cache.
+
+        Scheduled rather than awaited, because the caller holds the lock's
+        turn and the read needs it. A read already in flight absorbs the
+        request, and shutdown cancels it, so a read-back never outlives the
+        provider that asked for it.
+        """
+        if self._shutdown_requested or self._read_back_task is not None:
+            return
+        # Not eager, for the same reason as ``_start_look``: the caller is
+        # inside the provider's write path.
+        self._read_back_task = self.hass.async_create_task(
+            self._async_read_back(),
+            f"{DOMAIN} read back for {self._lock.lock.entity_id}",
+            eager_start=False,
+        )
+
+    async def _async_read_back(self) -> None:
+        """Run the requested read, then release the slot for the next request."""
+        try:
+            await self.async_request_refresh()
+        finally:
+            self._read_back_task = None
 
     async def _async_confirmation_look(self) -> None:
         """Look once; hand off to the timer while anything is still pending."""
@@ -817,6 +853,9 @@ class LockUsercodeUpdateCoordinator(
         if self._confirm_unsub:
             self._confirm_unsub()
             self._confirm_unsub = None
+        if self._read_back_task is not None:
+            self._read_back_task.cancel()
+            self._read_back_task = None
         if self._drift_unsub:
             self._drift_unsub()
             self._drift_unsub = None

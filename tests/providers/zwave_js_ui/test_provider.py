@@ -51,14 +51,12 @@ SUPERVISION_NO_SUPPORT = {"status": 0}
 UNSUPERVISED = None
 UNCONFIRMED_RESULTS = [
     pytest.param(SUPERVISION_WORKING, id="working"),
-    pytest.param(UNSUPERVISED, id="unsupervised"),
-    # ``False == 0``: read as a status it would pass for NoSupport.
-    pytest.param({"status": False}, id="boolean_status"),
-]
-REFUSED_RESULTS = [
-    pytest.param(SUPERVISION_FAIL, id="fail"),
     pytest.param(SUPERVISION_NO_SUPPORT, id="no_support"),
+    pytest.param(UNSUPERVISED, id="unsupervised"),
+    # ``True == 1``: read as a status it would pass for Working.
+    pytest.param({"status": True}, id="boolean_status"),
 ]
+REFUSED_RESULTS = [pytest.param(SUPERVISION_FAIL, id="fail")]
 
 
 def _user_code_handler(
@@ -549,14 +547,12 @@ class TestAsyncDeleteCredential:
         """
         lock = zui_gateway_resolved
         lock.coordinator = MagicMock()
-        lock.coordinator.async_request_refresh = AsyncMock()
         zui_api_responder.set_result("sendCommand", result)
 
         assert await _delete_credential(lock, 7) is True
-        await hass.async_block_till_done()
 
         lock.coordinator.push_update.assert_not_called()
-        lock.coordinator.async_request_refresh.assert_awaited_once()
+        lock.coordinator.request_read_back.assert_called_once_with()
 
     async def test_an_unconfirmed_clear_without_a_coordinator_still_returns(
         self,

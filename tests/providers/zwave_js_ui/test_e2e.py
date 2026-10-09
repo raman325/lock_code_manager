@@ -385,9 +385,9 @@ class TestRefusedWrites:
         """
         The api call succeeds and the lock says Fail: the slot is not in sync.
 
-        zwave-js-ui reports the call as a success either way. Reading only
-        that, LCM pushed the code as the lock's word and the slot read in sync
-        while the lock held nothing.
+        zwave-js-ui reports the call as a success either way, so only the
+        Supervision result tells a refused write from an applied one; the
+        coordinator must keep reporting the lock's empty slot.
         """
         for _ in range(len(E2E_SLOT_PINS) + 2):
             await async_advance_time(hass, TICK_INTERVAL)
@@ -403,6 +403,100 @@ class TestRefusedWrites:
             )
             assert in_sync is not None
             assert in_sync.state != STATE_ON
+
+
+class UnsupervisedUserCodeTable(UserCodeTable):
+    """A lock without Supervision: it applies set and clear but returns no result."""
+
+    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Answer as the table would, minus the Supervision result."""
+        response = super().__call__(api_base, request)
+        _target, method, _method_args = request["args"]
+        if method in ("set", "clear"):
+            response["result"] = None
+        return response
+
+
+class TestUnconfirmedWrites:
+    """Writes the lock applied without saying so still settle."""
+
+    @pytest.fixture
+    def user_code_table(self) -> UserCodeTable:
+        """The stand-in node never supervises a command."""
+        return UnsupervisedUserCodeTable()
+
+    async def test_an_unconfirmed_set_ends_in_sync(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """
+        A set with no Supervision result is confirmed by the read that follows.
+
+        Nothing is pushed on the strength of the write, so the slot reads in
+        sync only because the confirmation read saw the lock hold the code.
+        """
+        for _ in range(len(E2E_SLOT_PINS) + 2):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        assert user_code_table.codes == E2E_SLOT_PINS
+        lock_entity_id = zui_lock.lock.entity_id
+        for slot_num, pin in E2E_SLOT_PINS.items():
+            assert zui_lock.coordinator.data.get(pin_address(slot_num)) == (
+                SlotCredential.known(pin)
+            )
+            in_sync = hass.states.get(
+                in_sync_entity_id(hass, lcm_config_entry, slot_num, lock_entity_id)
+            )
+            assert in_sync is not None
+            assert in_sync.state == STATE_ON
+
+    async def test_an_unconfirmed_clear_ends_in_sync_without_being_reissued(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        user_code_table: UserCodeTable,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """
+        A clear with no Supervision result is read back, then left alone.
+
+        The slot must end empty and in sync, and the clear must not repeat
+        while the coordinator still shows the old code.
+        """
+        for _ in range(len(E2E_SLOT_PINS) + 2):
+            await async_advance_time(hass, TICK_INTERVAL)
+        assert user_code_table.codes == E2E_SLOT_PINS
+
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {
+                ATTR_ENTITY_ID: slot_entity_id(
+                    hass, SWITCH_DOMAIN, lcm_config_entry, 1, CONF_ENABLED
+                )
+            },
+            blocking=True,
+        )
+        for _ in range(len(E2E_SLOT_PINS) + 4):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        assert user_code_table.codes == {2: E2E_SLOT_PINS[2]}
+        assert zui_lock.coordinator.data.get(pin_address(1)) == SlotCredential.empty()
+        in_sync = hass.states.get(
+            in_sync_entity_id(hass, lcm_config_entry, 1, zui_lock.lock.entity_id)
+        )
+        assert in_sync is not None
+        assert in_sync.state == STATE_ON
+        clears = [
+            command
+            for command in send_commands(zui_api_responder)
+            if command == user_code_call("clear", [1])
+        ]
+        assert 1 <= len(clears) <= 2
 
 
 class TestPushUpdates:

@@ -80,15 +80,14 @@ def test_only_supervision_success_confirms_a_write(result: object) -> None:
     A write is the lock's word only when the lock said Supervision Success.
 
     Anything else the gateway can return is at most unconfirmed, and only an
-    explicit Fail or NoSupport is a refusal. Before this rule the result was
-    discarded, so a Fail read as a confirmed write.
+    explicit Fail is a refusal.
     """
     status = result.get("status") if isinstance(result, dict) else None
     named = None if isinstance(status, bool) else status
     try:
         outcome = _supervised_write_result("set", 1, result)
     except LockOperationFailed:
-        assert named in (0, 2)
+        assert named == 2
         return
     assert (outcome is WriteResult.CONFIRMED) == (named == 255)
     assert outcome is not WriteResult.NO_CHANGE

@@ -1681,6 +1681,74 @@ async def test_shutdown_cancels_a_timer_fired_read_in_flight(
     assert poll_coordinator._confirm_unsub is None
 
 
+async def test_request_read_back_is_one_read_however_often_it_is_asked(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Requests made while a read-back is in flight share that read."""
+    reads = poll_lock.service_calls["get_usercodes"]
+    before = len(reads)
+
+    poll_coordinator.request_read_back()
+    first = poll_coordinator._read_back_task
+    assert first is not None
+    poll_coordinator.request_read_back()
+    assert poll_coordinator._read_back_task is first
+
+    await hass.async_block_till_done()
+    assert len(reads) == before + 1
+    assert poll_coordinator._read_back_task is None
+
+
+async def test_shutdown_cancels_a_read_back_in_flight(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A read-back must not outlive the provider that asked for it."""
+    gate = asyncio.Event()
+    completed: list[int] = []
+
+    async def slow_read(*_args, **_kwargs):
+        await gate.wait()
+        completed.append(1)
+        return {1: SlotCredential.empty()}
+
+    with patch.object(poll_lock, "async_get_usercodes", slow_read):
+        poll_coordinator.request_read_back()
+        for _ in range(3):
+            await asyncio.sleep(0)  # let the task start and enter the read
+        task = poll_coordinator._read_back_task
+        assert task is not None
+
+        await poll_coordinator.async_shutdown()
+        gate.set()
+        await hass.async_block_till_done()
+
+    await asyncio.wait([task])
+    assert task.cancelled()
+    assert poll_coordinator._read_back_task is None
+    assert completed == []
+
+
+async def test_request_read_back_after_shutdown_reads_nothing(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A clear returning after unload has no one left to read for."""
+    reads = poll_lock.service_calls["get_usercodes"]
+    await poll_coordinator.async_shutdown()
+    before = len(reads)
+
+    poll_coordinator.request_read_back()
+    assert poll_coordinator._read_back_task is None
+    await hass.async_block_till_done()
+
+    assert len(reads) == before
+
+
 async def test_record_write_while_the_timer_is_armed_pulls_the_look_forward(
     hass: HomeAssistant,
     poll_lock: MockLCMLock,
