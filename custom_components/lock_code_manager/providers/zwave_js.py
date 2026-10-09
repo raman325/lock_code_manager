@@ -899,10 +899,7 @@ class ZWaveJSLock(BaseLock):
         # Ignore AVAILABLE when Lock Code Manager expects a PIN on this
         # slot. Some locks send stale AVAILABLE events after a code was
         # set, which would cause infinite sync loops.
-        if (
-            self.coordinator is not None
-            and self.coordinator.desired_credential(pin_address(code_slot)).is_present
-        ):
+        if self._uc_expects_pin(code_slot):
             _LOGGER.debug(
                 "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
                 "(LCM expects PIN on this slot)",
@@ -915,10 +912,17 @@ class ZWaveJSLock(BaseLock):
     @callback
     def _handle_uc_code_update(self, code_slot: int, new_value: Any) -> None:
         """Handle a userCode value update for a code slot."""
-        if self._uc_slot_status(code_slot) == CodeSlotStatus.AVAILABLE:
+        if (
+            not self._uc_expects_pin(code_slot)
+            and self._uc_slot_status(code_slot) == CodeSlotStatus.AVAILABLE
+        ):
             # The status decides first. An Available slot holds nothing,
             # whatever the code field carries -- a masked placeholder, zeros,
-            # or a leftover code (#819).
+            # or a leftover code (#819). Only where the status handler would
+            # not ignore that Available: the driver caches a stale Available
+            # (#863) as readily as a true one, so where a PIN is wanted the
+            # code is read as a code, as before. Whether the paired code half
+            # of a stale Available is also ignored is left open.
             self._confirm_slot(code_slot, SlotCredential.empty())
             return
         if not new_value:
@@ -949,6 +953,13 @@ class ZWaveJSLock(BaseLock):
         # driver's post-write verification report doubles as the
         # confirming push for a pending optimistic write.
         self._confirm_slot(code_slot, resolved)
+
+    def _uc_expects_pin(self, code_slot: int) -> bool:
+        """Return whether Lock Code Manager wants a PIN on a User Code CC slot."""
+        return (
+            self.coordinator is not None
+            and self.coordinator.desired_credential(pin_address(code_slot)).is_present
+        )
 
     def _uc_slot_status(self, code_slot: int) -> Any:
         """Return a User Code CC slot's cached userIdStatus, None when unknown."""

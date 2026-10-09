@@ -808,6 +808,53 @@ async def test_uc_shim_masked_code_on_available_slot_pushes_empty(
     zwave_js_lock.unsubscribe_push_updates()
 
 
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("1234", SlotCredential.known("1234")),
+        ("****", SlotCredential.known("****")),
+    ],
+    ids=["real-code", "masked-code"],
+)
+async def test_uc_shim_stale_available_keeps_the_code_read_when_pin_wanted(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    code: str,
+    expected: SlotCredential,
+) -> None:
+    """Where a PIN is wanted, a cached Available does not decide the code event.
+
+    The status handler ignores a stale Available while a PIN is wanted (#863),
+    but the driver caches it all the same. The paired code event is read as a
+    code there, exactly as before the Available-first rule, until the paired
+    half of #863 is decided.
+    """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    mock_coordinator.desired_credential.return_value = SlotCredential.known("1234")
+    zwave_js_lock.coordinator = mock_coordinator
+
+    zwave_js_lock.subscribe_push_updates()
+
+    # Fixture slot 3 has userIdStatus=AVAILABLE; the stale report repeats it.
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(
+            lock_schlage_be469.node_id, "userIdStatus", 3, CodeSlotStatus.AVAILABLE
+        )
+    )
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 3, code)
+    )
+    await hass.async_block_till_done()
+
+    mock_coordinator.observe_push.assert_called_once_with(pin_address(3), expected)
+
+    zwave_js_lock.unsubscribe_push_updates()
+
+
 async def test_uc_shim_zeros_on_a_slot_not_in_use_push_empty(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -859,6 +906,8 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
     """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}
+    # No PIN is wanted, so the cached status is consulted; it is unknown too.
+    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()
