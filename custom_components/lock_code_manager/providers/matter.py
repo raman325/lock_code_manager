@@ -1584,8 +1584,8 @@ class MatterLock(BaseLock):
         """
         code_slot: int | None = None
         try:
-            # In the lock's turn, like every other read: a read that overlaps
-            # a write can be answered with the users from before it.
+            # Like the coordinator's reads, in the lock's turn: a read that
+            # overlaps a write can be answered with the users from before it.
             raw_users = await self._execute_rate_limited(
                 "get", self._raw_lock_users, exchanges=len(self.managed_slots)
             )
@@ -1597,11 +1597,38 @@ class MatterLock(BaseLock):
                 user_index,
                 err,
             )
+            if not resolved.is_empty:
+                # Without the read there is no owner to push to. Lock Code
+                # Manager's own writes already pushed their outcome, and the
+                # drift check relearns an add made from outside.
+                return
         else:
+            owner = next(
+                (
+                    raw_user
+                    for raw_user in raw_users
+                    if raw_user.get("user_index") == user_index
+                ),
+                None,
+            )
             code_slot = _lcm_slot_from_raw_users_by_user_index(raw_users, user_index)
-            if code_slot is None and any(
-                raw_user.get("user_index") == user_index for raw_user in raw_users
-            ):
+            holds_pin = owner is not None and any(
+                credential.get("type") == "pin"
+                for credential in owner.get("credentials") or []
+            )
+            if resolved.is_empty and holds_pin and code_slot is not None:
+                # The read comes after the event, and the lock hands a freed
+                # user index to the next add: this index now belongs to a
+                # user holding a PIN, so the clear it announced is history.
+                LOGGER.debug(
+                    "Lock %s: LockUserChange clear for userIndex %s is stale; "
+                    "the index now belongs to slot %s with a PIN; ignoring",
+                    self.lock.entity_id,
+                    user_index,
+                    code_slot,
+                )
+                return
+            if code_slot is None and owner is not None:
                 # Present but untagged: somebody else's user now, whatever
                 # this index anchored before.
                 self._slot_by_user_index.pop(user_index, None)
