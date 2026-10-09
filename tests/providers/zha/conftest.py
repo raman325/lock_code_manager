@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 import itertools
 import sys
 import time
@@ -443,3 +443,85 @@ async def simple_lcm_config_entry(
     )
     entry.add_to_hass(hass)
     return entry
+
+
+class UnconfirmingDoorLockTable:
+    """
+    A lock that applies a set or clear but never says so.
+
+    Stands in for the Door Lock cluster's PIN commands: ``set_pin_code`` and
+    ``clear_pin_code`` change the table and reply with nothing, and
+    ``get_pin_code`` answers with the real zigpy reply for the slot.
+    """
+
+    def __init__(self) -> None:
+        """Start with an empty table and no commands recorded."""
+        self.codes: dict[int, str] = {}
+        self.clears: list[int] = []
+
+    async def set_pin_code(
+        self, user_id: int, _status: Any, _user_type: Any, pin: str
+    ) -> None:
+        """Hold the code and reply with no status."""
+        self.codes[user_id] = pin
+
+    async def clear_pin_code(self, user_id: int) -> None:
+        """Drop the code and reply with no status."""
+        self.clears.append(user_id)
+        self.codes.pop(user_id, None)
+
+    async def get_pin_code(self, user_id: int) -> Any:
+        """Answer the way the lock does: Enabled with the code, or Available."""
+        held = user_id in self.codes
+        return closures.DoorLock.ClientCommandDefs.get_pin_code_response.schema(
+            user_id=user_id,
+            user_status=closures.DoorLock.UserStatus.Enabled
+            if held
+            else closures.DoorLock.UserStatus.Available,
+            user_type=closures.DoorLock.UserType.Unrestricted,
+            code=self.codes.get(user_id, ""),
+        )
+
+
+@pytest.fixture
+def unconfirming_lock_table(zha_lock: ZHALock) -> UnconfirmingDoorLockTable:
+    """Put an unconfirming lock behind the Door Lock cluster's PIN commands."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    table = UnconfirmingDoorLockTable()
+    cluster.set_pin_code = AsyncMock(side_effect=table.set_pin_code)
+    cluster.clear_pin_code = AsyncMock(side_effect=table.clear_pin_code)
+    cluster.get_pin_code = AsyncMock(side_effect=table.get_pin_code)
+    return table
+
+
+@pytest.fixture
+async def lcm_config_entry(
+    hass: HomeAssistant,
+    zha_lock_entity: er.RegistryEntry,
+    unconfirming_lock_table: UnconfirmingDoorLockTable,
+) -> AsyncGenerator[MockConfigEntry]:
+    """
+    Set up a full LCM config entry managing the ZHA lock.
+
+    This runs the real async_setup_entry path, so the lock entity's platform
+    is what picks ZHALock and the real coordinator and sync manager run.
+    """
+    config = {
+        CONF_LOCKS: [zha_lock_entity.entity_id],
+        CONF_SLOTS: ZHA_LCM_CONFIG_SLOTS,
+    }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zha_lcm_e2e",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield entry
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()

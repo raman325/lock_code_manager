@@ -315,11 +315,22 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
-        if hasattr(result, "status") and result.status != 0:
+        if (status := getattr(result, "status", None)) is None:
+            # Only the lock's status says it applied the code. A reply without
+            # one says the command arrived, so the write is recorded
+            # unconfirmed and the coordinator reads the slot back.
+            _LOGGER.debug(
+                "Lock %s slot %s: set_pin_code reply carried no status; "
+                "treating the write as unconfirmed",
+                self.lock.entity_id,
+                code_slot,
+            )
+            return WriteResult.OPTIMISTIC
+        if status != 0:
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=f"set_pin_code rejected: status {result.status}",
+                reason=f"set_pin_code rejected: status {status}",
             )
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
@@ -343,11 +354,22 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
-        if hasattr(result, "status") and result.status != 0:
+        if (status := getattr(result, "status", None)) is None:
+            # The clear arrived but the lock did not say it applied it, so the
+            # slot is not pushed empty: it is read back instead.
+            _LOGGER.debug(
+                "Lock %s slot %s: clear_pin_code reply carried no status; "
+                "reading the slot back",
+                self.lock.entity_id,
+                code_slot,
+            )
+            self._request_read_back()
+            return True
+        if status != 0:
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=f"clear_pin_code rejected: status {result.status}",
+                reason=f"clear_pin_code rejected: status {status}",
             )
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True

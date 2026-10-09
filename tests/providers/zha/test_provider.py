@@ -327,6 +327,54 @@ async def test_delete_credential_failure(
         await zha_lock.async_delete_credential(ref)
 
 
+async def test_set_credential_without_a_status_is_unconfirmed(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A set reply that carries no status is not a confirmed write.
+
+    The status is the lock saying it applied the code. Without one the write
+    is unconfirmed: the base records it pending and the coordinator reads
+    the slot back, and nothing here claims the slot holds the code.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.set_pin_code = AsyncMock(return_value=None)
+    zha_lock.coordinator = MagicMock()
+
+    credential = credential_from_slot(3, SlotCredential.known("5678"))
+    result = await zha_lock.async_set_credential(
+        3, credential, "5678", name=None, source="direct"
+    )
+
+    assert result is WriteResult.OPTIMISTIC
+    zha_lock.coordinator.push_update.assert_not_called()
+
+
+async def test_delete_credential_without_a_status_reads_the_slot_back(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A clear reply that carries no status leaves the slot to a fresh read.
+
+    Pushing the slot empty would report a clear the lock never confirmed;
+    reporting nothing at all would leave the old code on screen until some
+    unrelated read, because a push provider gets no refresh after a clear.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.clear_pin_code = AsyncMock(return_value=None)
+    zha_lock.coordinator = MagicMock()
+
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    assert await zha_lock.async_delete_credential(ref) is True
+
+    zha_lock.coordinator.push_update.assert_not_called()
+    zha_lock.coordinator.request_read_back.assert_called_once_with()
+
+
 # ---------------------------------------------------------------------------
 # Push update tests
 # ---------------------------------------------------------------------------
