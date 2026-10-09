@@ -775,6 +775,71 @@ async def test_uc_shim_zeros_on_available_slot_pushes_empty(
     zwave_js_lock.unsubscribe_push_updates()
 
 
+async def test_uc_shim_masked_code_on_available_slot_pushes_empty(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """The status decides first: an Available slot is empty, masked code or not.
+
+    A lock that masks codes reports asterisks even for a cleared slot. Read as
+    a code, the asterisks became ``known("****")``: a PIN that was never
+    there, and one that never matches (#819, broken since #1327).
+    """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
+    zwave_js_lock.coordinator = mock_coordinator
+
+    zwave_js_lock.subscribe_push_updates()
+
+    # Fixture slot 3 has userIdStatus=AVAILABLE.
+    lock_schlage_be469.receive_event(
+        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 3, "****")
+    )
+    await hass.async_block_till_done()
+
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(3), SlotCredential.empty()
+    )
+
+    zwave_js_lock.unsubscribe_push_updates()
+
+
+async def test_uc_shim_zeros_on_a_slot_not_in_use_push_empty(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """All-zeros counts as empty when the cached status says the slot is not in use.
+
+    An Available status decides before this rule is reached, so ``in_use`` is
+    patched on a slot whose status is not Available to pin the rule itself.
+    """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    zwave_js_lock.subscribe_push_updates()
+
+    # Fixture slot 2 has userIdStatus=ENABLED.
+    with patch.object(zwave_js_lock, "_uc_slot_in_use", return_value=False):
+        lock_schlage_be469.receive_event(
+            _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "0000")
+        )
+        await hass.async_block_till_done()
+
+    mock_coordinator.observe_push.assert_called_once_with(
+        pin_address(2), SlotCredential.empty()
+    )
+
+    zwave_js_lock.unsubscribe_push_updates()
+
+
 async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,

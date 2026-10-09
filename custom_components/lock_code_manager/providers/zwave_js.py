@@ -30,7 +30,11 @@ from zwave_js_server.const.command_class.notification import (
 )
 from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode, get_usercodes
+from zwave_js_server.util.lock import (
+    get_code_slot_value,
+    get_usercode,
+    get_usercodes,
+)
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -911,6 +915,12 @@ class ZWaveJSLock(BaseLock):
     @callback
     def _handle_uc_code_update(self, code_slot: int, new_value: Any) -> None:
         """Handle a userCode value update for a code slot."""
+        if self._uc_slot_status(code_slot) == CodeSlotStatus.AVAILABLE:
+            # The status decides first. An Available slot holds nothing,
+            # whatever the code field carries -- a masked placeholder, zeros,
+            # or a leftover code (#819).
+            self._confirm_slot(code_slot, SlotCredential.empty())
+            return
         if not new_value:
             # No value from a slot the status says is occupied is the lock
             # withholding the code, not a cleared slot -- the same rule the
@@ -939,6 +949,15 @@ class ZWaveJSLock(BaseLock):
         # driver's post-write verification report doubles as the
         # confirming push for a pending optimistic write.
         self._confirm_slot(code_slot, resolved)
+
+    def _uc_slot_status(self, code_slot: int) -> Any:
+        """Return a User Code CC slot's cached userIdStatus, None when unknown."""
+        try:
+            return get_code_slot_value(
+                self.node, code_slot, LOCK_USERCODE_STATUS_PROPERTY
+            ).value
+        except NotFoundError:
+            return None
 
     def _uc_slot_in_use(self, code_slot: int) -> bool | None:
         """Return whether a User Code CC slot is in use, None when unknown."""
