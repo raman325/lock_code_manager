@@ -552,6 +552,27 @@ class BaseLock:
         self.coordinator.observe_push(pin_address(code_slot), observed)
 
     @final
+    @callback
+    def _request_read_back(self, code_slot: int) -> None:
+        """
+        Have the coordinator read the lock again after a clear nobody confirmed.
+
+        An unconfirmed set is recorded pending and the coordinator goes to
+        look; a clear has no such record, and on a push provider the base
+        requests no refresh after one. Without this, the slot would keep
+        showing the code the clear was meant to remove until some unrelated
+        read. Scheduled, not awaited: the caller holds the lock's turn, and
+        the read needs it.
+        """
+        if self.coordinator is None:
+            return
+        self.hass.async_create_task(
+            self.coordinator.async_request_refresh(),
+            f"Read back {self.lock.entity_id} slot {code_slot} after an "
+            "unconfirmed clear",
+        )
+
+    @final
     def is_slot_managed(self, code_slot: int) -> bool:
         """Return whether a code slot is managed by any LCM config entry for this lock."""
         return (

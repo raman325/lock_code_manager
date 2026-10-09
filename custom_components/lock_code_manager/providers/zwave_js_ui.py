@@ -10,7 +10,7 @@ import re
 from typing import Any, Literal
 from uuid import uuid4
 
-from zwave_js_server.const import CommandClass
+from zwave_js_server.const import CommandClass, SupervisionStatus
 from zwave_js_server.const.command_class.lock import CodeSlotStatus
 
 from homeassistant.components.mqtt import (
@@ -321,6 +321,38 @@ def _project_user_code_result(result: Any) -> SlotCredential:
     ):
         return SlotCredential.known(code)
     return SlotCredential.unreadable()
+
+
+def _supervised_write_result(
+    operation: str, code_slot: int, result: Any
+) -> WriteResult:
+    """
+    Classify what a User Code CC ``set`` or ``clear`` returned.
+
+    zwave-js-ui hands back whatever the driver's command returned: a
+    Supervision result when the lock supervised the command, nothing when it
+    did not. Success is the lock saying it applied the write. Working means it
+    took the command and has not finished, and no result means the command
+    went out unsupervised; both say only that the lock received it, so the
+    write is unconfirmed. Fail, and the lock answering that it does not
+    support the command, are refusals and raise. They raise as an operation
+    failure rather than a rejection: the lock gives no reason, so the slot
+    breaker decides, the same as a Supervision Fail on the Z-Wave JS path.
+
+    A boolean status is no status: ``False == 0`` would otherwise read as the
+    lock refusing, and ``True == 1`` as Working.
+    """
+    status = result.get("status") if isinstance(result, dict) else None
+    if isinstance(status, bool):
+        return WriteResult.OPTIMISTIC
+    if status == SupervisionStatus.SUCCESS:
+        return WriteResult.CONFIRMED
+    if status in (SupervisionStatus.FAIL, SupervisionStatus.NO_SUPPORT):
+        raise LockOperationFailed(
+            f"User Code {operation} on slot {code_slot} was refused by the lock "
+            f"(Supervision status {status})"
+        )
+    return WriteResult.OPTIMISTIC
 
 
 @dataclass(repr=False, eq=False)
@@ -1286,36 +1318,51 @@ class ZWaveJSUILock(BaseMqttLock):
         Set a Personal Identification Number credential on a code slot.
 
         ``user_id`` is ignored; slot-only providers address the credential by
-        ``credential.slot``. A successful api response is taken as confirmed
-        because zwave-js-ui answers only once the driver's supervised set has
-        completed, so success here means the lock acknowledged the write.
+        ``credential.slot``. What the write means is the Supervision result
+        the api returns (``_supervised_write_result``): only Success pushes
+        the code as the lock's word. An unconfirmed write pushes nothing; the
+        base records it pending with the code believed, and the coordinator
+        reads the slot back.
 
         Failures from the api client propagate untouched: the base and sync
-        layers decide what a refused or disconnected write means, and the
-        optimistic push below is skipped either way.
+        layers decide what a refused or disconnected write means.
         """
         code_slot = credential.slot
         await self._async_ensure_operational()
-        await self._async_user_code_command(
-            # ``int`` for the same reason the command class id is cast: the
-            # wire payload's shape stays obvious at the call site.
+        result = _supervised_write_result(
             "set",
-            [code_slot, int(CodeSlotStatus.ENABLED), pin],
+            code_slot,
+            await self._async_user_code_command(
+                # ``int`` for the same reason the command class id is cast:
+                # the wire payload's shape stays obvious at the call site.
+                "set",
+                [code_slot, int(CodeSlotStatus.ENABLED), pin],
+            ),
         )
-        self._push_credential_update(code_slot, SlotCredential.known(pin))
-        return WriteResult.CONFIRMED
+        if result is WriteResult.CONFIRMED:
+            self._push_credential_update(code_slot, SlotCredential.known(pin))
+        return result
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Clear a Personal Identification Number from a code slot.
 
-        Mirrors ``async_set_credential``: the api answers after the driver's
-        supervised clear, so a success pushes the slot empty and anything
-        else propagates without touching the coordinator.
+        Mirrors ``async_set_credential``: a Supervision Success pushes the slot
+        empty, and a refusal raises without touching the coordinator. An
+        unconfirmed clear reports a change -- whether one happened is unknown,
+        and the base contract asks for True then -- and has the slot read
+        back instead of pushing it empty.
         """
         await self._async_ensure_operational()
-        await self._async_user_code_command("clear", [ref.slot])
-        self._push_credential_update(ref.slot, SlotCredential.empty())
+        result = _supervised_write_result(
+            "clear",
+            ref.slot,
+            await self._async_user_code_command("clear", [ref.slot]),
+        )
+        if result is WriteResult.CONFIRMED:
+            self._push_credential_update(ref.slot, SlotCredential.empty())
+        else:
+            self._request_read_back(ref.slot)
         return True
 
     async def async_get_max_slot(self) -> int | None:

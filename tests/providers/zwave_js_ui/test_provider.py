@@ -37,6 +37,28 @@ MANAGED_SLOTS = "custom_components.lock_code_manager.providers._base.get_managed
 # credential operation addresses.
 CC_USER_CODE_ID = 99
 NODE_TARGET = {"nodeId": ZUI_NODE_ID, "commandClass": CC_USER_CODE_ID, "endpoint": 0}
+# Supervision results as the driver returns them through ``sendCommand``
+# (node-zwave-js ``SupervisionStatus``: 0 NoSupport, 1 Working, 2 Fail,
+# 255 Success). Working carries the remaining duration the lock reported.
+SUPERVISION_SUCCESS = {"status": 255}
+SUPERVISION_WORKING = {
+    "status": 1,
+    "remainingDuration": {"unit": "seconds", "value": 5},
+}
+SUPERVISION_FAIL = {"status": 2}
+SUPERVISION_NO_SUPPORT = {"status": 0}
+# No result at all: the command went out unsupervised.
+UNSUPERVISED = None
+UNCONFIRMED_RESULTS = [
+    pytest.param(SUPERVISION_WORKING, id="working"),
+    pytest.param(UNSUPERVISED, id="unsupervised"),
+    # ``False == 0``: read as a status it would pass for NoSupport.
+    pytest.param({"status": False}, id="boolean_status"),
+]
+REFUSED_RESULTS = [
+    pytest.param(SUPERVISION_FAIL, id="fail"),
+    pytest.param(SUPERVISION_NO_SUPPORT, id="no_support"),
+]
 
 
 def _user_code_handler(
@@ -377,10 +399,10 @@ class TestAsyncSetCredential:
         zui_gateway_resolved: ZWaveJSUILock,
         zui_api_responder: ZWaveJSUIApiResponder,
     ) -> None:
-        """The wire shape is ``set(slot, Enabled, pin)`` and success is confirmed."""
+        """The wire shape is ``set(slot, Enabled, pin)`` and Success is confirmed."""
         lock = zui_gateway_resolved
         lock.coordinator = MagicMock()
-        zui_api_responder.set_result("sendCommand", None)
+        zui_api_responder.set_result("sendCommand", SUPERVISION_SUCCESS)
 
         assert await _set_credential(lock, 4) is WriteResult.CONFIRMED
 
@@ -426,6 +448,51 @@ class TestAsyncSetCredential:
 
         lock.coordinator.push_update.assert_not_called()
 
+    @pytest.mark.parametrize("result", UNCONFIRMED_RESULTS)
+    async def test_an_unconfirmed_set_is_optimistic_and_pushes_nothing(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        result: dict[str, Any] | None,
+    ) -> None:
+        """
+        Working, or no Supervision at all, says only that the lock got the set.
+
+        The base records an optimistic write pending and reads the slot back;
+        pushing the code here would report it as the lock's word.
+        """
+        lock = zui_gateway_resolved
+        lock.coordinator = MagicMock()
+        zui_api_responder.set_result("sendCommand", result)
+
+        assert await _set_credential(lock, 4) is WriteResult.OPTIMISTIC
+
+        lock.coordinator.push_update.assert_not_called()
+
+    @pytest.mark.parametrize("result", REFUSED_RESULTS)
+    async def test_a_supervision_refusal_fails_and_pushes_nothing(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        result: dict[str, Any],
+    ) -> None:
+        """
+        The api call succeeds but the lock refused the set.
+
+        zwave-js-ui reports the call itself as a success either way; only the
+        Supervision result says the lock refused, so it must not be dropped.
+        """
+        lock = zui_gateway_resolved
+        lock.coordinator = MagicMock()
+        zui_api_responder.set_result("sendCommand", result)
+
+        with pytest.raises(LockOperationFailed, match="refused by the lock"):
+            await _set_credential(lock, 4)
+
+        lock.coordinator.push_update.assert_not_called()
+
 
 class TestAsyncDeleteCredential:
     """Clears over the User Code CC ``clear`` method."""
@@ -439,7 +506,7 @@ class TestAsyncDeleteCredential:
         """The wire shape is ``clear(slot)`` and the slot is pushed empty."""
         lock = zui_gateway_resolved
         lock.coordinator = MagicMock()
-        zui_api_responder.set_result("sendCommand", None)
+        zui_api_responder.set_result("sendCommand", SUPERVISION_SUCCESS)
 
         assert await _delete_credential(lock, 7) is True
 
@@ -463,6 +530,62 @@ class TestAsyncDeleteCredential:
 
         with pytest.raises(LockOperationFailed):
             await _delete_credential(lock)
+
+        lock.coordinator.push_update.assert_not_called()
+
+    @pytest.mark.parametrize("result", UNCONFIRMED_RESULTS)
+    async def test_an_unconfirmed_clear_reads_the_slot_back(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        result: dict[str, Any] | None,
+    ) -> None:
+        """
+        A clear the lock did not confirm is not pushed empty; it is read back.
+
+        It still reports a change: whether one happened is unknown, and the
+        base contract asks for True then.
+        """
+        lock = zui_gateway_resolved
+        lock.coordinator = MagicMock()
+        lock.coordinator.async_request_refresh = AsyncMock()
+        zui_api_responder.set_result("sendCommand", result)
+
+        assert await _delete_credential(lock, 7) is True
+        await hass.async_block_till_done()
+
+        lock.coordinator.push_update.assert_not_called()
+        lock.coordinator.async_request_refresh.assert_awaited_once()
+
+    async def test_an_unconfirmed_clear_without_a_coordinator_still_returns(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+    ) -> None:
+        """With no coordinator there is nothing to read back into; the clear stands."""
+        lock = zui_gateway_resolved
+        lock.coordinator = None
+        zui_api_responder.set_result("sendCommand", UNSUPERVISED)
+
+        assert await _delete_credential(lock, 7) is True
+
+    @pytest.mark.parametrize("result", REFUSED_RESULTS)
+    async def test_a_supervision_refused_clear_fails_and_pushes_nothing(
+        self,
+        hass: HomeAssistant,
+        zui_gateway_resolved: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        result: dict[str, Any],
+    ) -> None:
+        """A clear the lock refused must not report the slot empty."""
+        lock = zui_gateway_resolved
+        lock.coordinator = MagicMock()
+        zui_api_responder.set_result("sendCommand", result)
+
+        with pytest.raises(LockOperationFailed, match="refused by the lock"):
+            await _delete_credential(lock, 7)
 
         lock.coordinator.push_update.assert_not_called()
 

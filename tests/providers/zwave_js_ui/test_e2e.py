@@ -67,6 +67,9 @@ CC_USER_CODE_ID = 99
 # zwave-js UserIDStatus: 0 Available, 1 Enabled.
 STATUS_AVAILABLE = 0
 STATUS_ENABLED = 1
+# node-zwave-js SupervisionStatus, as a supervised ``set``/``clear`` returns it.
+SUPERVISION_SUCCESS = {"status": 255}
+SUPERVISION_FAIL = {"status": 2}
 
 E2E_SLOT_PINS = {1: "1234", 2: "5678"}
 LOCK_CAPACITY = 20
@@ -121,9 +124,11 @@ class UserCodeTable:
         elif method == "set":
             slot_num, _status, code = method_args
             self.codes[slot_num] = code
+            result = SUPERVISION_SUCCESS
         elif method == "clear":
             (slot_num,) = method_args
             self.codes.pop(slot_num, None)
+            result = SUPERVISION_SUCCESS
         elif method == "getUsersCount":
             result = LOCK_CAPACITY
         return {"success": True, "message": "", "result": result}
@@ -349,6 +354,55 @@ class TestInitialSync:
             )
             assert code is not None
             assert code.state == pin
+
+
+class RefusingUserCodeTable(UserCodeTable):
+    """A node that answers every ``set`` with Supervision Fail and stores nothing."""
+
+    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Refuse sets; answer everything else as the table would."""
+        _target, method, _method_args = request["args"]
+        if method == "set":
+            return {"success": True, "message": "", "result": SUPERVISION_FAIL}
+        return super().__call__(api_base, request)
+
+
+class TestRefusedWrites:
+    """A write the lock refused under Supervision never reads as in sync."""
+
+    @pytest.fixture
+    def user_code_table(self) -> UserCodeTable:
+        """The stand-in node refuses every code LCM sends it."""
+        return RefusingUserCodeTable()
+
+    async def test_a_supervision_fail_leaves_the_slot_out_of_sync(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """
+        The api call succeeds and the lock says Fail: the slot is not in sync.
+
+        zwave-js-ui reports the call as a success either way. Reading only
+        that, LCM pushed the code as the lock's word and the slot read in sync
+        while the lock held nothing.
+        """
+        for _ in range(len(E2E_SLOT_PINS) + 2):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        assert user_code_table.codes == {}
+        lock_entity_id = zui_lock.lock.entity_id
+        for slot_num in E2E_SLOT_PINS:
+            assert zui_lock.coordinator.data.get(pin_address(slot_num)) == (
+                SlotCredential.empty()
+            )
+            in_sync = hass.states.get(
+                in_sync_entity_id(hass, lcm_config_entry, slot_num, lock_entity_id)
+            )
+            assert in_sync is not None
+            assert in_sync.state != STATE_ON
 
 
 class TestPushUpdates:
