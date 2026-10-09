@@ -1,0 +1,236 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "e3db5dc2ef64",
+  "session_id": "88689b8f-7a06-4f90-9808-9d17aef5d545",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-09T17:19:21.153523Z",
+  "branch": "fix/provider-honesty",
+  "checkpoints_count": 6,
+  "save_step_count": 5,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/providers/zwave_js_ui.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "2e8509f32d77",
+  "checkpoint_transcript_start": 2638,
+  "transcript_lines_at_start": 2638,
+  "compact_transcript_start": 338,
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 128990,
+    "cache_read_tokens": 5994363,
+    "output_tokens": 16226,
+    "api_call_count": 21,
+    "subagent_tokens": {
+      "input_tokens": 372,
+      "cache_creation_tokens": 1151135,
+      "cache_read_tokens": 23962693,
+      "output_tokens": 140522,
+      "api_call_count": 183
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01964m6G2sgDSQ3jf58kq3zD",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:brainstorming"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2e8509f32d77",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 60,
+        "end": 61,
+        "entry_ids": [
+          "32361be5-7446-4bea-a33a-e8f9afc9acd8"
+        ],
+        "tool_use_id": "toolu_01964m6G2sgDSQ3jf58kq3zD"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01964m6G2sgDSQ3jf58kq3zD"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:brainstorming",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01QAw14x8sGUEbQkVrf8hYEU",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:writing-plans"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2e8509f32d77",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1608,
+        "end": 1609,
+        "entry_ids": [
+          "f3ce7170-97c5-4622-9285-a9deaaf187c3"
+        ],
+        "tool_use_id": "toolu_01QAw14x8sGUEbQkVrf8hYEU"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01QAw14x8sGUEbQkVrf8hYEU"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:writing-plans",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LHF82S8WdzYwTzLBtH1w1Z",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:subagent-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2e8509f32d77",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1917,
+        "end": 1918,
+        "entry_ids": [
+          "793599eb-b637-4e41-be46-669ed5152797"
+        ],
+        "tool_use_id": "toolu_01LHF82S8WdzYwTzLBtH1w1Z"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LHF82S8WdzYwTzLBtH1w1Z"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:subagent-driven-development",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 53
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-10-09T17:19:20.91009Z",
+    "agent_lines": 6,
+    "agent_removed": 12,
+    "human_added": 3,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 9,
+    "total_lines_changed": 25,
+    "agent_percentage": 72,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1081,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/ORIG_HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/config": 17,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/delta/copy-baseline": 5,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/description": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/applypatch-msg.sample": 15,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/commit-msg.sample": 74,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/fsmonitor-watchman.sample": 168,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/post-update.sample": 8,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-applypatch.sample": 14,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-commit.sample": 49,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-merge-commit.sample": 13,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-push.sample": 53,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-rebase.sample": 169,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-receive.sample": 24,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/prepare-commit-msg.sample": 42,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/push-to-checkout.sample": 78,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/sendemail-validate.sample": 77,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/update.sample": 128,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/info/exclude": 6,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/logs/HEAD": 3,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/logs/refs/remotes/origin/HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/objects/info/alternates": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/packed-refs": 132,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/refs/remotes/origin/HEAD": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1081,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/ORIG_HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/config": 17,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/delta/copy-baseline": 5,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/description": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/applypatch-msg.sample": 15,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/commit-msg.sample": 74,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/fsmonitor-watchman.sample": 168,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/post-update.sample": 8,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-applypatch.sample": 14,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-commit.sample": 49,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-merge-commit.sample": 13,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-push.sample": 53,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-rebase.sample": 169,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/pre-receive.sample": 24,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/prepare-commit-msg.sample": 42,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/push-to-checkout.sample": 78,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/sendemail-validate.sample": 77,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/hooks/update.sample": 128,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/info/exclude": 6,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/logs/HEAD": 3,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/logs/refs/remotes/origin/HEAD": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/objects/info/alternates": 1,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/packed-refs": 132,
+        ".delta/clones/cge9cntwtd4c/lock_code_manager.git/refs/remotes/origin/HEAD": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

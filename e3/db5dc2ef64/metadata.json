@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "e3db5dc2ef64",
+  "strategy": "manual-commit",
+  "branch": "fix/provider-honesty",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/providers/zwave_js_ui.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e3/db5dc2ef64/0/metadata.json",
+      "transcript": "/e3/db5dc2ef64/0/full.jsonl",
+      "compact_transcript": "/e3/db5dc2ef64/0/transcript.jsonl",
+      "content_hash": "/e3/db5dc2ef64/0/content_hash.txt",
+      "prompt": "/e3/db5dc2ef64/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 128990,
+    "cache_read_tokens": 5994363,
+    "output_tokens": 16226,
+    "api_call_count": 21,
+    "subagent_tokens": {
+      "input_tokens": 372,
+      "cache_creation_tokens": 1151135,
+      "cache_read_tokens": 23962693,
+      "output_tokens": 140522,
+      "api_call_count": 183
+    }
+  }
+}

@@ -1,0 +1,77 @@
+<task-notification>
+<task-id>adff29544681e4be9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/88689b8f-7a06-4f90-9808-9d17aef5d545/tasks/adff29544681e4be9.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-PR review of PR A" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no Critical issues and no regressions. One Important issue: on ZHA, a dropped set is still reported as in sync in two cases. Then four Minor ones, three of them dead code.
+
+**Evidence**
+- The full suite passed in the scratch copy: `HYPOTHESIS_PROFILE=ci … -m pytest tests/ -q -n auto` gave 2507 passed, 3 skipped.
+- I ran 23 mutations there, each restored in a `finally`. 20 were killed. The 3 that survived change nothing the code does (Minor 1, 2 and 3 below).
+- The worktree was not touched. Its only change is the `.entire/.gitignore` edit that was there before I started.
+
+**Checked and clean**
+- **Breaker charges:** a set or a clear is charged once at most. The unconfirmed clear goes to PENDING_CONFIRMATION with no charge after the write. `take_failed_write` charges it once. A Supervision Fail is charged once through `LockOperationFailed` and records nothing pending.
+- **Pending clears always end:** by a read, a push, the filter on reads that don't name the slot, or `_fail_overdue` at the deadline after failed reads (uncharged, then re-synced).
+- **Unload/reload and target changes:** `async_shutdown` clears `_pending`, and `record_clear` is a no-op after shutdown. The tick drops a pending clear when the slot turns active (mutation `sync_stale_old` was killed).
+- **Set versus pending clear:** `record_write` replaces a pending clear, and a confirmed push set calls `drop_pending`. A clear supersedes anything recorded before its turn, using the `started[0]` stamp.
+- **Read-after-release ordering:** I checked there is no await between the lock's turn being released and `_apply_read`. So a read issued before a clear can never settle that clear.
+- **Shipped fixes:**
+  - #1437: an unconfirmed clear still returns True, so `_cleared_slots` excuses an unreadable read after it.
+  - #1549: the look's read is still scoped to pending slots.
+  - #1545: the coordinator still owns pending writes.
+  - #1562: the Matter dispatch was already a detached task before this PR. The turn wait it now has is bounded, and stop's grace loop ignores a holder that isn't a tick.
+- **Z-Wave JS Available-first (task 4):**
+  - In node-zwave-js (`UserCodeCC.ts`), `persistUserCode` sets `userIdStatus` before `userCode`.
+  - In zwave_js_server, `Node.receive_event` updates the model before it emits.
+  - So `_uc_slot_status` sees the new status when the code update handler runs.
+- **ZHA reply matching (task 3):** zigpy's `_maybe_match_response` pairs replies only by key, excluding only Report Attributes. That supports the docstring's claim.
+- **Strings:** strings.json and translations/en.json are identical when parsed, and the placeholders are unchanged.
+- **Conventions:** the added lines have no `nonlocal`, no inline imports, and no history-style comments.
+
+### Important
+
+**1. ZHA: a status-less set the lock dropped still reads in sync when the read-back fails or is answered for another user** (`domain/coordinator.py:243`, `providers/zha.py:436` and `:455`)
+
+- **Cause:** task 2 records a status-less ZHA set as OPTIMISTIC and leaves it pending for the read-back. But `_apply_read` confirms a pending set on any present observation, and unreadable counts as present. ZHA marks a slot unreadable when the read times out on the mesh (`:436`). After task 3, it also does so when the reply names another user (`:455`).
+- **Scenario:**
+  1. The lock drops `set_pin_code`, which replies with no status.
+  2. The read-back of that slot times out, or gets a reply for another user.
+  3. The slot is confirmed as `known(pin)` and the in-sync sensor goes on, while the lock holds nothing.
+- **Interaction:** this is where tasks 2 and 3 meet. Before task 3, a misattributed reply showing Available would have kept the set waiting. Now it confirms the set.
+- **Evidence:** two experiments in scratch, built on the PR's own `unconfirming_lock_table` and `lcm_config_entry` e2e harness, with `applies = False`:
+  - `get_pin_code` raising zigpy's `TimeoutError`: table `{}`, `coordinator.data[1] == SlotCredential(present=True, pin='1234')`, nothing pending, in-sync `on`.
+  - `misattributed = {1: 2}`: same result, in-sync `on`.
+  - Both fail an assertion that the slot is not in sync.
+- **Not a regression:** on main, a status-less set was CONFIRMED outright. But it defeats "a set stays pending" on exactly the lossy links where status-less replies are likely, and the e2e tests only cover read-backs that answer cleanly.
+- **Fix:** this is the deferred "SlotCredential answers the wrong question" limitation, so I don't think it should block. At least note it in the PR. A real fix would keep ZHA's "read failed" (timeout, misattributed, unparseable) apart from "holds an unreadable code" for pending sets. One option is to leave such slots out of a confirmation-look result, so a set keeps waiting until its deadline.
+
+### Minor
+
+1. **Dead disjunct** (`coordinator.py:547`): `_apply_read` has already deleted every pending clear whose address is in `new_data`, so `address in new_data or` can never be the deciding term. The mutation to `if pending.pin is not None` survived the full suite. Simplify the condition and its comment to "drop clears the read did not name".
+
+2. **Dead boolean guard** (`zwave_js_ui.py:349`): `True` (1, Working) and `False` (0, NoSupport) already fall through to OPTIMISTIC. Deleting the guard survived the suite, and the docstring's justification describes no difference in outcome. Drop it, or reword the docstring so it doesn't claim a behavior the guard doesn't change.
+
+3. **Redundant early return** (`matter.py:1600`): an ADD/MODIFY whose read failed returns early. Without it, `code_slot` is None and `resolved` is not empty, so it returns a few lines later anyway with a different debug line. The mutation survived. It's harmless; just know it only changes the log line.
+
+4. **Edge cases worth a follow-up issue rather than blocking:**
+   - **Scope computed early** (`coordinator.py:526`): the look builds its read scope before waiting for the turn. An unconfirmed clear on an unmanaged slot, recorded while the look waits, is left out of that read. The filter then drops it unread, and the replace removes the slot from `data`. It's uncharged and has no breaker, but it isn't "read back" as the docstring says.
+   - **Supervision Working on a clear:** this is judged by the first read, which can run before the lock finishes. That's one possible spurious charge per cycle. The re-sync usually lands, so it's unlikely to reach suspension. Note the asymmetry with sets, which wait until the deadline when the read shows the slot empty.
+   - **Suspension message for an inactive slot:** it attributes every strike to clears ("after N attempts to clear it"). Strikes from sets made while the slot was active aren't reset when it's toggled off from OUT_OF_SYNC. It also omits that changing the PIN resumes sync too.
+
+### Mutation results
+
+| Area | Mutations | Result |
+|---|---|---|
+| Coordinator clear handling: `fail_overdue_clear_charged`, `superseded_no_time`, `superseded_always_drop`, `apply_read_present`, `apply_read_nochargeable`, `push_nochargeable`, `chargeable_true`, `record_clear_keep_failed`, `sync_stale_old`, `suspend_msg_same` | 10 | all killed |
+| ZHA: `zha_no_userid_check`, `zha_no_schema_check`, `zha_clear_nostatus_confirmed` | 3 | all killed |
+| Z-Wave JS: `zwave_avail_no_gate`, `zwave_avail_removed` | 2 | all killed |
+| Matter: `matter_no_turn`, `matter_no_stale_guard`, `matter_stale_no_holds_pin` | 3 | all killed |
+| zwave-js-ui: `zui_working_confirmed`, `zui_fail_optimistic` | 2 | all killed |
+| `filter_dead`, `zui_bool_check`, `matter_busy_add_falls_through` | 3 | survived, no behavior change |
+
+Everything I ran is in /private/tmp/claude-501/final-review-a-tools/: the runner `mutate.py`, and `test_review_experiment.py` and `test_review_experiment2.py`, which belong in `tests/providers/zha/` of a copy to run.</result>
+<usage><subagent_tokens>245163</subagent_tokens><tool_uses>90</tool_uses><duration_ms>1261794</duration_ms></usage>
+</task-notification>
