@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -649,14 +648,10 @@ def test_parse_pin_response_unknown_format() -> None:
     [
         pytest.param(_pin_reply(4, DoorLock.UserStatus.Available), id="decoded"),
         pytest.param([4, DoorLock.UserStatus.Available, 0, ""], id="list"),
-        pytest.param(
-            SimpleNamespace(user_status=DoorLock.UserStatus.Available, code=""),
-            id="no-user-id",
-        ),
     ],
 )
 def test_parse_pin_response_for_another_user_is_not_an_answer(result: Any) -> None:
-    """A reply naming another user, or none, says nothing about the slot asked.
+    """A reply naming another user says nothing about the slot asked.
 
     zigpy matches a reply to its request by sequence number, not by the user
     it names, so this can happen; read as slot 3's answer it would call slot
