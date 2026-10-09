@@ -13,7 +13,7 @@ pyudev==0.24.5
 universal-silabs-flasher==1.1.0
 usb-devices>=0.5.1
 uv
-zha==2.2.2
-zha-quirks==2.2.2
-zigpy>=2.2.0
-zwave-js-server-python==0.73.1
+zha==2.3.0
+zha-quirks==2.3.0
+zigpy>=2.3.0
+zwave-js-server-python==0.74.0
