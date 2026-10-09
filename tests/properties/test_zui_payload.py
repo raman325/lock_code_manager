@@ -83,11 +83,10 @@ def test_only_supervision_success_confirms_a_write(result: object) -> None:
     explicit Fail is a refusal.
     """
     status = result.get("status") if isinstance(result, dict) else None
-    named = None if isinstance(status, bool) else status
     try:
         outcome = _supervised_write_result("set", 1, result)
     except LockOperationFailed:
-        assert named == 2
+        assert status == 2
         return
-    assert (outcome is WriteResult.CONFIRMED) == (named == 255)
+    assert (outcome is WriteResult.CONFIRMED) == (status == 255)
     assert outcome is not WriteResult.NO_CHANGE

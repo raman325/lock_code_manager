@@ -53,7 +53,7 @@ UNCONFIRMED_RESULTS = [
     pytest.param(SUPERVISION_WORKING, id="working"),
     pytest.param(SUPERVISION_NO_SUPPORT, id="no_support"),
     pytest.param(UNSUPERVISED, id="unsupervised"),
-    # ``True == 1``: read as a status it would pass for Working.
+    # ``True == 1``, so it reads as Working: unconfirmed all the same.
     pytest.param({"status": True}, id="boolean_status"),
 ]
 REFUSED_RESULTS = [pytest.param(SUPERVISION_FAIL, id="fail")]

@@ -535,16 +535,15 @@ class LockUsercodeUpdateCoordinator(
             # slot it no longer reports is one the lock no longer has.
             failed_before = len(self._failed_writes)
             new_data = self._apply_read(self._normalize_keys(raw))
-            # A completed read that does not name a pending address is the
-            # lock not holding it: a poller's read is scoped to name every
-            # pending slot, and a push provider's refresh re-reads the pending
-            # slots from the device and then projects everything the lock
-            # holds. That settles a clear. A set is judged like an absent
-            # slot: waited for until the deadline, then given up.
+            # The read settled every clear it named. One it did not name is
+            # the lock not holding it, since a poller's read is scoped to name
+            # every pending slot and a push provider's refresh projects
+            # everything the lock holds: drop it. A set is judged like an
+            # absent slot: waited for until the deadline, then given up.
             self._pending = {
                 address: pending
                 for address, pending in self._pending.items()
-                if address in new_data or pending.pin is not None
+                if pending.pin is not None
             }
             self._fail_overdue(
                 [address for address in self._pending if address not in new_data]

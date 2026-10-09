@@ -341,13 +341,8 @@ def _supervised_write_result(
     as an operation failure rather than a rejection: the lock gives no
     reason, so the slot breaker decides, the same as a Supervision Fail on
     the Z-Wave JS path.
-
-    A boolean status is no status: ``True == 1`` would otherwise read as
-    Working, and ``False == 0`` as NoSupport.
     """
     status = result.get("status") if isinstance(result, dict) else None
-    if isinstance(status, bool):
-        return WriteResult.OPTIMISTIC
     if status == SupervisionStatus.SUCCESS:
         return WriteResult.CONFIRMED
     if status == SupervisionStatus.FAIL:
