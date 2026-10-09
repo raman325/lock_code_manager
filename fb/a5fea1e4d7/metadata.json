@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "fba5fea1e4d7",
+  "strategy": "manual-commit",
+  "branch": "fix/provider-honesty",
+  "checkpoints_count": 32,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/fb/a5fea1e4d7/0/metadata.json",
+      "transcript": "/fb/a5fea1e4d7/0/full.jsonl",
+      "compact_transcript": "/fb/a5fea1e4d7/0/transcript.jsonl",
+      "content_hash": "/fb/a5fea1e4d7/0/content_hash.txt",
+      "prompt": "/fb/a5fea1e4d7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 390,
+    "cache_creation_tokens": 913384,
+    "cache_read_tokens": 60942649,
+    "output_tokens": 275357,
+    "api_call_count": 186,
+    "subagent_tokens": {
+      "input_tokens": 2576,
+      "cache_creation_tokens": 4784173,
+      "cache_read_tokens": 194879135,
+      "output_tokens": 1229083,
+      "api_call_count": 1292
+    }
+  }
+}
