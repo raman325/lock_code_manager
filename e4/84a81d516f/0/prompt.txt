@@ -1996,3 +1996,40 @@ Reflowed the `_apply_read` docstring in `coordinator.py`.</result>
 **Worktree mutation:** The worktree was never mutated for base checks. They ran only in the scratch copy. `.entire/.gitignore` is still modified from before and unstaged.</result>
 <usage><subagent_tokens>106193</subagent_tokens><tool_uses>4</tool_uses><duration_ms>196068</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a235d5607254847d8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/88689b8f-7a06-4f90-9808-9d17aef5d545/tasks/a235d5607254847d8.output</output-file>
+<status>completed</status>
+<summary>Agent "Quality review PR A Task 4" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Approved.** Both Important items are resolved in 14bf1b10, and the worktree's code matches HEAD. I ran only the 141 zwave_js tests (all pass), not the full suite, so the 2502-passed and 100%-coverage figures are the commit's claim, not something I confirmed.
+
+**Worktree vs HEAD.** HEAD is 14bf1b10. Nothing under `custom_components/` or `tests/` differs from HEAD, and there are no untracked files there. The only change is a one-line edit to `.entire/.gitignore`, which was already there when this session started and is not part of this work.
+
+**Important 1 (zeros tests): resolved.**
+- `test_uc_shim_zeros_on_available_slot_pushes_empty_when_pin_wanted` now sets `desired_credential=known("1234")`, and its docstring explains why the zeros rule is reached.
+- The redundant test that patched `_uc_slot_in_use` is gone.
+- Removing the zeros branch now fails exactly that one test, so coverage comes from a real event path rather than a patched private method.
+
+**Important 2 (fresh status plus the #819 rule): resolved.** `test_uc_shim_fresh_available_status_then_masked_code_pushes_empty` fails in three cases:
+- Removing the Available rule.
+- A version of `_uc_slot_status` that returns the fixture's old status instead of the one the report just wrote.
+- Running it against fa9fcb3e's code, which fails with `pin='****'` as the commit claims.
+
+**Minor items:**
+- The comment uses the agreed wording.
+- The history phrasing is gone from the docstrings.
+- "Command Class" is spelled out in the two new docstrings.
+- The return type is now `int | None`.
+- ruff check and ruff format pass on both files.
+- `patch` and `Any` are still used elsewhere, so no imports are left dangling.
+
+The other mutations still fail the right tests. Removing the PIN-wanted gate fails both cases of `test_uc_shim_stale_available_keeps_the_code_read_when_pin_wanted`. Removing the Available rule also fails the masked-code-on-Available test.
+
+Everything I ran used scratch copies under `/private/tmp/claude-501/review-scratch/t4-quality/`, and the mutated source was restored afterwards.</result>
+<usage><subagent_tokens>135464</subagent_tokens><tool_uses>3</tool_uses><duration_ms>93751</duration_ms></usage>
+</task-notification>
