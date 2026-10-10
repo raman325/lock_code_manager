@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "741dc99d939e",
+  "strategy": "manual-commit",
+  "branch": "fix/shared-lock-entry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/zwave_js_ui/test_e2e.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/74/1dc99d939e/0/metadata.json",
+      "transcript": "/74/1dc99d939e/0/full.jsonl",
+      "compact_transcript": "/74/1dc99d939e/0/transcript.jsonl",
+      "content_hash": "/74/1dc99d939e/0/content_hash.txt",
+      "prompt": "/74/1dc99d939e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 850,
+    "cache_creation_tokens": 2713400,
+    "cache_read_tokens": 134757589,
+    "output_tokens": 480725,
+    "api_call_count": 389,
+    "subagent_tokens": {
+      "input_tokens": 150,
+      "cache_creation_tokens": 657341,
+      "cache_read_tokens": 15641389,
+      "output_tokens": 59310,
+      "api_call_count": 73
+    }
+  }
+}
