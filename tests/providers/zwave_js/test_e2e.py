@@ -16,11 +16,7 @@ from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
-from homeassistant.config_entries import (
-    SOURCE_IGNORE,
-    ConfigEntryDisabler,
-    ConfigEntryState,
-)
+from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -36,7 +32,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
-from tests.common import in_sync_entity_id
+from tests.common import in_sync_entity_id, user_subentries
 from tests.conftest import async_trigger_sync_tick
 from tests.providers.zwave_js.conftest import (
     ZWAVE_JS_LCM_CONFIG_SLOTS,
@@ -294,18 +290,15 @@ class TestEvents:
         )
 
 
-def _entry_on_slot_3(
-    lock_entity: er.RegistryEntry, unique_id: str, **kwargs: Any
-) -> MockConfigEntry:
-    """Build a second entry on the Z-Wave JS lock, holding slot 3 only."""
+def _entry_on_slot_3(lock_entity: er.RegistryEntry, unique_id: str) -> MockConfigEntry:
+    """Build a second entry on the Z-Wave JS lock, its one user on slot 3."""
     return MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_LOCKS: [lock_entity.entity_id],
-            CONF_SLOTS: {3: {CONF_NAME: "slot3", CONF_PIN: "5555", CONF_ENABLED: True}},
-        },
+        data={CONF_LOCKS: [lock_entity.entity_id]},
         unique_id=unique_id,
-        **kwargs,
+        subentries_data=user_subentries(
+            {3: {CONF_NAME: "slot3", CONF_PIN: "5555", CONF_ENABLED: True}}
+        ),
     )
 
 
@@ -403,10 +396,16 @@ class TestSharedLock:
         "state",
         [
             ConfigEntryState.SETUP_IN_PROGRESS,
+            ConfigEntryState.SETUP_RETRY,
             ConfigEntryState.UNLOAD_IN_PROGRESS,
             ConfigEntryState.NOT_LOADED,
         ],
-        ids=["setting_up", "unloading_to_reload", "between_unload_and_setup"],
+        ids=[
+            "setting_up",
+            "retrying_setup",
+            "unloading_to_reload",
+            "between_unload_and_setup",
+        ],
     )
     async def test_an_enabled_entry_not_loaded_keeps_its_slots(
         self,
@@ -440,18 +439,32 @@ class TestSharedLock:
 
         assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.known("5555")
 
-    async def test_an_ignored_entry_keeps_no_slots(
+    @pytest.mark.parametrize(
+        "state",
+        [
+            ConfigEntryState.SETUP_ERROR,
+            ConfigEntryState.MIGRATION_ERROR,
+            ConfigEntryState.FAILED_UNLOAD,
+        ],
+        ids=["setup_failed", "migration_failed", "unload_failed"],
+    )
+    async def test_an_entry_that_failed_keeps_no_slots(
         self,
         hass: HomeAssistant,
         lcm_config_entry: MockConfigEntry,
         lock_entity: er.RegistryEntry,
         lock_schlage_be469: Node,
+        state: ConfigEntryState,
     ) -> None:
-        """An ignored entry syncs nothing, so an Available on its slot is believed."""
-        ignored_entry = _entry_on_slot_3(
-            lock_entity, "test_zwave_js_e2e_ignored", source=SOURCE_IGNORE
-        )
-        ignored_entry.add_to_hass(hass)
+        """
+        An entry that failed syncs nothing until the user acts, so it wants nothing.
+
+        Counted as keeping its slots, a genuine Available on one of them would
+        be dropped as stale and the slot shown holding a code it no longer has.
+        """
+        failed_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_failed")
+        failed_entry.add_to_hass(hass)
+        failed_entry.mock_state(hass, state)
         lock = get_zwave_lock(hass, lcm_config_entry, lock_entity)
 
         lock_schlage_be469.receive_event(
