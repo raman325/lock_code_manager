@@ -422,6 +422,70 @@ class TestPushUpdates:
         )
 
 
+class TestSharedLock:
+    """A lock two entries share answers for each slot from the entry that owns it."""
+
+    async def test_a_stale_available_on_the_second_entrys_slot_keeps_its_code(
+        self,
+        hass: HomeAssistant,
+        synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """
+        The second entry's code is wanted on its slot, so a stale Available is ignored.
+
+        The lock and its coordinator belong to the entry that set the lock up.
+        Asked only of that entry, a slot the second entry owns wants nothing,
+        so the stale Available some locks send after a code is set (#863)
+        would empty the slot and sync would write the code again.
+        """
+        second_slot, second_pin = max(E2E_SLOT_PINS) + 1, "2468"
+        second_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [zui_lock.lock.entity_id]},
+            unique_id="test_zui_e2e_second",
+            subentries_data=user_subentries(
+                {
+                    second_slot: {
+                        CONF_NAME: "second",
+                        CONF_PIN: second_pin,
+                        CONF_ENABLED: True,
+                    }
+                }
+            ),
+        )
+        second_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(second_entry.entry_id)
+        await hass.async_block_till_done()
+        assert second_entry.runtime_data.locks[zui_lock.lock.entity_id] is zui_lock
+        for _ in range(3):
+            if user_code_table.codes.get(second_slot) == second_pin:
+                break
+            await async_advance_time(hass, TICK_INTERVAL)
+        assert user_code_table.codes.get(second_slot) == second_pin
+        write = user_code_call("set", [second_slot, STATUS_ENABLED, second_pin])
+        writes_before = send_commands(zui_api_responder).count(write)
+
+        fire_zui_node_value(
+            hass,
+            f"user_code/endpoint_0/userIdStatus/{second_slot}",
+            STATUS_AVAILABLE,
+        )
+        await hass.async_block_till_done()
+        assert zui_lock.coordinator.data.get(
+            pin_address(second_slot)
+        ) == SlotCredential.known(second_pin)
+
+        for _ in range(3):
+            await async_advance_time(hass, TICK_INTERVAL)
+        assert send_commands(zui_api_responder).count(write) == writes_before
+
+        await hass.config_entries.async_unload(second_entry.entry_id)
+        await hass.async_block_till_done()
+
+
 class TestKeypadEvents:
     """Verify keypad notifications surface as LCM code slot events."""
 
