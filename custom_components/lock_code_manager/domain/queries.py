@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import slugify
@@ -77,23 +77,43 @@ def get_managed_slots(
 
 
 def find_entry_for_lock_slot(
-    hass: HomeAssistant, lock_entity_id: str, code_slot: int | str
+    hass: HomeAssistant,
+    lock_entity_id: str,
+    code_slot: int | str,
+    *,
+    keeping_slots: bool = False,
 ) -> ConfigEntry | None:
     """
     Find the config entry that manages a specific lock + slot combination.
 
     Returns None if no entry manages this lock/slot. There can be at most one
-    due to the config entry uniqueness constraint.
+    due to the config entry uniqueness constraint. Every entry counts, in any
+    state, unless ``keeping_slots``: then only one that keeps its slots
+    (``_keeps_its_slots``), because a disabled or ignored entry syncs
+    nothing, so a slot it claims is not wanted on the lock.
     """
     return next(
         (
             entry
             for entry in hass.config_entries.async_entries(DOMAIN)
-            if (config := get_entry_config(entry)).has_lock(lock_entity_id)
+            if (not keeping_slots or _keeps_its_slots(entry))
+            and (config := get_entry_config(entry)).has_lock(lock_entity_id)
             and config.has_slot(code_slot)
         ),
         None,
     )
+
+
+def _keeps_its_slots(entry: ConfigEntry) -> bool:
+    """
+    Return whether an entry keeps its slots: it is enabled and not ignored.
+
+    Not its load state: an entry syncs its slots before its setup finishes,
+    and a reload unloads and sets it up again without anybody releasing them.
+    Counted out for that window, a slot would lose the guard against a stale
+    Available report on every options reload.
+    """
+    return entry.disabled_by is None and entry.source != SOURCE_IGNORE
 
 
 def iter_loaded_lcm_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:

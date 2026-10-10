@@ -35,7 +35,7 @@ from ..const import (
 from .credentials import CredentialAddress, CredentialType, pin_address
 from .exceptions import LockBusy, LockCodeManagerError
 from .models import SlotCredential
-from .queries import get_entry_config
+from .queries import find_entry_for_lock_slot, get_entry_config
 from .resilience import CircuitBreaker
 from .util import per_lock_issue_id
 
@@ -174,13 +174,20 @@ class LockUsercodeUpdateCoordinator(
         """
         Return the credential LCM wants at an address.
 
-        Disabled slots and enabled-but-blank slots map to
-        ``SlotCredential.empty()``; an enabled slot with a configured PIN
-        maps to ``SlotCredential.known(pin)``.
+        Asked of the entry that owns the slot on this lock, which need not be
+        the entry this coordinator was created for: entries sharing a lock
+        share its coordinator. A slot no entry keeping its slots owns, a
+        disabled slot and an enabled-but-blank slot map to
+        ``SlotCredential.empty()``; an enabled slot with a configured Personal
+        Identification Number maps to ``SlotCredential.known(pin)``.
         """
-        slot_data = get_entry_config(self._config_entry).slot(
-            _checked(address).user_ref
+        slot_num = _checked(address).user_ref
+        entry = find_entry_for_lock_slot(
+            self.hass, self._lock.lock.entity_id, slot_num, keeping_slots=True
         )
+        if entry is None:
+            return SlotCredential.empty()
+        slot_data = get_entry_config(entry).slot(slot_num)
         if not slot_data.get(CONF_ENABLED):
             return SlotCredential.empty()
         pin = slot_data.get(CONF_PIN)
