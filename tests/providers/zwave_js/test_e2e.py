@@ -5,15 +5,19 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
 )
+from zwave_js_server.const.command_class.lock import CodeSlotStatus
 from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
+from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
@@ -28,7 +32,13 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
-from tests.providers.zwave_js.conftest import ZWAVE_JS_LCM_CONFIG_SLOTS
+from tests.common import in_sync_entity_id, user_subentries
+from tests.conftest import async_trigger_sync_tick
+from tests.providers.zwave_js.conftest import (
+    ZWAVE_JS_LCM_CONFIG_SLOTS,
+    get_zwave_lock,
+)
+from tests.providers.zwave_js.helpers import make_uc_value_event
 
 
 def async_capture_events(
@@ -278,6 +288,196 @@ class TestEvents:
             e2e_zwave_lock.coordinator.data.get(pin_address(1))
             == SlotCredential.unreadable()
         )
+
+
+def _entry_on_slot_3(lock_entity: er.RegistryEntry, unique_id: str) -> MockConfigEntry:
+    """Build a second entry on the Z-Wave JS lock, its one user on slot 3."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [lock_entity.entity_id]},
+        unique_id=unique_id,
+        subentries_data=user_subentries(
+            {3: {CONF_NAME: "slot3", CONF_PIN: "5555", CONF_ENABLED: True}}
+        ),
+    )
+
+
+class TestSharedLock:
+    """A lock entries share answers for each slot from the entry that owns it."""
+
+    async def test_a_stale_available_on_the_second_entrys_slot_keeps_its_code(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        lock_schlage_be469: Node,
+        mock_lock_helpers: dict,
+    ) -> None:
+        """
+        The second entry's code is wanted on its slot, so a stale Available is ignored.
+
+        The lock instance and its coordinator belong to whichever entry set the
+        lock up first. Asked only of that entry, a slot the second entry owns
+        wants nothing, so the stale Available some locks send after a code is
+        set (#863) would be taken at its word: the slot reported empty while it
+        holds the code, and the code written again.
+        """
+        second_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_second")
+        second_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(second_entry.entry_id)
+        await hass.async_block_till_done()
+        lock = get_zwave_lock(hass, lcm_config_entry, lock_entity)
+        assert second_entry.runtime_data.locks[lock_entity.entity_id] is lock
+        in_sync = in_sync_entity_id(hass, second_entry, 3, lock_entity.entity_id)
+
+        # The lock reports the second entry's code on its slot: in sync.
+        lock_schlage_be469.receive_event(
+            make_uc_value_event(lock_schlage_be469.node_id, "userCode", 3, "5555")
+        )
+        await hass.async_block_till_done()
+        await async_trigger_sync_tick(hass, in_sync, set_dirty=False)
+        assert hass.states.get(in_sync).state == "on"
+        mock_lock_helpers["async_set_credential"].reset_mock()
+
+        lock_schlage_be469.receive_event(
+            make_uc_value_event(
+                lock_schlage_be469.node_id, "userIdStatus", 3, CodeSlotStatus.AVAILABLE
+            )
+        )
+        await hass.async_block_till_done()
+        assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.known("5555")
+
+        await async_trigger_sync_tick(hass, in_sync, set_dirty=False)
+        assert hass.states.get(in_sync).state == "on"
+        mock_lock_helpers["async_set_credential"].assert_not_called()
+
+        await hass.config_entries.async_unload(second_entry.entry_id)
+
+    async def test_the_creating_entry_disabled_wants_none_of_its_slots(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        lock_schlage_be469: Node,
+    ) -> None:
+        """
+        Disabling the entry that set the shared lock up releases its slots.
+
+        The second entry keeps the lock and its coordinator alive, and the
+        coordinator still belongs to the first entry. A disabled entry syncs
+        nothing, so its codes are not wanted and an Available on one of its
+        slots is taken at its word.
+        """
+        second_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_second")
+        second_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(second_entry.entry_id)
+        await hass.async_block_till_done()
+        lock = get_zwave_lock(hass, lcm_config_entry, lock_entity)
+
+        assert await hass.config_entries.async_set_disabled_by(
+            lcm_config_entry.entry_id, ConfigEntryDisabler.USER
+        )
+        await hass.async_block_till_done()
+        assert second_entry.runtime_data.locks[lock_entity.entity_id] is lock
+        assert lock.coordinator.config_entry is lcm_config_entry
+
+        lock_schlage_be469.receive_event(
+            make_uc_value_event(
+                lock_schlage_be469.node_id, "userIdStatus", 1, CodeSlotStatus.AVAILABLE
+            )
+        )
+        await hass.async_block_till_done()
+
+        assert lock.coordinator.data.get(pin_address(1)) == SlotCredential.empty()
+
+        await hass.config_entries.async_unload(second_entry.entry_id)
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            ConfigEntryState.SETUP_IN_PROGRESS,
+            ConfigEntryState.SETUP_RETRY,
+            ConfigEntryState.UNLOAD_IN_PROGRESS,
+            ConfigEntryState.NOT_LOADED,
+        ],
+        ids=[
+            "setting_up",
+            "retrying_setup",
+            "unloading_to_reload",
+            "between_unload_and_setup",
+        ],
+    )
+    async def test_an_enabled_entry_not_loaded_keeps_its_slots(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        lock_schlage_be469: Node,
+        state: ConfigEntryState,
+    ) -> None:
+        """
+        An enabled entry's slots stay its own through setup and a reload.
+
+        It syncs them before its setup finishes, and a reload unloads and sets
+        it up again without anybody releasing them, so a stale Available on
+        such a slot is still ignored while its code is wanted.
+        """
+        joining_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_joining")
+        joining_entry.add_to_hass(hass)
+        joining_entry.mock_state(hass, state)
+        lock = get_zwave_lock(hass, lcm_config_entry, lock_entity)
+
+        lock_schlage_be469.receive_event(
+            make_uc_value_event(lock_schlage_be469.node_id, "userCode", 3, "5555")
+        )
+        lock_schlage_be469.receive_event(
+            make_uc_value_event(
+                lock_schlage_be469.node_id, "userIdStatus", 3, CodeSlotStatus.AVAILABLE
+            )
+        )
+        await hass.async_block_till_done()
+
+        assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.known("5555")
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            ConfigEntryState.SETUP_ERROR,
+            ConfigEntryState.MIGRATION_ERROR,
+            ConfigEntryState.FAILED_UNLOAD,
+        ],
+        ids=["setup_failed", "migration_failed", "unload_failed"],
+    )
+    async def test_an_entry_that_failed_keeps_no_slots(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        lock_schlage_be469: Node,
+        state: ConfigEntryState,
+    ) -> None:
+        """
+        An entry that failed syncs nothing until the user acts, so it wants nothing.
+
+        Counted as keeping its slots, a genuine Available on one of them would
+        be dropped as stale and the slot shown holding a code it no longer has.
+        """
+        failed_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_failed")
+        failed_entry.add_to_hass(hass)
+        failed_entry.mock_state(hass, state)
+        lock = get_zwave_lock(hass, lcm_config_entry, lock_entity)
+
+        lock_schlage_be469.receive_event(
+            make_uc_value_event(lock_schlage_be469.node_id, "userCode", 3, "5555")
+        )
+        lock_schlage_be469.receive_event(
+            make_uc_value_event(
+                lock_schlage_be469.node_id, "userIdStatus", 3, CodeSlotStatus.AVAILABLE
+            )
+        )
+        await hass.async_block_till_done()
+
+        assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.empty()
 
 
 class TestColdStartRace:

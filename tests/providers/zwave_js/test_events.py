@@ -32,6 +32,7 @@ from custom_components.lock_code_manager.domain.events import CredentialOperatio
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from tests.providers.zwave_js.helpers import make_uc_value_event
 
 # ---------------------------------------------------------------------------
 # Push subscription tests
@@ -675,26 +676,6 @@ async def test_credential_deleted_non_pin_ignored(
 # ---------------------------------------------------------------------------
 
 
-def _make_uc_value_event(
-    node_id: int, property_name: str, code_slot: int, new_value
-) -> ZwaveEvent:
-    """Create a User Code CC value-updated ZwaveEvent."""
-    return ZwaveEvent(
-        type="value updated",
-        data={
-            "source": "node",
-            "event": "value updated",
-            "nodeId": node_id,
-            "args": {
-                "commandClass": CommandClass.USER_CODE,
-                "property": property_name,
-                "propertyKey": code_slot,
-                "newValue": new_value,
-            },
-        },
-    )
-
-
 async def test_uc_shim_plain_code_pushes_known(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -710,7 +691,7 @@ async def test_uc_shim_plain_code_pushes_known(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "8642")
+        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "8642")
     )
     await hass.async_block_till_done()
 
@@ -737,7 +718,7 @@ async def test_uc_shim_masked_code_pushes_unreadable(
 
     # Fixture slot 2 has userIdStatus=ENABLED, so in_use is True.
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
+        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
     )
     await hass.async_block_till_done()
 
@@ -764,7 +745,7 @@ async def test_uc_shim_zeros_on_available_slot_pushes_empty(
 
     # Fixture slot 3 has userIdStatus=AVAILABLE, so in_use is False.
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 3, "0000")
+        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 3, "0000")
     )
     await hass.async_block_till_done()
 
@@ -801,7 +782,7 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
     # Slot 99 has no userCode/userIdStatus values in the fixture at all, so
     # get_usercode() raises NotFoundError and in_use resolves to None.
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 99, "0000")
+        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 99, "0000")
     )
     await hass.async_block_till_done()
 
@@ -844,7 +825,7 @@ async def test_uc_shim_empty_code_follows_occupancy(
 
     with patch.object(zwave_js_lock, "_uc_slot_in_use", return_value=in_use):
         lock_schlage_be469.receive_event(
-            _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
+            make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
         )
         await hass.async_block_till_done()
 
@@ -884,10 +865,10 @@ async def test_uc_shim_status_then_empty_code_reads_the_fresh_status(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userIdStatus", 2, status)
+        make_uc_value_event(lock_schlage_be469.node_id, "userIdStatus", 2, status)
     )
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
+        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
     )
     await hass.async_block_till_done()
 
@@ -914,7 +895,7 @@ async def test_uc_shim_status_available_pushes_empty(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(
+        make_uc_value_event(
             lock_schlage_be469.node_id, "userIdStatus", 2, CodeSlotStatus.AVAILABLE
         )
     )
@@ -947,7 +928,7 @@ async def test_uc_shim_status_available_ignored_when_pin_expected(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(
+        make_uc_value_event(
             lock_schlage_be469.node_id, "userIdStatus", 2, CodeSlotStatus.AVAILABLE
         )
     )
@@ -973,7 +954,7 @@ async def test_uc_shim_status_occupied_ignored(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(
+        make_uc_value_event(
             lock_schlage_be469.node_id, "userIdStatus", 2, CodeSlotStatus.ENABLED
         )
     )
@@ -1017,11 +998,11 @@ async def test_uc_shim_ignores_unrelated_value_events(
     )
     # Wrong property
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "keypadMode", 2, 1)
+        make_uc_value_event(lock_schlage_be469.node_id, "keypadMode", 2, 1)
     )
     # Slot 0 is not a valid user code slot
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 0, "1234")
+        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 0, "1234")
     )
     await hass.async_block_till_done()
 
@@ -1051,7 +1032,7 @@ async def test_uc_shim_confirms_pending_optimistic_write(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
+        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
     )
     await hass.async_block_till_done()
 

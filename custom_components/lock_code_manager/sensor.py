@@ -87,8 +87,10 @@ class LockCodeManagerCodeSlotSensorEntity(
             return credential.readable_pin
         # Unreadable code: fall back to the configured PIN so the sensor still
         # exposes the slot's intended value to consumers like the sync layer.
+        # This sensor's own entry owns the slot, even on a lock whose
+        # coordinator another entry created.
         return self.coordinator.desired_credential(
-            pin_address(int(self.slot_num))
+            pin_address(int(self.slot_num)), owner=self.config_entry
         ).readable_pin
 
     @property
