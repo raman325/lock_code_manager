@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "be658c732c26",
+  "strategy": "manual-commit",
+  "branch": "fix/provider-responses",
+  "checkpoints_count": 16,
+  "files_touched": [
+    "tests/providers/zha/test_e2e.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/658c732c26/0/metadata.json",
+      "transcript": "/be/658c732c26/0/full.jsonl",
+      "compact_transcript": "/be/658c732c26/0/transcript.jsonl",
+      "content_hash": "/be/658c732c26/0/content_hash.txt",
+      "prompt": "/be/658c732c26/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 7870,
+    "cache_read_tokens": 753119,
+    "output_tokens": 2804,
+    "api_call_count": 2
+  }
+}
