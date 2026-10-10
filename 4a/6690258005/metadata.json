@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "4a6690258005",
+  "strategy": "manual-commit",
+  "branch": "fix/options-slot-overlap",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/4a/6690258005/0/metadata.json",
+      "transcript": "/4a/6690258005/0/full.jsonl",
+      "compact_transcript": "/4a/6690258005/0/transcript.jsonl",
+      "content_hash": "/4a/6690258005/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 866,
+    "cache_creation_tokens": 2735584,
+    "cache_read_tokens": 138004144,
+    "output_tokens": 489244,
+    "api_call_count": 397
+  }
+}
