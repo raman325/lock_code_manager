@@ -371,8 +371,8 @@ class TestSharedLock:
         """
         Disabling the entry that set the shared lock up releases its slots.
 
-        The second entry keeps the lock and its coordinator alive, and the
-        coordinator still belongs to the first entry. A disabled entry syncs
+        The second entry keeps the lock, which the first entry built, and its
+        coordinator alive. A disabled entry syncs
         nothing, so its codes are not wanted and an Available on one of its
         slots is taken at its word.
         """
@@ -387,7 +387,6 @@ class TestSharedLock:
         )
         await hass.async_block_till_done()
         assert second_entry.runtime_data.locks[lock_entity.entity_id] is lock
-        assert lock.coordinator.config_entry is lcm_config_entry
 
         lock_schlage_be469.receive_event(
             make_uc_value_event(

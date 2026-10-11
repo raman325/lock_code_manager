@@ -60,9 +60,7 @@ class CredentialMachine(RuleBasedStateMachine):
         # deferred debounced refresh could freshen coordinator.data between a
         # rule's _would_duplicate read and its assertion. Examples run in
         # milliseconds, leaving orders of magnitude of margin.
-        self.coordinator = LockUsercodeUpdateCoordinator(
-            self.hass, self.lock, self.config_entry
-        )
+        self.coordinator = LockUsercodeUpdateCoordinator(self.hass, self.lock)
         self.lock.coordinator = self.coordinator
         self._run(self.coordinator.async_refresh())
 

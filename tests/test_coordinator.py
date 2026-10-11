@@ -70,12 +70,10 @@ def _make_lock(
 
 
 def _make_coordinator(
-    hass: HomeAssistant,
-    lock: MockLCMLock,
-    config_entry: MockConfigEntry,
+    hass: HomeAssistant, lock: MockLCMLock
 ) -> LockUsercodeUpdateCoordinator:
     """Create a coordinator for a mock lock."""
-    return LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    return LockUsercodeUpdateCoordinator(hass, lock)
 
 
 @pytest.fixture
@@ -105,7 +103,7 @@ async def poll_coordinator(
     hass: HomeAssistant, poll_lock: MockLCMLock, lcm_config_entry: MockConfigEntry
 ) -> AsyncGenerator[LockUsercodeUpdateCoordinator]:
     """Return a coordinator with a poll-based lock."""
-    coordinator = _make_coordinator(hass, poll_lock, lcm_config_entry)
+    coordinator = _make_coordinator(hass, poll_lock)
     yield coordinator
     await coordinator.async_shutdown()
 
@@ -116,7 +114,7 @@ async def push_coordinator(
 ) -> AsyncGenerator[LockUsercodeUpdateCoordinator]:
     """Return a coordinator with a push-based lock (with hard refresh enabled)."""
     push_lock._hard_refresh_interval = timedelta(hours=1)
-    coordinator = _make_coordinator(hass, push_lock, lcm_config_entry)
+    coordinator = _make_coordinator(hass, push_lock)
     yield coordinator
     await coordinator.async_shutdown()
 
@@ -146,7 +144,7 @@ async def test_drift_timer_not_created_without_hard_refresh_interval(
     # VirtualLock doesn't override hard_refresh_interval, so it should be None
     assert lock.hard_refresh_interval is None
 
-    coordinator = LockUsercodeUpdateCoordinator(hass, lock, mock_lock_config_entry)
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock)
 
     # With no hard_refresh_interval, drift timer should NOT be created
     assert coordinator._drift_unsub is None
@@ -160,7 +158,7 @@ async def test_drift_timer_created_for_lock_with_hard_refresh_interval(
     """Test that drift detection timer IS created when hard_refresh_interval is set."""
     poll_lock._hard_refresh_interval = timedelta(hours=1)
 
-    coordinator = _make_coordinator(hass, poll_lock, lcm_config_entry)
+    coordinator = _make_coordinator(hass, poll_lock)
 
     # With hard_refresh_interval set, drift timer SHOULD be created
     assert coordinator._drift_unsub is not None
@@ -304,10 +302,6 @@ async def test_subscribe_push_updates_called_during_setup(
     with (
         patch(
             "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
-        ),
-        patch(
-            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
@@ -324,10 +318,6 @@ async def test_unsubscribe_push_updates_called_during_unload(
     """Test that unsubscribe_push_updates is called during async_unload."""
     # Setup first
     with (
-        patch(
-            "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
-        ),
         patch(
             "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
@@ -352,10 +342,6 @@ async def test_subscribe_push_not_called_for_non_push_lock(
 
     # Mock coordinator refreshes
     with (
-        patch(
-            "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
-        ),
         patch(
             "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
@@ -759,7 +745,7 @@ async def test_poll_initial_load_failure_keeps_poll_cadence(
     """
     scan_interval = timedelta(seconds=BACKOFF_INITIAL_SECONDS * 7)
     with patch.object(type(poll_lock), "usercode_scan_interval", scan_interval):
-        coordinator = _make_coordinator(hass, poll_lock, lcm_config_entry)
+        coordinator = _make_coordinator(hass, poll_lock)
         assert coordinator.update_interval == scan_interval
 
         mock_get = AsyncMock(side_effect=LockDisconnected("asleep at boot"))
@@ -891,7 +877,7 @@ class TestLatePushCapability:
         not landed at construction time.
         """
         push_lock._supports_push = False
-        coordinator = _make_coordinator(hass, push_lock, lcm_config_entry)
+        coordinator = _make_coordinator(hass, push_lock)
         assert coordinator.update_interval == push_lock.usercode_scan_interval
         push_lock._supports_push = True
         return coordinator

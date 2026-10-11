@@ -18,7 +18,7 @@ from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_NAME, CONF_NAME, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
@@ -36,9 +36,6 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.coordinator import (
-    LockUsercodeUpdateCoordinator,
-)
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialType,
@@ -148,10 +145,6 @@ async def test_base(hass: HomeAssistant):
     # Mock coordinator refreshes since BaseLock doesn't implement
     # the abstract methods needed for a real refresh.
     with (
-        patch(
-            "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
-        ),
         patch(
             "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
@@ -1057,7 +1050,7 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
     with (
         patch(
             "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
+            "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
         await lock.async_setup_internal(lcm_config_entry)
@@ -1102,10 +1095,6 @@ async def test_async_setup_internal_creates_coordinator_when_setup_fails(
         ),
         patch(
             "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
-        ),
-        patch(
-            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
@@ -1134,52 +1123,38 @@ async def test_async_setup_internal_creates_coordinator_when_setup_fails(
     assert lock._setup_succeeded is True
 
 
-async def test_async_setup_internal_setup_in_progress_first_refresh_not_ready(
+async def test_async_setup_internal_absorbs_a_failed_first_read(
     hass: HomeAssistant,
 ):
-    """A first-refresh failure during initial setup is absorbed, not propagated.
+    """
+    A first read that fails during initial setup is absorbed, not propagated.
 
-    When async_setup_internal runs while its own LCM config entry is still
-    SETUP_IN_PROGRESS (the normal case: initial integration load), the new
-    coordinator's first refresh uses
-    async_config_entry_first_refresh(), which raises ConfigEntryNotReady /
-    UpdateFailed instead of returning when the initial fetch fails. That
-    failure is expected during a cold start and must not escape
-    async_setup_internal -- the coordinator is still created and the lock
-    stays degraded until the next successful refresh.
+    The lock is expected to be unreachable during a cold start, so setup still
+    builds the coordinator and the lock stays unavailable until a later read
+    succeeds.
     """
     entity_reg = er.async_get(hass)
-    dev_reg = dr.async_get(hass)
-
-    # state=SETUP_IN_PROGRESS mirrors what HA sets on the LCM config entry
-    # while running its own async_setup_entry -- the actual state
-    # async_setup_internal observes on initial (non-hot-added) lock setup.
     config_entry = MockConfigEntry(
         domain=DOMAIN, state=ConfigEntryState.SETUP_IN_PROGRESS
     )
     config_entry.add_to_hass(hass)
-
     lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "test",
-        "test_lock_setup_in_progress_not_ready",
-        config_entry=config_entry,
+        "lock", "test", "first_read_fails", config_entry=config_entry
     )
-
-    lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
+    lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+    lock._min_operation_delay = 0
 
     with patch.object(
-        LockUsercodeUpdateCoordinator,
-        "async_config_entry_first_refresh",
-        side_effect=ConfigEntryNotReady("lock still asleep"),
+        lock, "async_get_usercodes", side_effect=LockDisconnected("lock still asleep")
     ):
-        # Should not raise even though the first refresh wasn't ready.
         await lock.async_setup_internal(config_entry)
 
     assert lock.coordinator is not None
+    assert lock.coordinator.last_update_success is False
     assert lock._setup_complete.is_set()
 
     await lock.async_unload(False)
+    await lock.coordinator.async_shutdown()
 
 
 async def test_on_integration_loaded_skips_when_no_config_entry(
@@ -2719,12 +2694,8 @@ async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
     assert lock._setup_deferred is True
 
 
-@pytest.mark.parametrize(
-    "entry_state",
-    [ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.NOT_LOADED],
-)
 async def test_setup_does_not_hang_on_a_lock_that_never_answers(
-    hass: HomeAssistant, entry_state: ConfigEntryState
+    hass: HomeAssistant,
 ):
     """
     Setup gives up on the initial read instead of parking on it.
@@ -2733,15 +2704,14 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
     never returns leaves it in `setup_in_progress` and takes reload and remove
     with it -- the same trap the bounded teardown fixes at the other end of the
     lifecycle. Cancelling a read is safe: it mutates nothing.
-
-    Both branches are covered because they call different coordinator methods,
-    and only one of them raises on failure.
     """
     entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(domain=DOMAIN, state=entry_state)
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, state=ConfigEntryState.SETUP_IN_PROGRESS
+    )
     config_entry.add_to_hass(hass)
     lock_entity = entity_reg.async_get_or_create(
-        "lock", "test", f"setup_hangs_{entry_state.value}", config_entry=config_entry
+        "lock", "test", "setup_hangs", config_entry=config_entry
     )
     lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
     lock._min_operation_delay = 0

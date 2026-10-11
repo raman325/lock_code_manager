@@ -19,14 +19,13 @@ from typing import Any, ClassVar, Literal, NoReturn, final
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
     async_create_issue,
     async_delete_issue,
 )
-from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from ..const import (
     DOMAIN,
@@ -896,9 +895,7 @@ class BaseLock:
                     f"Refresh coordinator for {lock_entity_id}",
                 )
             else:
-                self.coordinator = LockUsercodeUpdateCoordinator(
-                    self.hass, self, config_entry
-                )
+                self.coordinator = LockUsercodeUpdateCoordinator(self.hass, self)
                 # Bounded, unlike the write path. Setup runs while Home
                 # Assistant holds this entry's lock, so a read that never
                 # returns parks it in `setup_in_progress` and takes reload and
@@ -915,14 +912,9 @@ class BaseLock:
                 refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
                 try:
                     async with asyncio.timeout(refresh_budget):
-                        if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
-                            await self.coordinator.async_config_entry_first_refresh()
-                        else:
-                            await self.coordinator.async_refresh()
-                except ConfigEntryNotReady, UpdateFailed:
-                    # Reported by the shared check below, which also catches
-                    # the refreshes that record a failure without raising one.
-                    pass
+                        # Records a failure rather than raising it; reported
+                        # by the check below.
+                        await self.coordinator.async_refresh()
                 except TimeoutError:
                     # The coordinator already recorded the cancellation this
                     # timeout raised through it -- but it recorded a bare

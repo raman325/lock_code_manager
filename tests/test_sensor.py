@@ -81,7 +81,7 @@ async def test_sensor_unreadable_code_on_a_shared_lock_shows_its_entrys_pin(
     An unreadable code falls back to the PIN of the entry that owns the slot.
 
     The second entry shares the first entry's lock, and with it the lock's
-    coordinator, which was created for the first entry.
+    coordinator, which the first entry built.
     """
     second_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -96,9 +96,10 @@ async def test_sensor_unreadable_code_on_a_shared_lock_shows_its_entrys_pin(
     second_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(second_entry.entry_id)
     await hass.async_block_till_done()
-    coordinator = second_entry.runtime_data.locks[LOCK_1_ENTITY_ID].coordinator
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert second_entry.runtime_data.locks[LOCK_1_ENTITY_ID] is lock
+    coordinator = lock.coordinator
     assert coordinator is not None
-    assert coordinator.config_entry is lock_code_manager_config_entry
 
     coordinator.async_set_updated_data({pin_address(3): SlotCredential.unreadable()})
     await hass.async_block_till_done()

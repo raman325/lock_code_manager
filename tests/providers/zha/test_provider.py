@@ -296,7 +296,7 @@ async def coordinator(
     simple_lcm_config_entry: MockConfigEntry,
 ) -> AsyncGenerator[LockUsercodeUpdateCoordinator]:
     """Attach a real coordinator to the lock, loaded with its first read."""
-    coordinator = LockUsercodeUpdateCoordinator(hass, zha_lock, simple_lcm_config_entry)
+    coordinator = LockUsercodeUpdateCoordinator(hass, zha_lock)
     zha_lock.coordinator = coordinator
     await coordinator.async_refresh()
     yield coordinator
