@@ -4119,3 +4119,63 @@ Can we use freezegun or some other tool that’s native to HA tests instead of c
 ---
 
 For 1629 should the coordinator be tied to any config entry? It’s fine when there’s only one config entry but it’s weird when there multiple
+
+---
+
+<task-notification>
+<task-id>ad3135091be8320cb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/88689b8f-7a06-4f90-9808-9d17aef5d545/tasks/ad3135091be8320cb.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix: options save on failed entry" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I made the fix, and it is committed as **`5cc2c4ab`** on `fix/options-save-failed-entry`. It has not been pushed. The full suite passes, coverage is 100%, and prek passes.
+
+**Shared helper:** `_async_save_locks_and_reload(hass, config_entry, locks)` in `/Users/raman/projects/lock_code_manager/.worktrees/options-save-failed-entry/custom_components/lock_code_manager/config_flow.py`, placed after `_check_common_slots`.
+- It is reauth's block moved as is, with its comments: release the dropped locks, write `data` with `{**to_dict(), CONF_LOCKS: locks}` and `options={}`, then start the reload.
+- Each caller still returns `self.async_abort(reason="locks_updated")` itself. Reauth's step now just calls the helper.
+- The only other change to reauth is `**user_input` becoming `CONF_LOCKS: locks`. That is the same thing, because the reauth form has only the one field.
+
+**"Not loaded" condition:** `self.config_entry.state is not ConfigEntryState.LOADED`. It sits in the options step's `if not errors:` save branch only, so it should merge cleanly with the other worktree. A loaded entry still gets `create_entry` and is applied by the update listener, with no reload.
+- `options.abort.locks_updated` is added to `strings.json` and `translations/en.json` with reauth's exact text. The two files are still identical.
+
+**Tests changed: 5, all in `tests/test_config_flow.py`.** These are the only tests that save options, and they used entries that were never set up, so they now took the new path.
+- They are about saving a normal, loaded entry, so I made the entry LOADED rather than changing what they expect.
+- To do that I added a helper, `_async_load`, which calls `hass.config_entries.async_setup` and asserts LOADED. It sits under the module's setup bypass, so no integration code runs; it only gives the flow the loaded state.
+- The five tests:
+  - `test_options_flow_edits_the_locks`
+  - `test_options_flow_no_added_pairs_persists_immediately`
+  - `test_editing_keeps_what_the_form_never_asked_about`
+  - `test_options_flow_rejects_unclaimed_mqtt_lock`
+  - `test_options_flow_saves_around_a_grandfathered_unclaimed_lock`. An entry holding an unclaimed lock does load in production; it only gets a repair.
+
+**New tests** in `tests/test_init.py`:
+- **`test_an_options_save_repairs_an_entry_that_failed_to_load`:** the entry is unloaded, `lock.test_2` is removed from the registry, and setup is run again, which gives SETUP_ERROR. Saving the options without that lock then gives the `locks_updated` abort, the entry ends LOADED, `data` holds only lock 1, and `options` is empty. It also checks that `async_release_locks` was called once with `[lock.test_2]`.
+  - I check the release with a spy that still runs the real function, not by looking at the registry. Once the reload succeeds, setup's `_async_prune_orphaned_lock_entities` removes the same registry rows, so the end state can't show whether the save released the lock.
+- **`test_an_options_save_leaves_a_loaded_entry_to_its_listener`:** this reuses the earlier attempt's test, plus checks that the listener applied the save. The result is `create_entry`, `data` and `runtime_data.locks` hold only lock 1, `options` is empty, lock 2's rows are gone, and `async_reload` is never called.
+
+**Failing-first evidence:**
+- On main, the failed-entry test fails at `result["type"] == "abort"` (it got `create_entry`).
+- With the state check moved first, the entry stays SETUP_ERROR both on main and with the earlier `async_schedule_reload` approach. That confirms the plain reload doesn't work.
+- The loaded-entry test passes on main, as it should, since that behaviour is unchanged.
+
+**Mutation checks**, run in `/private/tmp/claude-501/options-save-scratch/` with files restored in a `finally` (checked with `cmp`). All six mutants were caught:
+
+| Mutant | Caught by |
+|---|---|
+| Branch never taken | the failed-entry test |
+| Branch always taken | the loaded-entry test and 7 config-flow tests |
+| No release | the spy |
+| No reload | the LOADED check |
+| `options` not cleared | `test_reauth_wins_over_stale_options` |
+| Plain `async_schedule_reload` | the failed-entry test |
+
+**Results:** 2647 passed and 3 skipped, coverage is 100% (7387 statements), and `prek run --all-files` passes after `yarn install`. `.entire/.gitignore` was not committed.
+
+**Noticed but left alone:**
+- **A release test that may not test anything.** In this codebase, unloading an entry already removes the per-lock entity rows from the registry; I saw all of them gone straight after `async_unload`. So `test_releasing_a_lock_from_an_entry_that_never_loaded_purges_every_row` probably proves nothing: its rows are already gone before the release call. It also never checks that they exist after the unload.
+- **Disabled entries.** If the entry is disabled, Home Assistant's reload returns without setting it up. The save still writes `data` and the flow still aborts with `locks_updated`, which seems acceptable.
+- **Reauth flow cleanup.** Reloading also makes Home Assistant abort the reauth flow that the failed setup opened, which is a side benefit. No test checks it.
+- **Comment wording.** Reauth's moved comment still includes a past-tense line ("that left a cleartext PIN on disk…"). I kept it word for word because the block was a move, but it is the kind of history line your comment rules discourage.</result>
+<usage><subagent_tokens>152996</subagent_tokens><tool_uses>46</tool_uses><duration_ms>445223</duration_ms></usage>
+</task-notification>
