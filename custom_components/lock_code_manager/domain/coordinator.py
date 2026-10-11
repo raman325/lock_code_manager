@@ -93,7 +93,7 @@ class LockUsercodeUpdateCoordinator(
 ):
     """Class to manage usercode updates."""
 
-    def __init__(self, hass: HomeAssistant, lock: BaseLock, config_entry: Any) -> None:
+    def __init__(self, hass: HomeAssistant, lock: BaseLock) -> None:
         """Initialize the usercode update coordinator."""
         self._lock = lock
         self._drift_unsub: Callable[[], None] | None = None
@@ -113,7 +113,12 @@ class LockUsercodeUpdateCoordinator(
             name=f"{DOMAIN} {lock.lock.entity_id}",
             update_method=self.async_get_usercodes,
             update_interval=update_interval,
-            config_entry=config_entry,
+            # Belongs to the lock, which several entries can share, not to any
+            # one of them: Lock Code Manager shuts it down once the last entry
+            # holding the lock lets go (``async_unload_lock``). The "Disable
+            # polling" system option, which Home Assistant reads from a
+            # coordinator's own entry, therefore does not apply.
+            config_entry=None,
         )
         self.data: dict[CredentialAddress, SlotCredential] = {}
         # Writes the lock has not yet been seen to hold, by address. This is the
@@ -176,14 +181,13 @@ class LockUsercodeUpdateCoordinator(
         """
         Return the credential LCM wants at an address.
 
-        Asked of the entry that owns the slot on this lock, which need not be
-        the entry this coordinator was created for: entries sharing a lock
-        share its coordinator. A caller that already holds the owning entry
-        passes it as ``owner``; otherwise it is found among the entries
-        keeping their slots on this lock. A slot none of them owns, a disabled
-        slot and an enabled-but-blank slot map to ``SlotCredential.empty()``;
-        an enabled slot with a configured Personal Identification Number maps
-        to ``SlotCredential.known(pin)``.
+        Asked of the entry that owns the slot on this lock: entries sharing a
+        lock share its coordinator, which belongs to none of them. A caller
+        that already holds the owning entry passes it as ``owner``; otherwise
+        it is found among the entries keeping their slots on this lock. A slot
+        none of them owns, a disabled slot and an enabled-but-blank slot map to
+        ``SlotCredential.empty()``; an enabled slot with a configured Personal
+        Identification Number maps to ``SlotCredential.known(pin)``.
         """
         slot_num = _checked(address).user_ref
         entry = owner or find_entry_for_lock_slot(
@@ -231,6 +235,8 @@ class LockUsercodeUpdateCoordinator(
         leaves the address for the sync tick to charge once. Addresses with
         nothing pending are the lock's word as read.
         """
+        if self._shutdown_requested:
+            return self.data
         now = time.monotonic()
         out: dict[CredentialAddress, SlotCredential] = {}
         for address, cred in observed.items():
@@ -602,6 +608,8 @@ class LockUsercodeUpdateCoordinator(
 
     def _apply_backoff(self) -> None:
         """Record a connectivity failure and poll on a backoff until recovery."""
+        if self._shutdown_requested:
+            return
         self._lock_breaker.record_failure()
         if self._lock_breaker.tripped:
             # Poll on the backoff interval until a successful update clears the
@@ -702,6 +710,8 @@ class LockUsercodeUpdateCoordinator(
 
     def _reset_backoff(self) -> None:
         """Reset the lock breaker and restore the original update interval."""
+        if self._shutdown_requested:
+            return
         # A successful reach proves the lock is (now) reachable; from here on a
         # later drop is a genuine outage that may raise lock_offline.
         self._reached_once = True
@@ -816,8 +826,27 @@ class LockUsercodeUpdateCoordinator(
                 "Connection check failed for %s: %s", self._lock.lock.entity_id, err
             )
 
+    @callback
+    def async_set_updated_data(
+        self, data: dict[CredentialAddress, SlotCredential]
+    ) -> None:
+        """Set new data and notify listeners, unless shut down."""
+        if self._shutdown_requested:
+            return
+        super().async_set_updated_data(data)
+
     async def async_shutdown(self) -> None:
-        """Shut down the coordinator and clean up resources."""
+        """
+        Shut down the coordinator and clean up resources.
+
+        Whatever answers after this -- a read or write still out, a push --
+        answers for a lock that is gone, so the methods that record into the
+        breaker, the repairs and the data do nothing once shut down: a late
+        answer could otherwise raise a repair for the gone lock, or clear one
+        that by then belongs to the lock set up in its place. This holds from
+        the moment this runs; teardown calls it last, after the slot syncs
+        stop, so an answer arriving earlier in teardown is still recorded.
+        """
         # Nothing may be looked at again: a look already in flight is
         # cancelled, and an empty pending set arms no timer after it.
         self._pending.clear()

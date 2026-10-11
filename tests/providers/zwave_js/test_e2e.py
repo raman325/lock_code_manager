@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -30,6 +30,9 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+)
+from custom_components.lock_code_manager.domain.coordinator import (
+    LockUsercodeUpdateCoordinator,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
@@ -368,8 +371,8 @@ class TestSharedLock:
         """
         Disabling the entry that set the shared lock up releases its slots.
 
-        The second entry keeps the lock and its coordinator alive, and the
-        coordinator still belongs to the first entry. A disabled entry syncs
+        The second entry keeps the lock, which the first entry built, and its
+        coordinator alive. A disabled entry syncs
         nothing, so its codes are not wanted and an Available on one of its
         slots is taken at its word.
         """
@@ -384,7 +387,6 @@ class TestSharedLock:
         )
         await hass.async_block_till_done()
         assert second_entry.runtime_data.locks[lock_entity.entity_id] is lock
-        assert lock.coordinator.config_entry is lcm_config_entry
 
         lock_schlage_be469.receive_event(
             make_uc_value_event(
@@ -483,6 +485,133 @@ class TestSharedLock:
         await hass.async_block_till_done()
 
         assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.empty()
+
+
+def _lock_holds_on_slot_3(access_control: MagicMock, pin: str) -> None:
+    """Make the lock's next read report ``pin`` on slot 3."""
+    access_control.get_users_cached.return_value = [
+        UserData(
+            user_id=3,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="slot3",
+        )
+    ]
+    access_control.get_all_credentials_cached.return_value = [
+        CredentialData(user_id=3, type=UserCredentialType.PIN_CODE, slot=3, data=pin)
+    ]
+
+
+async def _assert_a_refresh_reads_the_lock(
+    lock: ZWaveJSLock, access_control: MagicMock
+) -> None:
+    """Assert the lock's coordinator still reads the lock when refreshed."""
+    _lock_holds_on_slot_3(access_control, "7777")
+    await lock.coordinator.async_refresh()
+    assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.known("7777")
+
+
+class TestSharedCoordinatorLifetime:
+    """A shared lock's coordinator runs while any entry uses the lock."""
+
+    async def test_disabling_the_creating_entry_keeps_the_coordinator_running(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+    ) -> None:
+        """The entry left using the lock still has a coordinator that reads it."""
+        second_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_second")
+        second_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(second_entry.entry_id)
+        await hass.async_block_till_done()
+        lock = get_zwave_lock(hass, lcm_config_entry, lock_entity)
+
+        assert await hass.config_entries.async_set_disabled_by(
+            lcm_config_entry.entry_id, ConfigEntryDisabler.USER
+        )
+        await hass.async_block_till_done()
+        assert second_entry.runtime_data.locks[lock_entity.entity_id] is lock
+
+        await _assert_a_refresh_reads_the_lock(lock, mock_access_control)
+
+        await hass.config_entries.async_unload(second_entry.entry_id)
+
+    async def test_reloading_the_creating_entry_keeps_the_coordinator_running(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+    ) -> None:
+        """The reloaded entry takes back the shared lock with a working coordinator."""
+        second_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_second")
+        second_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(second_entry.entry_id)
+        await hass.async_block_till_done()
+        lock = get_zwave_lock(hass, lcm_config_entry, lock_entity)
+
+        assert await hass.config_entries.async_reload(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+        assert get_zwave_lock(hass, lcm_config_entry, lock_entity) is lock
+
+        await _assert_a_refresh_reads_the_lock(lock, mock_access_control)
+
+        await hass.config_entries.async_unload(second_entry.entry_id)
+
+    @pytest.mark.parametrize(
+        "creating_entry_last", [True, False], ids=["creating_last", "creating_first"]
+    )
+    async def test_the_coordinator_shuts_down_once_the_last_entry_unloads(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        creating_entry_last: bool,
+    ) -> None:
+        """
+        The coordinator runs until the last entry using the lock unloads, then stops.
+
+        Watched from before the coordinator exists, so a shutdown registered
+        while it is built is counted with the one Lock Code Manager runs.
+        """
+        with patch.object(
+            LockUsercodeUpdateCoordinator,
+            "async_shutdown",
+            autospec=True,
+            side_effect=LockUsercodeUpdateCoordinator.async_shutdown,
+        ) as shutdown:
+            creating_entry = MockConfigEntry(
+                domain=DOMAIN,
+                data={
+                    CONF_LOCKS: [lock_entity.entity_id],
+                    CONF_SLOTS: ZWAVE_JS_LCM_CONFIG_SLOTS,
+                },
+                unique_id="test_zwave_js_e2e",
+            )
+            second_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_second")
+            for entry in (creating_entry, second_entry):
+                entry.add_to_hass(hass)
+                assert await hass.config_entries.async_setup(entry.entry_id)
+                await hass.async_block_till_done()
+            lock = get_zwave_lock(hass, creating_entry, lock_entity)
+            first, last = (
+                (second_entry, creating_entry)
+                if creating_entry_last
+                else (creating_entry, second_entry)
+            )
+
+            assert await hass.config_entries.async_unload(first.entry_id)
+            await hass.async_block_till_done()
+            shutdown.assert_not_called()
+            await _assert_a_refresh_reads_the_lock(lock, mock_access_control)
+
+            assert await hass.config_entries.async_unload(last.entry_id)
+            await hass.async_block_till_done()
+            shutdown.assert_awaited_once_with(lock.coordinator)
 
 
 class TestColdStartRace:
