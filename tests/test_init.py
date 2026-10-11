@@ -2448,6 +2448,88 @@ async def test_an_options_save_leaves_a_loaded_entry_to_its_listener(
     reload.assert_not_called()
 
 
+@pytest.mark.parametrize("repair", ["options", "reauth"])
+async def test_a_save_repairs_an_entry_whose_failed_setup_left_runtime_data(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    repair: str,
+) -> None:
+    """
+    A setup reads the entry as it is now, not as a previous failed setup saw it.
+
+    Home Assistant keeps `runtime_data` on an entry whose setup failed after
+    assigning it, and unloading an entry that is not loaded keeps it too. A
+    setup that read its configuration from there found the lock the save had
+    just removed, and failed again.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.config_entries.async_unload(entry.entry_id)
+    with patch(
+        "custom_components.lock_code_manager._async_prune_orphaned_lock_entities",
+        side_effect=RuntimeError,
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert hasattr(entry, "runtime_data")
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+    if repair == "options":
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+    else:
+        [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+        result = await hass.config_entries.flow.async_configure(
+            flow["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+
+
+async def test_an_options_save_on_a_failed_entry_keeps_what_the_form_never_asked_about(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The failed-entry save rewrites `data`, so it has to carry the rest of it.
+
+    The form has one field. Writing only that field drops every other key the
+    entry holds, and nothing on the way to the reload would notice.
+    """
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**BASE_CONFIG, "written_by_something_else": {"kept": True}},
+        unique_id="carries_extra",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    await hass.async_block_till_done()
+
+    assert result["reason"] == "locks_updated"
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data["written_by_something_else"] == {"kept": True}
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_an_options_save_repairs_an_entry_waiting_to_retry_setup(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
