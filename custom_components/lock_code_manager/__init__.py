@@ -1059,25 +1059,6 @@ def _find_shared_lock_instance(
     )
 
 
-def _lock_still_owned_by_another_entry(
-    hass: HomeAssistant,
-    config_entry: LockCodeManagerConfigEntry,
-    lock_entity_id: str,
-) -> bool:
-    """
-    Return True if another entry still holds the shared instance for this lock.
-
-    Teardown is the exact inverse of acquisition, so it asks by calling the
-    acquiring side rather than restating its rule: any predicate that drifts
-    from ``_find_shared_lock_instance`` leaves an ownerless BaseLock whose
-    push subscription and config-entry state listener keep firing, plus a
-    second instance beside it on the next setup that doubles every code-slot
-    event. Config membership is not the question -- a loaded entry that
-    dropped this lock during setup lists it but does not own it.
-    """
-    return _find_shared_lock_instance(hass, config_entry, lock_entity_id) is not None
-
-
 def _lock_instance_held_by_another_entry(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -1089,8 +1070,13 @@ def _lock_instance_held_by_another_entry(
 
     An entry takes a shared instance by putting it in its ``runtime_data.locks``
     and gives it up by taking it out, so whichever takes it out last tears it
-    down. Asked by identity: another entry can hold a different instance for
-    the same lock, and keeping that one alive says nothing about this one.
+    down: its push subscription, its config-entry state listener and its
+    coordinator stop with no entry left to stop them otherwise. Asked by
+    identity: an entry setting up while another unloads finds nothing to share
+    and builds its own instance for the same lock, and that one being held
+    says nothing about this one. Config membership is not the question either
+    -- an entry that dropped this lock during setup lists it but does not
+    hold it.
     """
     return any(
         runtime_data.locks.get(lock_entity_id) is lock
@@ -1120,7 +1106,9 @@ async def async_unload_lock(
     }
     await _async_stop_slot_sync(runtime_data, lock_entity_ids)
     for _lock_entity_id, lock in locks.items():
-        if not _lock_still_owned_by_another_entry(hass, config_entry, _lock_entity_id):
+        if not _lock_instance_held_by_another_entry(
+            hass, config_entry, _lock_entity_id, lock
+        ):
             # ``remove_permanently`` discards state that deliberately outlives
             # an unload -- the per-lock setup-failed repair, the provider's
             # stored codes. Only a lock leaving Lock Code Manager altogether

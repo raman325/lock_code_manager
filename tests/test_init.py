@@ -2361,6 +2361,84 @@ async def test_a_failed_lock_another_entry_joined_keeps_its_coordinator(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_an_entry_unloading_while_another_builds_the_lock_anew_stops_its_own(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    An unloading entry stops its lock even when another entry holds a new one.
+
+    While the first entry unloads it shares nothing, so a second entry setting
+    up then builds its own instance for the same lock. That instance being
+    held says nothing about the first one: left running, the first entry's
+    coordinator would outlive every entry. The first entry's unload is held
+    up the way an update pass in flight holds it.
+    """
+    config = copy.deepcopy(BASE_CONFIG)
+    config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    unloading_entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="Leaving")
+    second_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                3: {CONF_NAME: "second", CONF_PIN: "2468", CONF_ENABLED: True}
+            },
+        },
+        unique_id="Arriving",
+    )
+    second_instance_set_up = asyncio.Event()
+    set_up: list[MockLCMLock] = []
+    original_setup_internal = MockLCMLock.async_setup_internal
+
+    async def _note_set_up(self: MockLCMLock, config_entry) -> None:
+        await original_setup_internal(self, config_entry)
+        set_up.append(self)
+        if len(set_up) == 2:
+            second_instance_set_up.set()
+
+    with (
+        patch.object(MockLCMLock, "async_setup_internal", _note_set_up),
+        patch.object(
+            LockUsercodeUpdateCoordinator,
+            "async_shutdown",
+            autospec=True,
+            side_effect=LockUsercodeUpdateCoordinator.async_shutdown,
+        ) as shutdown,
+    ):
+        unloading_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(unloading_entry.entry_id)
+        await hass.async_block_till_done()
+        old_lock = unloading_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+        pass_lock = unloading_entry.runtime_data.pass_lock
+        await pass_lock.acquire()
+        unload = hass.async_create_task(
+            hass.config_entries.async_unload(unloading_entry.entry_id)
+        )
+        await asyncio.sleep(0)
+        assert unloading_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
+
+        second_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(second_entry.entry_id)
+        await second_instance_set_up.wait()
+        new_lock = second_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert new_lock is not old_lock
+
+        pass_lock.release()
+        assert await unload
+        await hass.async_block_till_done()
+
+        assert old_lock.coordinator is not None
+        assert new_lock.coordinator is not None
+        shutdown.assert_awaited_once_with(old_lock.coordinator)
+        new_lock.codes[3] = "2468"
+        await new_lock.coordinator.async_refresh()
+        assert new_lock.coordinator.data[pin_address(3)] == SlotCredential.known("2468")
+
+        assert await hass.config_entries.async_unload(second_entry.entry_id)
+
+
 async def test_update_listener_slot_removal_handles_missing_and_failing_coordinators(
     hass: HomeAssistant,
     mock_lock_config_entry,
