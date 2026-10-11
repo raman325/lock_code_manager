@@ -18,8 +18,13 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 
-from custom_components.lock_code_manager.const import TICK_INTERVAL
+from custom_components.lock_code_manager.const import (
+    DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+    TICK_INTERVAL,
+)
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zha import ZHALock
@@ -64,6 +69,28 @@ async def _run_ticks(hass: HomeAssistant) -> None:
     """Run enough sync ticks for every configured slot to be written."""
     for _ in range(len(CONFIGURED_PINS) + 2):
         await async_advance_time(hass, TICK_INTERVAL)
+
+
+def _slot_suspension(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry, slot_num: int
+) -> ir.IssueEntry | None:
+    """Return the repair suspending a slot on the ZHA lock, if there is one."""
+    lock = _zha_lock(lcm_config_entry)
+    return ir.async_get(hass).async_get_issue(
+        DOMAIN,
+        f"slot_suspended_{lcm_config_entry.entry_id}_{lock.lock.entity_id}_{slot_num}",
+    )
+
+
+async def _tick_until_slot_1_is_suspended(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """Run sync ticks until slot 1 is suspended, failing if it never is."""
+    for _ in range(4 * MAX_SYNC_ATTEMPTS):
+        if _slot_suspension(hass, lcm_config_entry, 1) is not None:
+            return
+        await async_advance_time(hass, TICK_INTERVAL)
+    pytest.fail("slot 1 was never suspended")
 
 
 def _in_sync_state(
@@ -356,16 +383,21 @@ class TestWriteStatus:
         The frame says nothing of whether the set landed. Confirmed on its
         strength, slot 1 read in sync while the lock held no code there;
         taken as a refusal, the slot was disabled for another command's
-        failure.
+        failure. Each such answer is a failed write of slot 1, charged to
+        the slot breaker until it suspends the slot -- not a connectivity
+        failure, which would mark the whole lock unreachable.
         """
         door_lock.answers["set_pin_code"] = _for_slot_1(foreign(door_lock.cluster))
 
-        await _run_ticks(hass)
+        await _tick_until_slot_1_is_suspended(hass, lcm_config_entry)
 
         assert 1 not in door_lock.codes
-        assert _writes(door_lock, "set_pin_code").count(1) >= 2
+        assert _writes(door_lock, "set_pin_code").count(1) == MAX_SYNC_ATTEMPTS
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
         assert _slot_enabled_state(hass, lcm_config_entry, 1) == STATE_ON
+        assert not _zha_lock(lcm_config_entry).coordinator.unreachable
+        assert door_lock.codes[2] == CONFIGURED_PINS[2]
+        assert _in_sync_state(hass, lcm_config_entry, 2) == STATE_ON
 
     @pytest.mark.parametrize("foreign", _foreign_replies("clear_pin_code_response"))
     async def test_a_set_answered_by_another_frame_converges_on_its_own_reply(
@@ -405,16 +437,19 @@ class TestClearStatus:
         A clear the lock refused, answered by a frame about something else, is retried.
 
         Confirmed on that frame's strength, the slot read empty while the lock
-        still held a code that opens the door.
+        still held a code that opens the door. Each such answer is a failed
+        write of slot 1, charged to the slot breaker until it suspends the
+        slot, while the lock stays reachable.
         """
         await _run_ticks(hass)
         door_lock.answers["clear_pin_code"] = _for_slot_1(foreign(door_lock.cluster))
 
         await _disable_slot_1(hass, lcm_config_entry)
-        await _run_ticks(hass)
+        await _tick_until_slot_1_is_suspended(hass, lcm_config_entry)
 
         assert door_lock.codes[1] == CONFIGURED_PINS[1]
-        assert _writes(door_lock, "clear_pin_code").count(1) >= 2
+        assert _writes(door_lock, "clear_pin_code").count(1) == MAX_SYNC_ATTEMPTS
+        assert not _zha_lock(lcm_config_entry).coordinator.unreachable
         assert _zha_lock(lcm_config_entry).coordinator.data.get(pin_address(1)) == (
             SlotCredential.known(CONFIGURED_PINS[1])
         )

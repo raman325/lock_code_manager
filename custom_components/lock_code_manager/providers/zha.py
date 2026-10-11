@@ -66,16 +66,16 @@ def _is_reply(result: Any, cluster: DoorLock, reply: foundation.ZCLCommandDef) -
     return decoded_with is not None and isinstance(result, decoded_with.schema)
 
 
-def _write_status(
+def _write_answer(
     result: Any,
     cluster: DoorLock,
     request: foundation.ZCLCommandDef,
     response: foundation.ZCLCommandDef,
     code_slot: int,
     lock_entity_id: str,
-) -> int | None:
+) -> Any:
     """
-    Return the status a set or clear's own reply gives, or None if it gives none.
+    Return ``result`` if it answers the set or clear, else raise.
 
     zigpy pairs a reply with its request by endpoint, cluster, direction and
     transaction sequence number, so any frame arriving on those can fill the
@@ -89,19 +89,16 @@ def _write_status(
     the slot breaker counts it, rather than confirming a write that did not
     land.
     """
-    if _is_reply(result, cluster, response):
-        status = getattr(result, "status", None)
-    elif isinstance(result, _DEFAULT_RESPONSE) and result.command_id == request.id:
-        status = result.status
-    else:
-        # The name only: a foreign frame can carry a code.
-        raise LockOperationFailed(
-            f"Lock {lock_entity_id}: {request.name} on slot {code_slot} was "
-            f"answered by a reply to something else "
-            f"({type(result).__name__}), so whether it landed is unknown"
-        )
-    # A quirk may decode the status as None, or as something not a number.
-    return status if isinstance(status, int) else None
+    if _is_reply(result, cluster, response) or (
+        isinstance(result, _DEFAULT_RESPONSE) and result.command_id == request.id
+    ):
+        return result
+    # The name only: a foreign frame can carry a code.
+    raise LockOperationFailed(
+        f"Lock {lock_entity_id}: {request.name} on slot {code_slot} was "
+        f"answered by a reply to something else "
+        f"({type(result).__name__}), so whether it landed is unknown"
+    )
 
 
 OPERATION_TO_LOCKED: dict[int, bool] = {
@@ -359,8 +356,8 @@ class ZHALock(BaseLock):
 
         Only the write's own reply can reject it, and a reply that is about
         something else fails the write so sync sends it again
-        (``_write_status``). The write's own reply with no status leaves it
-        standing.
+        (``_write_answer``). The write's own reply with no status field
+        leaves it standing.
 
         ``user_id`` is ignored; slot-only providers address the credential
         by ``credential.slot``.
@@ -382,18 +379,21 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
-        if status := _write_status(
+        answer = _write_answer(
             result,
             cluster,
             DoorLock.ServerCommandDefs.set_pin_code,
             DoorLock.ClientCommandDefs.set_pin_code_response,
             code_slot,
             self.lock.entity_id,
-        ):
+        )
+        # A quirk's response may name no status field, which leaves the write
+        # standing; any status other than 0 rejects it, None included.
+        if hasattr(answer, "status") and answer.status != 0:
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=f"set_pin_code rejected: status {status}",
+                reason=f"set_pin_code rejected: status {answer.status}",
             )
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
@@ -418,18 +418,21 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
-        if status := _write_status(
+        answer = _write_answer(
             result,
             cluster,
             DoorLock.ServerCommandDefs.clear_pin_code,
             DoorLock.ClientCommandDefs.clear_pin_code_response,
             code_slot,
             self.lock.entity_id,
-        ):
+        )
+        # A quirk's response may name no status field, which leaves the write
+        # standing; any status other than 0 rejects it, None included.
+        if hasattr(answer, "status") and answer.status != 0:
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=f"clear_pin_code rejected: status {status}",
+                reason=f"clear_pin_code rejected: status {answer.status}",
             )
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True

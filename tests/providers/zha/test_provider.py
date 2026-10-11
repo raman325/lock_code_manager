@@ -501,43 +501,61 @@ async def test_the_writes_own_refusal_rejects_the_code(
     assert pin_address(3) not in coordinator.data
 
 
-# A quirk redefining a write's own response so it carries no numeric status:
-# the write, its response, the quirk's cluster, and one such reply's fields.
-_NO_NUMERIC_STATUS = [
+# A quirk redefining a write's own response so its status is unusable: the
+# write, its response, the quirk's cluster, one such reply's fields, and
+# whether the write is rejected. With no status field the write stands; a
+# status that decodes as None or as something not a number is not 0, so it
+# rejects the write.
+_UNUSABLE_STATUS = [
     pytest.param(
         command,
         response,
         quirk_redefining(response, schema),
         fields,
+        rejected,
         id=f"{command}-status_{shape}",
     )
     for command, response in (
         ("set_pin_code", "set_pin_code_response"),
         ("clear_pin_code", "clear_pin_code_response"),
     )
-    for shape, schema, fields in (
-        ("named_otherwise", {"result": foundation.Status}, {"result": Status.FAILURE}),
-        ("absent", {"status?": foundation.Status}, {}),
+    for shape, schema, fields, rejected in (
+        (
+            "named_otherwise",
+            {"result": foundation.Status},
+            {"result": Status.FAILURE},
+            False,
+        ),
+        ("absent", {"status?": foundation.Status}, {}, True),
         (
             "not_a_number",
             {"status": zigpy_t.LVBytes},
             {"status": zigpy_t.LVBytes(b"\x01")},
+            True,
         ),
     )
 ]
 
 
 @pytest.mark.parametrize(
-    ("command", "response", "door_lock_cluster_type", "fields"), _NO_NUMERIC_STATUS
+    ("command", "response", "door_lock_cluster_type", "fields", "rejected"),
+    _UNUSABLE_STATUS,
 )
-async def test_an_own_response_with_no_numeric_status_is_no_answer(
+async def test_an_own_response_with_an_unusable_status(
     zha_lock: ZHALock,
     coordinator: LockUsercodeUpdateCoordinator,
     command: str,
     response: str,
     fields: dict[str, Any],
+    rejected: bool,
 ) -> None:
-    """A quirk's own response that carries no numeric status leaves the write standing."""
+    """
+    A quirk's own response with no usable status stands only if it has no status.
+
+    A response naming no status field says nothing against the write, so it
+    is confirmed and pushed. A status of None or of bytes is not 0, so the
+    write is rejected and nothing is pushed.
+    """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     setattr(
@@ -546,10 +564,13 @@ async def test_an_own_response_with_no_numeric_status_is_no_answer(
         AsyncMock(return_value=lock_frame(cluster, response, **fields).payload),
     )
 
-    result = await _write(zha_lock, command)
-
+    if rejected:
+        with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
+            await _write(zha_lock, command)
+        assert pin_address(3) not in coordinator.data
+        return
     returned, pushed = _STANDING[command]
-    assert result is returned
+    assert await _write(zha_lock, command) is returned
     assert coordinator.data[pin_address(3)] == pushed
 
 

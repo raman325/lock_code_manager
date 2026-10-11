@@ -19,7 +19,7 @@ from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
 
 from custom_components.lock_code_manager.domain.exceptions import LockOperationFailed
-from custom_components.lock_code_manager.providers.zha import ZHALock, _write_status
+from custom_components.lock_code_manager.providers.zha import ZHALock, _write_answer
 from tests.providers.zha.helpers import (
     QuirkedDoorLock,
     RenamingQuirkDoorLock,
@@ -130,17 +130,17 @@ _writes = st.sampled_from(
 
 
 @given(drawn=_replies(), write=_writes)
-def test_only_the_writes_own_reply_gives_it_a_status(
+def test_only_the_writes_own_reply_answers_it(
     drawn: _Drawn,
     write: tuple[foundation.ZCLCommandDef, foundation.ZCLCommandDef],
 ) -> None:
     """
-    A set or clear takes a status only from the reply that answers it.
+    A set or clear is answered only by the reply that is about it.
 
     That is its own response command, as the lock's cluster decodes it, or a
-    Default Response naming the command sent, and the status given is that
-    reply's own. Any other frame, however it carries a status, leaves the
-    write's outcome unknown, so the write fails to be sent again.
+    Default Response naming the command sent, and the answer is that reply
+    itself. Any other frame, however it carries a status, leaves the write's
+    outcome unknown, so the write fails to be sent again.
     """
     request, response = write
     answers = drawn.kind == response.name or (
@@ -148,8 +148,9 @@ def test_only_the_writes_own_reply_gives_it_a_status(
     )
     if not answers:
         with pytest.raises(LockOperationFailed):
-            _write_status(drawn.reply, drawn.cluster, request, response, 1, "lock.test")
+            _write_answer(drawn.reply, drawn.cluster, request, response, 1, "lock.test")
         return
-    assert _write_status(
-        drawn.reply, drawn.cluster, request, response, 1, "lock.test"
-    ) == (drawn.reply.status)
+    assert (
+        _write_answer(drawn.reply, drawn.cluster, request, response, 1, "lock.test")
+        is drawn.reply
+    )
