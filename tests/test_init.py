@@ -2753,14 +2753,14 @@ async def test_a_write_failing_after_the_lock_is_torn_down_records_nothing(
         lock, "async_get_usercodes", side_effect=LockDisconnected("lock offline")
     ):
         await _fail_polls_until_one_short_of_offline(coordinator)
-    interval_before = coordinator.update_interval
+    failures_before = coordinator._lock_breaker.failure_count
     assert await hass.config_entries.async_unload(entry.entry_id)
 
     coordinator.note_connectivity_failure()
     await hass.async_block_till_done()
 
     assert _offline_issue(hass) is None
-    assert coordinator.update_interval == interval_before
+    assert coordinator._lock_breaker.failure_count == failures_before
 
 
 async def test_a_push_after_the_lock_is_torn_down_records_nothing(

@@ -843,7 +843,9 @@ class LockUsercodeUpdateCoordinator(
         answers for a lock that is gone, so the methods that record into the
         breaker, the repairs and the data do nothing once shut down: a late
         answer could otherwise raise a repair for the gone lock, or clear one
-        that by then belongs to the lock set up in its place.
+        that by then belongs to the lock set up in its place. This holds from
+        the moment this runs; teardown calls it last, after the slot syncs
+        stop, so an answer arriving earlier in teardown is still recorded.
         """
         # Nothing may be looked at again: a look already in flight is
         # cancelled, and an empty pending set arms no timer after it.
