@@ -1078,6 +1078,28 @@ def _lock_still_owned_by_another_entry(
     return _find_shared_lock_instance(hass, config_entry, lock_entity_id) is not None
 
 
+def _lock_instance_held_by_another_entry(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_id: str,
+    lock: BaseLock,
+) -> bool:
+    """
+    Return True if another entry still holds this very lock instance.
+
+    An entry takes a shared instance by putting it in its ``runtime_data.locks``
+    and gives it up by taking it out, so whichever takes it out last tears it
+    down. Asked by identity: another entry can hold a different instance for
+    the same lock, and keeping that one alive says nothing about this one.
+    """
+    return any(
+        runtime_data.locks.get(lock_entity_id) is lock
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.entry_id != config_entry.entry_id
+        and (runtime_data := getattr(entry, "runtime_data", None)) is not None
+    )
+
+
 async def async_unload_lock(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -1892,7 +1914,17 @@ async def _async_setup_new_locks(
                 result,
                 exc_info=result,
             )
-            runtime_data.locks.pop(lock_entity_id, None)
+            failed_lock = runtime_data.locks.pop(lock_entity_id, None)
+            if (
+                failed_lock is not None
+                and failed_lock.coordinator is not None
+                and not _lock_instance_held_by_another_entry(
+                    hass, config_entry, lock_entity_id, failed_lock
+                )
+            ):
+                # Built before setup failed, and nothing reaches a dropped lock
+                # to stop it later.
+                await failed_lock.coordinator.async_shutdown()
             if isinstance(result, UnclaimedLockError):
                 # Only this failure has a diagnosis and an action to offer.
                 # Any other exception is a bug in a provider LCM does speak,
