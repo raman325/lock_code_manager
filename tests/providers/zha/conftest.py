@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 import itertools
 import sys
 import time
@@ -19,6 +19,7 @@ from zigpy.profiles import zha as zha_profile
 import zigpy.quirks
 import zigpy.state
 import zigpy.types
+from zigpy.zcl import foundation
 from zigpy.zcl.clusters import closures, general
 from zigpy.zcl.foundation import Status
 import zigpy.zdo.types as zdo_t
@@ -43,6 +44,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.providers.zha import ZHALock
 
 from ...common import user_subentries
+from .helpers import Frame, default_response, lock_frame
 
 # ZHA endpoint signature constants
 SIG_EP_INPUT = 1
@@ -359,11 +361,22 @@ def zigpy_device_mock(
 
 
 @pytest.fixture
+def door_lock_cluster_type() -> type[closures.DoorLock]:
+    """
+    Return the Door Lock cluster class the lock is built with.
+
+    The stock class unless a test overrides this with a quirk's own cluster.
+    """
+    return closures.DoorLock
+
+
+@pytest.fixture
 def zigpy_lock_device(
     zigpy_device_mock: Callable[..., zigpy.device.Device],
+    door_lock_cluster_type: type[closures.DoorLock],
 ) -> zigpy.device.Device:
     """Create a mock Zigbee lock device."""
-    return zigpy_device_mock(
+    device = zigpy_device_mock(
         {
             1: {
                 SIG_EP_INPUT: [
@@ -379,6 +392,11 @@ def zigpy_lock_device(
         manufacturer="Yale",
         model="YRD256",
     )
+    endpoint = device.endpoints[1]
+    cluster = door_lock_cluster_type(endpoint, is_server=True)
+    _patch_zha_cluster(cluster)
+    endpoint.add_input_cluster(closures.DoorLock.cluster_id, cluster)
+    return device
 
 
 @pytest.fixture
@@ -443,3 +461,159 @@ async def simple_lcm_config_entry(
     )
     entry.add_to_hass(hass)
     return entry
+
+
+# ---------------------------------------------------------------------------
+# End-to-end lock stand-in
+# ---------------------------------------------------------------------------
+
+# Replaces the lock's handling of one command: given the decoded request, it
+# returns the frame sent back (changing the table itself if the lock applied
+# the command), raises TimeoutError as zigpy does when no reply came, or
+# returns None to leave the request to the lock.
+Answer = Callable[[foundation.CommandSchema], Frame | None]
+
+
+class DoorLockStandIn:
+    """
+    A Zigbee Door Lock answering its Personal Identification Number commands.
+
+    It sits where the radio does: each command arrives as the frame zigpy
+    built, decoded with the lock's own cluster, and each answer is a frame
+    decoded the same way. What the provider receives is therefore what zigpy
+    hands a waiting request -- a decoded command, a Default Response, or the
+    raw bytes of a command the cluster has no definition for -- in the
+    cluster's own schema classes, never a hand-built object.
+
+    By default it behaves as the Zigbee Cluster Library says a lock does: a
+    set or clear changes the table and is answered with its own response, and
+    a get is answered for the user asked. ``answers`` replaces that handling
+    by command name.
+    """
+
+    def __init__(
+        self,
+        cluster: closures.DoorLock,
+        codes: dict[int, str],
+        answers: dict[str, Answer],
+    ) -> None:
+        """Hold the lock's table and the answers that replace its own."""
+        self.cluster = cluster
+        self.codes = dict(codes)
+        self.answers = answers
+        self.requests: list[foundation.CommandSchema] = []
+
+    def _answer(self, request: foundation.CommandSchema) -> Frame:
+        """Answer one decoded command the way the lock does."""
+        name = request.command.name
+        if (answer := self.answers.get(name)) is not None and (
+            frame := answer(request)
+        ) is not None:
+            return frame
+        if name == "set_pin_code":
+            self.codes[request.user_id] = request.pin_code
+            return lock_frame(self.cluster, "set_pin_code_response", status=0)
+        if name == "clear_pin_code":
+            self.codes.pop(request.user_id, None)
+            return lock_frame(self.cluster, "clear_pin_code_response", status=0)
+        if name == "get_pin_code":
+            code = self.codes.get(request.user_id)
+            return lock_frame(
+                self.cluster,
+                "get_pin_code_response",
+                user_id=request.user_id,
+                user_status=closures.DoorLock.UserStatus.Available
+                if code is None
+                else closures.DoorLock.UserStatus.Enabled,
+                user_type=closures.DoorLock.UserType.Unrestricted,
+                code=code or "",
+            )
+        return default_response(request.command.id, Status.UNSUP_CLUSTER_COMMAND)
+
+    async def request(self, data: bytes) -> foundation.CommandSchema | bytes:
+        """Decode one request frame, answer it, and decode the answer as zigpy does."""
+        header, request = self.cluster.deserialize(data)
+        self.requests.append(request)
+        frame = self._answer(request)
+        reply_header = (
+            foundation.ZCLHeader.general
+            if frame.general
+            else foundation.ZCLHeader.cluster
+        )(
+            header.tsn,
+            frame.payload.command.id,
+            direction=foundation.Direction.Server_to_Client,
+        )
+        _, decoded = self.cluster.deserialize(
+            reply_header.serialize() + frame.payload.serialize()
+        )
+        return decoded
+
+
+@pytest.fixture
+def door_lock_codes() -> dict[int, str]:
+    """Return the codes the lock holds before Lock Code Manager is set up."""
+    return {}
+
+
+@pytest.fixture
+def door_lock_answers() -> dict[str, Answer]:
+    """Return the answers replacing the lock's own handling, by command name."""
+    return {}
+
+
+@pytest.fixture
+def door_lock(
+    zigpy_lock_device: zigpy.device.Device,
+    door_lock_codes: dict[int, str],
+    door_lock_answers: dict[str, Answer],
+) -> DoorLockStandIn:
+    """Put the stand-in lock behind the lock endpoint's Door Lock traffic."""
+    endpoint = zigpy_lock_device.endpoints[1]
+    stand_in = DoorLockStandIn(
+        endpoint.in_clusters[closures.DoorLock.cluster_id],
+        door_lock_codes,
+        door_lock_answers,
+    )
+    other_traffic = endpoint.request
+
+    async def _request(*, cluster: int, data: bytes, **kwargs: Any) -> Any:
+        if cluster == closures.DoorLock.cluster_id:
+            return await stand_in.request(data)
+        return await other_traffic(cluster=cluster, data=data, **kwargs)
+
+    endpoint.request = AsyncMock(side_effect=_request)
+    return stand_in
+
+
+@pytest.fixture
+async def lcm_config_entry(
+    hass: HomeAssistant,
+    zha_lock_entity: er.RegistryEntry,
+    door_lock: DoorLockStandIn,
+) -> AsyncGenerator[MockConfigEntry]:
+    """
+    Set up a full Lock Code Manager config entry managing the ZHA lock.
+
+    This runs the real ``async_setup_entry`` path, so the lock entity's
+    platform is what picks ``ZHALock``, and the real coordinator and sync
+    managers run against the stand-in lock.
+    """
+    config = {
+        CONF_LOCKS: [zha_lock_entity.entity_id],
+        CONF_SLOTS: ZHA_LCM_CONFIG_SLOTS,
+    }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="test_zha_lcm_e2e",
+        subentries_data=user_subentries(config[CONF_SLOTS]),
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield entry
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
