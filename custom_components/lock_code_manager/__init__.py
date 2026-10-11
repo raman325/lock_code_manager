@@ -1077,6 +1077,14 @@ def _lock_instance_held_by_another_entry(
     says nothing about this one. Config membership is not the question either
     -- an entry that dropped this lock during setup lists it but does not
     hold it.
+
+    Deliberately not the question acquisition asks. ``_find_shared_lock_instance``
+    joins only instances held by LOADED entries, so it never joins one that is
+    being torn down. Release counts every entry still holding the instance,
+    whatever its state -- a reference count -- so an instance another entry is
+    joining, or is still unloading, is not torn down underneath it. An entry
+    stuck in FAILED_UNLOAD never lets go, so it keeps its instance alive; that
+    is accepted.
     """
     return any(
         runtime_data.locks.get(lock_entity_id) is lock
