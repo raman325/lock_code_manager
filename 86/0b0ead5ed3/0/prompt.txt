@@ -3715,3 +3715,44 @@ The message on `76abd8d7` still describes the masked rule that was dropped. The 
 ---
 
 Status?
+
+---
+
+<task-notification>
+<task-id>a508136fe0b135919</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/88689b8f-7a06-4f90-9808-9d17aef5d545/tasks/a508136fe0b135919.output</output-file>
+<status>completed</status>
+<summary>Agent "Minimal PR: ZHA reply matching" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both round-2 points are fixed in **`f715cdb8`** (`fix(zha): keep main's outcome for a write's own unusable status`), committed forward on `df74592e`. Not pushed; the worktree is clean.
+
+The full suite passes (2598 passed, 3 skipped) at 100% coverage, and `prek run --all-files` is clean. One full run had a single failure, `tests/providers/test_base.py::test_rate_limiting_mixed_operations`. It's a wall-clock timing check outside ZHA; it passed 3 out of 3 times on its own and the full rerun was green.
+
+**1. Unusable own status now matches main**
+
+I checked main first. I took main's condition, `hasattr(result, "status") and result.status != 0`, straight from `281745df`'s source and ran it on replies decoded by quirk clusters, for both set and clear:
+
+| Own-response shape | Main | Now |
+|---|---|---|
+| no `status` field (renamed) | confirmed and pushed | same |
+| `status?` missing, so `None` | `CodeRejectedError` | same |
+| status not a number (`LVBytes`, even `b''`) | `CodeRejectedError` | same |
+
+- **Code:** `_write_status` is now `_write_answer`. It returns the reply when it's the write's own response or a Default Response naming the command, and otherwise raises `LockOperationFailed` as before. Both callers apply main's exact condition to that reply. The comment and docstrings that claimed confirmation for all three shapes are corrected.
+- **Unit test:** `test_an_own_response_with_no_numeric_status_is_no_answer` is now `test_an_own_response_with_an_unusable_status`. A renamed field asserts the exact result and the exact pushed credential; `None` and bytes assert `CodeRejectedError` and no push.
+- **Property test:** it now checks that `_write_answer` returns exactly the reply for an answer and raises for anything else.
+- **Failing first:** run against `df74592e`'s provider, 4 of the 6 new cases fail (`None` and not-a-number, for set and clear). The renamed-field cases pass on both.
+
+**2. The slot breaker is now proven, not just a re-send**
+
+- **What the tests do now:** the refused-set and refused-clear tests keep sending foreign replies until the `slot_suspended` repair for slot 1 appears, failing if it never does. They then check:
+  - slot 1's write was sent exactly `MAX_SYNC_ATTEMPTS` times (3);
+  - `coordinator.unreachable` is false;
+  - for the set, slot 2 still holds its code and reads in sync;
+  - the earlier checks still hold: the lock keeps its code and the slot isn't in sync, and for the clear the slot still reads as holding its code.
+- **`LockDisconnected` mutant:** run in scratch, with the files restored in a `finally` and checked byte-for-byte afterwards. Raising `LockDisconnected` for a foreign reply passed all 24 refused-write cases under the `df74592e` tests, and fails all 24 under the new ones.
+
+**Left alone, as declined:** routing a `ParsingError` to `LockDisconnected`; the release-path clear not being retried (#1622); a repeated set after a foreign reply getting a non-zero status; cleaning up `_write_answer`'s arguments.</result>
+<usage><subagent_tokens>325535</subagent_tokens><tool_uses>11</tool_uses><duration_ms>279870</duration_ms></usage>
+</task-notification>
