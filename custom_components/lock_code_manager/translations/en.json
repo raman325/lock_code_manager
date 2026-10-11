@@ -144,6 +144,7 @@
   },
   "options": {
     "abort": {
+      "locks_updated": "The locks for your config entry have been updated.",
       "unknown": "An unexpected error occurred while updating options."
     },
     "error": {
