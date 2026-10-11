@@ -2439,6 +2439,204 @@ async def test_an_entry_unloading_while_another_builds_the_lock_anew_stops_its_o
         assert await hass.config_entries.async_unload(second_entry.entry_id)
 
 
+def _sharing_entries() -> tuple[MockConfigEntry, MockConfigEntry]:
+    """Build an entry on both locks and one sharing the second lock."""
+    return (
+        MockConfigEntry(
+            domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="First Sharer"
+        ),
+        MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [LOCK_2_ENTITY_ID],
+                CONF_SLOTS: {
+                    3: {CONF_NAME: "second", CONF_PIN: "2468", CONF_ENABLED: True}
+                },
+            },
+            unique_id="Second Sharer",
+        ),
+    )
+
+
+def _watch_coordinator_shutdowns():
+    """Count coordinator shutdowns, from before any coordinator is built."""
+    return patch.object(
+        LockUsercodeUpdateCoordinator,
+        "async_shutdown",
+        autospec=True,
+        side_effect=LockUsercodeUpdateCoordinator.async_shutdown,
+    )
+
+
+async def test_two_entries_unloading_one_shared_lock_at_once_tear_it_down_once(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Two entries letting go of one lock at once tear it down exactly once.
+
+    The first entry tears its unshared lock down before it reaches the shared
+    one, and that teardown is where the second entry takes the shared lock
+    out -- the way any await in a real teardown would give it the turn. Each
+    entry decides whether it is the last holder as it takes the lock out, so
+    only the second finds itself last.
+    """
+    first_entry, second_entry = _sharing_entries()
+    original_shutdown = LockUsercodeUpdateCoordinator.async_shutdown
+    unshared: list[LockUsercodeUpdateCoordinator] = []
+
+    async def _let_the_other_entry_let_go_first(
+        self: LockUsercodeUpdateCoordinator,
+    ) -> None:
+        if self in unshared:
+            for _ in range(100):
+                # Home Assistant drops the runtime data once an unload ends.
+                runtime_data = getattr(second_entry, "runtime_data", None)
+                if runtime_data is None or LOCK_2_ENTITY_ID not in runtime_data.locks:
+                    break
+                await asyncio.sleep(0)
+        await original_shutdown(self)
+
+    with patch.object(
+        LockUsercodeUpdateCoordinator,
+        "async_shutdown",
+        autospec=True,
+        side_effect=_let_the_other_entry_let_go_first,
+    ) as shutdown:
+        for entry in (first_entry, second_entry):
+            entry.add_to_hass(hass)
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+        assert list(first_entry.runtime_data.locks) == [
+            LOCK_1_ENTITY_ID,
+            LOCK_2_ENTITY_ID,
+        ]
+        unshared.append(first_entry.runtime_data.locks[LOCK_1_ENTITY_ID].coordinator)
+        lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
+        assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
+
+        assert all(
+            await asyncio.gather(
+                hass.config_entries.async_unload(first_entry.entry_id),
+                hass.config_entries.async_unload(second_entry.entry_id),
+            )
+        )
+        await hass.async_block_till_done()
+
+        assert [
+            call
+            for call in shutdown.await_args_list
+            if call.args[0] is lock.coordinator
+        ] == [call(lock.coordinator)]
+        assert lock.service_calls["unload"] == [(False,)]
+
+
+async def test_a_lock_an_unloading_entry_still_holds_outlives_another_entry(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    An entry still unloading keeps the lock it holds until it lets go.
+
+    Holding counts whatever state the holder is in, so the other entry
+    unloading first leaves the shared lock to the one still on its way out.
+    The second entry's unload is held up the way an update pass in flight
+    holds it.
+    """
+    first_entry, second_entry = _sharing_entries()
+    with _watch_coordinator_shutdowns() as shutdown:
+        for entry in (first_entry, second_entry):
+            entry.add_to_hass(hass)
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+        lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
+
+        pass_lock = second_entry.runtime_data.pass_lock
+        await pass_lock.acquire()
+        second_unload = asyncio.create_task(
+            hass.config_entries.async_unload(second_entry.entry_id)
+        )
+        await asyncio.sleep(0)
+        assert second_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
+        assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
+
+        assert await hass.config_entries.async_unload(first_entry.entry_id)
+        await hass.async_block_till_done()
+        assert call(lock.coordinator) not in shutdown.await_args_list
+        assert lock.service_calls["unload"] == []
+
+        pass_lock.release()
+        assert await second_unload
+        await hass.async_block_till_done()
+        assert [
+            call
+            for call in shutdown.await_args_list
+            if call.args[0] is lock.coordinator
+        ] == [call(lock.coordinator)]
+        assert lock.service_calls["unload"] == [(False,)]
+
+
+async def test_a_new_instance_failing_setup_beside_an_unloading_one_is_stopped(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A failed new instance is stopped even while an unloading entry holds an old one.
+
+    The unloading entry holds a different instance for the same lock, so it
+    is no reason to keep the failed one's coordinator running. The new
+    instance claims push updates its provider never implemented, which fails
+    its setup after its coordinator is built.
+    """
+    unloading_entry, failing_entry = _sharing_entries()
+    with _watch_coordinator_shutdowns() as shutdown:
+        unloading_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(unloading_entry.entry_id)
+        await hass.async_block_till_done()
+        old_lock = unloading_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
+
+        pass_lock = unloading_entry.runtime_data.pass_lock
+        await pass_lock.acquire()
+        unload = asyncio.create_task(
+            hass.config_entries.async_unload(unloading_entry.entry_id)
+        )
+        await asyncio.sleep(0)
+        assert unloading_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
+
+        read: list[MockLCMLock] = []
+        original_get_usercodes = MockLCMLock.async_get_usercodes
+
+        async def _note_reads(self: MockLCMLock, slots=None):
+            read.append(self)
+            return await original_get_usercodes(self, slots)
+
+        with (
+            patch.object(
+                MockLCMLock,
+                "supports_push",
+                property(lambda self: self is not old_lock),
+            ),
+            patch.object(MockLCMLock, "async_get_usercodes", _note_reads),
+        ):
+            failing_entry.add_to_hass(hass)
+            assert await hass.config_entries.async_setup(failing_entry.entry_id)
+            await hass.async_block_till_done()
+        # The one read with a coordinator; the setup's probe reads others.
+        (new_lock,) = {lock for lock in read if lock.coordinator is not None}
+        assert new_lock is not old_lock
+        assert LOCK_2_ENTITY_ID not in failing_entry.runtime_data.locks
+        assert unloading_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is old_lock
+        shutdown.assert_awaited_once_with(new_lock.coordinator)
+
+        pass_lock.release()
+        assert await unload
+        await hass.async_block_till_done()
+        assert call(old_lock.coordinator) in shutdown.await_args_list
+        assert shutdown.await_args_list.count(call(new_lock.coordinator)) == 1
+
+        assert await hass.config_entries.async_unload(failing_entry.entry_id)
+
+
 async def test_update_listener_slot_removal_handles_missing_and_failing_coordinators(
     hass: HomeAssistant,
     mock_lock_config_entry,

@@ -1105,31 +1105,32 @@ async def async_unload_lock(
     lock_entity_ids = (
         list(runtime_data.locks) if lock_entity_ids is None else list(lock_entity_ids)
     )
-    # Popped first, then the managers are stopped together: one grace for all
-    # of them.
-    locks = {
+    # Whether this entry is the last to hold each lock is decided as it is
+    # popped, with no await in between: two entries letting go of one lock
+    # at once would otherwise each pop it, each find no other holder, and
+    # both tear it down. Then the managers are stopped together: one grace
+    # for all of them.
+    last_held = {
         _lock_entity_id: lock
         for _lock_entity_id in lock_entity_ids
         if (lock := runtime_data.locks.pop(_lock_entity_id, None))
+        and not _lock_instance_held_by_another_entry(
+            hass, config_entry, _lock_entity_id, lock
+        )
     }
     await _async_stop_slot_sync(runtime_data, lock_entity_ids)
-    for _lock_entity_id, lock in locks.items():
-        if not _lock_instance_held_by_another_entry(
-            hass, config_entry, _lock_entity_id, lock
-        ):
-            # ``remove_permanently`` discards state that deliberately outlives
-            # an unload -- the per-lock setup-failed repair, the provider's
-            # stored codes. Only a lock leaving Lock Code Manager altogether
-            # should lose those, so an entry that still manages it downgrades
-            # this to a plain teardown even while that entry is unloaded.
-            await lock.async_unload(
-                remove_permanently
-                and not _lock_managed_by_other_entry(
-                    hass, config_entry, _lock_entity_id
-                )
-            )
-            if lock.coordinator is not None:
-                await lock.coordinator.async_shutdown()
+    for _lock_entity_id, lock in last_held.items():
+        # ``remove_permanently`` discards state that deliberately outlives
+        # an unload -- the per-lock setup-failed repair, the provider's
+        # stored codes. Only a lock leaving Lock Code Manager altogether
+        # should lose those, so an entry that still manages it downgrades
+        # this to a plain teardown even while that entry is unloaded.
+        await lock.async_unload(
+            remove_permanently
+            and not _lock_managed_by_other_entry(hass, config_entry, _lock_entity_id)
+        )
+        if lock.coordinator is not None:
+            await lock.coordinator.async_shutdown()
 
 
 async def async_release_locks(
