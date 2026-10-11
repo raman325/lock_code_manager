@@ -113,8 +113,15 @@ class LockUsercodeUpdateCoordinator(
             name=f"{DOMAIN} {lock.lock.entity_id}",
             update_method=self.async_get_usercodes,
             update_interval=update_interval,
-            config_entry=config_entry,
+            # Home Assistant shuts a coordinator down when the entry it is
+            # built with unloads. Entries sharing a lock share this coordinator,
+            # so that would stop it under the others; Lock Code Manager shuts it
+            # down itself once the last entry using the lock unloads
+            # (``async_unload_lock``). The entry is set below, after that
+            # shutdown would have been registered, for the first refresh.
+            config_entry=None,
         )
+        self.config_entry = config_entry
         self.data: dict[CredentialAddress, SlotCredential] = {}
         # Writes the lock has not yet been seen to hold, by address. This is the
         # whole of "unverified": an address is verified exactly when nothing is
