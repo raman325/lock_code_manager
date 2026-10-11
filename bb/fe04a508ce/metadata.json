@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "bbfe04a508ce",
+  "strategy": "manual-commit",
+  "branch": "fix/zwave-js-ui-supervision-fail",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bb/fe04a508ce/0/metadata.json",
+      "transcript": "/bb/fe04a508ce/0/full.jsonl",
+      "compact_transcript": "/bb/fe04a508ce/0/transcript.jsonl",
+      "content_hash": "/bb/fe04a508ce/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 952,
+    "cache_creation_tokens": 3293926,
+    "cache_read_tokens": 155766332,
+    "output_tokens": 537551,
+    "api_call_count": 437
+  }
+}
