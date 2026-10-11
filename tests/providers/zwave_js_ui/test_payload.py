@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from custom_components.lock_code_manager.domain.exceptions import LockOperationFailed
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     _project_user_code_result,
+    _raise_on_supervision_fail,
     _unwrap_mqtt_value,
 )
 
@@ -68,3 +70,38 @@ def test_unwrap_mqtt_value(raw, expected):
 def test_project_user_code_result(result, expected):
     """Only Available is empty; Enabled needs a usable string code to be known."""
     assert _project_user_code_result(result) == expected
+
+
+@pytest.mark.parametrize("operation", ["set", "clear"])
+def test_a_supervision_fail_refuses_the_write(operation):
+    """Supervision status Fail (2) is the lock refusing the command."""
+    with pytest.raises(LockOperationFailed, match="refused by the lock"):
+        _raise_on_supervision_fail(operation, 3, {"status": 2})
+
+
+@pytest.mark.parametrize("operation", ["set", "clear"])
+@pytest.mark.parametrize(
+    "result",
+    [
+        # node-zwave-js SupervisionStatus: 0 NoSupport, 1 Working, 255 Success.
+        pytest.param({"status": 255}, id="success"),
+        pytest.param(
+            {"status": 1, "remainingDuration": {"unit": "seconds", "value": 5}},
+            id="working",
+        ),
+        pytest.param({"status": 0}, id="no_support"),
+        # No result at all: the command went out unsupervised.
+        pytest.param(None, id="unsupervised"),
+        pytest.param({}, id="no_status"),
+        # ``True == 1`` and ``False == 0``: neither can equal Fail, and ``2``
+        # is only a refusal as a number.
+        pytest.param({"status": True}, id="boolean_true_status"),
+        pytest.param({"status": False}, id="boolean_false_status"),
+        pytest.param({"status": "2"}, id="string_status"),
+        pytest.param([2], id="list_result"),
+        pytest.param(2, id="bare_number"),
+    ],
+)
+def test_any_other_result_leaves_the_write_standing(operation, result):
+    """Only an explicit Fail changes what a successful api call means."""
+    _raise_on_supervision_fail(operation, 3, result)
