@@ -233,10 +233,7 @@ async def _async_save_locks_and_reload(
         data={**get_entry_config(config_entry).to_dict(), CONF_LOCKS: locks},
         options={},
     )
-    hass.async_create_task(
-        hass.config_entries.async_reload(config_entry.entry_id),
-        f"Reload config entry {config_entry.entry_id}",
-    )
+    hass.config_entries.async_schedule_reload(config_entry.entry_id)
 
 
 async def _async_validate_users_yaml(
@@ -886,13 +883,21 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                     errors = {"base": err.translation_key}
                     description_placeholders = err.placeholders
             if not errors:
-                if self.config_entry.state is not ConfigEntryState.LOADED:
+                if self.config_entry.state in (
+                    ConfigEntryState.SETUP_ERROR,
+                    ConfigEntryState.SETUP_RETRY,
+                ):
                     # Saved as reauth saves: with no update listener to apply
                     # it, a save left in `options` reports success while the
-                    # entry stays as it was. Written before the reload rather
+                    # entry stays failed. Written before the reload rather
                     # than left to Home Assistant, which writes the options
                     # only after this step returns -- after a reload started
                     # here has already read the entry.
+                    # Only these two states. Both are reached after migration,
+                    # so the entry's data no longer holds its users, and both
+                    # are ones Home Assistant will reload. Any other state that
+                    # is not loaded may be an entry that never migrated, whose
+                    # users this rewrite of its data would delete.
                     await _async_save_locks_and_reload(
                         self.hass, self.config_entry, user_input[CONF_LOCKS]
                     )
