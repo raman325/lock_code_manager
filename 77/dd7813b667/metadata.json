@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "77dd7813b667",
+  "strategy": "manual-commit",
+  "branch": "fix/zha-reply-matching",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/77/dd7813b667/0/metadata.json",
+      "transcript": "/77/dd7813b667/0/full.jsonl",
+      "compact_transcript": "/77/dd7813b667/0/transcript.jsonl",
+      "content_hash": "/77/dd7813b667/0/content_hash.txt",
+      "prompt": "/77/dd7813b667/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 970,
+    "cache_creation_tokens": 3318724,
+    "cache_read_tokens": 160711192,
+    "output_tokens": 549520,
+    "api_call_count": 446,
+    "subagent_tokens": {
+      "input_tokens": 244,
+      "cache_creation_tokens": 686918,
+      "cache_read_tokens": 18069587,
+      "output_tokens": 116425,
+      "api_call_count": 122
+    }
+  }
+}
