@@ -1,5 +1,10 @@
 """Test the helpers module."""
 
+from collections.abc import Callable
+import logging
+from typing import Any
+
+import probatio as vol
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -8,16 +13,26 @@ from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
+    ATTR_FLOOR_ID,
+    ATTR_LABEL_ID,
     CONF_PIN,
+    ENTITY_MATCH_ALL,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import area_registry as ar, entity_registry as er
+from homeassistant.helpers import (
+    area_registry as ar,
+    device_registry as dr,
+    entity_registry as er,
+    floor_registry as fr,
+    label_registry as lr,
+)
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_USERS,
     DOMAIN,
+    SERVICE_HARD_REFRESH_USERCODES,
 )
 from custom_components.lock_code_manager.domain.locks import get_locks_from_targets
 from custom_components.lock_code_manager.domain.queries import (
@@ -149,6 +164,147 @@ async def test_get_locks_from_targets_deduplicates(
     )
 
     assert len(locks) == 1
+
+
+def _lock_device_id(hass: HomeAssistant, lock_entity_id: str) -> str:
+    """Return the device a lock entity belongs to."""
+    entry = er.async_get(hass).async_get(lock_entity_id)
+    assert entry is not None
+    assert entry.device_id is not None
+    return entry.device_id
+
+
+def _area_on_lock_device(hass: HomeAssistant, _: MockConfigEntry) -> dict[str, Any]:
+    """Put the area on the lock's device only, as most integrations do."""
+    area = ar.async_get(hass).async_get_or_create("front_door")
+    dr.async_get(hass).async_update_device(
+        _lock_device_id(hass, LOCK_1_ENTITY_ID), area_id=area.id
+    )
+    assert er.async_get(hass).async_get(LOCK_1_ENTITY_ID).area_id is None
+    return {ATTR_AREA_ID: area.id}
+
+
+def _area_on_lock_entity(hass: HomeAssistant, _: MockConfigEntry) -> dict[str, Any]:
+    """Put the area on the lock entity itself."""
+    area = ar.async_get(hass).async_get_or_create("front_door")
+    er.async_get(hass).async_update_entity(LOCK_1_ENTITY_ID, area_id=area.id)
+    return {ATTR_AREA_ID: area.id}
+
+
+def _device(hass: HomeAssistant, _: MockConfigEntry) -> dict[str, Any]:
+    """Target the lock's device."""
+    return {ATTR_DEVICE_ID: _lock_device_id(hass, LOCK_1_ENTITY_ID)}
+
+
+def _floor(hass: HomeAssistant, _: MockConfigEntry) -> dict[str, Any]:
+    """Target the floor of the area the lock's device is in."""
+    floor = fr.async_get(hass).async_create("Ground")
+    area = ar.async_get(hass).async_create("front_door", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(
+        _lock_device_id(hass, LOCK_1_ENTITY_ID), area_id=area.id
+    )
+    return {ATTR_FLOOR_ID: floor.floor_id}
+
+
+def _label(hass: HomeAssistant, _: MockConfigEntry) -> dict[str, Any]:
+    """Target a label on the lock entity."""
+    label = lr.async_get(hass).async_create("Doors")
+    er.async_get(hass).async_update_entity(LOCK_1_ENTITY_ID, labels={label.label_id})
+    return {ATTR_LABEL_ID: label.label_id}
+
+
+def _area_with_unmanaged_lock(
+    hass: HomeAssistant, mock_lock_config_entry: MockConfigEntry
+) -> dict[str, Any]:
+    """Put a lock Lock Code Manager does not manage in the targeted area."""
+    area = ar.async_get(hass).async_get_or_create("front_door")
+    dev_reg = dr.async_get(hass)
+    dev_reg.async_update_device(
+        _lock_device_id(hass, LOCK_1_ENTITY_ID), area_id=area.id
+    )
+    unmanaged_device = dev_reg.async_get_or_create(
+        config_entry_id=mock_lock_config_entry.entry_id,
+        identifiers={("test", "lock.unmanaged")},
+    )
+    dev_reg.async_update_device(unmanaged_device.id, area_id=area.id)
+    er.async_get(hass).async_get_or_create(
+        "lock",
+        "test",
+        "unmanaged",
+        config_entry=mock_lock_config_entry,
+        device_id=unmanaged_device.id,
+    )
+    return {ATTR_AREA_ID: area.id}
+
+
+@pytest.mark.parametrize(
+    ("build_target", "refreshed"),
+    [
+        pytest.param(_area_on_lock_device, {LOCK_1_ENTITY_ID}, id="area_on_device"),
+        pytest.param(_area_on_lock_entity, {LOCK_1_ENTITY_ID}, id="area_on_entity"),
+        pytest.param(_device, {LOCK_1_ENTITY_ID}, id="device"),
+        pytest.param(_floor, {LOCK_1_ENTITY_ID}, id="floor"),
+        pytest.param(_label, {LOCK_1_ENTITY_ID}, id="label"),
+        pytest.param(
+            lambda hass, _: {
+                ATTR_DEVICE_ID: _lock_device_id(hass, LOCK_1_ENTITY_ID),
+                ATTR_ENTITY_ID: LOCK_2_ENTITY_ID,
+            },
+            {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID},
+            id="mixed_device_and_entity",
+        ),
+        pytest.param(
+            _area_with_unmanaged_lock, {LOCK_1_ENTITY_ID}, id="unmanaged_lock_skipped"
+        ),
+    ],
+)
+async def test_hard_refresh_usercodes_resolves_targets(
+    hass: HomeAssistant,
+    mock_lock_config_entry: MockConfigEntry,
+    lock_code_manager_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+    build_target: Callable[[HomeAssistant, MockConfigEntry], dict[str, Any]],
+    refreshed: set[str],
+) -> None:
+    """
+    hard_refresh_usercodes reaches the managed locks any entity service would.
+
+    Entities a target reaches without naming them are skipped quietly when they
+    are not managed locks; only an entity named directly earns a warning.
+    """
+    target = build_target(hass, mock_lock_config_entry)
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_HARD_REFRESH_USERCODES, target, blocking=True
+    )
+
+    locks = lock_code_manager_config_entry.runtime_data.locks
+    assert {
+        entity_id
+        for entity_id, lock in locks.items()
+        if lock.service_calls["hard_refresh_codes"]
+    } == refreshed
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+        and record.name.startswith(f"custom_components.{DOMAIN}")
+    ]
+
+
+async def test_hard_refresh_usercodes_rejects_entity_id_all(
+    hass: HomeAssistant,
+    mock_lock_config_entry: MockConfigEntry,
+    lock_code_manager_config_entry: MockConfigEntry,
+) -> None:
+    """hard_refresh_usercodes refuses "all", which names no entity to resolve."""
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_HARD_REFRESH_USERCODES,
+            {ATTR_ENTITY_ID: ENTITY_MATCH_ALL},
+            blocking=True,
+        )
 
 
 async def test_get_loaded_config_entry_raises_when_not_loaded(

@@ -9,13 +9,12 @@ from typing import Any
 
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, callback, split_entity_id
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import (
-    config_validation as cv,
-    device_registry as dr,
-    entity_registry as er,
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.target import (
+    TargetSelection,
+    async_extract_referenced_entity_ids,
 )
 
 from ..providers import BaseLock, resolve_provider_class_for_entity
@@ -114,37 +113,23 @@ def get_managed_lock(hass: HomeAssistant, lock_entity_id: str) -> BaseLock:
 def get_locks_from_targets(
     hass: HomeAssistant, target_data: dict[str, Any]
 ) -> set[BaseLock]:
-    """Get lock(s) from target IDs."""
-    area_ids: list[str] = cv.ensure_list(target_data.get(ATTR_AREA_ID, []))
-    device_ids: list[str] = cv.ensure_list(target_data.get(ATTR_DEVICE_ID, []))
-    entity_ids: list[str] = cv.ensure_list(target_data.get(ATTR_ENTITY_ID, []))
+    """
+    Get the managed lock(s) a service call's target refers to.
+
+    Targets resolve the way they do for any entity service, so an area
+    reaches a lock whose area is set on its device rather than on the entity.
+    """
+    selected = async_extract_referenced_entity_ids(hass, TargetSelection(target_data))
     managed_locks = get_managed_locks(hass)
-    lcm_lock_entity_ids = managed_locks.keys()
-    lock_entity_ids: set[str] = set()
-    ent_reg = er.async_get(hass)
-    lock_entity_ids.update(
-        ent.entity_id
-        for area_id in area_ids
-        for ent in er.async_entries_for_area(ent_reg, area_id)
-        if ent.domain == LOCK_DOMAIN
-    )
-    lock_entity_ids.update(
-        ent.entity_id
-        for device_id in device_ids
-        for ent in er.async_entries_for_device(ent_reg, device_id)
-        if ent.domain == LOCK_DOMAIN
-    )
-    # Split invalid (non-lock domain) from unmanaged lock entities for clearer logs.
+    # Split invalid (non-lock domain) from unmanaged lock entities for clearer
+    # logs. Only entities named directly are worth a warning: an area, device,
+    # floor or label is expected to reach entities that are not managed locks.
     invalid_entities: set[str] = set()
     unmanaged_entities: set[str] = set()
-    for entity_id in entity_ids:
-        domain = split_entity_id(entity_id)[0]
-        if domain != LOCK_DOMAIN:
+    for entity_id in selected.referenced:
+        if split_entity_id(entity_id)[0] != LOCK_DOMAIN:
             invalid_entities.add(entity_id)
-            continue
-        if entity_id in lcm_lock_entity_ids:
-            lock_entity_ids.add(entity_id)
-        else:
+        elif entity_id not in managed_locks:
             unmanaged_entities.add(entity_id)
 
     if invalid_entities:
@@ -162,6 +147,6 @@ def get_locks_from_targets(
 
     return {
         lock
-        for ent_id in (lock_entity_ids & lcm_lock_entity_ids)
-        if (lock := managed_locks.get(ent_id))
+        for entity_id in selected.referenced | selected.indirectly_referenced
+        if (lock := managed_locks.get(entity_id))
     }
