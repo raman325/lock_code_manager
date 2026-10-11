@@ -1,11 +1,12 @@
 """Test base class."""
 
 import asyncio
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 import contextlib
 from datetime import timedelta
 import logging
-import time
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -66,6 +67,76 @@ from custom_components.lock_code_manager.providers._util import (
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, MockLCMLock
 
 TEST_OPERATION_DELAY = 0.01
+
+_REAL_SLEEP = asyncio.sleep
+
+
+class RateLimitClock:
+    """
+    The rate limiter's clock and sleep, moved only by the test.
+
+    The clock stands still unless something sleeps on it, and a sleep
+    advances it by exactly the requested delay and returns at once. A test
+    asserts what the limiter asked to wait rather than how long the machine
+    took, so its verdict does not depend on load.
+
+    Waits are kept per task: a write starts a confirmation read in its own
+    task, and the sync tick runs in another, so the test reads only the waits
+    of the operations it started.
+    """
+
+    def __init__(self) -> None:
+        """Start the clock far from zero, like a real monotonic clock."""
+        self.now = 1_000.0
+        self._waits: list[tuple[asyncio.Task[Any] | None, float]] = []
+
+    def monotonic(self) -> float:
+        """Return the current controlled time."""
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        """Record the wait, advance the clock by it, and yield once."""
+        self._waits.append((asyncio.current_task(), delay))
+        self.now += delay
+        await _REAL_SLEEP(0)
+
+    def waits(self, task: asyncio.Task[Any] | None = None) -> list[float]:
+        """Return the waits one task asked for, the calling task by default."""
+        task = task or asyncio.current_task()
+        return [delay for waiter, delay in self._waits if waiter is task]
+
+
+class _AsyncioWithClockSleep:
+    """
+    ``asyncio`` as ``providers._base`` sees it, with ``sleep`` on the clock.
+
+    Patching ``asyncio.sleep`` itself would reach every coroutine on the
+    event loop, so only the provider module's reference is swapped.
+    """
+
+    def __init__(self, clock: RateLimitClock) -> None:
+        """Route ``sleep`` to the clock."""
+        self.sleep = clock.sleep
+
+    def __getattr__(self, name: str) -> Any:
+        """Hand every other attribute to the real ``asyncio``."""
+        return getattr(asyncio, name)
+
+
+@pytest.fixture
+def rate_limit_clock(lock_code_manager_config_entry) -> Iterator[RateLimitClock]:
+    """
+    Put the provider module's clock and sleep under test control.
+
+    Depends on the config entry so setup runs on the real clock and only the
+    test body runs on this one.
+    """
+    clock = RateLimitClock()
+    with (
+        patch.object(base_module, "time", SimpleNamespace(monotonic=clock.monotonic)),
+        patch.object(base_module, "asyncio", _AsyncioWithClockSleep(clock)),
+    ):
+        yield clock
 
 
 class MockLCMLockWithPush(MockLCMLock):
@@ -577,27 +648,20 @@ async def test_rate_limiting_set_usercode(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    rate_limit_clock: RateLimitClock,
 ):
     """Test that operations are rate limited with minimum delay between calls."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
     lock_provider._last_operation_time = 0.0
 
-    # First operation should execute immediately
-    start_time = time.monotonic()
+    # The last operation is long past, so the first one runs without waiting.
     await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
-    first_duration = time.monotonic() - start_time
+    assert rate_limit_clock.waits() == []
 
-    # First operation should be fast (< 0.2 seconds without rate limiting delay)
-    assert first_duration < 0.2
-
-    # Second operation should be rate limited
-    start_time = time.monotonic()
+    # No time passes between the two, so the second waits the whole delay.
     await lock_provider.async_internal_set_usercode(2, "2222", "Test 2")
-    second_duration = time.monotonic() - start_time
-
-    # Second operation should take at least the rate limit time
-    assert second_duration >= TEST_OPERATION_DELAY
+    assert rate_limit_clock.waits() == [TEST_OPERATION_DELAY]
 
     # Verify both explicit operations completed (sync manager may add more)
     assert len(lock_provider.service_calls["set_usercode"]) >= 2
@@ -607,74 +671,69 @@ async def test_rate_limiting_mixed_operations(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    rate_limit_clock: RateLimitClock,
 ):
     """Test that rate limiting applies across different operation types."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
     lock_provider._last_operation_time = 0.0
 
-    # First operation: set usercode
     await lock_provider.async_internal_set_usercode(1, "1111", "Test")
+    assert rate_limit_clock.waits() == []
 
-    # Second operation: clear usercode (different operation type, should still be rate limited)
-    start_time = time.monotonic()
+    # A clear right after a set waits the whole delay: the pacing is per lock,
+    # not per operation type.
     await lock_provider.async_internal_clear_usercode(2)
-    duration = time.monotonic() - start_time
-
-    # Should be rate limited even though it's a different operation type
-    assert duration >= TEST_OPERATION_DELAY
+    assert rate_limit_clock.waits() == [TEST_OPERATION_DELAY]
 
 
 async def test_rate_limiting_get_usercodes(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    rate_limit_clock: RateLimitClock,
 ):
     """Test that get operations are also rate limited."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
     lock_provider._last_operation_time = 0.0
 
-    # First get should be fast
-    start_time = time.monotonic()
     await lock_provider.async_internal_get_usercodes()
-    first_duration = time.monotonic() - start_time
-    assert first_duration < 0.2
+    assert rate_limit_clock.waits() == []
 
-    # Second get should be rate limited
-    start_time = time.monotonic()
     await lock_provider.async_internal_get_usercodes()
-    second_duration = time.monotonic() - start_time
-    assert second_duration >= TEST_OPERATION_DELAY
+    assert rate_limit_clock.waits() == [TEST_OPERATION_DELAY]
 
 
 async def test_operations_are_serialized(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    rate_limit_clock: RateLimitClock,
 ):
     """Test that multiple parallel operations are serialized by the lock."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
     lock_provider._last_operation_time = 0.0
 
-    # Start multiple operations in parallel
-    start_time = time.monotonic()
-    await asyncio.gather(
-        lock_provider.async_internal_set_usercode(1, "1111", "Test 1"),
-        lock_provider.async_internal_set_usercode(2, "2222", "Test 2"),
-        lock_provider.async_internal_set_usercode(3, "3333", "Test 3"),
-    )
-    total_duration = time.monotonic() - start_time
+    tasks = [
+        asyncio.create_task(
+            lock_provider.async_internal_set_usercode(
+                slot, str(slot) * 4, f"Test {slot}"
+            )
+        )
+        for slot in (1, 2, 3)
+    ]
+    await asyncio.gather(*tasks)
 
-    # With 3 operations and the test delay between each:
-    # - First operation: executes immediately
-    # - Second operation: waits once
-    # - Third operation: waits once
-    # Total should be at least 2 * TEST_OPERATION_DELAY
-    assert total_duration >= 2 * TEST_OPERATION_DELAY
-
-    # Verify all operations completed
+    # Each operation sees the one before it finish: the first runs at once and
+    # the other two each wait the whole delay. Operations that overlapped
+    # would count the time another one spent waiting as their own.
+    assert [rate_limit_clock.waits(task) for task in tasks] == [
+        [],
+        [TEST_OPERATION_DELAY],
+        [TEST_OPERATION_DELAY],
+    ]
     assert len(lock_provider.service_calls["set_usercode"]) == 3
 
 
@@ -682,30 +741,24 @@ async def test_connection_failure_does_not_rate_limit_next_operation(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    rate_limit_clock: RateLimitClock,
 ):
     """Test that failed connection checks do not advance rate limit timing."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Tighten delay to keep test quick
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
     lock_provider._last_operation_time = 0.0
 
     lock_provider.set_connected(False)
 
-    # First attempt should fail fast without waiting
-    start = time.monotonic()
     with pytest.raises(LockDisconnected):
         await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
-    failed_duration = time.monotonic() - start
-    assert failed_duration < 0.2
+    assert rate_limit_clock.waits() == []
 
-    # Reconnect and verify the next call is not delayed by the failed attempt
+    # No time passes, so a failed attempt that counted as an operation would
+    # make this one wait.
     lock_provider.set_connected(True)
-    start = time.monotonic()
     await lock_provider.async_internal_set_usercode(1, "2222", "Test 2")
-    succeeded_duration = time.monotonic() - start
-
-    assert succeeded_duration < 0.2
+    assert rate_limit_clock.waits() == []
 
 
 async def test_async_call_service_raises_operation_failed_on_error(
