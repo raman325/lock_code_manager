@@ -634,8 +634,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             vol.Schema(
                 {
                     **cv.ENTITY_SERVICE_FIELDS,
-                    # The standard field also accepts "all", which is not an
-                    # entity ID the target resolution can look up; refuse it.
+                    # The standard field also accepts "all" and "none", which
+                    # are not entity IDs the target resolution can look up;
+                    # refuse both.
                     vol.Optional(ATTR_ENTITY_ID): cv.entity_ids,
                 }
             ),

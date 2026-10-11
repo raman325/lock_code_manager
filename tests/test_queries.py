@@ -174,13 +174,27 @@ def _lock_device_id(hass: HomeAssistant, lock_entity_id: str) -> str:
     return entry.device_id
 
 
-def _area_on_lock_device(hass: HomeAssistant, _: MockConfigEntry) -> dict[str, Any]:
-    """Put the area on the lock's device only, as most integrations do."""
+def _area_on_lock_device(
+    hass: HomeAssistant, mock_lock_config_entry: MockConfigEntry
+) -> dict[str, Any]:
+    """
+    Put the area on the lock's device only, as most integrations do.
+
+    The device also carries a sensor, as real lock devices do, so the area
+    reaches an entity that is not a lock at all.
+    """
     area = ar.async_get(hass).async_get_or_create("front_door")
-    dr.async_get(hass).async_update_device(
-        _lock_device_id(hass, LOCK_1_ENTITY_ID), area_id=area.id
+    device_id = _lock_device_id(hass, LOCK_1_ENTITY_ID)
+    dr.async_get(hass).async_update_device(device_id, area_id=area.id)
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "sensor",
+        "test",
+        "lock_1_battery",
+        config_entry=mock_lock_config_entry,
+        device_id=device_id,
     )
-    assert er.async_get(hass).async_get(LOCK_1_ENTITY_ID).area_id is None
+    assert ent_reg.async_get(LOCK_1_ENTITY_ID).area_id is None
     return {ATTR_AREA_ID: area.id}
 
 
