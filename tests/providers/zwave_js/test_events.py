@@ -787,8 +787,8 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
     ``_uc_slot_status`` reads the User Code CC status value from the
     driver's cache; a slot the value database has never seen (e.g. one
     outside the fixture's populated range) raises ``NotFoundError`` there,
-    which resolves to an *unknown* (None) in-use state -- distinct from the explicitly-False case that maps zeros to
-    empty. Zeros must not be misread as "cleared" when in_use can't be
+    which resolves to an *unknown* (None) in-use state -- distinct from the
+    explicitly-False case that maps zeros to empty. Zeros must not be misread as "cleared" when in_use can't be
     determined at all.
     """
     mock_coordinator = MagicMock()
@@ -814,11 +814,11 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
-        (CodeSlotStatus.DISABLED, SlotCredential.empty()),
+        (CodeSlotStatus.AVAILABLE, SlotCredential.empty()),
         (None, SlotCredential.empty()),
         (CodeSlotStatus.ENABLED, SlotCredential.unreadable()),
     ],
-    ids=["not-in-use", "unknown", "occupied"],
+    ids=["free", "unknown", "occupied"],
 )
 async def test_uc_shim_empty_code_follows_occupancy(
     hass: HomeAssistant,

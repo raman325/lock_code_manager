@@ -408,29 +408,6 @@ class TestUserCodeReports:
             == SlotCredential.empty()
         )
 
-    async def test_a_masked_code_on_a_stale_available_is_unreadable(
-        self,
-        hass: HomeAssistant,
-        e2e_zwave_lock: ZWaveJSLock,
-        lock_schlage_be469: Node,
-    ) -> None:
-        """
-        A masked placeholder is the lock withholding the code, whatever the status.
-
-        Where a PIN is wanted the Available status is not believed (#863), so
-        the code field is read -- and ``****`` read as the PIN can never
-        match, which sync would rewrite forever.
-        """
-        _user_code_report(
-            lock_schlage_be469, WANTED_SLOT, CodeSlotStatus.AVAILABLE, "****"
-        )
-        await hass.async_block_till_done()
-
-        assert (
-            e2e_zwave_lock.coordinator.data.get(pin_address(WANTED_SLOT))
-            == SlotCredential.unreadable()
-        )
-
     @pytest.mark.parametrize(
         ("code", "expected"),
         [

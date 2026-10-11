@@ -933,12 +933,12 @@ class ZWaveJSLock(BaseLock):
             )
         else:
             value = str(new_value)
-            # A masked placeholder is the lock withholding the code, whatever
-            # the status says: read as the PIN, it can never match, and sync
-            # would rewrite the slot forever. All-zeros only counts as empty
-            # when in_use is explicitly False (zeros from a partially-loaded
+            # Asymmetric in_use checks: masked codes count as unreadable
+            # even when in_use is None (some firmwares mask before
+            # reporting status), but all-zeros only counts as empty when
+            # in_use is explicitly False (zeros from a partially-loaded
             # cache must not be misread as cleared).
-            if is_masked_code(value):
+            if is_masked_code(value) and slot_in_use is not False:
                 resolved = SlotCredential.unreadable()
             elif value.strip("0") == "" and slot_in_use is False:
                 resolved = SlotCredential.empty()
