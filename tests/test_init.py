@@ -2643,6 +2643,50 @@ async def test_a_new_instance_failing_setup_beside_an_unloading_one_is_stopped(
         assert await hass.config_entries.async_unload(failing_entry.entry_id)
 
 
+def _offline_issue(hass: HomeAssistant) -> ir.IssueEntry | None:
+    """Return the first lock's lock-offline repair, if there is one."""
+    return ir.async_get(hass).async_get_issue(
+        DOMAIN, per_lock_issue_id("lock_offline", LOCK_1_ENTITY_ID)
+    )
+
+
+def _raise_offline_issue_for_a_new_lock(hass: HomeAssistant) -> None:
+    """Raise the first lock's lock-offline repair, as a lock set up anew would."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        per_lock_issue_id("lock_offline", LOCK_1_ENTITY_ID),
+        is_fixable=False,
+        is_persistent=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="lock_offline",
+        translation_placeholders={"lock_entity_id": LOCK_1_ENTITY_ID},
+    )
+
+
+async def _set_up_the_first_lock(
+    hass: HomeAssistant,
+) -> tuple[MockConfigEntry, MockLCMLock, LockUsercodeUpdateCoordinator]:
+    """Set up an entry and return it with its first lock and that lock's coordinator."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="Torn Down"
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    lock = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert lock.coordinator is not None and lock.coordinator.last_update_success
+    return entry, lock, lock.coordinator
+
+
+async def _fail_polls_until_one_short_of_offline(
+    coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Fail polls until one more failure would raise the lock-offline repair."""
+    for _ in range(POLL_FAILURE_ALERT_THRESHOLD - 1):
+        await coordinator.async_refresh()
+
+
 @pytest.mark.parametrize("answer", ["fails", "answers"])
 async def test_a_poll_in_flight_when_the_lock_is_torn_down_records_nothing(
     hass: HomeAssistant,
@@ -2655,18 +2699,10 @@ async def test_a_poll_in_flight_when_the_lock_is_torn_down_records_nothing(
     The lock has failed one poll short of raising the lock-offline repair
     when a scheduled poll starts reading and the last entry holding the lock
     unloads. Whatever that read then says, the lock is gone: failing must not
-    raise the repair for it, and answering must not move its data.
+    raise the repair for it, and answering must neither move its data nor
+    clear a repair that is by then the lock set up in its place's.
     """
-    entry = MockConfigEntry(
-        domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="Torn Down"
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    lock = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock.coordinator
-    assert coordinator is not None and coordinator.last_update_success
-
+    entry, lock, coordinator = await _set_up_the_first_lock(hass)
     holding = {"read": False}
     reading = asyncio.Event()
     read_may_answer = asyncio.Event()
@@ -2683,8 +2719,7 @@ async def test_a_poll_in_flight_when_the_lock_is_torn_down_records_nothing(
         raise LockDisconnected("lock offline")
 
     with patch.object(MockLCMLock, "async_get_usercodes", _offline):
-        for _ in range(POLL_FAILURE_ALERT_THRESHOLD - 1):
-            await coordinator.async_refresh()
+        await _fail_polls_until_one_short_of_offline(coordinator)
         data_before = coordinator.data
 
         holding["read"] = True
@@ -2693,15 +2728,60 @@ async def test_a_poll_in_flight_when_the_lock_is_torn_down_records_nothing(
         )
         await reading.wait()
         assert await hass.config_entries.async_unload(entry.entry_id)
+        if answer == "answers":
+            _raise_offline_issue_for_a_new_lock(hass)
         read_may_answer.set()
         await hass.async_block_till_done()
 
-    assert (
-        ir.async_get(hass).async_get_issue(
-            DOMAIN, per_lock_issue_id("lock_offline", LOCK_1_ENTITY_ID)
-        )
-        is None
-    )
+    assert (_offline_issue(hass) is not None) is (answer == "answers")
+    assert coordinator.data == data_before
+
+
+async def test_a_write_failing_after_the_lock_is_torn_down_records_nothing(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A write that fails once its lock is torn down charges nothing to the lock.
+
+    The lock is one failure short of the lock-offline repair; the sync layer
+    reporting a late write's connectivity failure must not raise it for a
+    lock that is gone.
+    """
+    entry, lock, coordinator = await _set_up_the_first_lock(hass)
+    with patch.object(
+        lock, "async_get_usercodes", side_effect=LockDisconnected("lock offline")
+    ):
+        await _fail_polls_until_one_short_of_offline(coordinator)
+    interval_before = coordinator.update_interval
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+    coordinator.note_connectivity_failure()
+    await hass.async_block_till_done()
+
+    assert _offline_issue(hass) is None
+    assert coordinator.update_interval == interval_before
+
+
+async def test_a_push_after_the_lock_is_torn_down_records_nothing(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A push that arrives once its lock is torn down changes nothing.
+
+    It must neither move the gone lock's data nor clear the lock-offline
+    repair, which is by then the lock set up in its place's.
+    """
+    entry, _lock, coordinator = await _set_up_the_first_lock(hass)
+    data_before = coordinator.data
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    _raise_offline_issue_for_a_new_lock(hass)
+
+    coordinator.push_update({1: SlotCredential.known("0000")})
+    await hass.async_block_till_done()
+
+    assert _offline_issue(hass) is not None
     assert coordinator.data == data_before
 
 

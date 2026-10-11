@@ -235,6 +235,8 @@ class LockUsercodeUpdateCoordinator(
         leaves the address for the sync tick to charge once. Addresses with
         nothing pending are the lock's word as read.
         """
+        if self._shutdown_requested:
+            return self.data
         now = time.monotonic()
         out: dict[CredentialAddress, SlotCredential] = {}
         for address, cred in observed.items():
@@ -606,6 +608,8 @@ class LockUsercodeUpdateCoordinator(
 
     def _apply_backoff(self) -> None:
         """Record a connectivity failure and poll on a backoff until recovery."""
+        if self._shutdown_requested:
+            return
         self._lock_breaker.record_failure()
         if self._lock_breaker.tripped:
             # Poll on the backoff interval until a successful update clears the
@@ -706,6 +710,8 @@ class LockUsercodeUpdateCoordinator(
 
     def _reset_backoff(self) -> None:
         """Reset the lock breaker and restore the original update interval."""
+        if self._shutdown_requested:
+            return
         # A successful reach proves the lock is (now) reachable; from here on a
         # later drop is a genuine outage that may raise lock_offline.
         self._reached_once = True
@@ -730,10 +736,6 @@ class LockUsercodeUpdateCoordinator(
 
     async def async_get_usercodes(self) -> dict[CredentialAddress, SlotCredential]:
         """Fetch usercodes from the provider, normalize slot keys, and apply backoff handling."""
-        # A read still out when the coordinator shuts down answers for a lock
-        # that is gone. Failing, it charges no breaker and raises no repair;
-        # answering, it settles nothing and clears no repair, which by then may
-        # belong to the lock set up in its place.
         try:
             data = await self._lock.async_internal_get_usercodes()
         except LockBusy as err:
@@ -752,15 +754,12 @@ class LockUsercodeUpdateCoordinator(
                 return self.data
             raise UpdateFailed from err
         except LockCodeManagerError as err:
-            if not self._shutdown_requested:
-                self._apply_backoff()
+            self._apply_backoff()
             # Don't swallow into {}: DataUpdateCoordinator records any return as
             # a success, so an empty return fakes a "recovered" while the lock
             # is still unreachable (#1268).
             raise UpdateFailed from err
 
-        if self._shutdown_requested:
-            return self.data
         self._reset_backoff()
         return self._apply_read(self._normalize_keys(data))
 
@@ -827,8 +826,25 @@ class LockUsercodeUpdateCoordinator(
                 "Connection check failed for %s: %s", self._lock.lock.entity_id, err
             )
 
+    @callback
+    def async_set_updated_data(
+        self, data: dict[CredentialAddress, SlotCredential]
+    ) -> None:
+        """Set new data and notify listeners, unless shut down."""
+        if self._shutdown_requested:
+            return
+        super().async_set_updated_data(data)
+
     async def async_shutdown(self) -> None:
-        """Shut down the coordinator and clean up resources."""
+        """
+        Shut down the coordinator and clean up resources.
+
+        Whatever answers after this -- a read or write still out, a push --
+        answers for a lock that is gone, so the methods that record into the
+        breaker, the repairs and the data do nothing once shut down: a late
+        answer could otherwise raise a repair for the gone lock, or clear one
+        that by then belongs to the lock set up in its place.
+        """
         # Nothing may be looked at again: a look already in flight is
         # cancelled, and an empty pending set arms no timer after it.
         self._pending.clear()
