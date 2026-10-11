@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "c01fc0686ade",
+  "strategy": "manual-commit",
+  "branch": "fix/shared-coordinator-lifetime",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c0/1fc0686ade/0/metadata.json",
+      "transcript": "/c0/1fc0686ade/0/full.jsonl",
+      "compact_transcript": "/c0/1fc0686ade/0/transcript.jsonl",
+      "content_hash": "/c0/1fc0686ade/0/content_hash.txt",
+      "prompt": "/c0/1fc0686ade/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1136,
+    "cache_creation_tokens": 4064860,
+    "cache_read_tokens": 210260149,
+    "output_tokens": 617007,
+    "api_call_count": 525
+  }
+}
