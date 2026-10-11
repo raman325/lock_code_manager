@@ -2603,6 +2603,44 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         assert result["type"] == "create_entry"
         assert result["data"][CONF_LOCKS] == [LOCK_2_ENTITY_ID]
 
+    async def test_options_flow_refuses_a_lock_an_unloaded_entry_manages(
+        self, hass: HomeAssistant, mock_lock_config_entry
+    ) -> None:
+        """
+        An entry that is not loaded still holds its numbers on its locks.
+
+        An entry waiting to retry setup, or never set up, has no runtime
+        data, but it will write its slots once it loads. Its stored config is
+        what counts until then.
+        """
+        entry = _entry_with_users(
+            hass, [LOCK_1_ENTITY_ID], {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+        )
+        await _async_set_up(hass, entry)
+        other = _entry_with_users(
+            hass,
+            [LOCK_2_ENTITY_ID],
+            {"Someone": {CONF_ENABLED: True, CONF_PIN: "4321"}},
+            title="other",
+            unique_id="other",
+        )
+        assert other.state is ConfigEntryState.NOT_LOADED
+        assert not hasattr(other, "runtime_data")
+        started = await hass.config_entries.options.async_init(entry.entry_id)
+
+        result = await hass.config_entries.options.async_configure(
+            started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+        )
+
+        assert result["type"] == "form"
+        assert result["errors"] == {"base": "slots_already_configured"}
+        assert result["description_placeholders"] == {
+            "lock": LOCK_2_ENTITY_ID,
+            "entry_title": "other",
+            "common_slots": "1",
+        }
+        assert list(get_entry_config(entry).locks) == [LOCK_1_ENTITY_ID]
+
 
 def _suggested_values(result) -> dict[str, object]:
     """Read back what a re-shown form offers the user for each field."""
