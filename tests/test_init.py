@@ -80,6 +80,7 @@ from custom_components.lock_code_manager.const import (
     STRATEGY_PATH,
 )
 from custom_components.lock_code_manager.domain.config import (
+    EntryConfig,
     build_slot_device_identifier,
     build_slot_unique_id,
 )
@@ -3121,6 +3122,128 @@ async def test_a_save_repairs_an_entry_whose_failed_setup_left_runtime_data(
     assert entry.state is ConfigEntryState.LOADED
     assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
     assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+
+
+async def _async_fail_setup_after_runtime_data(
+    hass: HomeAssistant, entry: MockConfigEntry
+) -> None:
+    """Leave `entry` failed by a setup that got as far as assigning `runtime_data`."""
+    await hass.config_entries.async_unload(entry.entry_id)
+    with patch(
+        "custom_components.lock_code_manager._async_prune_orphaned_lock_entities",
+        side_effect=RuntimeError,
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert hasattr(entry, "runtime_data")
+
+
+@pytest.mark.parametrize("unload", [False, True], ids=["failed", "unloaded"])
+async def test_a_failed_setup_s_cached_config_is_not_the_entry_s_config(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    unload: bool,
+) -> None:
+    """
+    An entry whose setup failed is read from what it stores.
+
+    Home Assistant keeps `runtime_data` on an entry whose setup failed after
+    assigning it, and unloading an entry that is not loaded keeps it too. Its
+    cached config is the failed run's, and predates anything saved since.
+    """
+    entry = lock_code_manager_config_entry
+    await _async_fail_setup_after_runtime_data(hass, entry)
+    if unload:
+        await hass.config_entries.async_unload(entry.entry_id)
+        assert entry.state is ConfigEntryState.NOT_LOADED
+        assert hasattr(entry, "runtime_data")
+
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+
+    assert get_entry_config(entry).locks == (LOCK_1_ENTITY_ID,)
+
+
+async def test_the_options_form_offers_a_failed_entry_s_saved_locks(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """The form a user repairs a failed entry with starts from what it stores."""
+    entry = lock_code_manager_config_entry
+    await _async_fail_setup_after_runtime_data(hass, entry)
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    [locks_key] = result["data_schema"].schema
+    assert locks_key.default() == [LOCK_1_ENTITY_ID]
+
+
+async def test_a_setup_reads_the_config_it_is_setting_up(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    A setup after a failed one sees what was saved since, not the failed run's view.
+
+    Read after the setup has assigned its own `runtime_data`; setup's own check
+    for a missing lock, which reads before that, is covered by
+    `test_a_save_repairs_an_entry_whose_failed_setup_left_runtime_data`.
+    """
+    entry = lock_code_manager_config_entry
+    await _async_fail_setup_after_runtime_data(hass, entry)
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    prune = lock_code_manager._async_prune_orphaned_lock_entities
+    seen: list[tuple[ConfigEntryState, tuple[str, ...]]] = []
+
+    def _recording_prune(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
+        seen.append((config_entry.state, get_entry_config(config_entry).locks))
+        prune(hass, config_entry)
+
+    with patch.object(
+        lock_code_manager, "_async_prune_orphaned_lock_entities", _recording_prune
+    ):
+        await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert seen == [(ConfigEntryState.SETUP_IN_PROGRESS, (LOCK_1_ENTITY_ID,))]
+    assert entry.state is ConfigEntryState.LOADED
+    assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+
+
+async def test_a_loaded_entry_answers_from_its_cached_config(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    A loaded entry, and one unloading, answer from the view last applied.
+
+    The cache is set apart from the stored data here, so only a read that
+    went through it can find it.
+    """
+    entry = lock_code_manager_config_entry
+    cached = EntryConfig.from_mapping({CONF_LOCKS: [LOCK_1_ENTITY_ID]})
+    entry.runtime_data.config = cached
+
+    assert get_entry_config(entry) is cached
+
+    unload_lock = lock_code_manager.async_unload_lock
+    seen: list[tuple[ConfigEntryState, bool]] = []
+
+    async def _recording_unload_lock(
+        hass: HomeAssistant, config_entry: MockConfigEntry, *args, **kwargs
+    ) -> None:
+        seen.append((config_entry.state, get_entry_config(config_entry) is cached))
+        await unload_lock(hass, config_entry, *args, **kwargs)
+
+    with patch.object(lock_code_manager, "async_unload_lock", _recording_unload_lock):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+    assert seen == [(ConfigEntryState.UNLOAD_IN_PROGRESS, True)]
 
 
 async def test_an_options_save_on_a_failed_entry_keeps_what_the_form_never_asked_about(
