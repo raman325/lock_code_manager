@@ -860,7 +860,6 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                         if lock_entity_id not in config.locks
                     ],
                     config.slot_numbers,
-                    self.config_entry,
                 )
             if not errors and config.slot_numbers:
                 # The users are not on this form, but the numbers they hold
