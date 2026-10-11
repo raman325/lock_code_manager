@@ -205,12 +205,11 @@ class LockUsercodeUpdateCoordinator(
 
         Asked of the entry that owns the slot on this lock: entries sharing a
         lock share its coordinator, which belongs to none of them. A caller
-        that already holds the owning entry
-        passes it as ``owner``; otherwise it is found among the entries
-        keeping their slots on this lock. A slot none of them owns, a disabled
-        slot and an enabled-but-blank slot map to ``SlotCredential.empty()``;
-        an enabled slot with a configured Personal Identification Number maps
-        to ``SlotCredential.known(pin)``.
+        that already holds the owning entry passes it as ``owner``; otherwise
+        it is found among the entries keeping their slots on this lock. A slot
+        none of them owns, a disabled slot and an enabled-but-blank slot map to
+        ``SlotCredential.empty()``; an enabled slot with a configured Personal
+        Identification Number maps to ``SlotCredential.known(pin)``.
         """
         slot_num = _checked(address).user_ref
         entry = owner or find_entry_for_lock_slot(
