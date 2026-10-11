@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import json
+import time
 from typing import Any, Literal
 from unittest.mock import patch
 
@@ -337,6 +338,9 @@ class MockLCMLock(BaseLock):
         # after a clear -- which is the state a clear can never confirm.
         self.write_only: set[int] = set()
         self.service_calls: defaultdict[str, list] = defaultdict(list)
+        # When each set, clear, and read reached the lock, on the monotonic
+        # clock, so pacing tests can check the gaps between them.
+        self.run_times: list[float] = []
 
     @property
     def domain(self) -> str:
@@ -388,6 +392,7 @@ class MockLCMLock(BaseLock):
 
         Returns CONFIRMED if the value was changed, NO_CHANGE if already set.
         """
+        self.run_times.append(time.monotonic())
         if self.codes.get(code_slot) == usercode:
             return WriteResult.NO_CHANGE
         self.codes[code_slot] = usercode
@@ -406,6 +411,7 @@ class MockLCMLock(BaseLock):
         it has no users to adopt. Matching the base signature is what lets the
         release path pass it without special-casing the double.
         """
+        self.run_times.append(time.monotonic())
         if code_slot not in self.codes:
             return False
         self.codes.pop(code_slot, None)
@@ -416,6 +422,7 @@ class MockLCMLock(BaseLock):
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
         """Return dictionary of code slots and usercodes."""
+        self.run_times.append(time.monotonic())
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
         codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
