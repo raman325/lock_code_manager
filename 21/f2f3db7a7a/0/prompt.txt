@@ -3760,3 +3760,13 @@ I checked main first. I took main's condition, `hasattr(result, "status") and re
 ---
 
 Fix ci for 1623
+
+---
+
+<task-notification>
+<task-id>bstyxwcp1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/88689b8f-7a06-4f90-9808-9d17aef5d545/tasks/bstyxwcp1.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for PR 1623 CI to finish" completed (exit code 0)</summary>
+</task-notification>
