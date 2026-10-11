@@ -36,7 +36,7 @@ from ..const import (
 from .credentials import CredentialAddress, CredentialType, pin_address
 from .exceptions import LockBusy, LockCodeManagerError
 from .models import SlotCredential
-from .queries import find_entry_for_lock_slot, get_entry_config
+from .queries import entries_holding_lock, find_entry_for_lock_slot, get_entry_config
 from .resilience import CircuitBreaker
 from .util import per_lock_issue_id
 
@@ -172,6 +172,30 @@ class LockUsercodeUpdateCoordinator(
     def lock(self) -> BaseLock:
         """Return the lock."""
         return self._lock
+
+    @callback
+    def _schedule_refresh(self) -> None:
+        """
+        Schedule the next poll, unless every entry holding the lock disabled polling.
+
+        Home Assistant asks the coordinator's own config entry, and this one
+        has none: it belongs to the lock, which several entries can share. One
+        of them turning polling off must not starve another that still wants
+        it, so polling stops only when all of them have -- and a lock no entry
+        holds any more polls for no one.
+
+        Home Assistant applies a changed preference by reloading the entry,
+        and the entry's code sensors ask for a refresh as they are added back;
+        every refresh schedules the next, so the change is decided here then.
+        """
+        if all(
+            entry.pref_disable_polling
+            for entry in entries_holding_lock(
+                self.hass, self._lock.lock.entity_id, self._lock
+            )
+        ):
+            return
+        super()._schedule_refresh()
 
     def desired_credential(
         self, address: CredentialAddress, *, owner: ConfigEntry | None = None
