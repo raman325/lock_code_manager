@@ -5,6 +5,7 @@ from collections.abc import Collection, Iterator
 import contextlib
 from datetime import timedelta
 import logging
+import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -86,8 +87,14 @@ class RateLimitClock:
     """
 
     def __init__(self) -> None:
-        """Start the clock far from zero, like a real monotonic clock."""
-        self.now = 1_000.0
+        """
+        Start where the real clock is.
+
+        The provider keeps what it read from this clock -- the last operation
+        time, the turn's start -- after the test, so those must still make
+        sense against the real clock once the patch is gone.
+        """
+        self.now = time.monotonic()
         self._waits: list[tuple[asyncio.Task[Any] | None, float]] = []
 
     def monotonic(self) -> float:
@@ -137,6 +144,23 @@ def rate_limit_clock(lock_code_manager_config_entry) -> Iterator[RateLimitClock]
         patch.object(base_module, "asyncio", _AsyncioWithClockSleep(clock)),
     ):
         yield clock
+
+
+async def _arm_rate_limit(hass: HomeAssistant, lock: BaseLock) -> None:
+    """
+    Wait out background work, then give ``lock`` a short delay last used long ago.
+
+    The sync tick, the coordinator's refresh, and confirmation reads take the
+    lock's turn from tasks of their own. One still holding or queued for the
+    turn when the test's first operation arrives makes that operation wait
+    for a reason the test is not about. Once every task has finished nothing
+    else runs until the caller yields, and the caller's first operation takes
+    the turn without yielding. Call it in the test body: the hop from a
+    fixture to the body runs the event loop, and a timer can fire there.
+    """
+    await hass.async_block_till_done(wait_background_tasks=True)
+    lock._min_operation_delay = TEST_OPERATION_DELAY
+    lock._last_operation_time = 0.0
 
 
 class MockLCMLockWithPush(MockLCMLock):
@@ -652,8 +676,7 @@ async def test_rate_limiting_set_usercode(
 ):
     """Test that operations are rate limited with minimum delay between calls."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    lock_provider._last_operation_time = 0.0
+    await _arm_rate_limit(hass, lock_provider)
 
     # The last operation is long past, so the first one runs without waiting.
     await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
@@ -675,8 +698,7 @@ async def test_rate_limiting_mixed_operations(
 ):
     """Test that rate limiting applies across different operation types."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    lock_provider._last_operation_time = 0.0
+    await _arm_rate_limit(hass, lock_provider)
 
     await lock_provider.async_internal_set_usercode(1, "1111", "Test")
     assert rate_limit_clock.waits() == []
@@ -695,8 +717,7 @@ async def test_rate_limiting_get_usercodes(
 ):
     """Test that get operations are also rate limited."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    lock_provider._last_operation_time = 0.0
+    await _arm_rate_limit(hass, lock_provider)
 
     await lock_provider.async_internal_get_usercodes()
     assert rate_limit_clock.waits() == []
@@ -713,14 +734,15 @@ async def test_operations_are_serialized(
 ):
     """Test that multiple parallel operations are serialized by the lock."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    lock_provider._last_operation_time = 0.0
+    await _arm_rate_limit(hass, lock_provider)
 
+    # Eager, so the first operation takes the turn before the body yields.
     tasks = [
-        asyncio.create_task(
+        hass.async_create_task(
             lock_provider.async_internal_set_usercode(
                 slot, str(slot) * 4, f"Test {slot}"
-            )
+            ),
+            eager_start=True,
         )
         for slot in (1, 2, 3)
     ]
@@ -745,8 +767,7 @@ async def test_connection_failure_does_not_rate_limit_next_operation(
 ):
     """Test that failed connection checks do not advance rate limit timing."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    lock_provider._last_operation_time = 0.0
+    await _arm_rate_limit(hass, lock_provider)
 
     lock_provider.set_connected(False)
 
