@@ -937,6 +937,26 @@ class SlotSyncManager:
         try:
             was_set = await self._perform_sync(snapshot)
         except CodeRejectedError as err:
+            if snapshot.active_state != STATE_ON:
+                # A refused clear leaves the code on the lock. Disabling the
+                # slot would only ask for the same clear again, every tick,
+                # and would switch off a slot the user may have left enabled.
+                _LOGGER.error(
+                    "%s: Lock refused to clear the code: %s. Suspending sync "
+                    "until the slot's PIN or active state changes.",
+                    self._log_prefix,
+                    err,
+                )
+                self._suspend_slot(
+                    snapshot,
+                    f"Lock **{self._lock.lock.entity_id}**: slot "
+                    f"**{self._slot_num}** should be empty, but the lock "
+                    f"refused to remove its code. The code may still be on "
+                    f"the lock and may still open the door.\n\n{err}\n\n"
+                    f"Sync resumes when this slot's PIN or active state "
+                    f"changes, or once the code is gone from the lock.",
+                )
+                return
             _LOGGER.error("%s: Code rejected: %s", self._log_prefix, err)
             await self._disable_slot(
                 f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "

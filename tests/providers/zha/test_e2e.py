@@ -17,9 +17,11 @@ from homeassistant.components.text import (
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    CONF_CONDITION,
     CONF_ENABLED,
     CONF_PIN,
     SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
     STATE_OFF,
     STATE_ON,
 )
@@ -47,6 +49,10 @@ from .helpers import (
 )
 
 CONFIGURED_PINS = {slot: config["pin"] for slot, config in ZHA_LCM_CONFIG_SLOTS.items()}
+# A PIN for slot 1 that differs from the one it is configured with.
+NEW_PIN = "9876"
+# The entity that gates slot 1 in the tests that give it a condition.
+SLOT_1_CONDITION = "input_boolean.slot_1_access"
 # A user on the lock that no Lock Code Manager entry manages.
 UNMANAGED_USER = 9
 _SET_PIN_CODE_ID = DoorLock.ServerCommandDefs.set_pin_code.id
@@ -131,16 +137,47 @@ def _writes(door_lock: DoorLockStandIn, name: str) -> list[int]:
     ]
 
 
+async def _switch_slot_1(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry, service: str
+) -> None:
+    """Turn slot 1's enabled switch on or off."""
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        service,
+        {
+            ATTR_ENTITY_ID: slot_entity_id(
+                hass, SWITCH_DOMAIN, lcm_config_entry, 1, CONF_ENABLED
+            )
+        },
+        blocking=True,
+    )
+
+
 async def _disable_slot_1(
     hass: HomeAssistant, lcm_config_entry: MockConfigEntry
 ) -> None:
     """Turn slot 1 off, so sync clears its code from the lock."""
+    await _switch_slot_1(hass, lcm_config_entry, SERVICE_TURN_OFF)
+
+
+async def _enable_slot_1(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> None:
+    """Turn slot 1 back on, so sync wants its configured code on the lock."""
+    await _switch_slot_1(hass, lcm_config_entry, SERVICE_TURN_ON)
+
+
+async def _set_slot_1_pin(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry, pin: str
+) -> None:
+    """Set slot 1's PIN; an empty one makes sync clear its code from the lock."""
     await hass.services.async_call(
-        SWITCH_DOMAIN,
-        SERVICE_TURN_OFF,
-        {
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        {ATTR_VALUE: pin},
+        target={
             ATTR_ENTITY_ID: slot_entity_id(
-                hass, SWITCH_DOMAIN, lcm_config_entry, 1, CONF_ENABLED
+                hass, TEXT_DOMAIN, lcm_config_entry, 1, CONF_PIN
             )
         },
         blocking=True,
@@ -151,34 +188,40 @@ async def _remove_slot_1_pin(
     hass: HomeAssistant, lcm_config_entry: MockConfigEntry
 ) -> None:
     """Empty slot 1's PIN, so sync clears its code from the lock."""
-    await hass.services.async_call(
-        TEXT_DOMAIN,
-        SERVICE_SET_VALUE,
-        {ATTR_VALUE: ""},
-        target={
-            ATTR_ENTITY_ID: slot_entity_id(
-                hass, TEXT_DOMAIN, lcm_config_entry, 1, CONF_PIN
-            )
-        },
-        blocking=True,
-    )
+    await _set_slot_1_pin(hass, lcm_config_entry, "")
 
 
-def _slot_1_repairs(
+async def _give_slot_1_a_new_pin_and_enable_it(
     hass: HomeAssistant, lcm_config_entry: MockConfigEntry
-) -> list[ir.IssueEntry]:
-    """Return every repair that names slot 1, disabling or suspending it."""
-    lock = _zha_lock(lcm_config_entry)
-    issue_ids = (
-        f"slot_disabled_{lcm_config_entry.entry_id}_1",
-        f"slot_suspended_{lcm_config_entry.entry_id}_{lock.lock.entity_id}_1",
+) -> None:
+    """Give slot 1 a PIN other than the one on the lock, and turn it back on."""
+    await _set_slot_1_pin(hass, lcm_config_entry, NEW_PIN)
+    await _enable_slot_1(hass, lcm_config_entry)
+
+
+async def _turn_slot_1_condition_off(
+    hass: HomeAssistant, _lcm_config_entry: MockConfigEntry
+) -> None:
+    """Turn slot 1's condition off while the slot stays enabled."""
+    hass.states.async_set(SLOT_1_CONDITION, STATE_OFF)
+    await hass.async_block_till_done()
+
+
+async def _turn_slot_1_condition_on(
+    hass: HomeAssistant, _lcm_config_entry: MockConfigEntry
+) -> None:
+    """Turn slot 1's condition back on."""
+    hass.states.async_set(SLOT_1_CONDITION, STATE_ON)
+    await hass.async_block_till_done()
+
+
+def _slot_1_disabled_repair(
+    hass: HomeAssistant, lcm_config_entry: MockConfigEntry
+) -> ir.IssueEntry | None:
+    """Return the repair reporting slot 1 as disabled, if there is one."""
+    return ir.async_get(hass).async_get_issue(
+        DOMAIN, f"slot_disabled_{lcm_config_entry.entry_id}_1"
     )
-    registry = ir.async_get(hass)
-    return [
-        issue
-        for issue_id in issue_ids
-        if (issue := registry.async_get_issue(DOMAIN, issue_id)) is not None
-    ]
 
 
 def _for_slot_1(frame: Frame) -> Answer:
@@ -560,50 +603,126 @@ class TestClearStatus:
         )
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "refused clear loops; fix pending refusal-rule decision "
-            "(design review flaw 9)"
-        ),
-    )
-    @pytest.mark.parametrize(
-        "make_slot_1_clear",
-        [
-            pytest.param(_disable_slot_1, id="slot_disabled"),
-            pytest.param(_remove_slot_1_pin, id="pin_removed"),
-        ],
-    )
-    async def test_a_clear_the_lock_keeps_refusing_is_not_sent_forever(
-        self,
+
+@_CLUSTER_TYPES
+class TestRefusedClear:
+    """A clear the lock refuses in its own reply suspends the slot, once."""
+
+    @pytest.fixture
+    def lcm_slots(self, hass: HomeAssistant) -> dict[int, dict[str, Any]]:
+        """Gate slot 1 on a condition that starts on, so it can be turned off."""
+        hass.states.async_set(SLOT_1_CONDITION, STATE_ON)
+        return {
+            **ZHA_LCM_CONFIG_SLOTS,
+            1: {**ZHA_LCM_CONFIG_SLOTS[1], CONF_CONDITION: SLOT_1_CONDITION},
+        }
+
+    @staticmethod
+    async def _refuse_every_clear_of_slot_1(
         hass: HomeAssistant,
         lcm_config_entry: MockConfigEntry,
         door_lock: DoorLockStandIn,
         make_slot_1_clear: Any,
     ) -> None:
-        """
-        A clear the lock refuses in its own reply, every time, stops and is reported.
-
-        The refusal disables the slot, and a disabled slot wants its code
-        cleared -- the very request the lock refused -- while the code stays
-        on the lock. Disabling also resets the slot breaker, so nothing is
-        ever charged: the same clear went out on every tick, with no end and
-        no suspension. The user is owed a repair, and the lock a rest.
-        """
+        """Sync every slot, then have the lock refuse each clear of slot 1."""
         await _run_ticks(hass)
-        door_lock.answers["clear_pin_code"] = lambda _request: lock_frame(
-            door_lock.cluster,
-            "clear_pin_code_response",
-            status=_DOOR_LOCK_GENERAL_FAILURE,
+        assert door_lock.codes == CONFIGURED_PINS
+        door_lock.answers["clear_pin_code"] = _for_slot_1(
+            lock_frame(
+                door_lock.cluster,
+                "clear_pin_code_response",
+                status=_DOOR_LOCK_GENERAL_FAILURE,
+            )
         )
-
         await make_slot_1_clear(hass, lcm_config_entry)
         for _ in range(4 * MAX_SYNC_ATTEMPTS):
             await async_advance_time(hass, TICK_INTERVAL)
 
-        assert door_lock.codes[1] == CONFIGURED_PINS[1]
+    @pytest.mark.parametrize(
+        ("make_slot_1_clear", "enabled_after"),
+        [
+            pytest.param(_disable_slot_1, STATE_OFF, id="slot_disabled"),
+            # Emptying an enabled slot's PIN turns the slot off by itself.
+            pytest.param(_remove_slot_1_pin, STATE_OFF, id="pin_removed"),
+            pytest.param(_turn_slot_1_condition_off, STATE_ON, id="condition_off"),
+        ],
+    )
+    async def test_a_clear_the_lock_keeps_refusing_suspends_the_slot(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        make_slot_1_clear: Any,
+        enabled_after: str,
+    ) -> None:
+        """
+        A refused clear is sent once, then the slot is suspended and reported.
+
+        Disabling the slot for the refusal asked for the same clear again,
+        and reset the slot breaker as it did, so the clear went out on every
+        tick for as long as the lock kept refusing it. It also switched off
+        a slot whose condition, not its user, wanted it empty. The code is
+        still on the lock, so the repair says so.
+        """
+        await self._refuse_every_clear_of_slot_1(
+            hass, lcm_config_entry, door_lock, make_slot_1_clear
+        )
+
+        assert _writes(door_lock, "clear_pin_code").count(1) == 1
+        suspension = _slot_suspension(hass, lcm_config_entry, 1)
+        assert suspension is not None
+        assert suspension.translation_placeholders is not None
+        reason = suspension.translation_placeholders["reason"]
+        assert "may still be on the lock" in reason
+        assert _slot_1_disabled_repair(hass, lcm_config_entry) is None
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
-        assert _slot_1_repairs(hass, lcm_config_entry)
-        assert _writes(door_lock, "clear_pin_code").count(1) <= MAX_SYNC_ATTEMPTS
+        assert door_lock.codes[1] == CONFIGURED_PINS[1]
+        assert _slot_enabled_state(hass, lcm_config_entry, 1) == enabled_after
         assert door_lock.codes[2] == CONFIGURED_PINS[2]
         assert _in_sync_state(hass, lcm_config_entry, 2) == STATE_ON
+
+    @pytest.mark.parametrize(
+        ("make_slot_1_clear", "change_slot_1_target", "pin_after"),
+        [
+            pytest.param(
+                _disable_slot_1,
+                _enable_slot_1,
+                CONFIGURED_PINS[1],
+                id="slot_re_enabled",
+            ),
+            pytest.param(
+                _remove_slot_1_pin,
+                _give_slot_1_a_new_pin_and_enable_it,
+                NEW_PIN,
+                id="pin_re_entered",
+            ),
+            pytest.param(
+                _turn_slot_1_condition_off,
+                _turn_slot_1_condition_on,
+                CONFIGURED_PINS[1],
+                id="condition_on",
+            ),
+        ],
+    )
+    async def test_a_slot_suspended_for_a_refused_clear_resumes_on_a_new_target(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        make_slot_1_clear: Any,
+        change_slot_1_target: Any,
+        pin_after: str,
+    ) -> None:
+        """A new PIN or active state for the slot ends the suspension, and it syncs."""
+        await self._refuse_every_clear_of_slot_1(
+            hass, lcm_config_entry, door_lock, make_slot_1_clear
+        )
+        assert _slot_suspension(hass, lcm_config_entry, 1) is not None
+
+        await change_slot_1_target(hass, lcm_config_entry)
+        await _run_ticks(hass)
+
+        assert door_lock.codes[1] == pin_after
+        assert _in_sync_state(hass, lcm_config_entry, 1) == STATE_ON
+        assert _slot_suspension(hass, lcm_config_entry, 1) is None
+        assert _writes(door_lock, "clear_pin_code").count(1) == 1
