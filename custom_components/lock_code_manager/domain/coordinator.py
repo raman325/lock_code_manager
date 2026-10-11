@@ -203,9 +203,9 @@ class LockUsercodeUpdateCoordinator(
         """
         Return the credential LCM wants at an address.
 
-        Asked of the entry that owns the slot on this lock, which need not be
-        the entry this coordinator was created for: entries sharing a lock
-        share its coordinator. A caller that already holds the owning entry
+        Asked of the entry that owns the slot on this lock: entries sharing a
+        lock share its coordinator, which belongs to none of them. A caller
+        that already holds the owning entry
         passes it as ``owner``; otherwise it is found among the entries
         keeping their slots on this lock. A slot none of them owns, a disabled
         slot and an enabled-but-blank slot map to ``SlotCredential.empty()``;
