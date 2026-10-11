@@ -2410,6 +2410,165 @@ async def test_options_flow_refuses_a_lock_too_small_for_the_existing_slots(
     assert result["errors"] == {"base": "slot_out_of_range"}
     assert result["description_placeholders"]["num_slots"] == "1"
     assert result["description_placeholders"]["out_of_range_slots"] == "2"
+    _assert_options_error_renders(result)
+
+
+def _assert_options_error_renders(result) -> None:
+    """
+    Assert the options form has a sentence for its error, and all it names.
+
+    The options flow reads its errors from its own section of the strings,
+    not the setup flow's, so a key spelled out only for setup renders here as
+    the bare key. A sentence naming a placeholder the result does not supply
+    fails to render at all.
+    """
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+    supplied = result.get("description_placeholders") or {}
+    for key in result["errors"].values():
+        message = strings["options"]["error"][key]
+        missing = {
+            name for name in re.findall(r"\{(\w+)\}", message) if name not in supplied
+        }
+        assert not missing, f"{key} renders {missing} with nothing to fill them"
+
+
+async def test_options_flow_refuses_a_lock_whose_slots_another_entry_manages(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Adding a lock is refused when another entry manages this entry's numbers on it.
+
+    Each slot on a lock belongs to at most one entry. A lock added here
+    arrives carrying numbers that were issued without looking at it, so
+    nothing else stops two entries writing the same credential on it.
+    """
+    _entry_with_users(
+        hass,
+        [LOCK_2_ENTITY_ID],
+        {
+            "Alice": {CONF_ENABLED: True, CONF_PIN: "1111"},
+            "Bob": {CONF_ENABLED: True, CONF_PIN: "2222"},
+            "Carol": {CONF_ENABLED: True, CONF_PIN: "3333"},
+        },
+        title="other",
+        unique_id="other",
+    )
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
+            "User 2": {CONF_ENABLED: True, CONF_PIN: "5678"},
+        },
+    )
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+
+    result = await hass.config_entries.options.async_configure(
+        started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    assert result["errors"] == {"base": "slots_already_configured"}
+    # Only the numbers both entries hold: the other entry's third user does
+    # not collide with anyone here.
+    assert result["description_placeholders"] == {
+        "lock": LOCK_2_ENTITY_ID,
+        "entry_title": "other",
+        "common_slots": "1, 2",
+    }
+    _assert_options_error_renders(result)
+    assert list(get_entry_config(entry).locks) == [LOCK_1_ENTITY_ID]
+    assert not entry.options
+
+
+async def test_options_flow_accepts_a_shared_lock_when_the_numbers_differ(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Sharing a lock with another entry is fine; sharing a slot on it is not.
+
+    The same lock is offered to two entries: the one holding the other
+    entry's number is refused, the one holding a different number is not.
+    """
+    _entry_with_users(
+        hass,
+        [LOCK_2_ENTITY_ID],
+        {"Someone": {CONF_ENABLED: True, CONF_PIN: "4321"}},
+        title="other",
+        unique_id="other",
+    )
+    clashing = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+        unique_id="clashing",
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="test",
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=user_subentries(
+            {2: {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "1234"}}
+        ),
+    )
+    entry.add_to_hass(hass)
+
+    started = await hass.config_entries.options.async_init(clashing.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+
+    assert result["errors"] == {"base": "slots_already_configured"}
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+
+
+async def test_options_flow_saves_around_an_overlap_the_entry_already_has(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Only a lock being added is checked against the other entries' numbers.
+
+    An entry can already share numbers with another on a lock it holds, from
+    before this form checked for it. Every submission carries the whole lock
+    list, so checking all of it would refuse every edit until that conflict
+    was resolved somewhere else. A newly added lock is still checked.
+    """
+    _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+        {"Someone": {CONF_ENABLED: True, CONF_PIN: "4321"}},
+        title="other",
+        unique_id="other",
+    )
+    entry = _entry_with_users(
+        hass, [LOCK_2_ENTITY_ID], {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+    )
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+
+    result = await hass.config_entries.options.async_configure(
+        started["flow_id"], {CONF_LOCKS: [LOCK_2_ENTITY_ID, LOCK_1_ENTITY_ID]}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "slots_already_configured"}
+    assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+
+    result = await hass.config_entries.options.async_configure(
+        started["flow_id"], {CONF_LOCKS: [LOCK_2_ENTITY_ID]}
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_2_ENTITY_ID]
 
 
 def _suggested_values(result) -> dict[str, object]:

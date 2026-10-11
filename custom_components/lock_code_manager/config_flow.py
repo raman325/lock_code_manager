@@ -847,6 +847,21 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             errors, description_placeholders = _check_unclaimed_mqtt_locks(
                 self.hass, user_input[CONF_LOCKS], config.locks
             )
+            if not errors:
+                # A lock added here arrives with numbers issued without looking
+                # at it, so another entry may already manage some of them on it.
+                # Only added locks: an overlap the entry already carries on a
+                # lock it holds must not refuse every later edit of its locks.
+                errors, description_placeholders = _check_common_slots(
+                    self.hass,
+                    [
+                        lock_entity_id
+                        for lock_entity_id in user_input[CONF_LOCKS]
+                        if lock_entity_id not in config.locks
+                    ],
+                    config.slot_numbers,
+                    self.config_entry,
+                )
             if not errors and config.slot_numbers:
                 # The users are not on this form, but the numbers they hold
                 # are what a new lock has to be able to hold. Without this a
