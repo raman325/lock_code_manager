@@ -41,6 +41,7 @@ from homeassistant.helpers import (
     entity_registry as er,
     issue_registry as ir,
 )
+from homeassistant.helpers.update_coordinator import REQUEST_REFRESH_DEFAULT_COOLDOWN
 from homeassistant.util import dt as dt_util, slugify
 
 from custom_components import lock_code_manager
@@ -2702,6 +2703,49 @@ async def test_a_poll_in_flight_when_the_lock_is_torn_down_records_nothing(
         is None
     )
     assert coordinator.data == data_before
+
+
+async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_leaves(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A shared lock's coordinator belongs to no entry, so its polls outlive any one.
+
+    The first entry builds the lock, the second shares it, and once the first
+    unloads, the scheduled poll keeps reading the lock for the second. The
+    code it is seen to read sits on a slot no entry manages, so nothing but
+    the poll reads it.
+    """
+    first_entry, second_entry = _sharing_entries()
+    for entry in (first_entry, second_entry):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
+    assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
+    assert lock.coordinator is not None
+    assert lock.coordinator.config_entry is None
+    assert not lock.supports_push
+
+    assert await hass.config_entries.async_unload(first_entry.entry_id)
+    await hass.async_block_till_done()
+    # Lets any refresh already requested run first, so the read below can
+    # only be the scheduled poll's.
+    async_fire_time_changed(
+        hass,
+        dt_util.utcnow() + timedelta(seconds=REQUEST_REFRESH_DEFAULT_COOLDOWN + 1),
+    )
+    await hass.async_block_till_done()
+    lock.codes[9] = "1357"
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + lock.usercode_scan_interval + timedelta(seconds=1)
+    )
+    await hass.async_block_till_done()
+
+    assert lock.coordinator.data[pin_address(9)] == SlotCredential.known("1357")
+
+    assert await hass.config_entries.async_unload(second_entry.entry_id)
 
 
 async def test_update_listener_slot_removal_handles_missing_and_failing_coordinators(
