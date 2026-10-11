@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "bb2d0f0e23b0",
+  "strategy": "manual-commit",
+  "branch": "fix/zwave-js-available-819",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bb/2d0f0e23b0/0/metadata.json",
+      "transcript": "/bb/2d0f0e23b0/0/full.jsonl",
+      "compact_transcript": "/bb/2d0f0e23b0/0/transcript.jsonl",
+      "content_hash": "/bb/2d0f0e23b0/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 972,
+    "cache_creation_tokens": 3327080,
+    "cache_read_tokens": 161270054,
+    "output_tokens": 552764,
+    "api_call_count": 447
+  }
+}
