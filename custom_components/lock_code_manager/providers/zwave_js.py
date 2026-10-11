@@ -914,8 +914,11 @@ class ZWaveJSLock(BaseLock):
         if status == CodeSlotStatus.AVAILABLE and not self._expects_pin(code_slot):
             # An Available slot holds nothing, whatever the code field
             # carries: a masked placeholder, zeros, or a leftover code
-            # (#819). Where a PIN is wanted, the status handler ignores
-            # Available as stale (#863), so the code field is read below.
+            # (#819). Where a PIN is wanted, Available may be stale (#863),
+            # so it does not empty the slot on its own: the code field is
+            # read below with the slot not in use, where an empty or
+            # all-zeros code reads empty and any other code, a masked one
+            # included, reads as that code.
             self._confirm_slot(code_slot, SlotCredential.empty())
             return
         # In use exactly when the status is Enabled, unknown without one:

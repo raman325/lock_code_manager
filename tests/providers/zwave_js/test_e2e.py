@@ -409,6 +409,36 @@ class TestUserCodeReports:
         )
 
     @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param(ZWAVE_JS_LCM_CONFIG_SLOTS[WANTED_SLOT]["pin"], id="pin"),
+            pytest.param("****", id="masked"),
+        ],
+    )
+    async def test_a_stale_available_does_not_empty_a_wanted_slot(
+        self,
+        hass: HomeAssistant,
+        e2e_zwave_lock: ZWaveJSLock,
+        lock_schlage_be469: Node,
+        code: str,
+    ) -> None:
+        """
+        Where a PIN is wanted, an Available status alone does not empty the slot.
+
+        Some locks announce Available after a PIN lands (#863); taken as
+        empty, sync would rewrite the slot forever. The code field is read
+        as it always was.
+        """
+        _user_code_report(
+            lock_schlage_be469, WANTED_SLOT, CodeSlotStatus.AVAILABLE, code
+        )
+        await hass.async_block_till_done()
+
+        assert e2e_zwave_lock.coordinator.data.get(
+            pin_address(WANTED_SLOT)
+        ) == SlotCredential.known(code)
+
+    @pytest.mark.parametrize(
         ("code", "expected"),
         [
             pytest.param("4321", SlotCredential.known("4321"), id="code"),
