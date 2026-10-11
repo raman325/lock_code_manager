@@ -36,7 +36,11 @@ from ..domain.credentials import (
     WriteResult,
     user_from_slot,
 )
-from ..domain.exceptions import CodeRejectedError, LockDisconnected
+from ..domain.exceptions import (
+    CodeRejectedError,
+    LockDisconnected,
+    LockOperationFailed,
+)
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import is_masked_code
@@ -67,22 +71,35 @@ def _write_status(
     cluster: DoorLock,
     request: foundation.ZCLCommandDef,
     response: foundation.ZCLCommandDef,
+    code_slot: int,
+    lock_entity_id: str,
 ) -> int | None:
     """
-    Return the status a set or clear's own reply gives, or None for no answer.
+    Return the status a set or clear's own reply gives, or None if it gives none.
 
     zigpy pairs a reply with its request by endpoint, cluster, direction and
     transaction sequence number, so any frame arriving on those can fill the
     request -- a Default Response to another command, the other write's
-    response -- and its status is about something else. Only ``response``, or
-    a Default Response naming ``request``, answers the write.
+    response, an event -- and its status is about something else. Only
+    ``response``, or a Default Response naming ``request``, answers the write.
+
+    Any other reply, including the raw bytes of a command zigpy could not
+    decode, leaves the write's outcome unknown: the lock may have refused
+    it. That raises ``LockOperationFailed``, so sync sends the write again and
+    the slot breaker counts it, rather than confirming a write that did not
+    land.
     """
     if _is_reply(result, cluster, response):
         status = getattr(result, "status", None)
     elif isinstance(result, _DEFAULT_RESPONSE) and result.command_id == request.id:
         status = result.status
     else:
-        return None
+        # The name only: a foreign frame can carry a code.
+        raise LockOperationFailed(
+            f"Lock {lock_entity_id}: {request.name} on slot {code_slot} was "
+            f"answered by a reply to something else "
+            f"({type(result).__name__}), so whether it landed is unknown"
+        )
     # A quirk may decode the status as None, or as something not a number.
     return status if isinstance(status, int) else None
 
@@ -340,8 +357,10 @@ class ZHALock(BaseLock):
         and reconnect handling apply, mirroring the OSError branch of
         the service-call wrapper.
 
-        Only the write's own reply can reject it (``_write_status``); a
-        reply that gives no status for this write leaves it standing.
+        Only the write's own reply can reject it, and a reply that is about
+        something else fails the write so sync sends it again
+        (``_write_status``). The write's own reply with no status leaves it
+        standing.
 
         ``user_id`` is ignored; slot-only providers address the credential
         by ``credential.slot``.
@@ -368,6 +387,8 @@ class ZHALock(BaseLock):
             cluster,
             DoorLock.ServerCommandDefs.set_pin_code,
             DoorLock.ClientCommandDefs.set_pin_code_response,
+            code_slot,
+            self.lock.entity_id,
         ):
             raise CodeRejectedError(
                 code_slot=code_slot,
@@ -402,6 +423,8 @@ class ZHALock(BaseLock):
             cluster,
             DoorLock.ServerCommandDefs.clear_pin_code,
             DoorLock.ClientCommandDefs.clear_pin_code_response,
+            code_slot,
+            self.lock.entity_id,
         ):
             raise CodeRejectedError(
                 code_slot=code_slot,

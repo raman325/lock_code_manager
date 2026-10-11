@@ -119,10 +119,18 @@ def _for_slot_1(frame: Frame) -> Answer:
     return lambda request: frame if request.user_id == 1 else None
 
 
-def _applied(door_lock: DoorLockStandIn, frame: Frame) -> Answer:
-    """Apply a set or clear as the lock would, but answer it with ``frame``."""
+def _applied_once(door_lock: DoorLockStandIn, frame: Frame) -> Answer:
+    """
+    Apply slot 1's first set or clear as the lock would, but answer it with ``frame``.
 
-    def _answer(request: Any) -> Frame:
+    Every later request, and every other slot's, is the lock's own to answer.
+    """
+    answered: list[int] = []
+
+    def _answer(request: Any) -> Frame | None:
+        if request.user_id != 1 or answered:
+            return None
+        answered.append(request.user_id)
         if request.command.name == "set_pin_code":
             door_lock.codes[request.user_id] = request.pin_code
         else:
@@ -130,6 +138,45 @@ def _applied(door_lock: DoorLockStandIn, frame: Frame) -> Answer:
         return frame
 
     return _answer
+
+
+def _foreign_replies(other_write: str) -> list[Any]:
+    """
+    Return frames about something other than a write, each built from a cluster.
+
+    ``other_write`` is the response of the write not being tested. Each frame
+    can fill the write's pending request, since zigpy pairs a reply with its
+    request by sequence number, and none of them says whether the write landed.
+    """
+    return [
+        pytest.param(
+            lambda _cluster: default_response(_LOCK_DOOR_ID, Status.FAILURE),
+            id="default_response_naming_another_command",
+        ),
+        pytest.param(
+            lambda cluster: lock_frame(cluster, other_write, status=Status.FAILURE),
+            id="the_other_writes_response",
+        ),
+        # Shares the Default Response's command id, and carries a status.
+        pytest.param(
+            lambda cluster: lock_frame(
+                cluster, "set_week_day_schedule_response", status=Status.FAILURE
+            ),
+            id="cluster_command_sharing_the_default_response_id",
+        ),
+        pytest.param(
+            lambda cluster: lock_frame(
+                cluster,
+                "operation_event_notification",
+                operation_event_source=DoorLock.OperationEventSource.Keypad,
+                operation_event_code=DoorLock.OperationEvent.Lock,
+                user_id=1,
+                pin=CONFIGURED_PINS[1],
+                local_time=0,
+            ),
+            id="operation_event",
+        ),
+    ]
 
 
 @_CLUSTER_TYPES
@@ -295,48 +342,47 @@ class TestWriteStatus:
         assert _slot_enabled_state(hass, lcm_config_entry, 1) == STATE_OFF
         assert _slot_enabled_state(hass, lcm_config_entry, 2) == STATE_ON
 
-    @pytest.mark.parametrize(
-        "unrelated",
-        [
-            pytest.param(
-                lambda _cluster: default_response(_LOCK_DOOR_ID, Status.FAILURE),
-                id="default_response_naming_another_command",
-            ),
-            pytest.param(
-                lambda cluster: lock_frame(
-                    cluster, "clear_pin_code_response", status=Status.FAILURE
-                ),
-                id="the_other_writes_response",
-            ),
-            # Shares the Default Response's command id, and carries a status.
-            pytest.param(
-                lambda cluster: lock_frame(
-                    cluster, "set_week_day_schedule_response", status=Status.FAILURE
-                ),
-                id="cluster_command_sharing_the_default_response_id",
-            ),
-        ],
-    )
-    async def test_a_failure_about_another_command_does_not_reject_the_code(
+    @pytest.mark.parametrize("foreign", _foreign_replies("clear_pin_code_response"))
+    async def test_a_refused_set_answered_by_another_frame_is_sent_again(
         self,
         hass: HomeAssistant,
         lcm_config_entry: MockConfigEntry,
         door_lock: DoorLockStandIn,
-        unrelated: Any,
+        foreign: Any,
     ) -> None:
         """
-        A failure frame that answers some other command says nothing of the set.
+        A set the lock refused, answered by a frame about something else, is retried.
 
-        zigpy pairs a reply with its request by sequence number, so such a
-        frame can fill the pending set. Read as the set's answer, its status
-        disabled the slot as though the lock had refused the code.
+        The frame says nothing of whether the set landed. Confirmed on its
+        strength, slot 1 read in sync while the lock held no code there;
+        taken as a refusal, the slot was disabled for another command's
+        failure.
         """
-        door_lock.answers["set_pin_code"] = _applied(
-            door_lock, unrelated(door_lock.cluster)
+        door_lock.answers["set_pin_code"] = _for_slot_1(foreign(door_lock.cluster))
+
+        await _run_ticks(hass)
+
+        assert 1 not in door_lock.codes
+        assert _writes(door_lock, "set_pin_code").count(1) >= 2
+        assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
+        assert _slot_enabled_state(hass, lcm_config_entry, 1) == STATE_ON
+
+    @pytest.mark.parametrize("foreign", _foreign_replies("clear_pin_code_response"))
+    async def test_a_set_answered_by_another_frame_converges_on_its_own_reply(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        foreign: Any,
+    ) -> None:
+        """A set the lock applied but another frame answered is sent again and syncs."""
+        door_lock.answers["set_pin_code"] = _applied_once(
+            door_lock, foreign(door_lock.cluster)
         )
 
         await _run_ticks(hass)
 
+        assert _writes(door_lock, "set_pin_code").count(1) == 2
         assert door_lock.codes == CONFIGURED_PINS
         for slot_num in CONFIGURED_PINS:
             assert _slot_enabled_state(hass, lcm_config_entry, slot_num) == STATE_ON
@@ -347,22 +393,52 @@ class TestWriteStatus:
 class TestClearStatus:
     """A clear's status is taken only from the reply that answers it."""
 
-    async def test_a_failure_about_another_command_does_not_fail_the_clear(
+    @pytest.mark.parametrize("foreign", _foreign_replies("set_pin_code_response"))
+    async def test_a_refused_clear_answered_by_another_frame_is_sent_again(
         self,
         hass: HomeAssistant,
         lcm_config_entry: MockConfigEntry,
         door_lock: DoorLockStandIn,
+        foreign: Any,
     ) -> None:
-        """A Default Response naming the set does not answer a clear."""
+        """
+        A clear the lock refused, answered by a frame about something else, is retried.
+
+        Confirmed on that frame's strength, the slot read empty while the lock
+        still held a code that opens the door.
+        """
         await _run_ticks(hass)
-        door_lock.answers["clear_pin_code"] = _applied(
-            door_lock, default_response(_SET_PIN_CODE_ID, Status.FAILURE)
+        door_lock.answers["clear_pin_code"] = _for_slot_1(foreign(door_lock.cluster))
+
+        await _disable_slot_1(hass, lcm_config_entry)
+        await _run_ticks(hass)
+
+        assert door_lock.codes[1] == CONFIGURED_PINS[1]
+        assert _writes(door_lock, "clear_pin_code").count(1) >= 2
+        assert _zha_lock(lcm_config_entry).coordinator.data.get(pin_address(1)) == (
+            SlotCredential.known(CONFIGURED_PINS[1])
+        )
+        assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
+
+    @pytest.mark.parametrize("foreign", _foreign_replies("set_pin_code_response"))
+    async def test_a_clear_answered_by_another_frame_converges_on_its_own_reply(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        foreign: Any,
+    ) -> None:
+        """A clear the lock applied but another frame answered is sent again and syncs."""
+        await _run_ticks(hass)
+        door_lock.answers["clear_pin_code"] = _applied_once(
+            door_lock, foreign(door_lock.cluster)
         )
 
         await _disable_slot_1(hass, lcm_config_entry)
         await _run_ticks(hass)
 
         assert 1 not in door_lock.codes
+        assert _writes(door_lock, "clear_pin_code").count(1) == 2
         assert _zha_lock(lcm_config_entry).coordinator.data.get(pin_address(1)) == (
             SlotCredential.empty()
         )

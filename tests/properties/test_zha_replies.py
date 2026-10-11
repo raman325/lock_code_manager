@@ -14,9 +14,11 @@ from __future__ import annotations
 from typing import Any, NamedTuple
 
 from hypothesis import given, strategies as st
+import pytest
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
 
+from custom_components.lock_code_manager.domain.exceptions import LockOperationFailed
 from custom_components.lock_code_manager.providers.zha import ZHALock, _write_status
 from tests.providers.zha.helpers import (
     QuirkedDoorLock,
@@ -136,12 +138,18 @@ def test_only_the_writes_own_reply_gives_it_a_status(
     A set or clear takes a status only from the reply that answers it.
 
     That is its own response command, as the lock's cluster decodes it, or a
-    Default Response naming the command sent. Any other frame, however it
-    carries a status, gives none, and the status given is the reply's own.
+    Default Response naming the command sent, and the status given is that
+    reply's own. Any other frame, however it carries a status, leaves the
+    write's outcome unknown, so the write fails to be sent again.
     """
     request, response = write
-    status = _write_status(drawn.reply, drawn.cluster, request, response)
     answers = drawn.kind == response.name or (
         drawn.kind == "default_response" and drawn.reply.command_id == request.id
     )
-    assert status == (drawn.reply.status if answers else None)
+    if not answers:
+        with pytest.raises(LockOperationFailed):
+            _write_status(drawn.reply, drawn.cluster, request, response, 1, "lock.test")
+        return
+    assert _write_status(
+        drawn.reply, drawn.cluster, request, response, 1, "lock.test"
+    ) == (drawn.reply.status)

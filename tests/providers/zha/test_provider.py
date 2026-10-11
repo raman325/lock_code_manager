@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,15 +20,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import MAX_SEARCHED_SLOT
+from custom_components.lock_code_manager.domain.coordinator import (
+    LockUsercodeUpdateCoordinator,
+)
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
     WriteResult,
     credential_from_slot,
+    pin_address,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
+    LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import (
@@ -277,6 +282,25 @@ _WRITES = pytest.mark.parametrize(
     ],
     ids=["set", "clear"],
 )
+# What each write returns, and the slot state it pushes, once it stands.
+_STANDING = {
+    "set_pin_code": (WriteResult.CONFIRMED, SlotCredential.known("5678")),
+    "clear_pin_code": (True, SlotCredential.empty()),
+}
+
+
+@pytest.fixture
+async def coordinator(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> AsyncGenerator[LockUsercodeUpdateCoordinator]:
+    """Attach a real coordinator to the lock, loaded with its first read."""
+    coordinator = LockUsercodeUpdateCoordinator(hass, zha_lock, simple_lcm_config_entry)
+    zha_lock.coordinator = coordinator
+    await coordinator.async_refresh()
+    yield coordinator
+    await coordinator.async_shutdown()
 
 
 async def _write(zha_lock: ZHALock, command: str) -> WriteResult | bool:
@@ -303,9 +327,9 @@ def _other_write(response: str) -> str:
     )
 
 
-# Replies that give a write no status: each leaves the write standing. Each
-# is built, from the lock's own cluster, as zigpy decodes it.
-_NO_ANSWERS = [
+# Replies that answer a write without refusing it: each leaves the write
+# standing. Each is built, from the lock's own cluster, as zigpy decodes it.
+_OWN_SUCCESSES = [
     pytest.param(
         lambda cluster, _request_id, response: (
             lock_frame(cluster, response, status=Status.SUCCESS).payload
@@ -318,6 +342,11 @@ _NO_ANSWERS = [
         ),
         id="default_response_success",
     ),
+]
+
+# Replies about something else, which zigpy can still hand the write: none
+# says whether it landed.
+_FOREIGN_REPLIES = [
     pytest.param(
         lambda _cluster, _request_id, _response: (
             default_response(
@@ -328,7 +357,7 @@ _NO_ANSWERS = [
     ),
     pytest.param(
         lambda cluster, _request_id, response: (
-            lock_frame(cluster, _other_write(response), status=Status.FAILURE).payload
+            lock_frame(cluster, _other_write(response), status=Status.SUCCESS).payload
         ),
         id="the_other_writes_response",
     ),
@@ -336,10 +365,24 @@ _NO_ANSWERS = [
     pytest.param(
         lambda cluster, _request_id, _response: (
             lock_frame(
-                cluster, "set_week_day_schedule_response", status=Status.FAILURE
+                cluster, "set_week_day_schedule_response", status=Status.SUCCESS
             ).payload
         ),
         id="cluster_command_sharing_the_default_response_id",
+    ),
+    pytest.param(
+        lambda cluster, _request_id, _response: (
+            lock_frame(
+                cluster,
+                "operation_event_notification",
+                operation_event_source=DoorLock.OperationEventSource.Keypad,
+                operation_event_code=DoorLock.OperationEvent.Lock,
+                user_id=3,
+                pin="5678",
+                local_time=0,
+            ).payload
+        ),
+        id="operation_event",
     ),
     # A command the cluster has no definition for reaches the request as bytes.
     pytest.param(
@@ -373,54 +416,74 @@ _CLUSTERS = pytest.mark.parametrize(
 
 @_CLUSTERS
 @_WRITES
-@pytest.mark.parametrize("reply", _NO_ANSWERS)
-async def test_a_write_its_reply_gives_no_status_stands(
-    hass: HomeAssistant,
+@pytest.mark.parametrize("reply", _OWN_SUCCESSES)
+async def test_a_write_its_own_reply_does_not_refuse_stands(
     zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
+    coordinator: LockUsercodeUpdateCoordinator,
     command: str,
     request_id: int,
     response: str,
     reply: Any,
 ) -> None:
-    """
-    A write not refused in its own reply is pushed and confirmed.
-
-    zigpy pairs a reply with its request by sequence number, so a frame about
-    another command can fill the write; its status says nothing of the write.
-    """
+    """A write its own reply answers with success is confirmed and pushed."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     setattr(
         cluster, command, AsyncMock(return_value=reply(cluster, request_id, response))
     )
-    zha_lock.coordinator = MagicMock()
 
     result = await _write(zha_lock, command)
 
+    returned, pushed = _STANDING[command]
+    assert result is returned
     if command == "set_pin_code":
-        assert result is WriteResult.CONFIRMED
         cluster.set_pin_code.assert_called_once_with(
             3,
             DoorLock.UserStatus.Enabled,
             DoorLock.UserType.Unrestricted,
             "5678",
         )
-        pushed = SlotCredential.known("5678")
     else:
-        assert result is True
         cluster.clear_pin_code.assert_called_once_with(3)
-        pushed = SlotCredential.empty()
-    zha_lock.coordinator.push_update.assert_called_once_with({3: pushed})
+    assert coordinator.data[pin_address(3)] == pushed
+
+
+@_CLUSTERS
+@_WRITES
+@pytest.mark.parametrize("reply", _FOREIGN_REPLIES)
+async def test_a_write_answered_by_another_frame_fails_for_a_retry(
+    zha_lock: ZHALock,
+    coordinator: LockUsercodeUpdateCoordinator,
+    command: str,
+    request_id: int,
+    response: str,
+    reply: Any,
+) -> None:
+    """
+    A write a frame about something else answered fails, so sync sends it again.
+
+    zigpy pairs a reply with its request by sequence number, so such a frame
+    can fill the write. It says nothing of whether the lock took the write --
+    the lock may have refused it -- so nothing is pushed, and the failure is
+    the kind the slot breaker counts rather than a rejected code.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    setattr(
+        cluster, command, AsyncMock(return_value=reply(cluster, request_id, response))
+    )
+
+    with pytest.raises(LockOperationFailed, match="answered by a reply to something"):
+        await _write(zha_lock, command)
+    assert pin_address(3) not in coordinator.data
 
 
 @_CLUSTERS
 @_WRITES
 @pytest.mark.parametrize("reply", _OWN_REFUSALS)
 async def test_the_writes_own_refusal_rejects_the_code(
-    hass: HomeAssistant,
     zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
+    coordinator: LockUsercodeUpdateCoordinator,
     command: str,
     request_id: int,
     response: str,
@@ -432,11 +495,10 @@ async def test_the_writes_own_refusal_rejects_the_code(
     setattr(
         cluster, command, AsyncMock(return_value=reply(cluster, request_id, response))
     )
-    zha_lock.coordinator = MagicMock()
 
     with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
         await _write(zha_lock, command)
-    zha_lock.coordinator.push_update.assert_not_called()
+    assert pin_address(3) not in coordinator.data
 
 
 # A quirk redefining a write's own response so it carries no numeric status:
@@ -469,9 +531,8 @@ _NO_NUMERIC_STATUS = [
     ("command", "response", "door_lock_cluster_type", "fields"), _NO_NUMERIC_STATUS
 )
 async def test_an_own_response_with_no_numeric_status_is_no_answer(
-    hass: HomeAssistant,
     zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
+    coordinator: LockUsercodeUpdateCoordinator,
     command: str,
     response: str,
     fields: dict[str, Any],
@@ -484,10 +545,12 @@ async def test_an_own_response_with_no_numeric_status_is_no_answer(
         command,
         AsyncMock(return_value=lock_frame(cluster, response, **fields).payload),
     )
-    zha_lock.coordinator = MagicMock()
 
-    assert await _write(zha_lock, command) in (WriteResult.CONFIRMED, True)
-    zha_lock.coordinator.push_update.assert_called_once()
+    result = await _write(zha_lock, command)
+
+    returned, pushed = _STANDING[command]
+    assert result is returned
+    assert coordinator.data[pin_address(3)] == pushed
 
 
 # ---------------------------------------------------------------------------
