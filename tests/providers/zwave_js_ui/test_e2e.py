@@ -49,7 +49,7 @@ from tests.common import (
     in_sync_entity_id,
     slot_entity_id,
 )
-from tests.conftest import async_advance_time
+from tests.conftest import async_advance_time, sync_manager_for
 
 from ...common import user_subentries
 from .conftest import (
@@ -67,6 +67,9 @@ CC_USER_CODE_ID = 99
 # zwave-js UserIDStatus: 0 Available, 1 Enabled.
 STATUS_AVAILABLE = 0
 STATUS_ENABLED = 1
+# node-zwave-js SupervisionStatus.Fail, as a supervised ``set``/``clear``
+# returns it through ``sendCommand``.
+SUPERVISION_FAIL = {"status": 2}
 
 E2E_SLOT_PINS = {1: "1234", 2: "5678"}
 LOCK_CAPACITY = 20
@@ -349,6 +352,114 @@ class TestInitialSync:
             )
             assert code is not None
             assert code.state == pin
+
+
+class RefusingUserCodeTable(UserCodeTable):
+    """
+    A node that answers the named User Code methods with Supervision Fail.
+
+    zwave-js-ui reports the api call itself as a success either way; the
+    refusal is only in the result the driver's command returned, and a
+    refused command changes nothing in the table.
+    """
+
+    def __init__(self, refused: frozenset[str]) -> None:
+        """Refuse every call to one of ``refused``, starting from an empty table."""
+        super().__init__()
+        self.refused = refused
+
+    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Refuse the named methods; answer everything else as the table would."""
+        _target, method, _method_args = request["args"]
+        if method in self.refused:
+            return {"success": True, "message": "", "result": SUPERVISION_FAIL}
+        return super().__call__(api_base, request)
+
+
+class TestRefusedSet:
+    """A set the lock refused under Supervision is a failed write."""
+
+    @pytest.fixture
+    def user_code_table(self) -> UserCodeTable:
+        """The stand-in node refuses every code LCM sends it."""
+        return RefusingUserCodeTable(frozenset({"set"}))
+
+    async def test_a_supervision_fail_leaves_the_slot_out_of_sync(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """
+        The api call succeeds and the lock says Fail: the slot is not in sync.
+
+        Reading only the api's success, the code would be pushed as the lock's
+        word and the slot would read in sync while the lock held nothing. The
+        failure is charged to the slot breaker, as any failed operation is.
+        """
+        for _ in range(len(E2E_SLOT_PINS) + 2):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        assert user_code_table.codes == {}
+        lock_entity_id = zui_lock.lock.entity_id
+        for slot_num in E2E_SLOT_PINS:
+            assert zui_lock.coordinator.data.get(pin_address(slot_num)) == (
+                SlotCredential.empty()
+            )
+            entity_id = in_sync_entity_id(
+                hass, lcm_config_entry, slot_num, lock_entity_id
+            )
+            in_sync = hass.states.get(entity_id)
+            assert in_sync is not None
+            assert in_sync.state != STATE_ON
+            assert sync_manager_for(hass, entity_id)._slot_breaker.failure_count > 0
+
+
+class TestRefusedClear:
+    """A clear the lock refused under Supervision is a failed write."""
+
+    @pytest.fixture
+    def user_code_table(self) -> UserCodeTable:
+        """The stand-in node accepts codes and refuses to clear them."""
+        return RefusingUserCodeTable(frozenset({"clear"}))
+
+    async def test_a_supervision_fail_keeps_the_code_on_the_slot(
+        self,
+        hass: HomeAssistant,
+        synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """
+        Disabling a slot whose clear the lock refuses leaves it out of sync.
+
+        A refused clear pushed empty would read as the code being gone while
+        it still opens the door.
+        """
+        lock_entity_id = zui_lock.lock.entity_id
+        entity_id = in_sync_entity_id(hass, synced_lcm_config_entry, 1, lock_entity_id)
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {
+                ATTR_ENTITY_ID: slot_entity_id(
+                    hass, SWITCH_DOMAIN, synced_lcm_config_entry, 1, CONF_ENABLED
+                )
+            },
+            blocking=True,
+        )
+        for _ in range(len(E2E_SLOT_PINS) + 2):
+            await async_advance_time(hass, TICK_INTERVAL)
+
+        assert user_code_table.codes == E2E_SLOT_PINS
+        assert zui_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
+            E2E_SLOT_PINS[1]
+        )
+        in_sync = hass.states.get(entity_id)
+        assert in_sync is not None
+        assert in_sync.state != STATE_ON
+        assert sync_manager_for(hass, entity_id)._slot_breaker.failure_count > 0
 
 
 class TestPushUpdates:

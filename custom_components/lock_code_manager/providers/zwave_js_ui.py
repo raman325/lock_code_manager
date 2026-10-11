@@ -10,7 +10,7 @@ import re
 from typing import Any, Literal
 from uuid import uuid4
 
-from zwave_js_server.const import CommandClass
+from zwave_js_server.const import CommandClass, SupervisionStatus
 from zwave_js_server.const.command_class.lock import CodeSlotStatus
 
 from homeassistant.components.mqtt import (
@@ -321,6 +321,28 @@ def _project_user_code_result(result: Any) -> SlotCredential:
     ):
         return SlotCredential.known(code)
     return SlotCredential.unreadable()
+
+
+def _raise_on_supervision_fail(operation: str, code_slot: int, result: Any) -> None:
+    """
+    Raise if a User Code ``set`` or ``clear`` came back as a Supervision Fail.
+
+    zwave-js-ui reports the api call as a success whenever the driver ran the
+    command, and hands back whatever the command returned: a Supervision
+    result when the lock supervised it, nothing when it did not. Fail is the
+    lock explicitly refusing the command. It raises as an operation failure
+    rather than a rejection because the lock gives no reason, so the slot
+    breaker decides what repeated refusals mean.
+
+    Every other result leaves the write standing. Unlike the ``userIdStatus``
+    checks in this module, this needs no boolean guard: ``True == 1`` and
+    ``False == 0`` in Python, and neither equals Fail.
+    """
+    if isinstance(result, dict) and result.get("status") == SupervisionStatus.FAIL:
+        raise LockOperationFailed(
+            f"User Code {operation} on slot {code_slot} was refused by the lock "
+            "(Supervision status Fail)"
+        )
 
 
 @dataclass(repr=False, eq=False)
@@ -1288,7 +1310,9 @@ class ZWaveJSUILock(BaseMqttLock):
         ``user_id`` is ignored; slot-only providers address the credential by
         ``credential.slot``. A successful api response is taken as confirmed
         because zwave-js-ui answers only once the driver's supervised set has
-        completed, so success here means the lock acknowledged the write.
+        completed, so success here means the lock acknowledged the write --
+        unless the Supervision result it returns is a Fail, which is the lock
+        refusing it (``_raise_on_supervision_fail``).
 
         Failures from the api client propagate untouched: the base and sync
         layers decide what a refused or disconnected write means, and the
@@ -1296,11 +1320,15 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         code_slot = credential.slot
         await self._async_ensure_operational()
-        await self._async_user_code_command(
-            # ``int`` for the same reason the command class id is cast: the
-            # wire payload's shape stays obvious at the call site.
+        _raise_on_supervision_fail(
             "set",
-            [code_slot, int(CodeSlotStatus.ENABLED), pin],
+            code_slot,
+            await self._async_user_code_command(
+                # ``int`` for the same reason the command class id is cast:
+                # the wire payload's shape stays obvious at the call site.
+                "set",
+                [code_slot, int(CodeSlotStatus.ENABLED), pin],
+            ),
         )
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
@@ -1310,11 +1338,16 @@ class ZWaveJSUILock(BaseMqttLock):
         Clear a Personal Identification Number from a code slot.
 
         Mirrors ``async_set_credential``: the api answers after the driver's
-        supervised clear, so a success pushes the slot empty and anything
-        else propagates without touching the coordinator.
+        supervised clear, so a success pushes the slot empty, and a
+        Supervision Fail or anything else that went wrong propagates without
+        touching the coordinator.
         """
         await self._async_ensure_operational()
-        await self._async_user_code_command("clear", [ref.slot])
+        _raise_on_supervision_fail(
+            "clear",
+            ref.slot,
+            await self._async_user_code_command("clear", [ref.slot]),
+        )
         self._push_credential_update(ref.slot, SlotCredential.empty())
         return True
 
