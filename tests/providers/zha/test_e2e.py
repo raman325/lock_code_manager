@@ -454,6 +454,8 @@ class TestClearStatus:
             SlotCredential.known(CONFIGURED_PINS[1])
         )
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
+        assert door_lock.codes[2] == CONFIGURED_PINS[2]
+        assert _in_sync_state(hass, lcm_config_entry, 2) == STATE_ON
 
     @pytest.mark.parametrize("foreign", _foreign_replies("set_pin_code_response"))
     async def test_a_clear_answered_by_another_frame_converges_on_its_own_reply(
