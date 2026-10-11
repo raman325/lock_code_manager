@@ -616,13 +616,20 @@ class SlotSyncManager:
         finally:
             self._breaker_reset_requested = True
 
-    def _suspend_slot(self, snapshot: CredentialSyncState, reason: str) -> None:
+    def _suspend_slot(
+        self,
+        snapshot: CredentialSyncState,
+        reason: str,
+        translation_key: str = "slot_suspended",
+    ) -> None:
         """
         Suspend this lock and slot and create a per-slot repair issue.
 
         Records the desired target so the slot stays suspended until that
         target changes or it returns to sync, rather than resuming on
-        unrelated coordinator updates.
+        unrelated coordinator updates. ``translation_key`` picks the repair's
+        wording; the issue is the same one whatever it says, so resuming
+        clears it either way.
         """
         self._state = SyncState.SUSPENDED
         self._code_suspend_target = (snapshot.active_state, snapshot.credential_state)
@@ -640,7 +647,7 @@ class SlotSyncManager:
             is_fixable=True,
             is_persistent=True,
             severity=IssueSeverity.WARNING,
-            translation_key="slot_suspended",
+            translation_key=translation_key,
             translation_placeholders={
                 "lock_entity_id": self._lock.lock.entity_id,
                 "lock_name": self._lock.display_name or self._lock.lock.entity_id,
@@ -938,23 +945,19 @@ class SlotSyncManager:
             was_set = await self._perform_sync(snapshot)
         except CodeRejectedError as err:
             if snapshot.active_state != STATE_ON:
-                # A refused clear leaves the code on the lock. Disabling the
-                # slot would only ask for the same clear again, every tick,
-                # and would switch off a slot the user may have left enabled.
+                # A clear that did not happen leaves the code on the lock.
+                # Disabling the slot would only ask for the same clear again,
+                # every tick, and would switch off a slot the user may have
+                # left enabled.
                 _LOGGER.error(
-                    "%s: Lock refused to clear the code: %s. Suspending sync "
-                    "until the slot's PIN or active state changes.",
+                    "%s: Could not remove the code from the lock: %s. Suspending "
+                    "sync until the lock reports the slot empty or the slot's "
+                    "PIN or active state changes.",
                     self._log_prefix,
-                    err,
+                    err.reason,
                 )
                 self._suspend_slot(
-                    snapshot,
-                    f"Lock **{self._lock.lock.entity_id}**: slot "
-                    f"**{self._slot_num}** should be empty, but the lock "
-                    f"refused to remove its code. The code may still be on "
-                    f"the lock and may still open the door.\n\n{err}\n\n"
-                    f"Sync resumes when this slot's PIN or active state "
-                    f"changes, or once the code is gone from the lock.",
+                    snapshot, err.reason, translation_key="slot_clear_failed"
                 )
                 return
             _LOGGER.error("%s: Code rejected: %s", self._log_prefix, err)

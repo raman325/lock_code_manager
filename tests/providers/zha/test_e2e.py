@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -26,7 +27,7 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import issue_registry as ir, translation
 
 from custom_components.lock_code_manager.const import (
     DOMAIN,
@@ -604,6 +605,42 @@ class TestClearStatus:
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
 
 
+async def _rendered_repair(hass: HomeAssistant, issue: ir.IssueEntry) -> str:
+    """Return the repair's description as Home Assistant shows it, in English."""
+    translations = await translation.async_get_translations(
+        hass, "en", "issues", {DOMAIN}
+    )
+    template = translations[
+        f"component.{DOMAIN}.issues.{issue.translation_key}"
+        ".fix_flow.step.init.description"
+    ]
+    placeholders = issue.translation_placeholders or {}
+    return re.sub(r"\{(\w+)\}", lambda match: placeholders[match[1]], template)
+
+
+def _clear_slot_1_at_the_keypad(door_lock: DoorLockStandIn) -> None:
+    """Remove slot 1's code at the lock, which reports the deletion as it does."""
+    del door_lock.codes[1]
+    event = lock_frame(
+        door_lock.cluster,
+        "programming_event_notification",
+        program_event_source=DoorLock.OperationEventSource.Keypad,
+        program_event_code=DoorLock.ProgrammingEvent.PINCodeDeleted,
+        user_id=1,
+        pin=CONFIGURED_PINS[1],
+        user_type=DoorLock.UserType.Unrestricted,
+        user_status=DoorLock.UserStatus.Available,
+        local_time=0,
+        data="",
+    )
+    door_lock.cluster.listener_event(
+        "cluster_command",
+        0,
+        DoorLock.ClientCommandDefs.programming_event_notification.id,
+        event.payload,
+    )
+
+
 @_CLUSTER_TYPES
 class TestRefusedClear:
     """A clear the lock refuses in its own reply suspends the slot, once."""
@@ -671,9 +708,15 @@ class TestRefusedClear:
         assert _writes(door_lock, "clear_pin_code").count(1) == 1
         suspension = _slot_suspension(hass, lcm_config_entry, 1)
         assert suspension is not None
-        assert suspension.translation_placeholders is not None
-        reason = suspension.translation_placeholders["reason"]
-        assert "may still be on the lock" in reason
+        text = await _rendered_repair(hass, suspension)
+        assert "couldn't remove the code" in text
+        assert "status FAILURE (1)" in text
+        assert "may still be on the lock" in text
+        assert "delete it at the lock itself" in text
+        assert "cannot set code" not in text
+        assert "<Status." not in text
+        assert text.count("resume") == 1
+        assert "resumes once the lock reports the slot empty" in text
         assert _slot_1_disabled_repair(hass, lcm_config_entry) is None
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
         assert door_lock.codes[1] == CONFIGURED_PINS[1]
@@ -723,6 +766,35 @@ class TestRefusedClear:
         await _run_ticks(hass)
 
         assert door_lock.codes[1] == pin_after
+        assert _in_sync_state(hass, lcm_config_entry, 1) == STATE_ON
+        assert _slot_suspension(hass, lcm_config_entry, 1) is None
+        assert _writes(door_lock, "clear_pin_code").count(1) == 1
+
+    @pytest.mark.parametrize(
+        "make_slot_1_clear",
+        [
+            pytest.param(_disable_slot_1, id="slot_disabled"),
+            pytest.param(_remove_slot_1_pin, id="pin_removed"),
+            pytest.param(_turn_slot_1_condition_off, id="condition_off"),
+        ],
+    )
+    async def test_a_slot_suspended_for_a_refused_clear_resumes_once_the_lock_is_empty(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        make_slot_1_clear: Any,
+    ) -> None:
+        """The code removed at the lock itself brings the slot back in sync."""
+        await self._refuse_every_clear_of_slot_1(
+            hass, lcm_config_entry, door_lock, make_slot_1_clear
+        )
+        assert _slot_suspension(hass, lcm_config_entry, 1) is not None
+
+        _clear_slot_1_at_the_keypad(door_lock)
+        await _run_ticks(hass)
+
+        assert 1 not in door_lock.codes
         assert _in_sync_state(hass, lcm_config_entry, 1) == STATE_ON
         assert _slot_suspension(hass, lcm_config_entry, 1) is None
         assert _writes(door_lock, "clear_pin_code").count(1) == 1

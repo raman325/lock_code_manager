@@ -427,6 +427,17 @@
         }
       }
     },
+    "slot_clear_failed": {
+      "title": "Lock Code Manager: Code not removed from slot {slot_num} on {lock_name}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Code not removed from slot {slot_num} on {lock_name}",
+            "description": "Lock Code Manager couldn't remove the code from slot {slot_num} on lock {lock_entity_id}: {reason}\n\nThe code may still be on the lock and may still open the door. To remove it, delete it at the lock itself, from its keypad or the lock maker's app.\n\nSync for this slot is suspended. It resumes once the lock reports the slot empty, or when this slot's PIN or active state changes. Submit to acknowledge this issue."
+          }
+        }
+      }
+    },
     "lock_offline": {
       "title": "Lock unreachable: {lock_entity_id}",
       "description": "Lock Code Manager has been unable to communicate with `{lock_entity_id}` for multiple consecutive attempts. Code synchronization is paused until the lock is reachable again. This issue will be automatically dismissed when the lock recovers."

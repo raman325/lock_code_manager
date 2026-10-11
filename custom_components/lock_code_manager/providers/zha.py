@@ -101,6 +101,12 @@ def _write_answer(
     )
 
 
+def _status_text(status: Any) -> str:
+    """Name a reply's status for a person: zigpy formats its enums as a repr."""
+    name = getattr(status, "name", None)
+    return f"{name} ({int(status)})" if name else str(status)
+
+
 OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.Lock: True,
     DoorLock.OperationEvent.KeyLock: True,
@@ -393,7 +399,7 @@ class ZHALock(BaseLock):
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=f"set_pin_code rejected: status {answer.status}",
+                reason=f"set_pin_code rejected: status {_status_text(answer.status)}",
             )
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
@@ -432,7 +438,7 @@ class ZHALock(BaseLock):
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=f"clear_pin_code rejected: status {answer.status}",
+                reason=f"clear_pin_code rejected: status {_status_text(answer.status)}",
             )
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
