@@ -24,6 +24,7 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
     SERVICE_TURN_OFF,
+    STATE_OFF,
     STATE_ON,
     STATE_UNKNOWN,
 )
@@ -412,7 +413,7 @@ class TestRefusedSet:
             )
             in_sync = hass.states.get(entity_id)
             assert in_sync is not None
-            assert in_sync.state != STATE_ON
+            assert in_sync.state == STATE_OFF
             assert sync_manager_for(hass, entity_id)._slot_breaker.failure_count > 0
 
 
@@ -458,7 +459,7 @@ class TestRefusedClear:
         )
         in_sync = hass.states.get(entity_id)
         assert in_sync is not None
-        assert in_sync.state != STATE_ON
+        assert in_sync.state == STATE_OFF
         assert sync_manager_for(hass, entity_id)._slot_breaker.failure_count > 0
 
 
