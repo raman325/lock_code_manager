@@ -23,8 +23,6 @@ from homeassistant.components.lovelace.resources import (
 )
 from homeassistant.config_entries import ConfigEntryState, ConfigSubentry
 from homeassistant.const import (
-    ATTR_AREA_ID,
-    ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
     CONF_CONDITION,
     CONF_ENABLED,
@@ -635,13 +633,14 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         schema=vol.All(
             vol.Schema(
                 {
-                    vol.Optional(ATTR_AREA_ID): vol.All(cv.ensure_list, [cv.string]),
-                    vol.Optional(ATTR_DEVICE_ID): vol.All(cv.ensure_list, [cv.string]),
+                    **cv.ENTITY_SERVICE_FIELDS,
+                    # The standard field also accepts "all" and "none", which
+                    # are not entity IDs the target resolution can look up;
+                    # refuse both.
                     vol.Optional(ATTR_ENTITY_ID): cv.entity_ids,
                 }
             ),
-            cv.has_at_least_one_key(ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID),
-            cv.has_at_most_one_key(ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID),
+            cv.has_at_least_one_key(*cv.ENTITY_SERVICE_FIELDS),
         ),
     )
 
