@@ -123,11 +123,7 @@ from .domain.pin_generator import (
     MIN_PIN_LENGTH,
     generate_pin,
 )
-from .domain.queries import (
-    entries_holding_lock,
-    get_entry_config,
-    subentry_id_for_slot,
-)
+from .domain.queries import get_entry_config, subentry_id_for_slot
 from .domain.references import async_notify_moved
 from .domain.services import (
     async_add_users,
@@ -1091,8 +1087,10 @@ def _lock_instance_held_by_another_entry(
     is accepted.
     """
     return any(
-        entry.entry_id != config_entry.entry_id
-        for entry in entries_holding_lock(hass, lock_entity_id, lock)
+        runtime_data.locks.get(lock_entity_id) is lock
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.entry_id != config_entry.entry_id
+        and (runtime_data := getattr(entry, "runtime_data", None)) is not None
     )
 
 

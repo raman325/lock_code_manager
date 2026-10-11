@@ -124,23 +124,6 @@ def find_entry_for_lock_slot(
     )
 
 
-def entries_holding_lock(
-    hass: HomeAssistant, lock_entity_id: str, lock: object
-) -> Iterator[ConfigEntry]:
-    """
-    Yield every entry holding this very lock instance, whatever its state.
-
-    An entry holds a lock instance while its ``runtime_data.locks`` maps the
-    lock's entity id to it: taken there on setup, given up on unload.
-    """
-    return (
-        entry
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        if (runtime_data := getattr(entry, "runtime_data", None)) is not None
-        and runtime_data.locks.get(lock_entity_id) is lock
-    )
-
-
 def iter_loaded_lcm_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:
     """
     Yield loaded Lock Code Manager config entries.

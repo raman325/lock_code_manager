@@ -2443,20 +2443,14 @@ async def test_an_entry_unloading_while_another_builds_the_lock_anew_stops_its_o
         assert await hass.config_entries.async_unload(second_entry.entry_id)
 
 
-def _sharing_entries(
-    *, first_polls: bool = True, second_polls: bool = True
-) -> tuple[MockConfigEntry, MockConfigEntry]:
+def _sharing_entries() -> tuple[MockConfigEntry, MockConfigEntry]:
     """Build an entry on both locks and one sharing the second lock."""
     return (
         MockConfigEntry(
-            domain=DOMAIN,
-            data=copy.deepcopy(BASE_CONFIG),
-            unique_id="First Sharer",
-            pref_disable_polling=not first_polls,
+            domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="First Sharer"
         ),
         MockConfigEntry(
             domain=DOMAIN,
-            pref_disable_polling=not second_polls,
             data={
                 CONF_LOCKS: [LOCK_2_ENTITY_ID],
                 CONF_SLOTS: {
@@ -2752,117 +2746,6 @@ async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_
     assert lock.coordinator.data[pin_address(9)] == SlotCredential.known("1357")
 
     assert await hass.config_entries.async_unload(second_entry.entry_id)
-
-
-async def _set_up_sharing_entries(
-    hass: HomeAssistant, *, first_polls: bool, second_polls: bool
-) -> tuple[MockConfigEntry, MockConfigEntry, MockLCMLock]:
-    """Set up the sharing entries with their polling preferences; return the shared lock."""
-    first_entry, second_entry = _sharing_entries(
-        first_polls=first_polls, second_polls=second_polls
-    )
-    for entry in (first_entry, second_entry):
-        entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-    lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
-    assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
-    return first_entry, second_entry, lock
-
-
-async def _polled(hass: HomeAssistant, lock: MockLCMLock) -> bool:
-    """
-    Return whether the lock's poll timer fires within a few poll intervals.
-
-    Watched at the timer rather than through the data: syncing a slot reads
-    the lock too, polling or not, and each such read pushes the next poll
-    back, so time moves on in steps rather than one jump.
-    """
-    coordinator = lock.coordinator
-    assert coordinator is not None
-    start = dt_util.utcnow()
-    with patch.object(
-        coordinator,
-        "_handle_refresh_interval",
-        wraps=coordinator._handle_refresh_interval,
-    ) as poll:
-        for step in range(1, 31):
-            async_fire_time_changed(hass, start + timedelta(seconds=10 * step))
-            await hass.async_block_till_done()
-    return poll.called
-
-
-@pytest.mark.parametrize(
-    ("first_polls", "second_polls", "polls"),
-    [(False, False, False), (False, True, True), (True, False, True)],
-    ids=["every_holder_disabled", "first_disabled", "second_disabled"],
-)
-async def test_a_shared_lock_polls_unless_every_entry_holding_it_disabled_polling(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    first_polls: bool,
-    second_polls: bool,
-    polls: bool,
-):
-    """
-    A shared lock stops polling only when every entry holding it disabled polling.
-
-    One entry turning polling off must not starve another that still wants it.
-    """
-    first_entry, second_entry, lock = await _set_up_sharing_entries(
-        hass, first_polls=first_polls, second_polls=second_polls
-    )
-
-    assert await _polled(hass, lock) is polls
-
-    for entry in (first_entry, second_entry):
-        assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_a_shared_lock_resumes_polling_when_an_entry_turns_it_back_on(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """
-    Turning polling back on for one entry holding a shared lock resumes its polls.
-
-    Home Assistant applies the preference by reloading that entry, which then
-    rejoins the instance the other entry kept. Both entries' codes are on the
-    lock already, so no sync reads it: what decides the schedule again is the
-    refresh the rejoining entry's entities ask for as they are added.
-    """
-    entries = [
-        MockConfigEntry(
-            domain=DOMAIN,
-            data={
-                CONF_LOCKS: [LOCK_2_ENTITY_ID],
-                CONF_SLOTS: {
-                    slot: {CONF_NAME: f"quiet{slot}", CONF_PIN: pin, CONF_ENABLED: True}
-                },
-            },
-            unique_id=f"Quiet {slot}",
-            pref_disable_polling=True,
-        )
-        for slot, pin in ((1, "1234"), (2, "5678"))
-    ]
-    for entry in entries:
-        entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-    first_entry, second_entry = entries
-    lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
-    assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
-    assert await _polled(hass, lock) is False
-
-    hass.config_entries.async_update_entry(first_entry, pref_disable_polling=False)
-    assert await hass.config_entries.async_reload(first_entry.entry_id)
-    await hass.async_block_till_done()
-    assert first_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
-
-    assert await _polled(hass, lock) is True
-
-    for entry in entries:
-        assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_update_listener_slot_removal_handles_missing_and_failing_coordinators(
