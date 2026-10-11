@@ -784,11 +784,10 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
 ) -> None:
     """All-zeros on a slot with no cached userIdStatus value pushes known, not empty.
 
-    ``_uc_slot_in_use`` reads the User Code CC status value from the
-    driver's cache via ``get_usercode``; a slot the value database has
-    never seen (e.g. one outside the fixture's populated range) raises
-    ``NotFoundError`` there, which resolves to an *unknown* (None) in-use
-    state -- distinct from the explicitly-False case that maps zeros to
+    ``_uc_slot_status`` reads the User Code CC status value from the
+    driver's cache; a slot the value database has never seen (e.g. one
+    outside the fixture's populated range) raises ``NotFoundError`` there,
+    which resolves to an *unknown* (None) in-use state -- distinct from the explicitly-False case that maps zeros to
     empty. Zeros must not be misread as "cleared" when in_use can't be
     determined at all.
     """
@@ -799,7 +798,7 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
     zwave_js_lock.subscribe_push_updates()
 
     # Slot 99 has no userCode/userIdStatus values in the fixture at all, so
-    # get_usercode() raises NotFoundError and in_use resolves to None.
+    # the status lookup raises NotFoundError and in_use resolves to None.
     lock_schlage_be469.receive_event(
         _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 99, "0000")
     )
@@ -813,13 +812,13 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
 
 
 @pytest.mark.parametrize(
-    ("in_use", "expected"),
+    ("status", "expected"),
     [
-        (False, SlotCredential.empty()),
+        (CodeSlotStatus.DISABLED, SlotCredential.empty()),
         (None, SlotCredential.empty()),
-        (True, SlotCredential.unreadable()),
+        (CodeSlotStatus.ENABLED, SlotCredential.unreadable()),
     ],
-    ids=["free", "unknown", "occupied"],
+    ids=["not-in-use", "unknown", "occupied"],
 )
 async def test_uc_shim_empty_code_follows_occupancy(
     hass: HomeAssistant,
@@ -827,7 +826,7 @@ async def test_uc_shim_empty_code_follows_occupancy(
     lock_schlage_be469: Node,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
-    in_use: bool | None,
+    status: CodeSlotStatus | None,
     expected: SlotCredential,
 ) -> None:
     """An empty userCode value is a cleared slot -- unless the status says occupied.
@@ -842,7 +841,7 @@ async def test_uc_shim_empty_code_follows_occupancy(
 
     zwave_js_lock.subscribe_push_updates()
 
-    with patch.object(zwave_js_lock, "_uc_slot_in_use", return_value=in_use):
+    with patch.object(zwave_js_lock, "_uc_slot_status", return_value=status):
         lock_schlage_be469.receive_event(
             _make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
         )

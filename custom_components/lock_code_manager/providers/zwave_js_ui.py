@@ -28,7 +28,6 @@ from ..domain.credentials import (
     CredentialRef,
     User,
     WriteResult,
-    pin_address,
 )
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
@@ -627,12 +626,7 @@ class ZWaveJSUILock(BaseMqttLock):
                 # Ignore AVAILABLE when Lock Code Manager expects a PIN on
                 # this slot. Some locks send stale AVAILABLE events after a
                 # code was set, which would cause infinite sync loops.
-                if (
-                    self.coordinator is not None
-                    and self.coordinator.desired_credential(
-                        pin_address(slot_num)
-                    ).is_present
-                ):
+                if self._expects_pin(slot_num):
                     LOGGER.debug(
                         "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
                         "(LCM expects PIN on this slot)",

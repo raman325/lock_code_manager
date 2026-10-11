@@ -30,7 +30,7 @@ from zwave_js_server.const.command_class.notification import (
 )
 from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode, get_usercodes
+from zwave_js_server.util.lock import get_code_slot_value, get_usercodes
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -58,7 +58,6 @@ from ..domain.credentials import (
     SetUserResult,
     User,
     WriteResult,
-    pin_address,
 )
 from ..domain.exceptions import (
     CodeRejectedError,
@@ -895,10 +894,7 @@ class ZWaveJSLock(BaseLock):
         # Ignore AVAILABLE when Lock Code Manager expects a PIN on this
         # slot. Some locks send stale AVAILABLE events after a code was
         # set, which would cause infinite sync loops.
-        if (
-            self.coordinator is not None
-            and self.coordinator.desired_credential(pin_address(code_slot)).is_present
-        ):
+        if self._expects_pin(code_slot):
             _LOGGER.debug(
                 "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
                 "(LCM expects PIN on this slot)",
@@ -911,6 +907,20 @@ class ZWaveJSLock(BaseLock):
     @callback
     def _handle_uc_code_update(self, code_slot: int, new_value: Any) -> None:
         """Handle a userCode value update for a code slot."""
+        # The driver persists the status before the code, so the cached
+        # status is this report's. Read it first: it is a cached value
+        # lookup, while whether a PIN is wanted asks the coordinator.
+        status = self._uc_slot_status(code_slot)
+        if status == CodeSlotStatus.AVAILABLE and not self._expects_pin(code_slot):
+            # An Available slot holds nothing, whatever the code field
+            # carries: a masked placeholder, zeros, or a leftover code
+            # (#819). Where a PIN is wanted, the status handler ignores
+            # Available as stale (#863), so the code field is read below.
+            self._confirm_slot(code_slot, SlotCredential.empty())
+            return
+        # In use exactly when the status is Enabled, unknown without one:
+        # ``get_usercode``'s own rule, applied to the status already read.
+        slot_in_use = None if status is None else status == CodeSlotStatus.ENABLED
         if not new_value:
             # No value from a slot the status says is occupied is the lock
             # withholding the code, not a cleared slot -- the same rule the
@@ -918,18 +928,17 @@ class ZWaveJSLock(BaseLock):
             # would fail a pending write the lock in fact kept.
             resolved = (
                 SlotCredential.unreadable()
-                if self._uc_slot_in_use(code_slot) is True
+                if slot_in_use is True
                 else SlotCredential.empty()
             )
         else:
             value = str(new_value)
-            slot_in_use = self._uc_slot_in_use(code_slot)
-            # Asymmetric in_use checks: masked codes count as unreadable
-            # even when in_use is None (some firmwares mask before
-            # reporting status), but all-zeros only counts as empty when
-            # in_use is explicitly False (zeros from a partially-loaded
+            # A masked placeholder is the lock withholding the code, whatever
+            # the status says: read as the PIN, it can never match, and sync
+            # would rewrite the slot forever. All-zeros only counts as empty
+            # when in_use is explicitly False (zeros from a partially-loaded
             # cache must not be misread as cleared).
-            if is_masked_code(value) and slot_in_use is not False:
+            if is_masked_code(value):
                 resolved = SlotCredential.unreadable()
             elif value.strip("0") == "" and slot_in_use is False:
                 resolved = SlotCredential.empty()
@@ -940,13 +949,14 @@ class ZWaveJSLock(BaseLock):
         # confirming push for a pending optimistic write.
         self._confirm_slot(code_slot, resolved)
 
-    def _uc_slot_in_use(self, code_slot: int) -> bool | None:
-        """Return whether a User Code CC slot is in use, None when unknown."""
+    def _uc_slot_status(self, code_slot: int) -> int | None:
+        """Return a User Code Command Class slot's cached userIdStatus, or None."""
         try:
-            in_use = get_usercode(self.node, code_slot).get(ATTR_IN_USE)
+            return get_code_slot_value(
+                self.node, code_slot, LOCK_USERCODE_STATUS_PROPERTY
+            ).value
         except NotFoundError:
             return None
-        return in_use if isinstance(in_use, bool) else None
 
     async def _async_uc_reconcile_value_db(self, code_slot: int) -> None:
         """

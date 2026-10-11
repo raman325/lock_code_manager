@@ -5,10 +5,17 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from zwave_js_server.const import CommandClass
 from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
+)
+from zwave_js_server.const.command_class.lock import (
+    LOCK_USERCODE_PROPERTY,
+    LOCK_USERCODE_STATUS_PROPERTY,
+    CodeSlotStatus,
 )
 from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
@@ -328,3 +335,122 @@ class TestColdStartRace:
         assert lock._push_unsubs
 
         await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+def _user_code_report(node: Node, code_slot: int, status: int, code: str) -> None:
+    """
+    Deliver one User Code report for a slot, the way the driver persists it.
+
+    node-zwave-js writes ``userIdStatus`` before ``userCode``
+    (``UserCodeCC.ts`` ``persistUserCode``), so the status is in the value
+    database by the time the code's value event arrives.
+    """
+    for property_name, value in (
+        (LOCK_USERCODE_STATUS_PROPERTY, status),
+        (LOCK_USERCODE_PROPERTY, code),
+    ):
+        node.receive_event(
+            ZwaveEvent(
+                type="value updated",
+                data={
+                    "source": "node",
+                    "event": "value updated",
+                    "nodeId": node.node_id,
+                    "args": {
+                        "commandClassName": "User Code",
+                        "commandClass": CommandClass.USER_CODE,
+                        "endpoint": 0,
+                        "property": property_name,
+                        "propertyKey": code_slot,
+                        "newValue": value,
+                        "propertyName": property_name,
+                    },
+                },
+            )
+        )
+
+
+# No entry manages slot 3, so no PIN is wanted there; slot 2 wants one.
+UNWANTED_SLOT = 3
+WANTED_SLOT = 2
+
+
+class TestUserCodeReports:
+    """A User Code report reaches the coordinator as what the slot holds."""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param("****", id="masked"),
+            pytest.param("5678", id="leftover_code"),
+        ],
+    )
+    async def test_an_available_slot_no_pin_is_wanted_on_is_empty(
+        self,
+        hass: HomeAssistant,
+        e2e_zwave_lock: ZWaveJSLock,
+        lock_schlage_be469: Node,
+        code: str,
+    ) -> None:
+        """
+        Available means the slot holds nothing, whatever its code field says.
+
+        A lock that masks its codes reports an Available slot with a masked
+        placeholder; read as a code, it was the PIN ``****`` (#819).
+        """
+        _user_code_report(
+            lock_schlage_be469, UNWANTED_SLOT, CodeSlotStatus.AVAILABLE, code
+        )
+        await hass.async_block_till_done()
+
+        assert (
+            e2e_zwave_lock.coordinator.data.get(pin_address(UNWANTED_SLOT))
+            == SlotCredential.empty()
+        )
+
+    async def test_a_masked_code_on_a_stale_available_is_unreadable(
+        self,
+        hass: HomeAssistant,
+        e2e_zwave_lock: ZWaveJSLock,
+        lock_schlage_be469: Node,
+    ) -> None:
+        """
+        A masked placeholder is the lock withholding the code, whatever the status.
+
+        Where a PIN is wanted the Available status is not believed (#863), so
+        the code field is read -- and ``****`` read as the PIN can never
+        match, which sync would rewrite forever.
+        """
+        _user_code_report(
+            lock_schlage_be469, WANTED_SLOT, CodeSlotStatus.AVAILABLE, "****"
+        )
+        await hass.async_block_till_done()
+
+        assert (
+            e2e_zwave_lock.coordinator.data.get(pin_address(WANTED_SLOT))
+            == SlotCredential.unreadable()
+        )
+
+    @pytest.mark.parametrize(
+        ("code", "expected"),
+        [
+            pytest.param("4321", SlotCredential.known("4321"), id="code"),
+            # The lock withholding the code of an occupied slot.
+            pytest.param("", SlotCredential.unreadable(), id="withheld"),
+        ],
+    )
+    @pytest.mark.parametrize("code_slot", [UNWANTED_SLOT, WANTED_SLOT])
+    async def test_an_enabled_slot_reads_its_code_field(
+        self,
+        hass: HomeAssistant,
+        e2e_zwave_lock: ZWaveJSLock,
+        lock_schlage_be469: Node,
+        code_slot: int,
+        code: str,
+        expected: SlotCredential,
+    ) -> None:
+        """An Enabled slot holds its code, or a code it will not say."""
+        _user_code_report(lock_schlage_be469, code_slot, CodeSlotStatus.ENABLED, code)
+        await hass.async_block_till_done()
+
+        assert e2e_zwave_lock.coordinator.data.get(pin_address(code_slot)) == expected

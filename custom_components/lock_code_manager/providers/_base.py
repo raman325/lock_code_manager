@@ -552,6 +552,19 @@ class BaseLock:
         self.coordinator.observe_push(pin_address(code_slot), observed)
 
     @final
+    def _expects_pin(self, code_slot: int) -> bool:
+        """
+        Return whether Lock Code Manager wants a PIN on ``code_slot``.
+
+        Some locks announce a slot as Available after a PIN lands on it; a
+        provider asks this before believing such an announcement.
+        """
+        return (
+            self.coordinator is not None
+            and self.coordinator.desired_credential(pin_address(code_slot)).is_present
+        )
+
+    @final
     def is_slot_managed(self, code_slot: int) -> bool:
         """Return whether a code slot is managed by any LCM config entry for this lock."""
         return (
