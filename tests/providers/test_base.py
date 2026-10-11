@@ -90,9 +90,10 @@ class RateLimitClock:
         """
         Start where the real clock is.
 
-        The provider keeps what it read from this clock -- the last operation
-        time, the turn's start -- after the test, so those must still make
-        sense against the real clock once the patch is gone.
+        The provider keeps the last operation time it read from this clock
+        after the test, and the turn's start too if an operation is still in
+        flight when the patch is removed, so those must still make sense
+        against the real clock once the patch is gone.
         """
         self.now = time.monotonic()
         self._waits: list[tuple[asyncio.Task[Any] | None, float]] = []
@@ -153,9 +154,10 @@ async def _arm_rate_limit(hass: HomeAssistant, lock: BaseLock) -> None:
     The sync tick, the coordinator's refresh, and confirmation reads take the
     lock's turn from tasks of their own. One still holding or queued for the
     turn when the test's first operation arrives makes that operation wait
-    for a reason the test is not about. Once every task has finished nothing
-    else runs until the caller yields, and the caller's first operation takes
-    the turn without yielding. Call it in the test body: the hop from a
+    for a reason the test is not about. Once every task Home Assistant tracks
+    has finished, nothing else runs until the caller yields, and the caller's
+    first operation takes the turn without yielding. Lock work started on an
+    untracked task would not be waited for. Call it in the test body: the hop from a
     fixture to the body runs the event loop, and a timer can fire there.
     """
     await hass.async_block_till_done(wait_background_tasks=True)
