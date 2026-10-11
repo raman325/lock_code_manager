@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import zigpy.types as zigpy_t
+from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
+from zigpy.zcl.foundation import Status
 
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
 from homeassistant.core import HomeAssistant
@@ -34,6 +39,43 @@ from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
 from tests.providers.helpers import ProviderNativeTransportContractTests
+
+from .helpers import (
+    QuirkedDoorLock,
+    RenamingQuirkDoorLock,
+    default_response,
+    lock_frame,
+    quirk_redefining,
+)
+
+_GET_PIN_CODE_RESPONSE = DoorLock.ClientCommandDefs.get_pin_code_response
+_SET_PIN_CODE_ID = DoorLock.ServerCommandDefs.set_pin_code.id
+_CLEAR_PIN_CODE_ID = DoorLock.ServerCommandDefs.clear_pin_code.id
+# Set and Clear PIN Code Response general failure (Zigbee Cluster Library).
+_DOOR_LOCK_GENERAL_FAILURE = 1
+
+
+def _pin_reply(
+    user_id: int, user_status: DoorLock.UserStatus, code: str = ""
+) -> foundation.CommandSchema:
+    """Build the Get PIN Code Response zigpy decodes for one user."""
+    return _GET_PIN_CODE_RESPONSE.schema(
+        user_id=user_id,
+        user_status=user_status,
+        user_type=DoorLock.UserType.Unrestricted,
+        code=code,
+    )
+
+
+def _every_slot_answers(
+    user_status: DoorLock.UserStatus, code: str = ""
+) -> Callable[[int], Awaitable[foundation.CommandSchema]]:
+    """Answer every get_pin_code, for the slot asked, with one status and code."""
+
+    async def _get_pin_code(slot_num: int) -> foundation.CommandSchema:
+        return _pin_reply(slot_num, user_status, code)
+
+    return _get_pin_code
 
 
 @pytest.mark.skip(
@@ -192,16 +234,8 @@ async def test_get_users(
 
     async def mock_get_pin_code(slot_num):
         if slot_num == 1:
-            return type(
-                "Response",
-                (),
-                {"user_status": DoorLock.UserStatus.Enabled, "code": "1234"},
-            )()
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+            return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "1234")
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -223,16 +257,8 @@ async def test_get_usercodes_via_base_projection(
 
     async def mock_get_pin_code(slot_num):
         if slot_num == 1:
-            return type(
-                "Response",
-                (),
-                {"user_status": DoorLock.UserStatus.Enabled, "code": "1234"},
-            )()
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+            return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "1234")
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -242,89 +268,226 @@ async def test_get_usercodes_via_base_projection(
     assert codes[2] is SlotCredential.empty()
 
 
-async def test_set_credential(
-    hass: HomeAssistant,
-    zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
-) -> None:
-    """Test async_set_credential calls the cluster and pushes optimistic update."""
-    cluster = zha_lock._get_door_lock_cluster()
-    assert cluster is not None
-    cluster.set_pin_code = AsyncMock(return_value=type("Response", (), {"status": 0})())
-    zha_lock.coordinator = MagicMock()
-
-    credential = credential_from_slot(3, SlotCredential.known("5678"))
-    result = await zha_lock.async_set_credential(
-        3, credential, "5678", name="Test User", source="direct"
-    )
-
-    assert result is WriteResult.CONFIRMED
-    cluster.set_pin_code.assert_called_once_with(
-        3,
-        DoorLock.UserStatus.Enabled,
-        DoorLock.UserType.Unrestricted,
-        "5678",
-    )
-    zha_lock.coordinator.push_update.assert_called_once_with(
-        {3: SlotCredential.known("5678")}
-    )
+# A write as each operation's cluster command: its name, request id, response.
+_WRITES = pytest.mark.parametrize(
+    ("command", "request_id", "response"),
+    [
+        ("set_pin_code", _SET_PIN_CODE_ID, "set_pin_code_response"),
+        ("clear_pin_code", _CLEAR_PIN_CODE_ID, "clear_pin_code_response"),
+    ],
+    ids=["set", "clear"],
+)
 
 
-async def test_set_credential_failure(
-    hass: HomeAssistant,
-    zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
-) -> None:
-    """Test async_set_credential raises CodeRejectedError on non-zero status."""
-    cluster = zha_lock._get_door_lock_cluster()
-    assert cluster is not None
-    cluster.set_pin_code = AsyncMock(return_value=type("Response", (), {"status": 1})())
-
-    credential = credential_from_slot(3, SlotCredential.known("5678"))
-    with pytest.raises(CodeRejectedError, match="set_pin_code rejected"):
-        await zha_lock.async_set_credential(
-            3, credential, "5678", name=None, source="direct"
+async def _write(zha_lock: ZHALock, command: str) -> WriteResult | bool:
+    """Set a code on slot 3, or clear slot 3, as ``command`` names."""
+    if command == "set_pin_code":
+        return await zha_lock.async_set_credential(
+            3,
+            credential_from_slot(3, SlotCredential.known("5678")),
+            "5678",
+            name="Test User",
+            source="direct",
         )
+    return await zha_lock.async_delete_credential(
+        CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    )
 
 
-async def test_delete_credential(
+def _other_write(response: str) -> str:
+    """Return the other write's response name."""
+    return (
+        "clear_pin_code_response"
+        if response == "set_pin_code_response"
+        else "set_pin_code_response"
+    )
+
+
+# Replies that give a write no status: each leaves the write standing. Each
+# is built, from the lock's own cluster, as zigpy decodes it.
+_NO_ANSWERS = [
+    pytest.param(
+        lambda cluster, _request_id, response: (
+            lock_frame(cluster, response, status=Status.SUCCESS).payload
+        ),
+        id="own_response_success",
+    ),
+    pytest.param(
+        lambda _cluster, request_id, _response: (
+            default_response(request_id, Status.SUCCESS).payload
+        ),
+        id="default_response_success",
+    ),
+    pytest.param(
+        lambda _cluster, _request_id, _response: (
+            default_response(
+                DoorLock.ServerCommandDefs.lock_door.id, Status.FAILURE
+            ).payload
+        ),
+        id="default_response_naming_another_command",
+    ),
+    pytest.param(
+        lambda cluster, _request_id, response: (
+            lock_frame(cluster, _other_write(response), status=Status.FAILURE).payload
+        ),
+        id="the_other_writes_response",
+    ),
+    # Shares the Default Response's command id, and carries a status.
+    pytest.param(
+        lambda cluster, _request_id, _response: (
+            lock_frame(
+                cluster, "set_week_day_schedule_response", status=Status.FAILURE
+            ).payload
+        ),
+        id="cluster_command_sharing_the_default_response_id",
+    ),
+    # A command the cluster has no definition for reaches the request as bytes.
+    pytest.param(
+        lambda _cluster, _request_id, _response: b"\x01",
+        id="undecoded_bytes",
+    ),
+]
+
+# The write's own refusal, in either reply that answers it.
+_OWN_REFUSALS = [
+    pytest.param(
+        lambda cluster, _request_id, response: (
+            lock_frame(cluster, response, status=_DOOR_LOCK_GENERAL_FAILURE).payload
+        ),
+        id="own_response",
+    ),
+    pytest.param(
+        lambda _cluster, request_id, _response: (
+            default_response(request_id, Status.FAILURE).payload
+        ),
+        id="default_response_naming_the_write",
+    ),
+]
+
+_CLUSTERS = pytest.mark.parametrize(
+    "door_lock_cluster_type",
+    [DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock],
+    ids=["stock", "quirk", "renaming_quirk"],
+)
+
+
+@_CLUSTERS
+@_WRITES
+@pytest.mark.parametrize("reply", _NO_ANSWERS)
+async def test_a_write_its_reply_gives_no_status_stands(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
+    command: str,
+    request_id: int,
+    response: str,
+    reply: Any,
 ) -> None:
-    """Test async_delete_credential calls the cluster and pushes optimistic update."""
+    """
+    A write not refused in its own reply is pushed and confirmed.
+
+    zigpy pairs a reply with its request by sequence number, so a frame about
+    another command can fill the write; its status says nothing of the write.
+    """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
-    cluster.clear_pin_code = AsyncMock(
-        return_value=type("Response", (), {"status": 0})()
+    setattr(
+        cluster, command, AsyncMock(return_value=reply(cluster, request_id, response))
     )
     zha_lock.coordinator = MagicMock()
 
-    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
-    result = await zha_lock.async_delete_credential(ref)
+    result = await _write(zha_lock, command)
 
-    assert result is True
-    cluster.clear_pin_code.assert_called_once_with(3)
-    zha_lock.coordinator.push_update.assert_called_once_with(
-        {3: SlotCredential.empty()}
-    )
+    if command == "set_pin_code":
+        assert result is WriteResult.CONFIRMED
+        cluster.set_pin_code.assert_called_once_with(
+            3,
+            DoorLock.UserStatus.Enabled,
+            DoorLock.UserType.Unrestricted,
+            "5678",
+        )
+        pushed = SlotCredential.known("5678")
+    else:
+        assert result is True
+        cluster.clear_pin_code.assert_called_once_with(3)
+        pushed = SlotCredential.empty()
+    zha_lock.coordinator.push_update.assert_called_once_with({3: pushed})
 
 
-async def test_delete_credential_failure(
+@_CLUSTERS
+@_WRITES
+@pytest.mark.parametrize("reply", _OWN_REFUSALS)
+async def test_the_writes_own_refusal_rejects_the_code(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
+    command: str,
+    request_id: int,
+    response: str,
+    reply: Any,
 ) -> None:
-    """Test async_delete_credential raises CodeRejectedError on non-zero status."""
+    """A non-zero status in the write's own reply rejects it and pushes nothing."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
-    cluster.clear_pin_code = AsyncMock(
-        return_value=type("Response", (), {"status": 1})()
+    setattr(
+        cluster, command, AsyncMock(return_value=reply(cluster, request_id, response))
     )
+    zha_lock.coordinator = MagicMock()
 
-    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
-    with pytest.raises(CodeRejectedError, match="clear_pin_code rejected"):
-        await zha_lock.async_delete_credential(ref)
+    with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
+        await _write(zha_lock, command)
+    zha_lock.coordinator.push_update.assert_not_called()
+
+
+# A quirk redefining a write's own response so it carries no numeric status:
+# the write, its response, the quirk's cluster, and one such reply's fields.
+_NO_NUMERIC_STATUS = [
+    pytest.param(
+        command,
+        response,
+        quirk_redefining(response, schema),
+        fields,
+        id=f"{command}-status_{shape}",
+    )
+    for command, response in (
+        ("set_pin_code", "set_pin_code_response"),
+        ("clear_pin_code", "clear_pin_code_response"),
+    )
+    for shape, schema, fields in (
+        ("named_otherwise", {"result": foundation.Status}, {"result": Status.FAILURE}),
+        ("absent", {"status?": foundation.Status}, {}),
+        (
+            "not_a_number",
+            {"status": zigpy_t.LVBytes},
+            {"status": zigpy_t.LVBytes(b"\x01")},
+        ),
+    )
+]
+
+
+@pytest.mark.parametrize(
+    ("command", "response", "door_lock_cluster_type", "fields"), _NO_NUMERIC_STATUS
+)
+async def test_an_own_response_with_no_numeric_status_is_no_answer(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+    command: str,
+    response: str,
+    fields: dict[str, Any],
+) -> None:
+    """A quirk's own response that carries no numeric status leaves the write standing."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    setattr(
+        cluster,
+        command,
+        AsyncMock(return_value=lock_frame(cluster, response, **fields).payload),
+    )
+    zha_lock.coordinator = MagicMock()
+
+    assert await _write(zha_lock, command) in (WriteResult.CONFIRMED, True)
+    zha_lock.coordinator.push_update.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -535,41 +698,159 @@ async def test_get_door_lock_cluster_no_matching_endpoint_cluster(
 # ---------------------------------------------------------------------------
 
 
-def test_parse_pin_response_bytes() -> None:
-    """Test parsing PIN response with bytes code."""
-    result = type(
-        "Response",
-        (),
-        {"user_status": DoorLock.UserStatus.Enabled, "code": b"1234"},
-    )()
-    status, pin = ZHALock._parse_pin_response(result)
-    assert status == DoorLock.UserStatus.Enabled
-    assert pin == "1234"
+def _get_pin_code_response(
+    cluster: type[DoorLock], user_id: int = 3, **fields: Any
+) -> foundation.CommandSchema:
+    """Build a Get PIN Code Response for ``user_id`` as ``cluster`` decodes it."""
+    return lock_frame(
+        cluster,
+        "get_pin_code_response",
+        **{
+            "user_id": user_id,
+            "user_status": DoorLock.UserStatus.Enabled,
+            "user_type": DoorLock.UserType.Unrestricted,
+            "code": "1234",
+            **fields,
+        },
+    ).payload
 
 
-def test_parse_pin_response_list_format() -> None:
-    """Test parsing PIN response in list format."""
-    result = [0, DoorLock.UserStatus.Enabled, 0, "5678"]
-    status, pin = ZHALock._parse_pin_response(result)
-    assert status == DoorLock.UserStatus.Enabled
-    assert pin == "5678"
-
-
-def test_parse_pin_response_list_bytes() -> None:
-    """Test parsing list-format response with bytes PIN."""
-    result = [0, DoorLock.UserStatus.Enabled, 0, b"5678"]
-    status, pin = ZHALock._parse_pin_response(result)
-    assert status == DoorLock.UserStatus.Enabled
-    assert pin == "5678"
-
-
-def test_parse_pin_response_unknown_format() -> None:
-    """An unrecognized response is not an answer.
-
-    Reporting it as ``Available`` would say "this slot is free" on the
-    strength of a reply that was never understood.
+@pytest.mark.parametrize(
+    "cluster",
+    [DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock],
+    ids=["stock", "quirk", "renaming_quirk"],
+)
+def test_parse_pin_response_reads_the_slots_reply(cluster: type[DoorLock]) -> None:
     """
-    assert ZHALock._parse_pin_response("unexpected") is None
+    The Get PIN Code Response the lock's cluster decodes is the slot's answer.
+
+    A quirk's redefinition, under the stock name or another, is a schema class
+    of its own; it is still the reply.
+    """
+    assert ZHALock._parse_pin_response(_get_pin_code_response(cluster), 3, cluster) == (
+        DoorLock.UserStatus.Enabled,
+        "1234",
+    )
+
+
+@pytest.mark.parametrize(
+    "cluster",
+    [DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock],
+    ids=["stock", "quirk", "renaming_quirk"],
+)
+@pytest.mark.parametrize(
+    "reply",
+    [
+        pytest.param(
+            lambda cluster: _get_pin_code_response(cluster, user_id=4),
+            id="another_users_reply",
+        ),
+        # Every decoded zigpy command is a tuple, so read positionally this
+        # passed its event code for a user status and its code for the slot's.
+        pytest.param(
+            lambda cluster: (
+                lock_frame(
+                    cluster,
+                    "operation_event_notification",
+                    operation_event_source=DoorLock.OperationEventSource.Keypad,
+                    operation_event_code=DoorLock.OperationEvent.Lock,
+                    user_id=3,
+                    pin="1234",
+                    local_time=0,
+                ).payload
+            ),
+            id="operation_event",
+        ),
+        pytest.param(
+            lambda cluster: (
+                lock_frame(
+                    cluster, "set_pin_code_response", status=Status.SUCCESS
+                ).payload
+            ),
+            id="a_writes_response",
+        ),
+        pytest.param(
+            lambda _cluster: (
+                default_response(
+                    DoorLock.ServerCommandDefs.get_pin_code.id, Status.SUCCESS
+                ).payload
+            ),
+            id="default_response",
+        ),
+        # A command the cluster has no definition for reaches the request as bytes.
+        pytest.param(lambda _cluster: b"unexpected", id="undecoded_bytes"),
+    ],
+)
+def test_parse_pin_response_rejects_a_reply_that_is_not_the_slots(
+    cluster: type[DoorLock], reply: Any
+) -> None:
+    """
+    A frame that is not slot 3's Get PIN Code Response is no answer for slot 3.
+
+    zigpy pairs a reply with its request by sequence number, not by the user
+    or command it is about. Reporting such a reply as ``Available`` would say
+    "this slot is free" on the strength of a reply that was never about it.
+    """
+    assert ZHALock._parse_pin_response(reply(cluster), 3, cluster) is None
+
+
+@pytest.mark.parametrize(
+    ("schema", "fields", "parsed"),
+    [
+        pytest.param(
+            {"code": zigpy_t.LVBytes},
+            {"code": zigpy_t.LVBytes(b"1234")},
+            (DoorLock.UserStatus.Enabled, "1234"),
+            id="code_as_bytes",
+        ),
+        pytest.param(
+            {"code": None, "pin": zigpy_t.CharacterString},
+            {"pin": "1234"},
+            (DoorLock.UserStatus.Enabled, ""),
+            id="code_named_otherwise",
+        ),
+        pytest.param(
+            {"user_status": None, "state": DoorLock.UserStatus},
+            {"state": DoorLock.UserStatus.Enabled},
+            None,
+            id="user_status_named_otherwise",
+        ),
+        pytest.param(
+            {"user_id": None, "user": zigpy_t.uint16_t},
+            {"user": 3},
+            None,
+            id="user_id_named_otherwise",
+        ),
+    ],
+)
+def test_parse_pin_response_reads_a_quirks_fields_by_name(
+    schema: dict[str, Any], fields: dict[str, Any], parsed: tuple[int, str] | None
+) -> None:
+    """
+    A quirk's Get PIN Code Response is read by field name, guarded.
+
+    A code decoded as bytes is its text; no code field is no code; no user
+    status, or no user to match against the slot, is no answer.
+    """
+    stock = {field.name: field.type for field in _GET_PIN_CODE_RESPONSE.schema.fields}
+    redefined = {
+        name: kind for name, kind in {**stock, **schema}.items() if kind is not None
+    }
+    cluster = quirk_redefining("get_pin_code_response", redefined)
+    values = {
+        "user_id": 3,
+        "user_status": DoorLock.UserStatus.Enabled,
+        "user_type": DoorLock.UserType.Unrestricted,
+        "code": "1234",
+        **fields,
+    }
+    reply = lock_frame(
+        cluster,
+        "get_pin_code_response",
+        **{name: value for name, value in values.items() if name in redefined},
+    ).payload
+
+    assert ZHALock._parse_pin_response(reply, 3, cluster) == parsed
 
 
 # ---------------------------------------------------------------------------
@@ -850,11 +1131,7 @@ async def test_hard_refresh_codes(
     assert cluster is not None
 
     async def mock_get_pin_code(slot_num):
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Enabled, "code": "1111"},
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "1111")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -898,16 +1175,8 @@ async def test_occupied_indices_sees_slots_no_entry_manages(
     async def mock_get_pin_code(slot_num):
         # Slot 4 is outside anything this entry manages.
         if slot_num == 4:
-            return type(
-                "Response",
-                (),
-                {"user_status": DoorLock.UserStatus.Enabled, "code": "9999"},
-            )()
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+            return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "9999")
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -926,9 +1195,7 @@ async def test_occupied_indices_stops_at_the_limit(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
-        )()
+        side_effect=_every_slot_answers(DoorLock.UserStatus.Available, "")
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 4))
@@ -953,9 +1220,7 @@ async def test_a_failed_index_is_unreadable_not_empty(
     async def mock_get_pin_code(slot_num):
         if slot_num == 2:
             raise OSError("radio dropped")
-        return type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -975,9 +1240,7 @@ async def test_occupied_indices_counts_a_write_only_slot(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Enabled, "code": ""}
-        )()
+        side_effect=_every_slot_answers(DoorLock.UserStatus.Enabled, "")
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 3))
@@ -998,7 +1261,8 @@ async def test_unparseable_response_is_unreadable_not_empty(
     """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
-    cluster.get_pin_code = AsyncMock(return_value="unexpected shape")
+    # A command the cluster has no definition for reaches the request as bytes.
+    cluster.get_pin_code = AsyncMock(return_value=b"unexpected shape")
 
     codes = await zha_lock.async_get_usercodes(range(1, 3))
 
@@ -1030,9 +1294,7 @@ async def test_only_available_means_the_slot_is_free(
     """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
-    cluster.get_pin_code = AsyncMock(
-        return_value=type("Response", (), {"user_status": user_status, "code": code})()
-    )
+    cluster.get_pin_code = AsyncMock(side_effect=_every_slot_answers(user_status, code))
 
     codes = await zha_lock.async_get_usercodes(range(1, 3))
 
@@ -1072,11 +1334,7 @@ async def test_a_masked_code_is_unreadable_not_known(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Enabled, "code": code},
-        )()
+        side_effect=_every_slot_answers(DoorLock.UserStatus.Enabled, code)
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 2))
@@ -1094,9 +1352,7 @@ async def test_available_is_an_empty_slot(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(
-        return_value=type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
-        )()
+        side_effect=_every_slot_answers(DoorLock.UserStatus.Available, "")
     )
 
     codes = await zha_lock.async_get_usercodes(range(1, 3))
@@ -1211,11 +1467,7 @@ async def test_a_scoped_read_touches_only_the_slots_asked_for(
     assert cluster is not None
 
     async def mock_get_pin_code(slot_num):
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
@@ -1285,11 +1537,7 @@ async def test_zigpys_own_timeout_marks_the_slot_unreadable_and_walks_on(
     async def mock_get_pin_code(slot_num):
         if slot_num == 1:
             raise TimeoutError("zigpy gave up")
-        return type(
-            "Response",
-            (),
-            {"user_status": DoorLock.UserStatus.Available, "code": ""},
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
     users = await zha_lock.async_get_users()
@@ -1315,9 +1563,7 @@ async def test_scoped_hard_refresh_still_names_every_managed_slot(
 
     async def mock_get_pin_code(slot_num):
         asked.append(slot_num)
-        return type(
-            "Response", (), {"user_status": DoorLock.UserStatus.Available, "code": ""}
-        )()
+        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
     codes = await zha_lock.async_hard_refresh_codes({7})

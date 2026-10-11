@@ -17,6 +17,7 @@ from datetime import timedelta
 import logging
 from typing import Any, ClassVar, Literal
 
+from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
 
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
@@ -41,6 +42,50 @@ from ._base import BaseLock
 from ._util import is_masked_code
 
 _LOGGER = logging.getLogger(__name__)
+
+# zigpy decodes general commands from its own table, never from a cluster's.
+_DEFAULT_RESPONSE = foundation.GENERAL_COMMANDS[
+    foundation.GeneralCommand.Default_Response
+].schema
+
+
+def _is_reply(result: Any, cluster: DoorLock, reply: foundation.ZCLCommandDef) -> bool:
+    """
+    Return whether ``result`` is ``reply`` as the lock's own cluster decodes it.
+
+    zigpy decodes a cluster command from the receiving cluster's own table, and
+    a quirk that redefines a reply -- under the stock name or another --
+    compiles a schema class of its own, so the stock class does not recognize
+    a quirked lock's reply.
+    """
+    decoded_with = cluster.client_commands.get(reply.id)
+    return decoded_with is not None and isinstance(result, decoded_with.schema)
+
+
+def _write_status(
+    result: Any,
+    cluster: DoorLock,
+    request: foundation.ZCLCommandDef,
+    response: foundation.ZCLCommandDef,
+) -> int | None:
+    """
+    Return the status a set or clear's own reply gives, or None for no answer.
+
+    zigpy pairs a reply with its request by endpoint, cluster, direction and
+    transaction sequence number, so any frame arriving on those can fill the
+    request -- a Default Response to another command, the other write's
+    response -- and its status is about something else. Only ``response``, or
+    a Default Response naming ``request``, answers the write.
+    """
+    if _is_reply(result, cluster, response):
+        status = getattr(result, "status", None)
+    elif isinstance(result, _DEFAULT_RESPONSE) and result.command_id == request.id:
+        status = result.status
+    else:
+        return None
+    # A quirk may decode the status as None, or as something not a number.
+    return status if isinstance(status, int) else None
+
 
 OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.Lock: True,
@@ -295,6 +340,9 @@ class ZHALock(BaseLock):
         and reconnect handling apply, mirroring the OSError branch of
         the service-call wrapper.
 
+        Only the write's own reply can reject it (``_write_status``); a
+        reply that gives no status for this write leaves it standing.
+
         ``user_id`` is ignored; slot-only providers address the credential
         by ``credential.slot``.
         """
@@ -315,11 +363,16 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
-        if hasattr(result, "status") and result.status != 0:
+        if status := _write_status(
+            result,
+            cluster,
+            DoorLock.ServerCommandDefs.set_pin_code,
+            DoorLock.ClientCommandDefs.set_pin_code_response,
+        ):
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=f"set_pin_code rejected: status {result.status}",
+                reason=f"set_pin_code rejected: status {status}",
             )
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
@@ -329,7 +382,8 @@ class ZHALock(BaseLock):
         Clear a Personal Identification Number from a slot.
 
         See ``async_set_credential`` for why bare zigpy failures route to
-        ``LockDisconnected`` instead of ``LockOperationFailed``.
+        ``LockDisconnected`` instead of ``LockOperationFailed``, and for
+        which reply's status counts.
         """
         code_slot = ref.slot
         cluster = await self._get_connected_cluster()
@@ -343,11 +397,16 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
-        if hasattr(result, "status") and result.status != 0:
+        if status := _write_status(
+            result,
+            cluster,
+            DoorLock.ServerCommandDefs.clear_pin_code,
+            DoorLock.ClientCommandDefs.clear_pin_code_response,
+        ):
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=f"clear_pin_code rejected: status {result.status}",
+                reason=f"clear_pin_code rejected: status {status}",
             )
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
@@ -392,7 +451,7 @@ class ZHALock(BaseLock):
                     slot_num,
                     result,
                 )
-                parsed = self._parse_pin_response(result)
+                parsed = self._parse_pin_response(result, slot_num, cluster)
             except LockDisconnected:
                 raise
             except TimeoutError:
@@ -424,7 +483,7 @@ class ZHALock(BaseLock):
 
             if parsed is None:
                 _LOGGER.debug(
-                    "Lock %s: unrecognized get_pin_code response for slot %s",
+                    "Lock %s: get_pin_code reply is not slot %s's answer",
                     self.lock.entity_id,
                     slot_num,
                 )
@@ -509,25 +568,33 @@ class ZHALock(BaseLock):
     # -- Response parsing ----------------------------------------------------
 
     @staticmethod
-    def _parse_pin_response(result: Any) -> tuple[int, str] | None:
+    def _parse_pin_response(
+        result: Any, slot_num: int, cluster: DoorLock
+    ) -> tuple[int, str] | None:
         """
-        Extract (user_status, pin_code) from a get_pin_code response.
+        Extract (user_status, pin_code) from slot ``slot_num``'s get_pin_code reply.
 
-        ``None`` for a shape this does not recognize. Reporting such a
-        response as ``Available`` would answer "this slot is free" from a
-        reply that was never understood.
+        ``None`` for a reply that is not recognizably that slot's answer: one
+        that is not a Get PIN Code Response as ``cluster`` decodes it
+        (``_is_reply``), or that names another user. zigpy pairs a reply with
+        its request by endpoint, cluster, direction and transaction sequence
+        number, not by the user it names, so either can fill this slot's
+        read. Reporting such a reply as ``Available`` would answer "this slot
+        is free" from a reply that was never about it.
         """
-        if hasattr(result, "user_status"):
-            pin = getattr(result, "code", "") or ""
-            if isinstance(pin, bytes):
-                pin = pin.decode("utf-8", errors="ignore")
-            return result.user_status, str(pin)
-        if isinstance(result, (list, tuple)) and len(result) >= 4:
-            pin = result[3]
-            if isinstance(pin, bytes):
-                pin = pin.decode("utf-8", errors="ignore")
-            return result[1], str(pin) if pin else ""
-        return None
+        if not _is_reply(
+            result, cluster, DoorLock.ClientCommandDefs.get_pin_code_response
+        ):
+            return None
+        # A quirk's redefinition of the reply may name its fields otherwise.
+        if getattr(result, "user_id", None) != slot_num or not hasattr(
+            result, "user_status"
+        ):
+            return None
+        pin = getattr(result, "code", "") or ""
+        if isinstance(pin, bytes):
+            pin = pin.decode("utf-8", errors="ignore")
+        return result.user_status, str(pin)
 
     # -- Push updates --------------------------------------------------------
 

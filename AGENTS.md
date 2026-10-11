@@ -326,8 +326,8 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
 
 Provider tests live in dedicated modules mirroring the integration's test patterns:
 
-Each provider package has a `conftest.py`, a `test_provider.py`, and (except
-`zha`) a `test_e2e.py`; anything further is split by subject.
+Each provider package has a `conftest.py`, a `test_provider.py`, and a
+`test_e2e.py`; anything further is split by subject.
 
 ```text
 tests/providers/
@@ -335,7 +335,7 @@ tests/providers/
   matter/          # + helpers, fixtures/, test_sdk_exception_translation
   schlage/
   virtual/
-  zha/             # conftest, test_provider
+  zha/             # + helpers (Zigbee frames, quirk-style clusters)
   zigbee2mqtt/     # + test_payload, test_topic_resolution
   zwave_js/        # + helpers, fixtures/, test_events
   zwave_js_ui/     # + test_api, test_borrowed, test_payload, test_push,
