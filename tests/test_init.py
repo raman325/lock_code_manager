@@ -60,6 +60,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_PIN_IN_SYNC,
     ATTR_TEXT,
     BACKOFF_FAILURE_THRESHOLD,
+    BACKOFF_MAX_SECONDS,
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOT,
@@ -68,6 +69,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     ENTITY_IDS_RENAMED_ISSUE,
     EVENT_CREDENTIAL_USED,
+    POLL_FAILURE_ALERT_THRESHOLD,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
@@ -91,6 +93,7 @@ from custom_components.lock_code_manager.domain.slot_assignment import (
     identity,
 )
 from custom_components.lock_code_manager.domain.user_migration import migrate_to_users
+from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 from custom_components.lock_code_manager.entity import build_slot_device_info
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import (
@@ -2637,6 +2640,68 @@ async def test_a_new_instance_failing_setup_beside_an_unloading_one_is_stopped(
         assert shutdown.await_args_list.count(call(new_lock.coordinator)) == 1
 
         assert await hass.config_entries.async_unload(failing_entry.entry_id)
+
+
+@pytest.mark.parametrize("answer", ["fails", "answers"])
+async def test_a_poll_in_flight_when_the_lock_is_torn_down_records_nothing(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    answer: str,
+):
+    """
+    A scheduled poll still reading when its lock is torn down changes nothing.
+
+    The lock has failed one poll short of raising the lock-offline repair
+    when a scheduled poll starts reading and the last entry holding the lock
+    unloads. Whatever that read then says, the lock is gone: failing must not
+    raise the repair for it, and answering must not move its data.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="Torn Down"
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    lock = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None and coordinator.last_update_success
+
+    holding = {"read": False}
+    reading = asyncio.Event()
+    read_may_answer = asyncio.Event()
+    original_get_usercodes = MockLCMLock.async_get_usercodes
+
+    async def _offline(self: MockLCMLock, slots=None):
+        if self is not lock:
+            return await original_get_usercodes(self, slots)
+        if holding["read"]:
+            reading.set()
+            await read_may_answer.wait()
+            if answer == "answers":
+                return {1: SlotCredential.known("0000")}
+        raise LockDisconnected("lock offline")
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _offline):
+        for _ in range(POLL_FAILURE_ALERT_THRESHOLD - 1):
+            await coordinator.async_refresh()
+        data_before = coordinator.data
+
+        holding["read"] = True
+        async_fire_time_changed(
+            hass, dt_util.utcnow() + timedelta(seconds=BACKOFF_MAX_SECONDS + 1)
+        )
+        await reading.wait()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        read_may_answer.set()
+        await hass.async_block_till_done()
+
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, per_lock_issue_id("lock_offline", LOCK_1_ENTITY_ID)
+        )
+        is None
+    )
+    assert coordinator.data == data_before
 
 
 async def test_update_listener_slot_removal_handles_missing_and_failing_coordinators(

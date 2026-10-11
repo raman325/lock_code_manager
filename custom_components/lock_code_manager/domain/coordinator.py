@@ -729,6 +729,10 @@ class LockUsercodeUpdateCoordinator(
 
     async def async_get_usercodes(self) -> dict[CredentialAddress, SlotCredential]:
         """Fetch usercodes from the provider, normalize slot keys, and apply backoff handling."""
+        # A read still out when the coordinator shuts down answers for a lock
+        # that is gone. Failing, it charges no breaker and raises no repair;
+        # answering, it settles nothing and clears no repair, which by then may
+        # belong to the lock set up in its place.
         try:
             data = await self._lock.async_internal_get_usercodes()
         except LockBusy as err:
@@ -747,12 +751,15 @@ class LockUsercodeUpdateCoordinator(
                 return self.data
             raise UpdateFailed from err
         except LockCodeManagerError as err:
-            self._apply_backoff()
+            if not self._shutdown_requested:
+                self._apply_backoff()
             # Don't swallow into {}: DataUpdateCoordinator records any return as
             # a success, so an empty return fakes a "recovered" while the lock
             # is still unreachable (#1268).
             raise UpdateFailed from err
 
+        if self._shutdown_requested:
+            return self.data
         self._reset_backoff()
         return self._apply_read(self._normalize_keys(data))
 
