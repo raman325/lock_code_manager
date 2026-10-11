@@ -112,6 +112,18 @@ def bypass_entry_setup_and_unload_fixture():
         yield
 
 
+async def _async_load(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """
+    Load the entry, as an entry the user edits normally is.
+
+    Setup is bypassed in this module, so no integration code runs for the
+    entry. What this gives the options flow is the loaded state, which
+    decides whether a save is applied by the update listener or by a reload.
+    """
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    assert entry.state is ConfigEntryState.LOADED
+
+
 async def _start_config_flow(hass: HomeAssistant):
     """Start a config flow."""
     result = await hass.config_entries.flow.async_init(
@@ -448,6 +460,7 @@ async def test_options_flow_edits_the_locks(
         [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
         {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
     )
+    await _async_load(hass, entry)
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
     assert result["type"] == "form"
@@ -766,7 +779,8 @@ async def test_options_flow_no_added_pairs_persists_immediately(
     hass: HomeAssistant, mock_lock_config_entry
 ):
     """Resubmitting the locks the entry already has saves without complaint."""
-    flow_id, _ = await _start_options_flow(hass)
+    flow_id, entry = await _start_options_flow(hass)
+    await _async_load(hass, entry)
 
     result = await hass.config_entries.options.async_configure(
         flow_id, {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
@@ -2317,6 +2331,7 @@ async def test_editing_keeps_what_the_form_never_asked_about(
         ),
     )
     entry.add_to_hass(hass)
+    await _async_load(hass, entry)
     started = await hass.config_entries.options.async_init(entry.entry_id)
 
     result = await hass.config_entries.options.async_configure(
@@ -2714,6 +2729,7 @@ async def test_options_flow_rejects_unclaimed_mqtt_lock(
         list(BASE_CONFIG[CONF_LOCKS]),
         {"test1": {CONF_PIN: "1234", CONF_ENABLED: True}},
     )
+    await _async_load(hass, entry)
 
     started = await hass.config_entries.options.async_init(entry.entry_id)
     flow_id = started["flow_id"]
@@ -2753,6 +2769,7 @@ async def test_options_flow_saves_around_a_grandfathered_unclaimed_lock(
     entry = _entry_with_users(
         hass, locks, {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
     )
+    await _async_load(hass, entry)
     started = await hass.config_entries.options.async_init(entry.entry_id)
 
     result = await hass.config_entries.options.async_configure(

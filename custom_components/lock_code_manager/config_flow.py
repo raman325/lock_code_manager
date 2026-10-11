@@ -14,6 +14,7 @@ from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigSubentry,
     ConfigSubentryFlow,
     SubentryFlowResult,
@@ -196,6 +197,43 @@ def _check_common_slots(
             "lock": lock,
             "entry_title": entry_title,
         }
+
+
+async def _async_save_locks_and_reload(
+    hass: HomeAssistant, config_entry: ConfigEntry, locks: list[str]
+) -> None:
+    """
+    Save an entry's locks straight to its data, then reload it.
+
+    For an entry the update listener cannot act for: the listener is
+    registered only by a setup that succeeded, so on a failed entry a save
+    left in ``options`` is never applied. Reauth and the options flow both
+    reach a failed entry, and both save through here.
+    """
+    # Consume any options-flow save that sat unprocessed while the entry was
+    # failed and clear it: the entry is read options-first, so leaving stale
+    # options in place would silently override this save on the next load.
+    # Resolved through EntryConfig, not by merging raw dicts: the two sides
+    # may be in different shapes, and a raw merge carries both, discarding
+    # the very save this exists to consume.
+    # Released before the entry is rewritten, while the roster still names
+    # them. This does not reach the update listener: the write below leaves
+    # empty options, which is the same shape the listener's own settle write
+    # leaves, so the listener returns early and its removal pass never runs.
+    # For a provider whose store IS the credentials, that left a cleartext PIN
+    # on disk for a lock no entry referenced any more.
+    dropped = [
+        lock_entity_id
+        for lock_entity_id in get_entry_config(config_entry).locks
+        if lock_entity_id not in locks
+    ]
+    await async_release_locks(hass, config_entry, dropped)
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={**get_entry_config(config_entry).to_dict(), CONF_LOCKS: locks},
+        options={},
+    )
+    hass.config_entries.async_schedule_reload(config_entry.entry_id)
 
 
 async def _async_validate_users_yaml(
@@ -759,40 +797,8 @@ class LockCodeManagerFlowHandler(
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
-                # Consume any options-flow save that sat unprocessed while
-                # the entry was failed (no update listener registered in
-                # that state) and clear it: the data→options migration
-                # merges options-preferred, so leaving stale options in
-                # place would silently override this reauth fix on the
-                # next load.
-                # Resolved through EntryConfig, not by merging raw dicts: the
-                # two sides may be in different shapes, and a raw merge carries
-                # both, discarding the very save this block exists to consume.
-                # Released before the entry is rewritten, while the roster
-                # still names them. This does not reach the update listener
-                # the options flow relies on: the write below leaves empty
-                # options, which is the same shape the listener's own settle
-                # write leaves, so the listener returns early and its removal
-                # pass never runs. For a provider whose store IS the
-                # credentials, that left a cleartext PIN on disk for a lock
-                # no entry referenced any more.
-                dropped = [
-                    lock_entity_id
-                    for lock_entity_id in get_entry_config(config_entry).locks
-                    if lock_entity_id not in user_input[CONF_LOCKS]
-                ]
-                await async_release_locks(self.hass, config_entry, dropped)
-                self.hass.config_entries.async_update_entry(
-                    config_entry,
-                    data={
-                        **get_entry_config(config_entry).to_dict(),
-                        **user_input,
-                    },
-                    options={},
-                )
-                self.hass.async_create_task(
-                    self.hass.config_entries.async_reload(config_entry.entry_id),
-                    f"Reload config entry {config_entry.entry_id}",
+                await _async_save_locks_and_reload(
+                    self.hass, config_entry, user_input[CONF_LOCKS]
                 )
                 return self.async_abort(reason="locks_updated")
 
@@ -877,6 +883,25 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                     errors = {"base": err.translation_key}
                     description_placeholders = err.placeholders
             if not errors:
+                if self.config_entry.state in (
+                    ConfigEntryState.SETUP_ERROR,
+                    ConfigEntryState.SETUP_RETRY,
+                ):
+                    # Saved as reauth saves: with no update listener to apply
+                    # it, a save left in `options` reports success while the
+                    # entry stays failed. Written before the reload rather
+                    # than left to Home Assistant, which writes the options
+                    # only after this step returns -- after a reload started
+                    # here has already read the entry.
+                    # Only these two states. Both are reached after migration,
+                    # so the entry's data no longer holds its users, and both
+                    # are ones Home Assistant will reload. Any other state that
+                    # is not loaded may be an entry that never migrated, whose
+                    # users this rewrite of its data would delete.
+                    await _async_save_locks_and_reload(
+                        self.hass, self.config_entry, user_input[CONF_LOCKS]
+                    )
+                    return self.async_abort(reason="locks_updated")
                 # Only the entry's own half. The users are untouched in their
                 # subentries, and `extra` carries whatever else the entry
                 # holds so a form with one field does not erase the rest.

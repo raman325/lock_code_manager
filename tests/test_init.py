@@ -21,7 +21,11 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    ConfigEntryDisabler,
+    ConfigEntryState,
+)
 from homeassistant.const import (
     ATTR_CODE,
     ATTR_ENTITY_ID,
@@ -35,7 +39,7 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
@@ -2999,6 +3003,273 @@ async def test_an_options_submission_that_changes_nothing_still_settles(
     assert result["type"] == "create_entry"
     assert entry.options == {}
     assert entry.data[CONF_LOCKS] == locks
+
+
+async def test_an_options_save_repairs_an_entry_that_failed_to_load(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    Removing the lock an entry cannot load without brings the entry back.
+
+    A failed entry has no update listener, so nothing acts on an ordinary
+    options save: the user is told it worked while the entry stays failed
+    until Home Assistant restarts.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.config_entries.async_unload(entry.entry_id)
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    # Spied rather than observed: a successful reload's own orphan sweep
+    # removes the same registry rows, so the end state cannot tell whether
+    # the save released the lock.
+    with patch(
+        "custom_components.lock_code_manager.config_flow.async_release_locks",
+        wraps=async_release_locks,
+    ) as release:
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    release.assert_awaited_once_with(hass, entry, [LOCK_2_ENTITY_ID])
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert entry.options == {}
+    assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+
+
+async def test_an_options_save_leaves_a_loaded_entry_to_its_listener(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """A loaded entry applies the save through its update listener, not a reload."""
+    entry = lock_code_manager_config_entry
+    ent_reg = er.async_get(hass)
+    lock_2_rows = [
+        entity_id(hass, entry, slot_num, LOCK_2_ENTITY_ID)
+        for slot_num in BASE_CONFIG[CONF_SLOTS]
+        for entity_id in (in_sync_entity_id, code_entity_id)
+    ]
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    with patch.object(
+        hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+    ) as reload:
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert entry.options == {}
+    assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+    assert all(ent_reg.async_get(row) is None for row in lock_2_rows)
+    reload.assert_not_called()
+
+
+@pytest.mark.parametrize("repair", ["options", "reauth"])
+async def test_a_save_repairs_an_entry_whose_failed_setup_left_runtime_data(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    repair: str,
+) -> None:
+    """
+    A setup reads the entry as it is now, not as a previous failed setup saw it.
+
+    Home Assistant keeps `runtime_data` on an entry whose setup failed after
+    assigning it, and unloading an entry that is not loaded keeps it too. A
+    setup that read its configuration from there found the lock the save had
+    just removed, and failed again.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.config_entries.async_unload(entry.entry_id)
+    with patch(
+        "custom_components.lock_code_manager._async_prune_orphaned_lock_entities",
+        side_effect=RuntimeError,
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert hasattr(entry, "runtime_data")
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+    if repair == "options":
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+    else:
+        [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+        result = await hass.config_entries.flow.async_configure(
+            flow["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+
+
+async def test_an_options_save_on_a_failed_entry_keeps_what_the_form_never_asked_about(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The failed-entry save rewrites `data`, so it has to carry the rest of it.
+
+    The form has one field. Writing only that field drops every other key the
+    entry holds, and nothing on the way to the reload would notice.
+    """
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**BASE_CONFIG, "written_by_something_else": {"kept": True}},
+        unique_id="carries_extra",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    await hass.async_block_till_done()
+
+    assert result["reason"] == "locks_updated"
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data["written_by_something_else"] == {"kept": True}
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_options_save_repairs_an_entry_waiting_to_retry_setup(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """An entry waiting to retry setup is saved and reloaded like a failed one."""
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="retrying")
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.lock_code_manager.async_setup_entry",
+        side_effect=ConfigEntryNotReady,
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("version", "legacy"),
+    [
+        (
+            3,
+            {
+                CONF_SLOTS: {
+                    1: {CONF_NAME: "Alice", CONF_ENABLED: True, CONF_PIN: "1234"}
+                }
+            },
+        ),
+        (
+            4,
+            {
+                CONF_USERS: {"Alice": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+                CONF_SLOT_ASSIGNMENT: {"alice": 1},
+            },
+        ),
+    ],
+    ids=["slots", "users"],
+)
+async def test_an_options_save_keeps_the_users_of_an_entry_not_yet_migrated(
+    hass: HomeAssistant, mock_lock_config_entry, version: int, legacy: dict
+) -> None:
+    """
+    An entry that has not migrated still holds its users in its own data.
+
+    A disabled entry is never set up, so it is never migrated either. Saving
+    its locks by rewriting its data from the entry's own half would leave the
+    migration nobody to move once the entry is enabled.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID], **legacy},
+        version=version,
+        disabled_by=ConfigEntryDisabler.USER,
+        unique_id="not_migrated",
+    )
+    entry.add_to_hass(hass)
+    assert entry.state is ConfigEntryState.NOT_LOADED
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert entry.version == version
+    assert all(entry.data[key] == value for key, value in legacy.items())
+    assert set(get_entry_config(entry).users) == {"Alice"}
+    assert list(get_entry_config(entry).locks) == [LOCK_1_ENTITY_ID]
+
+
+async def test_an_options_save_does_not_reload_an_entry_that_failed_to_migrate(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Home Assistant refuses to reload an entry whose migration failed.
+
+    Reloading it from the save would fail in the background, after the flow
+    had already told the user the locks were updated.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]},
+        version=99,
+        unique_id="from_the_future",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.MIGRATION_ERROR
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with patch.object(
+        hass.config_entries, "async_reload", wraps=hass.config_entries.async_reload
+    ) as reload:
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert entry.state is ConfigEntryState.MIGRATION_ERROR
+    reload.assert_not_called()
 
 
 async def test_migration_v5_moves_an_existing_slot_device_to_its_user(

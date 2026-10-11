@@ -956,10 +956,13 @@ async def async_setup_entry(
 ) -> bool:
     """Set up a config entry."""
     ent_reg = er.async_get(hass)
+    # Read from the entry, not through `get_entry_config`: a setup that failed
+    # after assigning `runtime_data` leaves it in place, and its cached config
+    # predates whatever was saved to repair that failure.
     try:
         entity_id = next(
             entity_id
-            for entity_id in get_entry_config(config_entry).locks
+            for entity_id in EntryConfig.from_entry(config_entry).locks
             if not ent_reg.async_get(entity_id)
         )
     except StopIteration:
