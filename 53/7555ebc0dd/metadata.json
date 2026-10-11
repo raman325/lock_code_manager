@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "537555ebc0dd",
+  "strategy": "manual-commit",
+  "branch": "fix/zha-reply-matching",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/53/7555ebc0dd/0/metadata.json",
+      "transcript": "/53/7555ebc0dd/0/full.jsonl",
+      "compact_transcript": "/53/7555ebc0dd/0/transcript.jsonl",
+      "content_hash": "/53/7555ebc0dd/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 954,
+    "cache_creation_tokens": 3294943,
+    "cache_read_tokens": 156300396,
+    "output_tokens": 539173,
+    "api_call_count": 438
+  }
+}
