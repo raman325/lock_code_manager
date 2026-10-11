@@ -13,6 +13,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
@@ -35,7 +36,7 @@ from ..const import (
 from .credentials import CredentialAddress, CredentialType, pin_address
 from .exceptions import LockBusy, LockCodeManagerError
 from .models import SlotCredential
-from .queries import get_entry_config
+from .queries import find_entry_for_lock_slot, get_entry_config
 from .resilience import CircuitBreaker
 from .util import per_lock_issue_id
 
@@ -135,7 +136,6 @@ class LockUsercodeUpdateCoordinator(
         # apart, not N.
         self._confirm_task: asyncio.Task[None] | None = None
         self._confirm_unsub: Callable[[], None] | None = None
-        self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
             backoff_initial=timedelta(seconds=BACKOFF_INITIAL_SECONDS),
@@ -170,17 +170,28 @@ class LockUsercodeUpdateCoordinator(
         """Return the lock."""
         return self._lock
 
-    def desired_credential(self, address: CredentialAddress) -> SlotCredential:
+    def desired_credential(
+        self, address: CredentialAddress, *, owner: ConfigEntry | None = None
+    ) -> SlotCredential:
         """
         Return the credential LCM wants at an address.
 
-        Disabled slots and enabled-but-blank slots map to
-        ``SlotCredential.empty()``; an enabled slot with a configured PIN
-        maps to ``SlotCredential.known(pin)``.
+        Asked of the entry that owns the slot on this lock, which need not be
+        the entry this coordinator was created for: entries sharing a lock
+        share its coordinator. A caller that already holds the owning entry
+        passes it as ``owner``; otherwise it is found among the entries
+        keeping their slots on this lock. A slot none of them owns, a disabled
+        slot and an enabled-but-blank slot map to ``SlotCredential.empty()``;
+        an enabled slot with a configured Personal Identification Number maps
+        to ``SlotCredential.known(pin)``.
         """
-        slot_data = get_entry_config(self._config_entry).slot(
-            _checked(address).user_ref
+        slot_num = _checked(address).user_ref
+        entry = owner or find_entry_for_lock_slot(
+            self.hass, self._lock.lock.entity_id, slot_num, keeping_slots=True
         )
+        if entry is None:
+            return SlotCredential.empty()
+        slot_data = get_entry_config(entry).slot(slot_num)
         if not slot_data.get(CONF_ENABLED):
             return SlotCredential.empty()
         pin = slot_data.get(CONF_PIN)

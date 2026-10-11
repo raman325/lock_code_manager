@@ -1231,6 +1231,7 @@ async def test_unreachable_clears_on_recovery(
 async def test_desired_credential_disabled_slot_is_empty(
     hass: HomeAssistant,
     poll_coordinator: LockUsercodeUpdateCoordinator,
+    poll_lock: MockLCMLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """A disabled slot's desired credential is empty even with a configured PIN."""
@@ -1238,7 +1239,7 @@ async def test_desired_credential_disabled_slot_is_empty(
         hass,
         lcm_config_entry,
         {
-            CONF_LOCKS: [],
+            CONF_LOCKS: [poll_lock.lock.entity_id],
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "1234", CONF_ENABLED: False}},
         },
     )
@@ -1248,6 +1249,7 @@ async def test_desired_credential_disabled_slot_is_empty(
 async def test_desired_credential_enabled_blank_pin_is_empty(
     hass: HomeAssistant,
     poll_coordinator: LockUsercodeUpdateCoordinator,
+    poll_lock: MockLCMLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """An enabled slot with no configured PIN has an empty desired credential."""
@@ -1255,7 +1257,7 @@ async def test_desired_credential_enabled_blank_pin_is_empty(
         hass,
         lcm_config_entry,
         {
-            CONF_LOCKS: [],
+            CONF_LOCKS: [poll_lock.lock.entity_id],
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "", CONF_ENABLED: True}},
         },
     )
@@ -1265,6 +1267,7 @@ async def test_desired_credential_enabled_blank_pin_is_empty(
 async def test_desired_credential_enabled_with_pin_is_known(
     hass: HomeAssistant,
     poll_coordinator: LockUsercodeUpdateCoordinator,
+    poll_lock: MockLCMLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """An enabled slot with a configured PIN yields that PIN as the desired credential."""
@@ -1272,7 +1275,7 @@ async def test_desired_credential_enabled_with_pin_is_known(
         hass,
         lcm_config_entry,
         {
-            CONF_LOCKS: [],
+            CONF_LOCKS: [poll_lock.lock.entity_id],
             CONF_SLOTS: {1: {CONF_NAME: "x", CONF_PIN: "4242", CONF_ENABLED: True}},
         },
     )

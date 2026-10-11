@@ -2,9 +2,13 @@
 
 import logging
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -66,6 +70,44 @@ async def test_sensor_native_value_with_slot_code(
     state = hass.states.get(code_entity_id(hass, lock_code_manager_config_entry, 1))
     assert state is not None
     assert state.state == "5678"
+
+
+async def test_sensor_unreadable_code_on_a_shared_lock_shows_its_entrys_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    An unreadable code falls back to the PIN of the entry that owns the slot.
+
+    The second entry shares the first entry's lock, and with it the lock's
+    coordinator, which was created for the first entry.
+    """
+    second_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                3: {CONF_NAME: "shared3", CONF_PIN: "2468", CONF_ENABLED: True}
+            },
+        },
+        unique_id="Shared Sensor",
+    )
+    second_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(second_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = second_entry.runtime_data.locks[LOCK_1_ENTITY_ID].coordinator
+    assert coordinator is not None
+    assert coordinator.config_entry is lock_code_manager_config_entry
+
+    coordinator.async_set_updated_data({pin_address(3): SlotCredential.unreadable()})
+    await hass.async_block_till_done()
+
+    state = hass.states.get(code_entity_id(hass, second_entry, 3))
+    assert state is not None
+    assert state.state == "2468"
+
+    await hass.config_entries.async_unload(second_entry.entry_id)
 
 
 async def test_add_code_slot_entity_skipped_when_lock_has_no_coordinator(

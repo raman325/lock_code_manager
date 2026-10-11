@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from zwave_js_server.const import CommandClass
+from zwave_js_server.event import Event as ZwaveEvent
+
 from homeassistant.const import CONF_ENABLED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -32,3 +35,23 @@ def get_enabled_switch_entity_id(hass: HomeAssistant, entry_id: str, slot: int) 
     entity_id = ent_reg.async_get_entity_id("switch", DOMAIN, uid)
     assert entity_id, f"Switch entity not found for slot {slot}"
     return entity_id
+
+
+def make_uc_value_event(
+    node_id: int, property_name: str, code_slot: int, new_value: Any
+) -> ZwaveEvent:
+    """Create a User Code Command Class value-updated event."""
+    return ZwaveEvent(
+        type="value updated",
+        data={
+            "source": "node",
+            "event": "value updated",
+            "nodeId": node_id,
+            "args": {
+                "commandClass": CommandClass.USER_CODE,
+                "property": property_name,
+                "propertyKey": code_slot,
+                "newValue": new_value,
+            },
+        },
+    )
