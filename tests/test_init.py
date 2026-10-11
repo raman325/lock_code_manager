@@ -2495,6 +2495,8 @@ async def test_two_entries_unloading_one_shared_lock_at_once_tear_it_down_once(
                 if runtime_data is None or LOCK_2_ENTITY_ID not in runtime_data.locks:
                     break
                 await asyncio.sleep(0)
+            else:
+                pytest.fail("the other entry never let go of the shared lock")
         await original_shutdown(self)
 
     with patch.object(
