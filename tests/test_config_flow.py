@@ -26,15 +26,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import (
     EVENT_DATA_ENTRY_FLOW_PROGRESS_UPDATE,
     UnknownFlow,
-    UnknownStep,
 )
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.lock_code_manager.config_flow import (
-    LockCodeManagerFlowHandler,
-    _check_common_slots,
-)
+from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -69,6 +65,7 @@ from .common import (
     MockLCMLock,
     async_configure_flow,
     async_discover_unclaimed_mqtt_lock,
+    async_run_until_quiet,
     entry_users,
     flow_slots,
     flow_users,
@@ -3209,11 +3206,11 @@ async def test_a_second_request_while_an_unread_entry_is_saved_is_turned_away(
     """A duplicated submission is refused while the first one saves the entry.
 
     With nothing to wait on, allocation is answered within the request that
-    submitted the users, and Home Assistant leaves the flow on the users form
-    while it saves the entry. A second request carrying the same users -- a
-    client retry, a second open dialog -- gets the 404 a request for a step
-    already answered gets, and does not allocate and save a second entry
-    over the first.
+    submitted the users, and the flow must not still be on the users form
+    while that request saves the entry: a second request carrying the same
+    users -- a client retry, a second open dialog -- would pass the form,
+    allocate again and save a second entry over the first. It gets the 404 a
+    request for a step already answered gets.
     """
     flow_id = await _start_yaml_config_flow(hass)
     users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
@@ -3231,7 +3228,8 @@ async def test_a_second_request_while_an_unread_entry_is_saved_is_turned_away(
         saved = hass.async_create_task(
             hass.config_entries.flow.async_configure(flow_id, users)
         )
-        await saving.wait()
+        await async_run_until_quiet()
+        assert saving.is_set(), "the submitting request did not save the entry"
 
         with pytest.raises(UnknownFlow):
             await hass.config_entries.flow.async_configure(flow_id, users)
@@ -3280,8 +3278,8 @@ async def test_a_refusal_answered_at_once_can_be_submitted_again(
 ) -> None:
     """A refusal that needed no wait leaves the form open to another try.
 
-    Turning away a second request for a step already answered must not turn
-    away the user correcting a refused one.
+    The refusal comes back on the users form, not on a step that has already
+    taken the allocation, so the user correcting it is not turned away.
     """
     flow_id = await _start_yaml_config_flow(hass)
     users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
@@ -3293,46 +3291,6 @@ async def test_a_refusal_answered_at_once_can_be_submitted_again(
 
     result = await hass.config_entries.flow.async_configure(flow_id, users)
     assert result["type"] == "create_entry"
-
-
-async def test_an_allocation_cancelled_as_it_starts_is_shown_as_progress(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """Only an allocation that finished normally skips the progress step.
-
-    One cancelled before it could answer has no outcome to show, so the
-    submitting request is not where it surfaces.
-    """
-    flow_id = await _start_config_flow(hass)
-    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
-
-    with patch(
-        "custom_components.lock_code_manager.config_flow.async_allocate_for",
-        AsyncMock(side_effect=asyncio.CancelledError),
-    ):
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NUM_USERS: 2}
-        )
-
-    assert result["type"] == "progress"
-    assert result["step_id"] == "ui"
-
-
-async def test_allocating_for_a_step_with_no_allocated_sibling_starts_nothing(
-    hass: HomeAssistant,
-) -> None:
-    """A step missing its ``_allocated`` sibling fails before any read starts.
-
-    Checked up front, so it fails the same way whether the allocation would
-    have finished at once or only after a long read.
-    """
-    flow = LockCodeManagerFlowHandler()
-    flow.hass = hass
-
-    with pytest.raises(UnknownStep):
-        await flow._start_allocation("missing", None, [LOCK_1_ENTITY_ID], 1, {})
-
-    assert flow._allocation_task is None
 
 
 async def test_every_user_subentry_field_has_a_label(
