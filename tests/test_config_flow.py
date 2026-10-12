@@ -1618,7 +1618,7 @@ async def test_claims_above_the_window_do_not_widen_the_read(
 
     with (
         patch(
-            "custom_components.lock_code_manager.domain.allocation.get_managed_slots",
+            "custom_components.lock_code_manager.domain.allocation.slots_configured_on",
             return_value=set(range(90, 100)),
         ),
         patch.object(MockLCMLock, "async_get_usercodes", _read),

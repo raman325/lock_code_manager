@@ -36,7 +36,7 @@ from ..const import (
 from .credentials import CredentialAddress, CredentialType, pin_address
 from .exceptions import LockBusy, LockCodeManagerError
 from .models import SlotCredential
-from .queries import find_entry_for_lock_slot, get_entry_config
+from .queries import get_entry_config, syncing_owner
 from .resilience import CircuitBreaker
 from .util import per_lock_issue_id
 
@@ -190,9 +190,7 @@ class LockUsercodeUpdateCoordinator(
         Identification Number maps to ``SlotCredential.known(pin)``.
         """
         slot_num = _checked(address).user_ref
-        entry = owner or find_entry_for_lock_slot(
-            self.hass, self._lock.lock.entity_id, slot_num, keeping_slots=True
-        )
+        entry = owner or syncing_owner(self.hass, self._lock.lock.entity_id, slot_num)
         if entry is None:
             return SlotCredential.empty()
         slot_data = get_entry_config(entry).slot(slot_num)

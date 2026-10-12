@@ -104,9 +104,10 @@ from .domain.credentials import pin_address
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
 from .domain.queries import (
+    entries_configuring,
     find_config_entry_by_title,
     get_entry_config,
-    get_managed_slots,
+    slots_configured_on,
 )
 from .domain.services import (
     async_clear_slot_condition,
@@ -582,8 +583,7 @@ def _get_slot_entity_ids(
     ent_reg = er.async_get(hass)
     return {
         slot_int: _build_slot_entities(ent_reg, entry.entry_id, slot_int)
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        if get_entry_config(entry).has_lock(lock_entity_id)
+        for entry in entries_configuring(hass, lock_entity_id)
         for slot_int in get_entry_config(entry).slot_numbers
     }
 
@@ -657,7 +657,7 @@ def _serialize_lock_coordinator(
     """Serialize coordinator data for a lock."""
     coordinator = lock.coordinator
     data = coordinator.credentials_by_slot() if coordinator is not None else {}
-    managed_slots = get_managed_slots(hass, lock.lock.entity_id)
+    managed_slots = slots_configured_on(hass, lock.lock.entity_id)
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
     slot_metadata = _get_slot_metadata(hass, slot_entity_ids)
     ent_reg = er.async_get(hass)

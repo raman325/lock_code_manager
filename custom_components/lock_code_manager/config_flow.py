@@ -54,7 +54,7 @@ from .domain.names import (
     normalize_name,
     validate_user_names,
 )
-from .domain.queries import get_entry_config
+from .domain.queries import entries_configuring, get_entry_config
 from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
@@ -180,11 +180,10 @@ def _check_common_slots(
         lock, common_slots, entry_title = next(
             (lock, common_slots, entry.title)
             for lock in locks
-            for entry in hass.config_entries.async_entries(DOMAIN)
-            if (config := get_entry_config(entry)).has_lock(lock)
-            and (
+            for entry in entries_configuring(hass, lock)
+            if (
                 common_slots := sorted(
-                    config.slot_numbers & {int(s) for s in slots_list}
+                    get_entry_config(entry).slot_numbers & {int(s) for s in slots_list}
                 )
             )
             and not (config_entry and config_entry == entry)

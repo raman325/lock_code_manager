@@ -121,7 +121,11 @@ from .domain.pin_generator import (
     MIN_PIN_LENGTH,
     generate_pin,
 )
-from .domain.queries import get_entry_config, subentry_id_for_slot
+from .domain.queries import (
+    another_enabled_entry_configures,
+    get_entry_config,
+    subentry_id_for_slot,
+)
 from .domain.references import async_notify_moved
 from .domain.services import (
     async_add_users,
@@ -1008,29 +1012,6 @@ async def async_setup_entry(
     return True
 
 
-def _lock_managed_by_other_entry(
-    hass: HomeAssistant,
-    config_entry: LockCodeManagerConfigEntry,
-    lock_entity_id: str,
-) -> bool:
-    """
-    Return True if another (non-disabled, non-ignored) LCM entry manages the lock.
-
-    This asks about entry *presence*, which is what the persistent per-lock
-    repair issues care about: they outlive unloads and reloads, so an entry
-    that is merely between loads still needs its issue kept. Anything that
-    tears down live objects wants ``_lock_managed_by_other_loaded_entry``
-    instead.
-    """
-    return any(
-        entry.entry_id != config_entry.entry_id
-        and get_entry_config(entry).has_lock(lock_entity_id)
-        for entry in hass.config_entries.async_entries(
-            DOMAIN, include_disabled=False, include_ignore=False
-        )
-    )
-
-
 def _find_shared_lock_instance(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -1126,7 +1107,9 @@ async def async_unload_lock(
         # this to a plain teardown even while that entry is unloaded.
         await lock.async_unload(
             remove_permanently
-            and not _lock_managed_by_other_entry(hass, config_entry, _lock_entity_id)
+            and not another_enabled_entry_configures(
+                hass, config_entry, _lock_entity_id
+            )
         )
         if lock.coordinator is not None:
             await lock.coordinator.async_shutdown()
@@ -1173,7 +1156,7 @@ async def _async_release_locks(
         return
     for lock_entity_id in lock_entity_ids:
         runtime_data.callbacks.invoke_lock_removed_handlers(lock_entity_id)
-        if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
+        if not another_enabled_entry_configures(hass, config_entry, lock_entity_id):
             # A lock that never got an instance has no teardown to clear its
             # repair, and removing it from the entry is exactly what that
             # repair asks the user to do.
@@ -1262,7 +1245,7 @@ async def async_remove_entry(
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
         # Only delete per-lock issues if no other LCM entry manages this lock.
-        if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
+        if not another_enabled_entry_configures(hass, config_entry, lock_entity_id):
             for issue_key in PER_LOCK_ISSUE_KEYS:
                 async_delete_issue(
                     hass, DOMAIN, per_lock_issue_id(issue_key, lock_entity_id)

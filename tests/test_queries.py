@@ -37,7 +37,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.locks import get_locks_from_targets
 from custom_components.lock_code_manager.domain.queries import (
     get_loaded_config_entry,
-    get_managed_slots,
+    slots_configured_on,
 )
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
@@ -377,6 +377,6 @@ async def test_managed_slots_include_an_entry_that_was_never_migrated(
     )
     stale.add_to_hass(hass)
 
-    assert 7 in get_managed_slots(hass, LOCK_1_ENTITY_ID)
+    assert 7 in slots_configured_on(hass, LOCK_1_ENTITY_ID)
     # The loaded entry's own numbers are still there beside it.
-    assert {1, 2} <= get_managed_slots(hass, LOCK_1_ENTITY_ID)
+    assert {1, 2} <= slots_configured_on(hass, LOCK_1_ENTITY_ID)

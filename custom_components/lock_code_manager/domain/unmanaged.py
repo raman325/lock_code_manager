@@ -35,7 +35,7 @@ from homeassistant.helpers import (
 
 from ..const import CONF_LOCKS, DOMAIN
 from .locks import async_create_lock_instance, borrowed_lock_instance
-from .queries import get_managed_slots
+from .queries import slots_configured_on
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ async def async_sweep_unmanaged_codes(
 
         # Across every entry, not just this one: two entries sharing a lock
         # would otherwise each report the other's codes.
-        managed = get_managed_slots(hass, lock_entity_id)
+        managed = slots_configured_on(hass, lock_entity_id)
         unmanaged = sorted(
             slot
             for slot, credential in credentials.items()
