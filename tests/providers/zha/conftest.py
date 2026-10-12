@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 import itertools
 import sys
@@ -488,7 +489,9 @@ class DoorLockStandIn:
     By default it behaves as the Zigbee Cluster Library says a lock does: a
     set or clear changes the table and is answered with its own response, and
     a get is answered for the user asked. ``answers`` replaces that handling
-    by command name.
+    by command name, and ``reply_delays`` makes a command's answer take that
+    many seconds on the clock: a lock that answers, slowly, as one at the end
+    of zigpy's retries and the radio's confirmation waits does.
     """
 
     def __init__(
@@ -501,6 +504,7 @@ class DoorLockStandIn:
         self.cluster = cluster
         self.codes = dict(codes)
         self.answers = answers
+        self.reply_delays: dict[str, float] = {}
         self.requests: list[foundation.CommandSchema] = []
 
     def _answer(self, request: foundation.CommandSchema) -> Frame:
@@ -534,6 +538,8 @@ class DoorLockStandIn:
         """Decode one request frame, answer it, and decode the answer as zigpy does."""
         header, request = self.cluster.deserialize(data)
         self.requests.append(request)
+        if delay := self.reply_delays.get(request.command.name):
+            await asyncio.sleep(delay)
         frame = self._answer(request)
         reply_header = (
             foundation.ZCLHeader.general

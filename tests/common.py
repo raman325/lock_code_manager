@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Collection
-from contextlib import contextmanager
+from collections.abc import Awaitable, Callable, Collection, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -23,8 +23,20 @@ from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAI
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
+from homeassistant.components.text import (
+    ATTR_VALUE as TEXT_ATTR_VALUE,
+    DOMAIN as TEXT_DOMAIN,
+    SERVICE_SET_VALUE as TEXT_SERVICE_SET_VALUE,
+)
 from homeassistant.config_entries import ConfigEntry, ConfigSubentryData
-from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_ENTITY_ID,
+    CONF_NAME,
+    CONF_PIN,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
@@ -42,6 +54,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     SUBENTRY_TYPE_USER,
+    TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.allocation import build_lock_instance
 from custom_components.lock_code_manager.domain.config import (
@@ -78,6 +91,15 @@ BASE_CONFIG = {
             "number_of_uses": 5,
             CONF_ENTITY_ID: "calendar.test_1",
         },
+    },
+}
+
+# Two plain slots on one lock, holding the codes the mock lock starts with.
+TWO_SLOTS_ON_LOCK_1 = {
+    CONF_LOCKS: [LOCK_1_ENTITY_ID],
+    CONF_SLOTS: {
+        1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        2: {CONF_NAME: "test2", CONF_PIN: "5678", CONF_ENABLED: True},
     },
 }
 
@@ -408,6 +430,35 @@ async def _async_step_timers_to(freezer: FrozenDateTimeFactory, end: float) -> N
     )
 
 
+async def async_advance_clock(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    seconds: float,
+    *,
+    settle: bool = True,
+) -> None:
+    """
+    Move the frozen clock ``seconds`` ahead, firing every timer due on the way.
+
+    For waits that are not measured in sync ticks -- an operation deadline,
+    the stop grace -- and for stretches with no sync tick scheduled at all,
+    like an entry still setting up or one unloading. Each timer fires at its
+    own time and the work it set off runs before the next, as in
+    ``async_advance_sync_ticks``; the sync ticks on the way fire too. Then
+    settles as that helper does, ``settle=False`` included.
+
+    Moves a sync tick's interval at a time, so the bound on timers per step
+    guards against a runaway timer however far the clock goes.
+    """
+    loop = asyncio.get_running_loop()
+    end = loop.time() + seconds
+    step = TICK_INTERVAL.total_seconds()
+    while loop.time() < end:
+        await _async_step_timers_to(freezer, min(loop.time() + step, end))
+    if settle:
+        await async_settle_background(hass, freezer)
+
+
 async def async_tick_until(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -415,6 +466,7 @@ async def async_tick_until(
     *,
     max_ticks: int,
     what: str,
+    settle: bool = True,
 ) -> int:
     """
     Advance sync ticks until ``done``; return how many it took.
@@ -422,9 +474,9 @@ async def async_tick_until(
     Fails the test after ``max_ticks`` with ``what`` in the message, so a
     condition that never comes reports itself instead of spinning. Checks
     ``done`` before the first tick too, so a condition already met costs
-    nothing.
+    nothing. ``settle`` is passed to each ``async_advance_sync_ticks``.
     """
-    taken = await _async_tick_until(hass, freezer, done, max_ticks)
+    taken = await _async_tick_until(hass, freezer, done, max_ticks, settle=settle)
     if taken is None:
         pytest.fail(f"{what} not reached after {max_ticks} sync ticks")
     return taken
@@ -435,6 +487,8 @@ async def _async_tick_until(
     freezer: FrozenDateTimeFactory,
     done: Callable[[], bool],
     max_ticks: int,
+    *,
+    settle: bool = True,
 ) -> int | None:
     """
     Advance sync ticks until ``done``; return how many it took, None if never.
@@ -445,7 +499,7 @@ async def _async_tick_until(
     for taken in range(max_ticks):
         if done():
             return taken
-        await async_advance_sync_ticks(hass, freezer)
+        await async_advance_sync_ticks(hass, freezer, settle=settle)
     return max_ticks if done() else None
 
 
@@ -665,6 +719,39 @@ def slot_entity_id(
     return entity_id
 
 
+async def async_set_slot_pin(
+    hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int, pin: str
+) -> None:
+    """Set a slot's PIN through its text entity, as the user does."""
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        {TEXT_ATTR_VALUE: pin},
+        target={
+            ATTR_ENTITY_ID: slot_entity_id(
+                hass, TEXT_DOMAIN, config_entry, slot_num, CONF_PIN
+            )
+        },
+        blocking=True,
+    )
+
+
+async def async_switch_slot(
+    hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int, service: str
+) -> None:
+    """Turn a slot's enabled switch on or off, as the user does."""
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        service,
+        target={
+            ATTR_ENTITY_ID: slot_entity_id(
+                hass, SWITCH_DOMAIN, config_entry, slot_num, CONF_ENABLED
+            )
+        },
+        blocking=True,
+    )
+
+
 # The integration the mock lock entities belong to.
 LOCK_DEVICE_DOMAIN = "test"
 
@@ -683,7 +770,15 @@ SLOT_2_NAME_ENTITY = "text.mock_title_test2_name"
 SLOT_2_IN_SYNC_ENTITY = "binary_sensor.mock_title_test2_test_1_in_sync"
 
 
-LockOperation = Literal["set", "clear", "get"]
+# ``setup`` is the provider's own setup, which the entry runs when it builds
+# the lock and again whenever the lock's integration comes back. ``probe`` is
+# the device availability check every operation runs first: device
+# input/output on a provider like Schlage, whose check is a cloud round trip.
+LockOperation = Literal["set", "clear", "get", "setup", "probe"]
+# What a fault naming no operation matches: the calls that reach the lock's
+# code table. Setup and the probe are faulted only by name, so a test failing
+# every operation keeps the lifecycle it did not ask about.
+_TABLE_OPERATIONS = frozenset({"set", "clear", "get"})
 
 
 class FaultKind(StrEnum):
@@ -705,6 +800,10 @@ class FaultKind(StrEnum):
     # cleared, which raises ``LockDisconnected`` as a provider's own reply
     # timeout does.
     DROP_REPLY = "drop_reply"
+    # The call takes the fault's ``seconds`` on the clock before it reaches
+    # the lock, or until the fault is cleared, then runs as if nothing had
+    # happened: a lock that answers, slowly.
+    SLOW = "slow"
 
 
 # A read has nothing to ignore and nothing a lock refuses.
@@ -740,8 +839,9 @@ class LockFault:
     """
     One way a ``MockLCMLock`` misbehaves, until cleared.
 
-    Matches calls of ``operation`` (any when None) that touch ``slot`` (any
-    when None; a read touches every slot in its scope). The first installed
+    Matches calls of ``operation`` (any set, clear or read when None) that
+    touch ``slot`` (any when None; a read touches every slot in its scope,
+    and a setup or a probe touches none). The first installed
     fault that matches a call is the one it meets. ``times`` limits how
     many calls it matches before it removes itself; None matches until the
     test clears it. A spent fault still holds the last call it met until
@@ -759,6 +859,7 @@ class LockFault:
     slot: int | None
     error: type[Exception] | Exception | None = None
     times: int | None = None
+    seconds: float = 0.0
     hits: int = 0
     held: int = 0
     _released: asyncio.Event = field(default_factory=asyncio.Event)
@@ -788,7 +889,10 @@ class LockFault:
         misbehaves the same either way.
         """
         return (
-            self.operation in (None, operation)
+            (
+                self.operation == operation
+                or (self.operation is None and operation in _TABLE_OPERATIONS)
+            )
             and (self.slot is None or self.slot in slots)
             and (changes or self.kind is not FaultKind.IGNORE)
         )
@@ -846,6 +950,17 @@ class LockFault:
             self.raise_error(operation, slot)
         if self.kind is FaultKind.HANG:
             await self._async_hold()
+        if self.kind is FaultKind.SLOW:
+            # Counted as held while it waits, so a test can tell it is under
+            # way. Clearing ends the wait, so teardown can let it go on a
+            # frozen clock.
+            self.held += 1
+            try:
+                with suppress(TimeoutError):
+                    async with asyncio.timeout(self.seconds):
+                        await self._released.wait()
+            finally:
+                self.held -= 1
 
     def at_the_lock(self, operation: LockOperation, slot: int | None) -> None:
         """Act out the lock's own answer to a call that reached it."""
@@ -861,6 +976,33 @@ class LockFault:
             )
 
 
+# What ``when_mock_lock_built`` runs on each mock lock as it is built.
+_ON_BUILD: list[Callable[[MockLCMLock], None]] = []
+
+
+@contextmanager
+def when_mock_lock_built(act: Callable[[MockLCMLock], Any]) -> Iterator[list[Any]]:
+    """
+    Run ``act`` on each mock lock as an entry builds it, while inside.
+
+    For what has to be true of a lock before the entry's own setup reaches
+    it -- a fault on its setup -- and for what a real lock keeps across a
+    restart that a rebuilt mock would forget, like the codes it holds.
+    Yields what each call returned, in build order, so a test can clear a
+    fault it installed this way.
+    """
+    returned: list[Any] = []
+
+    def _act(lock: MockLCMLock) -> None:
+        returned.append(act(lock))
+
+    _ON_BUILD.append(_act)
+    try:
+        yield returned
+    finally:
+        _ON_BUILD.remove(_act)
+
+
 @dataclass(repr=False, eq=False)
 class MockLCMLock(BaseLock):
     """
@@ -869,7 +1011,7 @@ class MockLCMLock(BaseLock):
     Answers like a slot-only provider over an in-memory code table. With no
     fault installed every call succeeds; a test makes the lock misbehave on
     one operation and slot with the fault knobs -- ``ignore``, ``refuse``,
-    ``fail``, ``hang`` and ``drop_reply`` -- each returning the
+    ``fail``, ``hang``, ``drop_reply`` and ``slow`` -- each returning the
     ``LockFault`` to clear when done.
 
     ``service_calls`` records what reached the lock: ``set_usercode`` and
@@ -898,6 +1040,8 @@ class MockLCMLock(BaseLock):
         # released, and a refused one reached it and was turned away.
         self.run_times: list[float] = []
         self.faults: list[LockFault] = []
+        for act in _ON_BUILD:
+            act(self)
 
     def add_fault(
         self,
@@ -907,9 +1051,12 @@ class MockLCMLock(BaseLock):
         *,
         error: type[Exception] | Exception | None = None,
         times: int | None = None,
+        seconds: float = 0.0,
     ) -> LockFault:
         """Install a fault; the knobs below are the usual way in."""
-        fault = LockFault(self, kind, operation, slot, error=error, times=times)
+        fault = LockFault(
+            self, kind, operation, slot, error=error, times=times, seconds=seconds
+        )
         self.faults.append(fault)
         _INSTALLED_FAULTS[fault] = None
         return fault
@@ -993,6 +1140,25 @@ class MockLCMLock(BaseLock):
         """
         return self.add_fault(FaultKind.DROP_REPLY, operation, slot, times=times)
 
+    def slow(
+        self,
+        operation: LockOperation | None,
+        slot: int | None = None,
+        *,
+        seconds: float,
+        times: int | None = None,
+    ) -> LockFault:
+        """
+        Make calls take ``seconds`` on the clock, then answer as usual.
+
+        A slow write keeps the lock's turn for that long, as a lock that
+        answers slowly does, so everything queued behind it waits too.
+        Clearing the fault ends the wait early.
+        """
+        return self.add_fault(
+            FaultKind.SLOW, operation, slot, times=times, seconds=seconds
+        )
+
     def clear_faults(self) -> None:
         """
         Clear every fault installed on this lock, releasing any call one holds.
@@ -1041,6 +1207,17 @@ class MockLCMLock(BaseLock):
             fault.at_the_lock(operation, slot)
         return fault
 
+    async def _async_through_fault(self, operation: Literal["setup", "probe"]) -> None:
+        """
+        Carry a setup or a probe through the fault it meets, if any.
+
+        Neither touches the code table, so neither is recorded in
+        ``run_times``: the pacing between operations is not theirs.
+        """
+        if (fault := self._meet_fault(operation, (), True)) is not None:
+            await fault.async_before(operation, None)
+            await fault.async_after(operation)
+
     def _changes(self, code_slot: int, usercode: str | None) -> bool:
         """Return whether writing ``usercode`` (None clears) changes the slot."""
         return self.codes.get(code_slot) != usercode
@@ -1072,12 +1249,14 @@ class MockLCMLock(BaseLock):
         return self._connected
 
     async def async_is_device_available(self) -> bool:
-        """Return whether the physical device (node) is reachable."""
+        """Return whether the physical device (node) is reachable: the ``probe``."""
+        await self._async_through_fault("probe")
         return self._device_available
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Record the provider setup, which runs again on every reconnect."""
         self.service_calls["setup"].append((config_entry.entry_id,))
+        await self._async_through_fault("setup")
         await super().async_setup(config_entry)
 
     async def async_unload(self, remove_permanently: bool) -> None:

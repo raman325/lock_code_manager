@@ -44,6 +44,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.domain.sync import SlotSyncManager
+from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 
 from .common import (
     BASE_CONFIG,
@@ -57,6 +58,7 @@ from .common import (
     MockLCMPushLock,
     _async_step_timers_to,
     all_sync_managers,
+    async_advance_clock,
     async_advance_sync_ticks,
     async_run_until_quiet,
     async_settle_background,
@@ -67,6 +69,7 @@ from .common import (
     mock_lock,
     release_all_faults,
     sync_status,
+    when_mock_lock_built,
 )
 from .conftest import pytest_runtest_teardown
 
@@ -214,6 +217,71 @@ async def test_stepping_may_reach_the_end_on_its_last_allowed_jump(
         await _async_step_timers_to(freezer, end)
 
     assert loop.time() >= end
+
+
+async def test_advancing_the_clock_fires_each_timer_at_its_own_time(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """Both clocks move the whole way, and a timer on the way fires when it is due."""
+    loop = asyncio.get_running_loop()
+    start, wall = loop.time(), dt_util.utcnow()
+    fired: list[float] = []
+    async_call_later(hass, 30, lambda _now: fired.append(loop.time()))
+
+    await async_advance_clock(hass, freezer, 45)
+
+    [fired_at] = fired
+    assert start + 30 <= fired_at < start + 30 + CLOCK_STEP
+    assert loop.time() == pytest.approx(start + 45, abs=CLOCK_STEP)
+    assert (dt_util.utcnow() - wall).total_seconds() == pytest.approx(
+        45, abs=CLOCK_STEP
+    )
+
+
+async def test_advancing_the_clock_far_is_not_a_runaway_timer(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    An hour of sync ticks is more timers than one step allows, and still not a failure.
+
+    The bound on timers is per sync tick's worth of clock, so it still
+    catches a timer rearming itself, while a long wait -- an operation
+    deadline, the stop grace -- gets through.
+    """
+    await async_advance_sync_ticks(hass, freezer)
+    start = time.monotonic()
+
+    await async_advance_clock(hass, freezer, 3600)
+
+    assert time.monotonic() - start == pytest.approx(3600, abs=CLOCK_STEP)
+
+
+async def test_ticking_until_without_settling_leaves_a_held_write_held(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """``settle=False`` reaches the condition with a write held, where settling would fail."""
+    entry = lock_code_manager_config_entry
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    await _async_change_pin(hass, "4321")
+    fault = mock_lock(entry).hang("set", 1)
+
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: sync_status(hass, in_sync) == SyncState.SYNCING.value,
+        max_ticks=2,
+        what="slot 1 syncing",
+        settle=False,
+    )
+
+    await fault.async_wait_held()
 
 
 async def test_tick_until_fails_on_a_condition_that_never_comes(
@@ -936,6 +1004,116 @@ async def test_a_fault_used_as_a_context_manager_clears_on_exit(lock) -> None:
 
     assert not lock.faults
     assert await lock.async_set_usercode(1, "9999") is WriteResult.CONFIRMED
+
+
+async def test_slow_takes_its_seconds_on_the_clock_then_answers(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant, lock
+) -> None:
+    """Held while it waits, it reaches the lock once the clock has moved that far."""
+    await async_advance_sync_ticks(hass, freezer)
+    fault = lock.slow("set", 1, seconds=30, times=1)
+    write = hass.async_create_task(lock.async_set_usercode(1, "9999"))
+    await fault.async_wait_held()
+
+    await async_advance_clock(hass, freezer, 29, settle=False)
+    assert not write.done()
+    assert lock.codes[1] == "1234"
+    await async_advance_clock(hass, freezer, 1, settle=False)
+
+    assert await _async_answer(write) is WriteResult.CONFIRMED
+    assert lock.codes[1] == "9999"
+    assert not fault.held
+
+
+async def test_clearing_a_slow_fault_ends_its_wait(hass: HomeAssistant, lock) -> None:
+    """The call answers without the clock moving, so teardown can let it go."""
+    fault = lock.slow("set", 1, seconds=30)
+    write = hass.async_create_task(lock.async_set_usercode(1, "9999"))
+    await fault.async_wait_held()
+
+    fault.clear()
+
+    assert await _async_answer(write) is WriteResult.CONFIRMED
+
+
+async def test_setup_and_probe_faults_match_only_by_name(lock) -> None:
+    """A fault naming no operation leaves setup and the probe alone; naming them reaches them."""
+    lock.fail(None)
+
+    await lock.async_setup(lock._lcm_config_entry)
+    assert await lock.async_is_device_available() is True
+    lock.clear_faults()
+
+    lock.fail("setup", error=LockDisconnected, times=1)
+    lock.fail("probe", times=1)
+    with pytest.raises(LockDisconnected, match="injected setup failure"):
+        await lock.async_setup(lock._lcm_config_entry)
+    with pytest.raises(LockOperationFailed, match="injected probe failure"):
+        await lock.async_is_device_available()
+    assert await lock.async_is_device_available() is True
+
+
+async def test_a_hung_probe_holds_the_availability_check(
+    hass: HomeAssistant, lock
+) -> None:
+    """The check waits until the fault is cleared, and never reaches the code table."""
+    fault = lock.hang("probe")
+    check = hass.async_create_task(lock.async_is_device_available())
+    await fault.async_wait_held()
+    assert not check.done()
+
+    fault.clear()
+    assert await _async_answer(check) is True
+
+
+async def test_when_mock_lock_built_acts_on_each_lock_the_entry_builds(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Each lock built inside gets the act; none built after does.
+
+    The entry's own locks, and the throwaway ones it reads through.
+    """
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Built")
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(lambda built: built.lock.entity_id) as built:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert set(built) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+    built_inside = list(built)
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert built == built_inside
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.paced
+async def test_a_paced_test_keeps_the_real_delay_between_operations(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Under the marker, the second of two operations waits the providers' delay."""
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Paced")
+    entry.add_to_hass(hass)
+    setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
+    await async_advance_clock(hass, freezer, 5 * MIN_OPERATION_DELAY, settle=False)
+    assert setup.done()
+    lock = mock_lock(entry)
+    await async_advance_clock(hass, freezer, 5 * MIN_OPERATION_DELAY, settle=False)
+    lock.run_times.clear()
+
+    reads = hass.async_create_task(lock.async_internal_get_usercodes())
+    await async_run_until_quiet()
+    second = hass.async_create_task(lock.async_internal_get_usercodes())
+    await async_advance_clock(hass, freezer, 2 * MIN_OPERATION_DELAY, settle=False)
+
+    assert reads.done()
+    assert second.done()
+    first_at, second_at = lock.run_times
+    assert second_at - first_at == pytest.approx(MIN_OPERATION_DELAY, abs=CLOCK_STEP)
+    unload = hass.async_create_task(hass.config_entries.async_unload(entry.entry_id))
+    await async_advance_clock(hass, freezer, 5 * MIN_OPERATION_DELAY, settle=False)
+    assert unload.done()
 
 
 @pytest.mark.parametrize("kind", [FaultKind.IGNORE, FaultKind.REFUSE])

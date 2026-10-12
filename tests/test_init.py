@@ -77,6 +77,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     ENTITY_IDS_RENAMED_ISSUE,
     EVENT_CREDENTIAL_USED,
+    MAX_SYNC_ATTEMPTS,
     POLL_FAILURE_ALERT_THRESHOLD,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_HARD_REFRESH_USERCODES,
@@ -120,16 +121,21 @@ from .common import (
     SLOT_1_NAME_ENTITY,
     MockLCMLock,
     all_sync_managers,
+    async_advance_sync_ticks,
     async_blocking_stub,
     async_disable_and_reload,
     async_discover_unclaimed_mqtt_lock,
+    async_set_slot_pin,
     async_tick_until,
+    async_trip_slot_breaker,
     code_entity_id,
     entry_users,
     in_sync_entity_id,
     mock_lock,
     short_stop_grace,
     sync_manager_of,
+    sync_status,
+    when_mock_lock_built,
     write_entry_config,
 )
 from .conftest import (
@@ -1320,6 +1326,49 @@ async def test_unload_preserves_persistent_repair_issues(
         )
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         assert issue_reg.async_get_issue(DOMAIN, f"lock_offline_{lock_id}") is not None
+
+
+async def test_a_reload_keeps_the_repair_for_a_slot_suspended_by_real_failures(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    Regression for PR #1243: a reload keeps a suspended slot's repair.
+
+    The suspension came from writes that really failed and the lock still
+    fails them, but unloading deleted the repair, so a reload or a restart
+    hid the problem until the slot failed its way to suspended again.
+    """
+    entry = lock_code_manager_config_entry
+    issue_reg = ir.async_get(hass)
+    issue_id = f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_trip_slot_breaker(hass, freezer, entry, 1)
+    assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
+
+    # The lock built anew fails the same writes.
+    with when_mock_lock_built(
+        lambda lock: (
+            lock.fail("set", 1) if lock.lock.entity_id == LOCK_1_ENTITY_ID else None
+        )
+    ):
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+    assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
+
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: sync_status(hass, in_sync) == SyncState.SUSPENDED.value,
+        max_ticks=MAX_SYNC_ATTEMPTS + 2,
+        what="slot 1 suspended again",
+    )
+    assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
+    assert mock_lock(entry).codes[1] == "1234"
 
 
 async def test_remove_entry_cleans_up_repair_issues(

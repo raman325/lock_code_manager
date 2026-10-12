@@ -18,14 +18,22 @@ from pytest_homeassistant_custom_component.common import (
 
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import ATTR_NAME, CONF_NAME, STATE_UNKNOWN
-from homeassistant.core import HomeAssistant
+from homeassistant.const import (
+    ATTR_NAME,
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    STATE_ON,
+    STATE_UNKNOWN,
+)
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
     issue_registry as ir,
 )
+from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
     ATTR_CONFIG_ENTRY_ID,
@@ -33,8 +41,11 @@ from custom_components.lock_code_manager.const import (
     ATTR_CREDENTIAL_TYPE,
     ATTR_OPERATION,
     ATTR_SOURCE,
+    ATTR_SYNC_STATUS,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
+    CONF_LOCKS,
+    CONF_SLOTS,
     DOMAIN,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
@@ -56,7 +67,8 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationFailed,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
@@ -67,8 +79,17 @@ from tests.common import (
     CLOCK_STEP,
     LOCK_1_ENTITY_ID,
     MockLCMLock,
+    async_advance_clock,
+    async_advance_sync_ticks,
     async_run_paced,
+    async_run_until_quiet,
+    async_set_slot_pin,
     async_settle_background,
+    async_tick_until,
+    in_sync_entity_id,
+    mock_lock,
+    sync_status,
+    when_mock_lock_built,
 )
 
 TEST_OPERATION_DELAY = 0.01
@@ -2687,6 +2708,100 @@ async def test_a_wedged_operation_stops_blocking_every_other_slot(
     assert not lock._aio_lock.locked()
 
 
+# The codes the mock lock starts with, and more for further slots.
+_SLOT_PINS = {1: "1234", 2: "5678", 3: "3333", 4: "4444"}
+
+
+async def _async_set_up_slots(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, count: int
+) -> MockConfigEntry:
+    """Set up an entry with ``count`` slots on lock 1, run until they are in sync."""
+    slot_nums = range(1, count + 1)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                slot_num: {
+                    CONF_NAME: f"test{slot_num}",
+                    CONF_PIN: _SLOT_PINS[slot_num],
+                    CONF_ENABLED: True,
+                }
+                for slot_num in slot_nums
+            },
+        },
+        unique_id=f"{count} slots",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: all(_in_sync(hass, entry, slot_num) for slot_num in slot_nums),
+        max_ticks=3,
+        what="every slot in sync",
+    )
+    return entry
+
+
+def _in_sync(hass: HomeAssistant, entry: MockConfigEntry, slot_num: int) -> bool:
+    """Return whether a slot's in-sync sensor on lock 1 is on."""
+    return hass.states.get(in_sync_entity_id(hass, entry, slot_num)).state == STATE_ON
+
+
+async def test_a_write_that_never_returns_lets_go_of_its_slot_and_the_lock(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for #1523: a write that never returns is cut off at the deadline.
+
+    The write held the lock's turn and its slot's syncing state for good:
+    the slot never retried, and every other slot's write queued behind it.
+    Cut off, it gives the turn back: both writes then land.
+    """
+    entry = await _async_set_up_slots(hass, freezer, 2)
+    lock = mock_lock(entry)
+    wedge = lock.hang("set", 1, times=1)
+    await async_set_slot_pin(hass, entry, 1, "1111")
+    await async_set_slot_pin(hass, entry, 2, "2222")
+    await async_advance_sync_ticks(hass, freezer, settle=False)
+    await wedge.async_wait_held()
+    wedged_at = time.monotonic()
+    await async_advance_sync_ticks(hass, freezer, 5, settle=False)
+    assert sync_status(hass, in_sync_entity_id(hass, entry, 1)) == (
+        SyncState.SYNCING.value
+    )
+    assert lock.codes == {1: "1234", 2: "5678"}
+
+    await async_advance_clock(
+        hass, freezer, base_module.OPERATION_TIMEOUT, settle=False
+    )
+    assert wedge.held == 0, "the write still holds the lock's turn"
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: _in_sync(hass, entry, 1) and _in_sync(hass, entry, 2),
+        max_ticks=3,
+        what="both slots in sync after the cut-off",
+    )
+
+    assert lock.codes == {1: "1111", 2: "2222"}
+    assert sorted(lock.service_calls["set_usercode"]) == [
+        (1, "1111", "test1"),
+        (2, "2222", "test2"),
+    ]
+    # Nothing reached the lock while the write held its turn.
+    assert [
+        at
+        for at in lock.run_times
+        if wedged_at <= at < wedged_at + base_module.OPERATION_TIMEOUT
+    ] == []
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_the_timeout_uses_the_providers_own_budget(hass: HomeAssistant):
     """
     A provider that walks every slot in one call gets to say how long that is.
@@ -2797,6 +2912,100 @@ async def test_setup_does_not_hang_on_a_lock_that_never_answers(
     assert "no answer within" in str(lock.coordinator.last_exception)
 
 
+async def test_a_lock_whose_setup_never_answered_once_is_set_up_and_written_later(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for PRs #1526 and #1527: a setup that never answers is given up, then retried.
+
+    The provider's setup had no deadline, so a lock whose integration went
+    quiet stayed in setup for good: none of its slots' entities, nothing
+    written (#1527). Once it had one, a setup cut off at its deadline was
+    never tried again: the lock stayed un-set-up, and the sync, waiting on
+    that, never wrote to it (#1526).
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {1: {CONF_NAME: "test1", CONF_PIN: "4321", CONF_ENABLED: True}},
+        },
+        unique_id="Setup Wedge",
+    )
+    entry.add_to_hass(hass)
+    # Loaded and unloaded once first: setting it up again then reaches the
+    # lock without waiting on the executor to import its platforms. A restart
+    # while the lock's integration is wedged.
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    with when_mock_lock_built(lambda lock: lock.hang("setup", times=1)) as wedges:
+        setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
+        await async_run_until_quiet()
+        [wedge] = wedges
+        await wedge.async_wait_held()
+        await async_advance_clock(
+            hass, freezer, base_module.OPERATION_TIMEOUT, settle=False
+        )
+    assert wedge.held == 0, "the lock's setup is still parked"
+    assert setup.done()
+    assert entry.state is ConfigEntryState.LOADED
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    # The first read after the cut-off finds the lock answering, and that is
+    # what sets it up again.
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=3,
+        what="slot 1 in sync once the lock is set up",
+    )
+    assert lock.codes[1] == "4321"
+    assert len(lock.service_calls["setup"]) == 2
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_write_whose_availability_check_never_answers_is_retried(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for PR #1527: an availability check that never answers ends the write.
+
+    The checks every operation runs first are device input/output on some
+    providers -- Schlage's is a cloud round trip -- and they ran outside the
+    deadline. One that never answered parked the slot in syncing for good.
+    Cut off, the write is tried again, and lands.
+    """
+    entry = await _async_set_up_slots(hass, freezer, 1)
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    wedge = lock.hang("probe", times=1)
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_advance_sync_ticks(hass, freezer, settle=False)
+    await wedge.async_wait_held()
+    assert sync_status(hass, in_sync) == SyncState.SYNCING.value
+
+    await async_advance_clock(
+        hass, freezer, base_module.OPERATION_TIMEOUT, settle=False
+    )
+    assert wedge.held == 0, "the write is still waiting on the check"
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=3,
+        what="slot 1 in sync",
+    )
+    assert lock.codes[1] == "4321"
+    assert lock.service_calls["set_usercode"] == [(1, "4321", "test1")]
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_the_first_refresh_is_sized_to_a_walk_of_every_managed_slot(
     hass: HomeAssistant,
 ):
@@ -2871,6 +3080,62 @@ async def test_a_waiter_whose_turn_never_comes_is_busy_not_disconnected(
         holder.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await holder
+
+
+async def test_slots_queued_behind_long_writes_are_not_a_lock_gone_offline(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for #1535: waiting for the lock's turn is not the lock failing to answer.
+
+    Three writes each take most of their deadline and then land, so slot
+    4's write and the polls queue behind them for longer than they may
+    wait, again and again. Each wait that ran out was charged as a
+    disconnect, so a lock answering every command was marked unreachable:
+    its slots suspended. The lock never stops answering here.
+    """
+    entry = await _async_set_up_slots(hass, freezer, 4)
+    lock = mock_lock(entry)
+    new_pins = {1: "1111", 2: "2222", 3: "3330", 4: "4440"}
+    in_syncs = [in_sync_entity_id(hass, entry, slot_num) for slot_num in new_pins]
+    statuses: list[str | None] = []
+
+    @callback
+    def _record(event: Event[EventStateChangedData]) -> None:
+        if (state := event.data["new_state"]) is not None:
+            statuses.append(state.attributes.get(ATTR_SYNC_STATUS))
+
+    unsub = async_track_state_change_event(hass, in_syncs, _record)
+    # Most of a deadline each, so none of the writes is cut off.
+    hold = base_module.OPERATION_TIMEOUT * 0.9
+    long_writes = [
+        lock.slow("set", slot_num, seconds=hold, times=1) for slot_num in (1, 2, 3)
+    ]
+    for slot_num, pin in new_pins.items():
+        await async_set_slot_pin(hass, entry, slot_num, pin)
+    await async_advance_sync_ticks(hass, freezer, settle=False)
+    await async_advance_clock(hass, freezer, 3 * hold, settle=False)
+    assert [long_write.hits for long_write in long_writes] == [1, 1, 1]
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: all(_in_sync(hass, entry, slot_num) for slot_num in new_pins),
+        max_ticks=5,
+        what="every slot in sync",
+    )
+    unsub()
+
+    assert lock.codes == new_pins
+    assert SyncState.SUSPENDED.value not in statuses
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, per_lock_issue_id("lock_offline", LOCK_1_ENTITY_ID)
+        )
+        is None
+    )
+    await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_the_operation_deadline_starts_when_the_turn_comes(

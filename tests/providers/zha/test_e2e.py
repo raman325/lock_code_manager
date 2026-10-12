@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from zigpy.zcl.clusters.closures import DoorLock
@@ -16,6 +17,7 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
+from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CONDITION,
@@ -30,14 +32,23 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir, translation
 
 from custom_components.lock_code_manager.const import (
+    CONF_SLOT,
+    CONF_USERS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
+    SUBENTRY_TYPE_USER,
     TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zha import ZHALock
-from tests.common import in_sync_entity_id, slot_entity_id
+from tests.common import (
+    async_advance_clock,
+    async_advance_sync_ticks,
+    async_tick_until,
+    in_sync_entity_id,
+    slot_entity_id,
+)
 from tests.conftest import async_advance_time
 
 from .conftest import ZHA_LCM_CONFIG_SLOTS, Answer, DoorLockStandIn
@@ -325,6 +336,142 @@ class TestSync:
         assert set(_writes(door_lock, "get_pin_code")) == set(CONFIGURED_PINS)
         for slot_num in CONFIGURED_PINS:
             assert _in_sync_state(hass, lcm_config_entry, slot_num) == STATE_ON
+
+
+@pytest.mark.parametrize("door_lock_codes", [CONFIGURED_PINS])
+async def test_a_new_pin_on_a_slot_in_sync_is_written(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    door_lock: DoorLockStandIn,
+) -> None:
+    """
+    Regression for #63: changing the PIN of a slot in sync writes the new PIN.
+
+    The new PIN stayed configured while the lock kept opening for the old
+    one.
+    """
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: _in_sync_state(hass, lcm_config_entry, 1) == STATE_ON,
+        max_ticks=3,
+        what="slot 1 in sync",
+    )
+
+    await _set_slot_1_pin(hass, lcm_config_entry, NEW_PIN)
+    assert _in_sync_state(hass, lcm_config_entry, 1) == STATE_OFF
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: _in_sync_state(hass, lcm_config_entry, 1) == STATE_ON,
+        max_ticks=3,
+        what="slot 1 back in sync",
+    )
+    await async_advance_sync_ticks(hass, freezer, 3)
+
+    assert door_lock.codes == {**CONFIGURED_PINS, 1: NEW_PIN}
+    assert [
+        (request.user_id, request.pin_code)
+        for request in door_lock.requests
+        if request.command.name == "set_pin_code"
+    ] == [(1, NEW_PIN)]
+    assert _in_sync_state(hass, lcm_config_entry, 1) == STATE_ON
+
+
+async def test_a_reply_delay_holds_the_answer_that_long_on_the_clock(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    door_lock: DoorLockStandIn,
+) -> None:
+    """The stand-in answers a delayed command once the clock has moved that far."""
+    lock = _zha_lock(lcm_config_entry)
+    await async_advance_sync_ticks(hass, freezer)
+    door_lock.reply_delays["get_pin_code"] = 30
+    try:
+        read = hass.async_create_task(lock.async_get_usercodes({1}))
+        await async_advance_clock(hass, freezer, 29, settle=False)
+        assert not read.done()
+        await async_advance_clock(hass, freezer, 1, settle=False)
+        assert read.done()
+        assert read.result()[1] == SlotCredential.known(CONFIGURED_PINS[1])
+    finally:
+        door_lock.reply_delays.clear()
+        await async_advance_clock(hass, freezer, 30, settle=False)
+
+
+# Within what zigpy can spend on one command at the end of its retries,
+# and three of them past the flat operation deadline.
+_SLOW_REPLY = 300.0
+
+
+@pytest.mark.parametrize(
+    ("lcm_slots", "door_lock_codes"),
+    [({1: ZHA_LCM_CONFIG_SLOTS[1]}, {1: CONFIGURED_PINS[1]})],
+)
+async def test_adding_users_reads_a_slow_lock_for_as_long_as_the_read_walks(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    door_lock: DoorLockStandIn,
+) -> None:
+    """
+    Regression for #1528: a read walking several slow slots gets a deadline per slot.
+
+    Adding three users to a one-user entry reads three numbers off the
+    lock, one command each. The deadline was sized by how many slots the
+    entry manages rather than how many the read walks, so a lock answering
+    every command, slowly, was cut off partway and the users could not be
+    added.
+    """
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: _in_sync_state(hass, lcm_config_entry, 1) == STATE_ON,
+        max_ticks=3,
+        what="slot 1 in sync",
+    )
+    door_lock.reply_delays["get_pin_code"] = _SLOW_REPLY
+    try:
+        flow = await hass.config_entries.subentries.async_init(
+            (lcm_config_entry.entry_id, SUBENTRY_TYPE_USER),
+            context={"source": SOURCE_USER},
+        )
+        flow = await hass.config_entries.subentries.async_configure(
+            flow["flow_id"], {"next_step_id": "several"}
+        )
+        adding = hass.async_create_task(
+            hass.config_entries.subentries.async_configure(
+                flow["flow_id"],
+                {
+                    CONF_USERS: {
+                        f"user{number}": {CONF_ENABLED: True, CONF_PIN: f"{number}" * 4}
+                        for number in (2, 3, 4)
+                    }
+                },
+            )
+        )
+        await async_advance_clock(hass, freezer, 4 * _SLOW_REPLY, settle=False)
+
+        assert adding.done()
+        result = adding.result()
+        assert result.get("reason") == "users_added", result.get("errors")
+        # One read of the three numbers, each its own slow exchange.
+        assert [
+            request.user_id
+            for request in door_lock.requests
+            if request.command.name == "get_pin_code" and request.user_id != 1
+        ] == [2, 3, 4]
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in lcm_config_entry.subentries.values()
+        } == {"slot1": 1, "user2": 2, "user3": 3, "user4": 4}
+    finally:
+        # A slow reply still on its way waits on the clock, and so would the
+        # unload after the test.
+        door_lock.reply_delays.clear()
+        await async_advance_clock(hass, freezer, _SLOW_REPLY, settle=False)
 
 
 def _door_lock_cluster(zigpy_lock_device: Any) -> DoorLock:
