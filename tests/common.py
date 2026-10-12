@@ -18,7 +18,10 @@ from unittest.mock import patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_mqtt_message,
+)
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
@@ -44,6 +47,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.util import slugify
 
+from custom_components.lock_code_manager.config_flow import LockCodeManagerFlowHandler
 from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_IN_SYNC,
@@ -64,6 +68,9 @@ from custom_components.lock_code_manager.domain.config import (
     build_slot_unique_id,
 )
 from custom_components.lock_code_manager.domain.credentials import (
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
     WriteResult,
     pin_address,
 )
@@ -103,6 +110,22 @@ TWO_SLOTS_ON_LOCK_1 = {
         2: {CONF_NAME: "test2", CONF_PIN: "5678", CONF_ENABLED: True},
     },
 }
+
+
+# What a lock with room for ten PINs reports, and one with no room for any:
+# a Z-Wave lock whose interview finished while it slept reports the second.
+PIN_CAPABILITIES = LockCapabilities(
+    supports_user_management=False,
+    max_users=10,
+    credential_types={
+        CredentialType.PIN: CredentialTypeCapability(
+            num_slots=10, min_length=4, max_length=8, supports_learn=False
+        )
+    },
+)
+NO_PIN_CAPABILITIES = LockCapabilities(
+    supports_user_management=False, max_users=10, credential_types={}
+)
 
 
 UNCLAIMED_IDENTIFIER = "somebridge_1"
@@ -784,6 +807,9 @@ async def async_switch_slot(
     )
 
 
+# The version Lock Code Manager writes its entries at today.
+CONFIG_ENTRY_VERSION = LockCodeManagerFlowHandler.VERSION
+
 # The integration the mock lock entities belong to.
 LOCK_DEVICE_DOMAIN = "test"
 
@@ -1095,6 +1121,11 @@ class MockLCMLock(BaseLock):
         # monotonic clock: its first step, whether or not it goes further.
         self.attempt_times: list[float] = []
         self.faults: list[LockFault] = []
+        # What the lock reports it can hold, which setup checks a native-user
+        # lock against. None, the default, is a slot-only lock: it reports
+        # nothing and is checked for nothing. Read on every ask, so a test
+        # can fix a lock that failed the check and have it pass the next one.
+        self.capabilities: LockCapabilities | None = None
         for act in _ON_BUILD:
             act(self)
 
@@ -1303,6 +1334,17 @@ class MockLCMLock(BaseLock):
     def set_device_available(self, available: bool) -> None:
         """Set device (node) availability for testing."""
         self._device_available = available
+
+    @property
+    def supports_native_users(self) -> bool:
+        """Return whether the lock reports capabilities, as a native-user lock does."""
+        return self.capabilities is not None
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        """Return what the lock reports it can hold; only a native-user lock is asked."""
+        if self.capabilities is None:
+            return await super().async_get_capabilities()
+        return self.capabilities
 
     async def async_is_integration_connected(self) -> bool:
         """Return whether the integration's client/driver/broker is connected."""
@@ -1554,6 +1596,38 @@ def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
             unique_id=None,
         )
         for slot_num, fields in slots.items()
+    )
+
+
+def current_entry(
+    unique_id: str,
+    pins: dict[int, str],
+    locks: tuple[str, ...] = (LOCK_1_ENTITY_ID,),
+) -> MockConfigEntry:
+    """
+    Build an unloaded entry in the current shape: one enabled user per slot.
+
+    Setting it up migrates nothing. A migration from an older version reads
+    the lock, through a lock instance of its own, so a test watching what an
+    entry builds or reads would see that one too. The users are named
+    ``user<slot>``, and hold the PINs given.
+    """
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: list(locks)},
+        subentries_data=user_subentries(
+            {
+                slot_num: {
+                    CONF_NAME: f"user{slot_num}",
+                    CONF_PIN: pin,
+                    CONF_ENABLED: True,
+                }
+                for slot_num, pin in pins.items()
+            }
+        ),
+        unique_id=unique_id,
+        title=unique_id,
+        version=CONFIG_ENTRY_VERSION,
     )
 
 

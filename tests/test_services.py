@@ -19,6 +19,7 @@ from homeassistant.components.event import (
     DOMAIN as EVENT_DOMAIN,
 )
 from homeassistant.const import (
+    ATTR_ENTITY_ID,
     ATTR_NAME,
     CONF_CONDITION,
     CONF_ENABLED,
@@ -31,7 +32,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, instance_id
 
 from custom_components.lock_code_manager.const import (
     ATTR_CLEAR_CREDENTIALS,
@@ -66,6 +67,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_DISABLE_USER,
     SERVICE_ENABLE_USER,
     SERVICE_GENERATE_PIN,
+    SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_SET_CONDITION,
     SERVICE_SET_CREDENTIAL,
     SERVICE_USE_CREDENTIAL,
@@ -87,7 +89,12 @@ from custom_components.lock_code_manager.providers.schlage import (
 )
 from tests.providers.helpers import register_mock_service
 
-from .common import LOCK_1_ENTITY_ID, reading_for, unnumbered_user_subentry
+from .common import (
+    LOCK_1_ENTITY_ID,
+    mock_lock,
+    reading_for,
+    unnumbered_user_subentry,
+)
 
 
 async def test_async_set_usercode_domain_function_rejects_empty_usercode(
@@ -227,6 +234,68 @@ async def test_deobfuscate_log_service_round_trips_configured_pins(
         "matched": 2,
         "unmatched_tokens": ["pin#deadbeef"],
     }
+
+
+async def test_the_actions_still_answer_once_every_entry_has_unloaded(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Regression for PR #928: the actions keep answering after the last entry unloads.
+
+    Unloading the last entry dropped the integration's shared data, which the
+    actions -- registered once, for good -- still read: they failed from
+    then on, until a restart, even once an entry was set up again.
+    """
+    entry = lock_code_manager_config_entry
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Nothing manages the lock now, so there is nothing to refresh.
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ENABLE_USER,
+            {ATTR_CONFIG_ENTRY_ID: entry.entry_id, CONF_NAME: "test1"},
+            blocking=True,
+        )
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DEOBFUSCATE_LOG,
+        {ATTR_TEXT: "no tokens here"},
+        blocking=True,
+        return_response=True,
+    )
+    assert response is not None
+    assert response["summary"]["total"] == 0
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    token = mask_pin("1234", 1, await instance_id.async_get(hass))
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DEOBFUSCATE_LOG,
+        {ATTR_TEXT: f"Setting usercode on lock.test_1 slot 1 (pin={token})"},
+        blocking=True,
+        return_response=True,
+    )
+    assert response is not None
+    assert response["summary"]["matched"] == 1
+    assert "(pin=1234)" in response["deobfuscated_text"]
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    assert mock_lock(entry).service_calls["hard_refresh_codes"] == [(None,)]
 
 
 async def test_add_user_service(

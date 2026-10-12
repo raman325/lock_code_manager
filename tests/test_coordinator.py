@@ -5,17 +5,34 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
 )
 
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.components.homeassistant import (
+    DOMAIN as HA_DOMAIN,
+    SERVICE_UPDATE_ENTITY,
+)
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+)
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
-from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.helpers.update_coordinator import (
+    REQUEST_REFRESH_DEFAULT_COOLDOWN,
+    UpdateFailed,
+)
+from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
@@ -28,6 +45,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     PENDING_WRITE_TTL,
     POLL_FAILURE_ALERT_THRESHOLD,
+    TICK_INTERVAL,
+)
+from custom_components.lock_code_manager.diagnostics import (
+    async_get_config_entry_diagnostics,
 )
 from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
@@ -43,12 +64,23 @@ from custom_components.lock_code_manager.domain.exceptions import (
 )
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 from .common import (
+    CLOCK_STEP,
+    LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    LockFault,
     MockLCMLock,
     MockLCMPushLock,
+    async_advance_clock,
+    async_tick_until,
+    code_entity_id,
+    current_entry,
+    in_sync_entity_id,
+    mock_lock,
+    when_mock_lock_built,
     write_entry_config,
 )
 
@@ -499,6 +531,77 @@ async def test_cold_start_repeated_failures_keep_raising(
             with pytest.raises(UpdateFailed):
                 await poll_coordinator.async_get_usercodes()
             assert poll_coordinator._lock_breaker.failure_count == i
+
+
+async def test_a_lock_unread_since_startup_shows_nothing_until_it_answers(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+) -> None:
+    """
+    Regression for #1268: a lock whose reads fail from startup is never taken as read.
+
+    A failed read before any had succeeded was recorded as a successful one
+    with nothing in it: the integration reported the lock recovered while it
+    still answered nothing, every slot was skipped as missing from what was
+    read, and the next read failed again. The slots show nothing and write
+    nothing until a read succeeds; then they show what the lock holds.
+    """
+    entry = current_entry("Unread Since Startup", {1: "1234", 2: "2468"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(
+        lambda lock: lock.fail("get", error=LockDisconnected)
+    ) as built:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    [unanswered] = built
+    lock = mock_lock(entry)
+    in_syncs = [in_sync_entity_id(hass, entry, slot) for slot in (1, 2)]
+    codes = [code_entity_id(hass, entry, slot) for slot in (1, 2)]
+    shown: set[str] = set()
+
+    @callback
+    def _record(event: Event[EventStateChangedData]) -> None:
+        if (state := event.data["new_state"]) is not None:
+            shown.add(state.state)
+
+    unsub = async_track_state_change_event(hass, [*in_syncs, *codes], _record)
+    for _ in range(4):
+        await async_advance_clock(
+            hass, freezer, lock.usercode_scan_interval.total_seconds()
+        )
+        # What a downloaded diagnostics report says of the lock.
+        diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+        assert not diagnostics["locks"][LOCK_1_ENTITY_ID]["coordinator"][
+            "last_update_success"
+        ]
+    assert unanswered.hits == 5
+    assert shown <= {STATE_UNAVAILABLE}
+    assert [hass.states.get(entity_id).state for entity_id in (*in_syncs, *codes)] == [
+        STATE_UNAVAILABLE
+    ] * 4
+    assert {"set_usercode", "clear_usercode"}.isdisjoint(lock.call_order)
+
+    unanswered.clear()
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(codes[0]).state == "1234",
+        # Five failed reads have doubled the backoff twice: four minutes.
+        max_ticks=int(4 * BACKOFF_INITIAL_SECONDS / TICK_INTERVAL.total_seconds()) + 3,
+        what="the lock read",
+    )
+    assert hass.states.get(in_syncs[0]).state == STATE_ON
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_syncs[1]).state == STATE_ON,
+        max_ticks=5,
+        what="slot 2 written",
+    )
+    assert lock.codes == {1: "1234", 2: "2468"}
+    unsub()
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_backoff_subsequent_failure_raises_update_failed(
@@ -1128,6 +1231,85 @@ async def test_lock_offline_not_created_when_never_reached(
     issue_registry = async_get_issue_registry(hass)
     issue_id = f"lock_offline_{poll_lock.lock.entity_id}"
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+async def _async_fail_reads_past_the_alert_threshold(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    fault: LockFault,
+    code_entity: str,
+) -> None:
+    """
+    Read the lock until its reads have failed more often than the alert allows.
+
+    Asked for, as a user refreshing the code sensor does: left to its own
+    polls, the lock is read on a backoff doubling up to half an hour, which
+    puts the threshold hours away. Each ask waits out the coordinator's
+    debounce so it reads the lock on its own.
+    """
+    for _ in range(2 * POLL_FAILURE_ALERT_THRESHOLD):
+        if fault.hits > POLL_FAILURE_ALERT_THRESHOLD:
+            return
+        await hass.services.async_call(
+            HA_DOMAIN,
+            SERVICE_UPDATE_ENTITY,
+            {ATTR_ENTITY_ID: code_entity},
+            blocking=True,
+        )
+        await async_advance_clock(
+            hass, freezer, REQUEST_REFRESH_DEFAULT_COOLDOWN + CLOCK_STEP
+        )
+    pytest.fail(f"only {fault.hits} reads failed")
+
+
+async def test_a_lock_offline_since_startup_is_reported_only_once_it_was_reached(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+) -> None:
+    """
+    Regression for #1257: a lock not yet reached since startup is not reported offline.
+
+    After a restart the lock's integration was still coming up, so every
+    read failed; once enough had, a repair said the lock was offline -- and
+    it vanished again the moment the integration finished loading. A lock
+    is offline once it has been reached and then lost.
+    """
+    issue_reg = async_get_issue_registry(hass)
+    offline = per_lock_issue_id("lock_offline", LOCK_1_ENTITY_ID)
+    entry = current_entry("Never Reached", {1: "1234"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(
+        lambda lock: lock.fail("get", error=LockDisconnected)
+    ) as built:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    [starting] = built
+    code = code_entity_id(hass, entry, 1)
+    assert await async_setup_component(hass, HA_DOMAIN, {})
+
+    await _async_fail_reads_past_the_alert_threshold(hass, freezer, starting, code)
+    assert issue_reg.async_get_issue(DOMAIN, offline) is None
+    assert hass.states.get(code).state == STATE_UNAVAILABLE
+
+    # The lock's integration finishes loading, and the lock is reached.
+    starting.clear()
+    assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(code).state == "1234",
+        # The refresh its setup asks for waits out the coordinator's debounce.
+        max_ticks=int(REQUEST_REFRESH_DEFAULT_COOLDOWN / TICK_INTERVAL.total_seconds())
+        + 3,
+        what="the lock reached",
+    )
+
+    lost = mock_lock(entry).fail("get", error=LockDisconnected)
+    await _async_fail_reads_past_the_alert_threshold(hass, freezer, lost, code)
+    assert issue_reg.async_get_issue(DOMAIN, offline) is not None
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_lock_offline_created_after_reach_then_drop(

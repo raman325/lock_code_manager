@@ -25,7 +25,13 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE as TEXT_SERVICE_SET_VALUE,
 )
-from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_PIN,
+    STATE_OFF,
+    STATE_ON,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
@@ -41,6 +47,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
+    ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.domain.sync import SlotSyncManager
@@ -49,9 +56,12 @@ from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DE
 from .common import (
     BASE_CONFIG,
     CLOCK_STEP,
+    CONFIG_ENTRY_VERSION,
     LIFELONG_TASKS,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    NO_PIN_CAPABILITIES,
+    PIN_CAPABILITIES,
     SLOT_1_PIN_ENTITY,
     FaultKind,
     MockLCMLock,
@@ -66,6 +76,8 @@ from .common import (
     async_step_clock_until,
     async_tick_until,
     async_trip_slot_breaker,
+    current_entry,
+    entry_users,
     in_sync_entity_id,
     mock_lock,
     release_all_faults,
@@ -1290,3 +1302,35 @@ async def test_push_subscriptions_are_counted(
 
     await hass.config_entries.async_unload(entry.entry_id)
     assert [lock.unsubscribe_calls for lock in locks] == [1, 1]
+
+
+async def test_a_lock_reports_no_capabilities_unless_given_some(lock) -> None:
+    """The mock is slot-only until a test gives it capabilities to report."""
+    assert not lock.supports_native_users
+    with pytest.raises(ProviderNotImplementedError):
+        await lock.async_get_capabilities()
+
+    lock.capabilities = NO_PIN_CAPABILITIES
+    assert lock.supports_native_users
+    assert await lock.async_get_capabilities() is NO_PIN_CAPABILITIES
+    lock.capabilities = PIN_CAPABILITIES
+    assert await lock.async_get_capabilities() is PIN_CAPABILITIES
+
+
+async def test_a_current_entry_sets_up_without_migrating_or_reading_the_lock(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Its users are where setup looks for them, so the only lock built is the entry's."""
+    entry = current_entry("Current", {1: "1234", 3: "0123"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(lambda lock: lock) as built:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.version == CONFIG_ENTRY_VERSION
+    assert entry_users(entry) == {
+        "user1": {CONF_PIN: "1234", CONF_ENABLED: True},
+        "user3": {CONF_PIN: "0123", CONF_ENABLED: True},
+    }
+    assert built == [mock_lock(entry)]
+    assert await hass.config_entries.async_unload(entry.entry_id)

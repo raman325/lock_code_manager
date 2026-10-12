@@ -328,6 +328,12 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     check's asks; `noop_set_usercode` records sets that changed nothing, and `call_order`
     the order of everything `service_calls` records. `async_advance_across_deadline`
     checks a wait is held a tick before its deadline and let go a tick after
+  - `MockLCMLock.capabilities` makes the mock a native-user lock reporting what it
+    can hold (`PIN_CAPABILITIES`, `NO_PIN_CAPABILITIES`), so setup's capability
+    check runs against it; `None`, the default, keeps it slot-only.
+    `current_entry` builds an entry already in the current shape, so setting it
+    up migrates nothing -- a migration reads the lock through an instance of its
+    own, which a test watching what an entry builds or reads would see too
   - Time helpers for the `freezer` fixture: `async_advance_sync_ticks` and `async_tick_until`
     run the real scheduled sync tick by moving both clocks; `async_advance_clock` moves them
     any distance, for deadlines and the stop grace; `async_trip_slot_breaker` reaches
