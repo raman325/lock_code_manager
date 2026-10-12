@@ -73,9 +73,10 @@ class EntryConfig:
     Deeply read-only (``MappingProxyType`` throughout) so instances can be
     cached without defensive copies. An instance is cached on
     ``LockCodeManagerConfigEntryRuntimeData.config`` and refreshed by the
-    update listener; most callers should reach it via
-    ``entry.runtime_data.config``, or :func:`get_entry_config` for entries
-    that may not be loaded.
+    update listener. :func:`get_entry_config` is the accessor for any entry
+    that may not be loaded: it reads the cache only while the entry's state
+    says it is current, which ``entry.runtime_data.config`` read directly
+    does not check.
     """
 
     locks: tuple[str, ...]

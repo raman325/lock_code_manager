@@ -12,20 +12,29 @@ from homeassistant.util import slugify
 from ..const import CONF_SLOT, DOMAIN, SUBENTRY_TYPE_USER
 from .config import EntryConfig
 
+# The states in which an entry's ``runtime_data`` is the one its last setup
+# completed with. Home Assistant only starts unloading a loaded entry.
+_CACHED_CONFIG_IS_CURRENT_STATES = frozenset(
+    {ConfigEntryState.LOADED, ConfigEntryState.UNLOAD_IN_PROGRESS}
+)
+
 
 def get_entry_config(entry: ConfigEntry) -> EntryConfig:
     """
     Return the EntryConfig view of ``entry``.
 
-    Prefers the cached instance on ``entry.runtime_data.config`` (set by
-    the listener during setup and on every update) and falls back to
-    constructing fresh from the raw entry data. The fallback covers
-    iteration over ``hass.config_entries.async_entries(DOMAIN)`` which
-    may yield entries that haven't been loaded yet (or are mid-teardown)
-    and so don't have ``runtime_data`` populated.
+    A loaded entry answers from ``entry.runtime_data.config``, the view its
+    update listener last applied. Any other entry is read from its stored
+    data, because Home Assistant keeps ``runtime_data`` on an entry whose
+    setup failed after assigning it: that cache is the failed run's, and
+    predates anything saved since. A setup in progress is read from storage
+    too. Until it assigns its own ``runtime_data`` the one there may be a
+    failed run's, and once it has, that cache was built from the same data.
     """
     cached = getattr(getattr(entry, "runtime_data", None), "config", None)
-    if isinstance(cached, EntryConfig):
+    if entry.state in _CACHED_CONFIG_IS_CURRENT_STATES and isinstance(
+        cached, EntryConfig
+    ):
         return cached
     return EntryConfig.from_entry(entry)
 

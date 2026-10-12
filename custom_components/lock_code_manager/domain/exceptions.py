@@ -50,12 +50,13 @@ class CodeRejectedError(LockCodeManagerProviderError):
         """Initialize the error."""
         self.code_slot = code_slot
         self.lock_entity_id = lock_entity_id
-        reason = (
+        self.reason = (
             reason
             or "the call to the lock succeeded but the lock appears to reject the code"
         )
         super().__init__(
-            f"Lock {lock_entity_id}: cannot set code on slot {code_slot} — {reason}"
+            f"Lock {lock_entity_id}: cannot set code on slot {code_slot} — "
+            f"{self.reason}"
         )
 
 

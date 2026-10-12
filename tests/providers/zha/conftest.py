@@ -587,10 +587,17 @@ def door_lock(
 
 
 @pytest.fixture
+def lcm_slots() -> dict[int, dict[str, Any]]:
+    """Return the slots the end-to-end entry configures; override to change them."""
+    return ZHA_LCM_CONFIG_SLOTS
+
+
+@pytest.fixture
 async def lcm_config_entry(
     hass: HomeAssistant,
     zha_lock_entity: er.RegistryEntry,
     door_lock: DoorLockStandIn,
+    lcm_slots: dict[int, dict[str, Any]],
 ) -> AsyncGenerator[MockConfigEntry]:
     """
     Set up a full Lock Code Manager config entry managing the ZHA lock.
@@ -601,7 +608,7 @@ async def lcm_config_entry(
     """
     config = {
         CONF_LOCKS: [zha_lock_entity.entity_id],
-        CONF_SLOTS: ZHA_LCM_CONFIG_SLOTS,
+        CONF_SLOTS: lcm_slots,
     }
     entry = MockConfigEntry(
         domain=DOMAIN,
