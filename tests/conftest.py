@@ -72,17 +72,23 @@ def aiohttp_client(aiohttp_client, socket_enabled):
     return aiohttp_client
 
 
-@pytest.hookimpl(wrapper=True)
-def pytest_runtest_call(item: pytest.Item) -> Generator[None]:
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(
+    item: pytest.Item, nextitem: pytest.Item | None
+) -> Generator[None]:
     """
-    Release every mock-lock fault once the test body ends, before teardown.
+    Release every mock-lock fault before any fixture is torn down, and after.
 
-    A ``hang`` or ``drop_reply`` fault the test never cleared holds a call
-    the sync managers' stop then waits on, and on a frozen clock that wait
-    never ends. Fixture teardown is too late to let go of it -- an autouse
-    fixture is torn down after the config entries -- so this runs between
-    the test body and its fixtures' teardown.
+    A ``hang`` or ``drop_reply`` fault left installed holds a call the sync
+    managers' stop then waits on, and on a frozen clock that wait never
+    ends. Fixture teardown is too late to let go of it -- an autouse fixture
+    is torn down after the config entries -- so this runs before the
+    fixtures' finalizers. Teardown runs whether the test body ran or its
+    setup failed, so a fault a fixture installed is let go of too. Released
+    again once teardown ends, so nothing installed during it reaches the
+    next test.
     """
+    release_all_faults()
     try:
         return (yield)
     finally:
