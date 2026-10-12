@@ -416,7 +416,8 @@ class _AllocatesInProgress:
     step that takes the submission starts the task and shows progress; Home
     Assistant re-enters the step when the task finishes, the step hands off
     to its ``<step>_allocated`` sibling, and that one either proceeds or
-    re-shows the same form with the refusal.
+    re-shows the same form with the refusal. A task already finished when it
+    starts goes to that sibling directly.
     """
 
     # Provided by the FlowHandler this is mixed into.
@@ -428,7 +429,7 @@ class _AllocatesInProgress:
     _allocation_task: asyncio.Task[_AllocationOutcome] | None = None
     _allocation_submission: dict[str, Any] | None = None
 
-    def _start_allocation(
+    async def _start_allocation(
         self,
         step_id: str,
         config_entry: ConfigEntry | None,
@@ -438,7 +439,7 @@ class _AllocatesInProgress:
         *,
         held: Collection[int] = (),
     ) -> Any:
-        """Start allocating for ``submission`` and show progress for it."""
+        """Start allocating for ``submission``; show progress while it runs."""
         self._allocation_submission = submission
         self._allocation_task = self.hass.async_create_task(
             _allocate_for(
@@ -450,6 +451,13 @@ class _AllocatesInProgress:
                 progress=self.async_update_progress,
             )
         )
+        if self._allocation_task.done():
+            # Tasks start eagerly, so one with nothing to read has already
+            # finished. It must not be shown as progress: Home Assistant
+            # announces the step moved on as soon as it returns, before the
+            # dialog has subscribed to hear it, and the dialog never leaves
+            # the progress screen (issue #1639).
+            return await getattr(self, f"async_step_{step_id}_allocated")()
         return self.async_show_progress(
             step_id=step_id,
             progress_action="allocating",
@@ -570,7 +578,7 @@ class LockCodeManagerFlowHandler(
             # the count alone decides whether they fit -- and a refusal here
             # is one the user can still act on. The ``None`` is the entry the
             # lock reads are made for: this flow is what creates it.
-            return self._start_allocation(
+            return await self._start_allocation(
                 "ui",
                 None,
                 self.data[CONF_LOCKS],
@@ -703,7 +711,7 @@ class LockCodeManagerFlowHandler(
                 # neither can land on one a lock already holds. The ``None``
                 # is the entry the lock reads are made for, which this flow
                 # has not created yet.
-                return self._start_allocation(
+                return await self._start_allocation(
                     "yaml",
                     None,
                     self.data[CONF_LOCKS],

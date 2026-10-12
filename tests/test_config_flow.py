@@ -61,6 +61,7 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    LockFault,
     MockLCMLock,
     async_configure_flow,
     async_discover_unclaimed_mqtt_lock,
@@ -70,6 +71,7 @@ from .common import (
     reading_for,
     unnumbered_user_subentry,
     user_subentries,
+    when_mock_lock_built,
 )
 from .providers.zigbee2mqtt.conftest import async_discover_z2m_lock
 
@@ -2960,14 +2962,20 @@ async def test_ui_allocation_runs_as_a_progress_step(
     """The count submission shows progress while the locks are read (#1536).
 
     A lock that answers one index per round trip can take a minute or more;
-    the dialog reports the read instead of freezing. The read reports how
-    many locks have answered, and the flow moves on once it is done.
+    the dialog reports the read instead of freezing. The read is held here,
+    as a slow lock holds it, so it is still running when the submission is
+    answered. The read reports how many locks have answered, and the flow
+    moves on once it is done.
     """
     flow_id = await _start_config_flow(hass)
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
     updates = async_capture_events(hass, EVENT_DATA_ENTRY_FLOW_PROGRESS_UPDATE)
 
-    with _holding():
+    def _empty_and_slow_to_read(lock: MockLCMLock) -> LockFault:
+        lock.codes.clear()
+        return lock.hang("get")
+
+    with when_mock_lock_built(_empty_and_slow_to_read) as faults:
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 2}
         )
@@ -2975,6 +2983,9 @@ async def test_ui_allocation_runs_as_a_progress_step(
         assert result["step_id"] == "ui"
         assert result["progress_action"] == "allocating"
 
+        assert sum(fault.held for fault in faults) == 1
+        for fault in faults:
+            fault.clear()
         await hass.async_block_till_done()
         result = await hass.config_entries.flow.async_configure(flow_id)
 

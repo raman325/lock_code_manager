@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from matter_server.client.models.node import MatterNode
@@ -9,11 +11,18 @@ from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.config_entries import SOURCE_USER
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.const import TICK_INTERVAL
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_NUM_USERS,
+    CONF_USERS,
+    DOMAIN,
+    TICK_INTERVAL,
+)
 from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
     pin_address,
@@ -22,7 +31,7 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
 # Module path where lock_helpers functions are imported in the provider
-from tests.common import in_sync_entity_id
+from tests.common import flow_users, in_sync_entity_id
 from tests.conftest import async_advance_time, async_initial_tick
 
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
@@ -321,3 +330,89 @@ class TestOutOfBandDeletion:
         matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
         await async_advance_time(hass, TICK_INTERVAL * 3)
         assert hass.states.get(in_sync).state == STATE_ON
+
+
+@contextmanager
+def _matter_helpers_patched(helpers: dict[str, AsyncMock]) -> Iterator[None]:
+    """Answer every Matter lock helper the provider calls from ``helpers``."""
+    with ExitStack() as stack:
+        for name, mock in helpers.items():
+            stack.enter_context(patch(f"{_PROVIDER_MODULE}.{name}", mock))
+        yield
+
+
+class TestAddingThroughTheUserInterface:
+    """A Matter lock has nothing for allocation to read, so the flow never waits.
+
+    Matter allocates its own credential index, so allocation skips the lock
+    and finishes the moment it starts. Shown as progress anyway, the dialog
+    hears nothing: Home Assistant announces the step moved on before the
+    dialog has subscribed to hear it, and setup sits on the progress screen
+    for good (issue #1639).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _helpers_patched(
+        self, matter_mock_helpers: dict[str, AsyncMock]
+    ) -> Iterator[None]:
+        """Keep the helpers patched for the entry the flow creates and sets up."""
+        with _matter_helpers_patched(matter_mock_helpers):
+            yield
+
+    async def _start_flow(self, hass: HomeAssistant, lock_entity_id: str) -> str:
+        """Start setup on the Matter lock and return the flow at its path menu."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        flow_id = result["flow_id"]
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "matter", CONF_LOCKS: [lock_entity_id]}
+        )
+        assert result["step_id"] == "choose_path"
+        return flow_id
+
+    async def test_the_user_count_goes_straight_to_naming_the_first_user(
+        self, hass: HomeAssistant, lock_entity: er.RegistryEntry
+    ) -> None:
+        """Submitting the count shows the first user's form, never progress."""
+        flow_id = await self._start_flow(hass, lock_entity.entity_id)
+        await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
+
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 3}
+        )
+
+        assert result["type"] == "form"
+        assert result["step_id"] == "code_slot"
+        assert result["description_placeholders"] == {"user_num": 1, "num_users": 3}
+
+        for num in (1, 2, 3):
+            result = await hass.config_entries.flow.async_configure(
+                flow_id,
+                {CONF_NAME: f"User {num}", CONF_ENABLED: True, CONF_PIN: f"{num}" * 4},
+            )
+
+        assert result["type"] == "create_entry"
+        assert flow_users(result) == {
+            f"User {num}": {CONF_ENABLED: True, CONF_PIN: f"{num}" * 4}
+            for num in (1, 2, 3)
+        }
+        await hass.config_entries.async_unload(result["result"].entry_id)
+
+    async def test_a_block_of_users_goes_straight_to_creating_the_entry(
+        self, hass: HomeAssistant, lock_entity: er.RegistryEntry
+    ) -> None:
+        """Submitting the users block creates the entry, never progress."""
+        flow_id = await self._start_flow(hass, lock_entity.entity_id)
+        await hass.config_entries.flow.async_configure(
+            flow_id, {"next_step_id": "yaml"}
+        )
+        users = {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_USERS: users}
+        )
+
+        assert result["type"] == "create_entry"
+        assert flow_users(result) == users
+        await hass.config_entries.async_unload(result["result"].entry_id)
