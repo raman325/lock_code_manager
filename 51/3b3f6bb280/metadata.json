@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "513b3f6bb280",
+  "strategy": "manual-commit",
+  "branch": "fix/shared-lock-polling-pref",
+  "checkpoints_count": 28,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/51/3b3f6bb280/0/metadata.json",
+      "transcript": "/51/3b3f6bb280/0/full.jsonl",
+      "compact_transcript": "/51/3b3f6bb280/0/transcript.jsonl",
+      "content_hash": "/51/3b3f6bb280/0/content_hash.txt",
+      "prompt": "/51/3b3f6bb280/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1400,
+    "cache_creation_tokens": 6895049,
+    "cache_read_tokens": 296763872,
+    "output_tokens": 744222,
+    "api_call_count": 648,
+    "subagent_tokens": {
+      "input_tokens": 1164,
+      "cache_creation_tokens": 3060075,
+      "cache_read_tokens": 99479171,
+      "output_tokens": 649167,
+      "api_call_count": 579
+    }
+  }
+}
