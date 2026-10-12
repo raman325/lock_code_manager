@@ -4,8 +4,9 @@ import asyncio
 import copy
 from datetime import timedelta
 import logging
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, PropertyMock, patch
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -25,14 +26,22 @@ from homeassistant.const import (
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
+    EVENT_STATE_CHANGED,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
@@ -76,10 +85,15 @@ from .common import (
     SLOT_2_IN_SYNC_ENTITY,
     SLOT_2_PIN_ENTITY,
     MockLCMLock,
+    MockLCMPushLock,
+    async_advance_sync_ticks,
     async_blocking_stub,
     async_disable_and_reload,
     async_enable_and_reload,
+    async_tick_until,
+    code_entity_id,
     in_sync_entity_id,
+    mock_lock,
     pin_in_sync_entity_id,
     short_stop_grace,
     slot_entity_id,
@@ -253,6 +267,104 @@ async def test_startup_no_code_flapping_when_synced(
         f"Expected no clear_usercode calls during startup when codes are synced, "
         f"but found: {clear_calls}"
     )
+
+
+_EVERY_SLOT_ON_EVERY_LOCK = [
+    (slot_num, lock_entity_id)
+    for slot_num in BASE_CONFIG[CONF_SLOTS]
+    for lock_entity_id in BASE_CONFIG[CONF_LOCKS]
+]
+
+
+async def _async_set_up_base_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Set up an entry with the base configuration, as the fixture does."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="Mock Title"
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def _async_tick_until_every_slot_in_sync(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, entry: MockConfigEntry
+) -> None:
+    """Advance sync ticks until every slot reports in sync on every lock."""
+    in_syncs = [
+        in_sync_entity_id(hass, entry, slot_num, lock_entity_id)
+        for slot_num, lock_entity_id in _EVERY_SLOT_ON_EVERY_LOCK
+    ]
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: all(hass.states.get(in_sync).state == STATE_ON for in_sync in in_syncs),
+        max_ticks=3,
+        what="every slot in sync",
+    )
+
+
+@pytest.mark.parametrize("restart", [False, True], ids=["first_start", "restart"])
+async def test_codes_already_on_the_lock_are_neither_cleared_nor_set_on_start(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_calendars,
+    restart: bool,
+):
+    """
+    Regression for #101: starting up leaves the codes a lock already holds alone.
+
+    Every start cleared each slot and set it again before the slot's state
+    had loaded, though the lock held exactly the codes configured. The slot
+    sensors report a state throughout, never unavailable, which is how
+    #358's sensors acting before they were added showed.
+    """
+    calendar_1, _ = mock_calendars
+    now = dt_util.utcnow()
+    # Slot 2's condition: active through the whole test.
+    calendar_1.create_event(
+        dtstart=now - timedelta(days=1), dtend=now + timedelta(days=1), summary="on"
+    )
+    written: list[State] = []
+
+    @callback
+    def _record(event: Event[EventStateChangedData]) -> None:
+        if (state := event.data["new_state"]) is not None:
+            written.append(state)
+
+    hass.bus.async_listen(EVENT_STATE_CHANGED, _record)
+    entry = await _async_set_up_base_entry(hass)
+    if restart:
+        await _async_tick_until_every_slot_in_sync(hass, freezer, entry)
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        # Unloading leaves every entity unavailable; the restart starts there.
+        written.clear()
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    await _async_tick_until_every_slot_in_sync(hass, freezer, entry)
+    await async_advance_sync_ticks(hass, freezer, 3)
+
+    for lock_entity_id in BASE_CONFIG[CONF_LOCKS]:
+        lock = mock_lock(entry, lock_entity_id)
+        assert lock.codes == {1: "1234", 2: "5678"}
+        assert lock.service_calls["clear_usercode"] == []
+        assert lock.service_calls["set_usercode"] == []
+    slot_sensors = {
+        entity_id
+        for slot_num, lock_entity_id in _EVERY_SLOT_ON_EVERY_LOCK
+        for entity_id in (
+            in_sync_entity_id(hass, entry, slot_num, lock_entity_id),
+            code_entity_id(hass, entry, slot_num, lock_entity_id),
+        )
+    }
+    assert [
+        state
+        for state in written
+        if state.entity_id in slot_sensors and state.state == STATE_UNAVAILABLE
+    ] == []
+
+    await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_startup_detects_out_of_sync_code(
@@ -1387,6 +1499,83 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
 
+async def test_a_code_changed_where_only_the_drift_check_sees_it_is_put_back(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+):
+    """
+    Regression for #737: a change the drift check reads off the lock is synced back.
+
+    A push lock that never pushed the change is only read again by its drift
+    check. What that read found reached the slot's code sensor, but nothing
+    told the sync, so a slot in sync stayed in sync with the wrong code on
+    the lock.
+    """
+    drift_interval = timedelta(minutes=1)
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True}},
+    }
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="Drift Check")
+    entry.add_to_hass(hass)
+    with (
+        patch.dict(
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+            {"test": MockLCMPushLock},
+        ),
+        patch.object(
+            MockLCMPushLock,
+            "hard_refresh_interval",
+            new_callable=PropertyMock,
+            return_value=drift_interval,
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        lock = mock_lock(entry)
+        in_sync = in_sync_entity_id(hass, entry, 1)
+        code = code_entity_id(hass, entry, 1)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: hass.states.get(in_sync).state == STATE_ON,
+            max_ticks=3,
+            what="slot 1 in sync",
+        )
+
+        # Programmed at the keypad, and the lock pushes nothing about it.
+        lock.codes[1] = "5555"
+        await async_advance_sync_ticks(hass, freezer, 3)
+        assert hass.states.get(code).state == "1234"
+        in_sync_states: list[str] = []
+
+        @callback
+        def _record(event: Event[EventStateChangedData]) -> None:
+            if (state := event.data["new_state"]) is not None:
+                in_sync_states.append(state.state)
+
+        unsub = async_track_state_change_event(hass, in_sync, _record)
+        # The drift check and the sync it sets off can land within one tick.
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: bool(lock.service_calls["set_usercode"]),
+            max_ticks=int(drift_interval / TICK_INTERVAL) + 1,
+            what="the change put back",
+        )
+        await async_advance_sync_ticks(hass, freezer)
+        unsub()
+
+        assert STATE_OFF in in_sync_states
+        assert hass.states.get(in_sync).state == STATE_ON
+        assert lock.codes[1] == "1234"
+        assert lock.service_calls["set_usercode"] == [(1, "1234", "test1")]
+        assert len(lock.service_calls["hard_refresh_codes"]) >= 1
+
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_async_advance_time_drains_background_tick_chain(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -2241,6 +2430,106 @@ async def test_a_set_that_lands_but_raises_still_invalidates_the_clear(
         await _turn(SERVICE_TURN_OFF)
 
     assert clears.await_count == 1, "The slot was reported cleared without a clear"
+
+
+async def _async_turn_slot_1(hass: HomeAssistant, service: str) -> None:
+    """Enable or disable slot 1 through its switch."""
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        service,
+        target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+        blocking=True,
+    )
+
+
+def _slot_1_clears(lock: MockLCMLock) -> int:
+    """Count the clears of slot 1 that reached the lock, ones finding nothing too."""
+    return [
+        *lock.service_calls["clear_usercode"],
+        *lock.service_calls["noop_clear_usercode"],
+    ].count((1,))
+
+
+async def test_a_disabled_slot_the_lock_will_not_report_on_is_cleared_once(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    Regression for #1437: a disabled slot the lock withholds is cleared once.
+
+    The lock reports the slot occupied without saying what it holds, after
+    the clear lands too. Nothing could confirm the clear, so the slot read
+    out of sync on every tick and every tick cleared it again.
+    """
+    lock = mock_lock(lock_code_manager_config_entry)
+    in_sync = in_sync_entity_id(hass, lock_code_manager_config_entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    assert hass.states.get(in_sync).state == STATE_ON
+    lock.write_only = {1}
+
+    await _async_turn_slot_1(hass, SERVICE_TURN_OFF)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=3,
+        what="slot 1 cleared",
+    )
+    await async_advance_sync_ticks(hass, freezer, 5)
+
+    assert hass.states.get(in_sync).state == STATE_ON
+    assert _slot_1_clears(lock) == 1
+    assert 1 not in lock.codes
+
+
+async def test_a_set_that_lands_but_raises_leaves_the_next_disable_clearing(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    Regression for #1437: a set that raises may have landed, so it voids the clear.
+
+    The slot's earlier clear is what lets a lock that withholds its codes
+    read cleared. A set whose reply never came may still have put the code
+    on the lock, so disabling the slot again must clear it, not report it
+    cleared on the strength of the old clear while the code still opens
+    the door.
+    """
+    lock = mock_lock(lock_code_manager_config_entry)
+    in_sync = in_sync_entity_id(hass, lock_code_manager_config_entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    lock.write_only = {1}
+    await _async_turn_slot_1(hass, SERVICE_TURN_OFF)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=3,
+        what="slot 1 cleared",
+    )
+    assert _slot_1_clears(lock) == 1
+
+    # The set lands, and its reply never arrives: it raises once let go.
+    fault = lock.drop_reply("set", 1, times=1)
+    await _async_turn_slot_1(hass, SERVICE_TURN_ON)
+    await async_advance_sync_ticks(hass, freezer, settle=False)
+    await fault.async_wait_held()
+    await _async_turn_slot_1(hass, SERVICE_TURN_OFF)
+    fault.clear()
+    assert lock.codes[1] == "1234"
+
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: _slot_1_clears(lock) == 2,
+        max_ticks=5,
+        what="slot 1 cleared again",
+    )
+    assert 1 not in lock.codes
 
 
 async def test_a_clear_that_changed_nothing_is_not_evidence(

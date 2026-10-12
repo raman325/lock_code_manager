@@ -218,9 +218,23 @@ async def async_run_until_quiet() -> None:
     pytest.fail(f"event loop still busy after {_MAX_TURNS_TO_QUIET} turns")
 
 
+# Tasks an integration under test runs for as long as it is loaded -- the
+# Z-Wave JS client's listen loop -- registered by the fixture that starts them,
+# for as long as they run. They never finish, so waiting for them would never
+# end, and cancelling them would take the integration down under the test.
+# Any other task, a listen loop nobody registered included, is waited on.
+LIFELONG_TASKS: set[asyncio.Future[Any]] = set()
+
+
 def unfinished_tasks(hass: HomeAssistant) -> list[asyncio.Task[Any]]:
-    """Return the tasks Home Assistant tracks that have not finished."""
-    return [task for task in hass._tasks | hass._background_tasks if not task.done()]
+    """Return the tasks Home Assistant tracks that have not finished, lifelong ones aside."""
+    # Executor jobs are tracked here too, as bare futures; membership needs
+    # nothing a future lacks.
+    return [
+        task
+        for task in hass._tasks | hass._background_tasks
+        if not task.done() and task not in LIFELONG_TASKS
+    ]
 
 
 async def async_step_clock_until(

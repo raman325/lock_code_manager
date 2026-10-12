@@ -32,7 +32,12 @@ from custom_components.lock_code_manager.domain.events import CredentialOperatio
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
-from tests.providers.zwave_js.helpers import make_uc_value_event
+from tests.providers.zwave_js.helpers import (
+    make_credential_added_event,
+    make_credential_deleted_event,
+    make_credential_modified_event,
+    make_uc_value_event,
+)
 
 # ---------------------------------------------------------------------------
 # Push subscription tests
@@ -436,79 +441,6 @@ async def test_notification_event_non_access_control_ignored(
 # ---------------------------------------------------------------------------
 
 
-def _make_credential_added_event(
-    node_id: int,
-    credential_slot: int,
-    credential_type: int = UserCredentialType.PIN_CODE,
-    user_id: int = 1,
-    credential_data: str | None = None,
-) -> ZwaveEvent:
-    """Build a 'credential added' ZwaveEvent for a given slot."""
-    args: dict = {
-        "userId": user_id,
-        "credentialType": credential_type,
-        "credentialSlot": credential_slot,
-    }
-    if credential_data is not None:
-        args["data"] = credential_data
-    return ZwaveEvent(
-        type="credential added",
-        data={
-            "source": "node",
-            "event": "credential added",
-            "nodeId": node_id,
-            "endpointIndex": 0,
-            "args": args,
-        },
-    )
-
-
-def _make_credential_modified_event(
-    node_id: int,
-    credential_slot: int,
-    credential_type: int = UserCredentialType.PIN_CODE,
-    user_id: int = 1,
-) -> ZwaveEvent:
-    """Build a 'credential modified' ZwaveEvent for a given slot."""
-    return ZwaveEvent(
-        type="credential modified",
-        data={
-            "source": "node",
-            "event": "credential modified",
-            "nodeId": node_id,
-            "endpointIndex": 0,
-            "args": {
-                "userId": user_id,
-                "credentialType": credential_type,
-                "credentialSlot": credential_slot,
-            },
-        },
-    )
-
-
-def _make_credential_deleted_event(
-    node_id: int,
-    credential_slot: int,
-    credential_type: int = UserCredentialType.PIN_CODE,
-    user_id: int = 1,
-) -> ZwaveEvent:
-    """Build a 'credential deleted' ZwaveEvent for a given slot."""
-    return ZwaveEvent(
-        type="credential deleted",
-        data={
-            "source": "node",
-            "event": "credential deleted",
-            "nodeId": node_id,
-            "endpointIndex": 0,
-            "args": {
-                "userId": user_id,
-                "credentialType": credential_type,
-                "credentialSlot": credential_slot,
-            },
-        },
-    )
-
-
 async def test_credential_added_pin_pushes_unreadable(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -524,7 +456,7 @@ async def test_credential_added_pin_pushes_unreadable(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_credential_added_event(lock_schlage_be469.node_id, credential_slot=2)
+        make_credential_added_event(lock_schlage_be469.node_id, credential_slot=2)
     )
     await hass.async_block_till_done()
 
@@ -550,7 +482,7 @@ async def test_credential_added_pin_with_data_pushes_known(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_credential_added_event(
+        make_credential_added_event(
             lock_schlage_be469.node_id, credential_slot=2, credential_data="1234"
         )
     )
@@ -578,7 +510,7 @@ async def test_credential_modified_pin_pushes_unreadable(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_credential_modified_event(lock_schlage_be469.node_id, credential_slot=3)
+        make_credential_modified_event(lock_schlage_be469.node_id, credential_slot=3)
     )
     await hass.async_block_till_done()
 
@@ -604,7 +536,7 @@ async def test_credential_deleted_pin_pushes_empty(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_credential_deleted_event(lock_schlage_be469.node_id, credential_slot=5)
+        make_credential_deleted_event(lock_schlage_be469.node_id, credential_slot=5)
     )
     await hass.async_block_till_done()
 
@@ -630,7 +562,7 @@ async def test_credential_added_non_pin_ignored(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_credential_added_event(
+        make_credential_added_event(
             lock_schlage_be469.node_id,
             credential_slot=2,
             credential_type=UserCredentialType.PASSWORD,  # not PIN_CODE
@@ -658,7 +590,7 @@ async def test_credential_deleted_non_pin_ignored(
     zwave_js_lock.subscribe_push_updates()
 
     lock_schlage_be469.receive_event(
-        _make_credential_deleted_event(
+        make_credential_deleted_event(
             lock_schlage_be469.node_id,
             credential_slot=4,
             credential_type=UserCredentialType.PASSWORD,  # not PIN_CODE
