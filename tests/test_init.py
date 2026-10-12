@@ -1364,7 +1364,7 @@ async def test_a_reload_keeps_the_repair_for_a_slot_suspended_by_real_failures(
         hass,
         freezer,
         lambda: sync_status(hass, in_sync) == SyncState.SUSPENDED.value,
-        max_ticks=MAX_SYNC_ATTEMPTS + 2,
+        max_ticks=2 * MAX_SYNC_ATTEMPTS + 3,
         what="slot 1 suspended again",
     )
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None

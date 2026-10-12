@@ -322,7 +322,9 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     each targeting an operation and slot and returning a `LockFault` to clear. Besides `set`,
     `clear` and `get`, the `setup` and `probe` (device availability check) operations can be
     faulted by name. `when_mock_lock_built` acts on each mock lock as an entry builds it, for
-    faults that must be in place before setup or codes a lock keeps across a restart
+    faults that must be in place before setup or codes a lock keeps across a restart.
+    `probe_times` records every availability check, which is the only trace an attempt on
+    an offline lock leaves; `noop_set_usercode` records sets that changed nothing
   - Time helpers for the `freezer` fixture: `async_advance_sync_ticks` and `async_tick_until`
     run the real scheduled sync tick by moving both clocks; `async_advance_clock` moves them
     any distance, for deadlines and the stop grace; `async_trip_slot_breaker` reaches

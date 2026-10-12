@@ -317,45 +317,46 @@ async def test_a_new_pin_on_a_slot_the_lock_will_not_read_back_is_written_once(
     A lock that reports a slot occupied without saying what it holds gave
     nothing to compare the new PIN against, so the slot read in sync and the
     new PIN never reached the lock. It is written once, and the slot then
-    stays quiet: the PIN last written is what the lock is taken to hold.
+    stays quiet: the PIN last written is what the lock is taken to hold. A
+    set of the code the slot already holds changes nothing, so the lock's
+    record of those is what shows a slot rewritten for nothing.
     """
     entry = lock_code_manager_config_entry
     lock = mock_lock(entry)
     in_sync = in_sync_entity_id(hass, entry, 1)
     await async_advance_sync_ticks(hass, freezer)
-    reads = len(lock.service_calls["get_usercodes"])
     lock.write_only = {1}
-    await async_tick_until(
-        hass,
-        freezer,
-        lambda: len(lock.service_calls["get_usercodes"]) > reads,
-        max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 1,
-        what="a read with slot 1 withheld",
-    )
     # Withheld before anything was written to it, the slot is set once so
     # the PIN last written is known. The lock has that code already, so the
-    # set changes nothing and is not recorded.
+    # set changes nothing. The first read with the slot withheld starts it.
+    taken = await async_tick_until(
+        hass,
+        freezer,
+        lambda: bool(lock.service_calls["noop_set_usercode"]),
+        max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 3,
+        what="slot 1 set once withheld",
+    )
+    assert taken > 0
     await async_tick_until(
         hass,
         freezer,
         lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=3,
+        max_ticks=5,
         what="slot 1 in sync once withheld",
     )
-    await async_advance_sync_ticks(hass, freezer, 3)
-    assert lock.service_calls["set_usercode"] == []
 
     await async_set_slot_pin(hass, entry, 1, "4321")
     await async_tick_until(
         hass,
         freezer,
         lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=3,
+        max_ticks=6,
         what="slot 1 in sync with the new PIN",
     )
     await async_advance_sync_ticks(hass, freezer, 5)
 
     assert lock.codes[1] == "4321"
+    assert lock.service_calls["noop_set_usercode"] == [(1, "1234", "test1")]
     assert lock.service_calls["set_usercode"] == [(1, "4321", "test1")]
     assert hass.states.get(in_sync).state == STATE_ON
 
@@ -583,7 +584,7 @@ class TestSlotDisabledIssueCleanup:
                 hass.states.get(in_sync).state == STATE_ON
                 and lock.codes.get(1) == "5555"
             ),
-            max_ticks=3,
+            max_ticks=6,
             what="slot 1 back in sync with its new PIN",
         )
 
@@ -1683,12 +1684,16 @@ class TestAsyncStopCancelsInFlightTick:
         await async_advance_sync_ticks(hass, freezer, settle=False)
         await wedge.async_wait_held()
 
+        tick = TICK_INTERVAL.total_seconds()
         unload = hass.async_create_task(
             hass.config_entries.async_unload(entry.entry_id)
         )
         await async_run_until_quiet()
-        assert not unload.done()
-        await async_advance_clock(hass, freezer, STOP_GRACE_SECONDS, settle=False)
+        await async_advance_clock(
+            hass, freezer, STOP_GRACE_SECONDS - tick, settle=False
+        )
+        assert not unload.done(), "the unload gave the write less than its grace"
+        await async_advance_clock(hass, freezer, 2 * tick, settle=False)
 
         assert unload.done(), "the unload is still waiting on the write"
         assert unload.result() is True

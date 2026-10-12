@@ -47,6 +47,7 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.credentials import (
@@ -2739,10 +2740,26 @@ async def _async_set_up_slots(
         hass,
         freezer,
         lambda: all(_in_sync(hass, entry, slot_num) for slot_num in slot_nums),
-        max_ticks=3,
+        # The slots the lock lacks are written one after another.
+        max_ticks=2 * count + 3,
         what="every slot in sync",
     )
     return entry
+
+
+_TICK = TICK_INTERVAL.total_seconds()
+
+
+async def _async_advance_to_just_before(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, started_at: float
+) -> None:
+    """Move the clock to a sync tick short of the deadline of a call started then."""
+    await async_advance_clock(
+        hass,
+        freezer,
+        started_at + base_module.OPERATION_TIMEOUT - _TICK - time.monotonic(),
+        settle=False,
+    )
 
 
 def _in_sync(hass: HomeAssistant, entry: MockConfigEntry, slot_num: int) -> bool:
@@ -2776,9 +2793,9 @@ async def test_a_write_that_never_returns_lets_go_of_its_slot_and_the_lock(
     )
     assert lock.codes == {1: "1234", 2: "5678"}
 
-    await async_advance_clock(
-        hass, freezer, base_module.OPERATION_TIMEOUT, settle=False
-    )
+    await _async_advance_to_just_before(hass, freezer, wedged_at)
+    assert wedge.held == 1, "the write was cut off before its deadline"
+    await async_advance_clock(hass, freezer, 2 * _TICK, settle=False)
     assert wedge.held == 0, "the write still holds the lock's turn"
     await async_tick_until(
         hass,
@@ -2946,9 +2963,9 @@ async def test_a_lock_whose_setup_never_answered_once_is_set_up_and_written_late
         await async_run_until_quiet()
         [wedge] = wedges
         await wedge.async_wait_held()
-        await async_advance_clock(
-            hass, freezer, base_module.OPERATION_TIMEOUT, settle=False
-        )
+        await _async_advance_to_just_before(hass, freezer, time.monotonic())
+        assert wedge.held == 1, "the setup was cut off before its deadline"
+        await async_advance_clock(hass, freezer, 2 * _TICK, settle=False)
     assert wedge.held == 0, "the lock's setup is still parked"
     assert setup.done()
     assert entry.state is ConfigEntryState.LOADED
@@ -2960,7 +2977,7 @@ async def test_a_lock_whose_setup_never_answered_once_is_set_up_and_written_late
         hass,
         freezer,
         lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=3,
+        max_ticks=8,
         what="slot 1 in sync once the lock is set up",
     )
     assert lock.codes[1] == "4321"
@@ -2990,15 +3007,15 @@ async def test_a_write_whose_availability_check_never_answers_is_retried(
     await wedge.async_wait_held()
     assert sync_status(hass, in_sync) == SyncState.SYNCING.value
 
-    await async_advance_clock(
-        hass, freezer, base_module.OPERATION_TIMEOUT, settle=False
-    )
+    await _async_advance_to_just_before(hass, freezer, time.monotonic())
+    assert wedge.held == 1, "the check was cut off before its deadline"
+    await async_advance_clock(hass, freezer, 2 * _TICK, settle=False)
     assert wedge.held == 0, "the write is still waiting on the check"
     await async_tick_until(
         hass,
         freezer,
         lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=3,
+        max_ticks=6,
         what="slot 1 in sync",
     )
     assert lock.codes[1] == "4321"

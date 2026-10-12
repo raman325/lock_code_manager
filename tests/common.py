@@ -779,6 +779,8 @@ LockOperation = Literal["set", "clear", "get", "setup", "probe"]
 # code table. Setup and the probe are faulted only by name, so a test failing
 # every operation keeps the lifecycle it did not ask about.
 _TABLE_OPERATIONS = frozenset({"set", "clear", "get"})
+# Operations that touch no slot, so a fault naming one cannot name a slot.
+_SLOTLESS_OPERATIONS = frozenset({"setup", "probe"})
 
 
 class FaultKind(StrEnum):
@@ -868,6 +870,10 @@ class LockFault:
         """Refuse a fault that cannot happen to the operation it names."""
         if self.kind in _WRITE_ONLY_FAULTS and self.operation not in ("set", "clear"):
             raise ValueError(f"a {self.kind} fault needs a set or clear operation")
+        if self.operation in _SLOTLESS_OPERATIONS and self.slot is not None:
+            # It would match nothing, and a test relying on it would pass
+            # for the wrong reason.
+            raise ValueError(f"a {self.operation} touches no slot to name")
 
     def __enter__(self) -> Self:
         """Return the fault, to clear on exit."""
@@ -1016,9 +1022,13 @@ class MockLCMLock(BaseLock):
 
     ``service_calls`` records what reached the lock: ``set_usercode`` and
     ``clear_usercode`` for every write the lock acknowledged as a change
-    (an ignored one included -- the lock said yes), ``noop_clear_usercode``
+    (an ignored one included -- the lock said yes), ``noop_set_usercode``
+    for a set of the code the slot already held, ``noop_clear_usercode``
     for a clear of a slot that held nothing, ``get_usercodes`` for every
     read, and ``setup`` and ``unload`` for the provider lifecycle.
+    ``probe_times`` records when each device availability check was asked,
+    which every operation makes before it can reach the lock -- so attempts
+    against a lock that is not there show up there and nowhere else.
     """
 
     def __init__(self, *args, **kwargs):
@@ -1039,6 +1049,9 @@ class MockLCMLock(BaseLock):
         # ``fail`` stopped never reached it, a held one reached it when
         # released, and a refused one reached it and was turned away.
         self.run_times: list[float] = []
+        # When each device availability check was asked, on the monotonic
+        # clock: an operation's first step, whether or not it goes further.
+        self.probe_times: list[float] = []
         self.faults: list[LockFault] = []
         for act in _ON_BUILD:
             act(self)
@@ -1250,6 +1263,7 @@ class MockLCMLock(BaseLock):
 
     async def async_is_device_available(self) -> bool:
         """Return whether the physical device (node) is reachable: the ``probe``."""
+        self.probe_times.append(time.monotonic())
         await self._async_through_fault("probe")
         return self._device_available
 
@@ -1288,6 +1302,7 @@ class MockLCMLock(BaseLock):
         )
         # Asked again: a held call answers for what the slot holds on release.
         if not self._changes(code_slot, usercode):
+            self.service_calls["noop_set_usercode"].append((code_slot, usercode, name))
             result = WriteResult.NO_CHANGE
         else:
             if fault is None or fault.kind is not FaultKind.IGNORE:

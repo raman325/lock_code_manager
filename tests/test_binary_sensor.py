@@ -5,6 +5,7 @@ import copy
 from datetime import timedelta
 import itertools
 import logging
+import time
 from unittest.mock import AsyncMock, PropertyMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -653,11 +654,15 @@ async def test_entities_track_availability(
     assert in_sync_entity_obj.available
 
 
-# An offline lock is read again on its backoff: a minute once it has failed
-# three times, two after the fourth, which the tests taking one offline reach.
-_TICKS_TO_THE_BACKOFF_PROBE = (
-    int(2 * BACKOFF_INITIAL_SECONDS / TICK_INTERVAL.total_seconds()) + 5
-)
+def _ticks_through_the_backoff(backoff_seconds: float) -> int:
+    """
+    Return the sync ticks to wait for an offline lock's next read, with headroom.
+
+    The lock is read again on its backoff, ``backoff_seconds`` for the one it
+    is in; a read failing on the way doubles it, so the budget covers that
+    doubled step too.
+    """
+    return int(2 * backoff_seconds / TICK_INTERVAL.total_seconds()) + 3
 
 
 async def test_handles_disconnected_lock_on_set(
@@ -767,7 +772,7 @@ async def test_a_write_a_disconnected_lock_missed_is_retried_once_it_returns(
         hass,
         freezer,
         lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=3,
+        max_ticks=6,
         what="slot 1 in sync again",
     )
     assert lock.codes.get(1) == expected
@@ -822,7 +827,8 @@ async def test_an_offline_lock_holds_back_only_itself(
         hass,
         freezer,
         lambda: hass.states.get(in_sync_2).state == STATE_ON,
-        max_ticks=_TICKS_TO_THE_BACKOFF_PROBE,
+        # Four failures have doubled the backoff to two minutes.
+        max_ticks=_ticks_through_the_backoff(2 * BACKOFF_INITIAL_SECONDS),
         what="slot 1 in sync on the lock that came back",
     )
     assert lock_2.codes[1] == "9999"
@@ -1271,7 +1277,9 @@ async def test_strikes_against_an_old_pin_do_not_suspend_the_next_one(
 
     Two writes of a PIN fail and the third lands. One failure of the next
     PIN then made three, and the slot was suspended for a code that had
-    failed once -- reported as failing three times in a row.
+    failed once -- reported as failing three times in a row. The sync resets
+    the breaker in three places that back each other up, so only removing
+    all three fails this: it guards the outcome, not any one reset.
     """
     entry = lock_code_manager_config_entry
     lock = mock_lock(entry)
@@ -1285,7 +1293,7 @@ async def test_strikes_against_an_old_pin_do_not_suspend_the_next_one(
         hass,
         freezer,
         lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=MAX_SYNC_ATTEMPTS + 2,
+        max_ticks=2 * MAX_SYNC_ATTEMPTS + 3,
         what="the old PIN in sync",
     )
     assert old_pin_failures.hits == MAX_SYNC_ATTEMPTS - 1
@@ -1297,7 +1305,7 @@ async def test_strikes_against_an_old_pin_do_not_suspend_the_next_one(
         hass,
         freezer,
         lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=4,
+        max_ticks=8,
         what="the new PIN in sync",
     )
 
@@ -1494,7 +1502,10 @@ async def test_slots_stored_under_string_keys_and_one_added_later_reach_the_lock
     Stored configuration keys its slots by text, as JSON does, while the
     lock's codes are keyed by number. The sync looked a slot up by the text
     key, never found it, and sat showing out of sync without ever writing.
-    A user added once the entry is running goes the same way.
+    A user added once the entry is running goes the same way. What guards
+    this now is the conversion of stored text keys to numbers in
+    ``domain/slot_assignment.py``; the ``int()`` casts in the sync manager
+    and slot coordinator sit behind it and never see text.
     """
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -1519,7 +1530,7 @@ async def test_slots_stored_under_string_keys_and_one_added_later_reach_the_lock
         )
 
     await async_tick_until(
-        hass, freezer, lambda: _in_sync([1, 2]), max_ticks=3, what="slots 1, 2 in sync"
+        hass, freezer, lambda: _in_sync([1, 2]), max_ticks=7, what="slots 1, 2 in sync"
     )
     assert lock.codes == {1: "1234", 2: "2468"}
 
@@ -1539,7 +1550,7 @@ async def test_slots_stored_under_string_keys_and_one_added_later_reach_the_lock
         hass,
         freezer,
         lambda: _in_sync([1, 2, slot_num]),
-        max_ticks=3,
+        max_ticks=7,
         what="the added user in sync",
     )
     assert lock.codes == {1: "1234", 2: "2468", slot_num: "3690"}
@@ -2341,9 +2352,12 @@ async def test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced(
 
     Two slots out of sync went to the lock back to back with no delay
     between them, and kept being retried against a lock that was not
-    there. With the providers' real delay, nothing reaches the lock while
-    it is offline, each slot is written once when it returns, and every
-    operation is at least the delay after the one before it.
+    there. With the providers' real delay, the attempts on an offline lock
+    stop once its breaker trips and then come only on its backoff; each
+    slot is written once when it returns, and every operation is at least
+    the delay after the one before it. An attempt that gives up on an
+    offline lock never reaches it, so its availability check is what
+    records it.
     """
     entry = MockConfigEntry(domain=DOMAIN, data=TWO_SLOTS_ON_LOCK_1, unique_id="Paced")
     entry.add_to_hass(hass)
@@ -2369,26 +2383,27 @@ async def test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced(
     )
 
     lock.set_connected(False)
+    went_offline = time.monotonic()
     await async_set_slot_pin(hass, entry, 1, "1111")
     await async_set_slot_pin(hass, entry, 2, "2222")
-    await async_tick_until(
-        hass,
-        freezer,
-        lambda: _both(SyncState.SUSPENDED.value),
-        max_ticks=10,
-        what="both slots suspended while the lock is offline",
-        settle=False,
-    )
-    await async_advance_sync_ticks(hass, freezer, 10, settle=False)
+    # Long enough for the backoff to try the lock once, and double.
+    await async_advance_clock(hass, freezer, 4 * BACKOFF_INITIAL_SECONDS, settle=False)
     assert _both(SyncState.SUSPENDED.value)
     assert lock.service_calls["set_usercode"] == []
+    offline = [at - went_offline for at in lock.probe_times if at >= went_offline]
+    # Both writes and one retry in the first ticks trip the lock's breaker.
+    # After that only reads: the next one due, then one on the backoff.
+    assert len(offline) == 5, offline
+    assert offline[2] - offline[0] < 2 * TICK_INTERVAL.total_seconds(), offline
+    assert offline[4] - offline[3] >= BACKOFF_INITIAL_SECONDS, offline
 
     lock.set_connected(True)
     await async_tick_until(
         hass,
         freezer,
         lambda: _both(SyncState.IN_SYNC.value),
-        max_ticks=_TICKS_TO_THE_BACKOFF_PROBE,
+        # Five failures have doubled the backoff to four minutes.
+        max_ticks=_ticks_through_the_backoff(4 * BACKOFF_INITIAL_SECONDS),
         what="both slots back in sync",
         settle=False,
     )

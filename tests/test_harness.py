@@ -1116,6 +1116,13 @@ async def test_a_paced_test_keeps_the_real_delay_between_operations(
     assert unload.done()
 
 
+@pytest.mark.parametrize("operation", ["setup", "probe"])
+async def test_a_setup_or_probe_fault_cannot_name_a_slot(lock, operation) -> None:
+    """Neither touches a slot, so a fault naming one would match nothing."""
+    with pytest.raises(ValueError, match="touches no slot"):
+        lock.fail(operation, 1)
+
+
 @pytest.mark.parametrize("kind", [FaultKind.IGNORE, FaultKind.REFUSE])
 @pytest.mark.parametrize("operation", ["get", None])
 async def test_write_only_faults_need_a_write(lock, kind, operation) -> None:
@@ -1135,6 +1142,36 @@ async def test_noop_clears_are_recorded_apart_from_clears(lock) -> None:
 
     assert lock.service_calls["noop_clear_usercode"] == [(3,), (3,)]
     assert lock.service_calls["clear_usercode"] == [(1,)]
+
+
+async def test_noop_sets_are_recorded_apart_from_sets(lock) -> None:
+    """A set of the code a slot holds is counted, and never as a set that changed it."""
+    assert await lock.async_set_usercode(1, "1234", "test1") is WriteResult.NO_CHANGE
+    assert await lock.async_set_usercode(1, "9999", "test1") is WriteResult.CONFIRMED
+
+    assert lock.service_calls["noop_set_usercode"] == [(1, "1234", "test1")]
+    assert lock.service_calls["set_usercode"] == [(1, "9999", "test1")]
+
+
+async def test_every_availability_check_is_recorded_when_asked(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant, lock
+) -> None:
+    """
+    A write against a disconnected lock never reaches it, yet its check is recorded.
+
+    The integration's own check comes first and the device's after it, and
+    both are asked before an operation gives up on a lock that is not there.
+    """
+    await async_advance_sync_ticks(hass, freezer)
+    lock.probe_times.clear()
+    lock.run_times.clear()
+    lock.set_connected(False)
+
+    with pytest.raises(LockDisconnected):
+        await lock.async_internal_set_usercode(1, "9999", "test1")
+
+    assert lock.probe_times == [time.monotonic()]
+    assert lock.run_times == []
 
 
 async def test_provider_setup_is_recorded(
