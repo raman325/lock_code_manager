@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 import json
 import math
+import sys
 import time
 from typing import Any, Literal, Self
 from unittest.mock import patch
@@ -457,6 +458,37 @@ async def async_advance_clock(
         await _async_step_timers_to(freezer, min(loop.time() + step, end))
     if settle:
         await async_settle_background(hass, freezer)
+
+
+async def async_advance_across_deadline(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    *,
+    started_at: float,
+    deadline: float,
+    held: Callable[[], bool],
+    what: str,
+) -> None:
+    """
+    Check ``held`` a sync tick short of a deadline, then not ``held`` a tick past it.
+
+    ``started_at`` is when the deadline's wait began, on the monotonic clock,
+    and ``deadline`` how long it is. Bracketing it pins both halves of a
+    bound: a wait cut short lets go before the first check, and one that is
+    not bounded at all is still held at the second. Fails the test, rather
+    than checking nothing, if the deadline is already within a tick.
+    Doesn't settle, since what was held may leave work in flight.
+    """
+    tick = TICK_INTERVAL.total_seconds()
+    seconds = started_at + deadline - tick - time.monotonic()
+    if seconds <= 0:
+        pytest.fail(f"{what}: its deadline is {seconds + tick:.3f}s away, under a tick")
+    await async_advance_clock(hass, freezer, seconds, settle=False)
+    if not held():
+        pytest.fail(f"{what} let go a tick before its deadline")
+    await async_advance_clock(hass, freezer, 2 * tick, settle=False)
+    if held():
+        pytest.fail(f"{what} still held a tick after its deadline")
 
 
 async def async_tick_until(
@@ -982,6 +1014,10 @@ class LockFault:
             )
 
 
+# The BaseLock method that asks the device availability check on the
+# connection check's own cadence; every other asker is an operation's gate.
+_CONNECTION_CHECK = "async_internal_is_reachable"
+
 # What ``when_mock_lock_built`` runs on each mock lock as it is built.
 _ON_BUILD: list[Callable[[MockLCMLock], None]] = []
 
@@ -1026,9 +1062,14 @@ class MockLCMLock(BaseLock):
     for a set of the code the slot already held, ``noop_clear_usercode``
     for a clear of a slot that held nothing, ``get_usercodes`` for every
     read, and ``setup`` and ``unload`` for the provider lifecycle.
-    ``probe_times`` records when each device availability check was asked,
-    which every operation makes before it can reach the lock -- so attempts
-    against a lock that is not there show up there and nowhere else.
+    ``call_order`` names each of those in the order it was recorded.
+
+    ``attempt_times`` records when each operation -- a set, a clear or a
+    read -- asked the device availability check, the gate it passes before
+    it can reach the lock. An attempt on a lock that is not there stops at
+    that gate, so it shows up there and nowhere else. The connection check
+    asks the same question on its own cadence and is not an attempt, so its
+    asks are left out.
     """
 
     def __init__(self, *args, **kwargs):
@@ -1044,14 +1085,15 @@ class MockLCMLock(BaseLock):
         # after a clear -- which is the state a clear can never confirm.
         self.write_only: set[int] = set()
         self.service_calls: defaultdict[str, list] = defaultdict(list)
+        self.call_order: list[str] = []
         # When each set, clear, and read reached the lock, on the monotonic
         # clock, so pacing tests can check the gaps between them. A call a
         # ``fail`` stopped never reached it, a held one reached it when
         # released, and a refused one reached it and was turned away.
         self.run_times: list[float] = []
-        # When each device availability check was asked, on the monotonic
-        # clock: an operation's first step, whether or not it goes further.
-        self.probe_times: list[float] = []
+        # When each operation asked the device availability check, on the
+        # monotonic clock: its first step, whether or not it goes further.
+        self.attempt_times: list[float] = []
         self.faults: list[LockFault] = []
         for act in _ON_BUILD:
             act(self)
@@ -1231,6 +1273,11 @@ class MockLCMLock(BaseLock):
             await fault.async_before(operation, None)
             await fault.async_after(operation)
 
+    def _record(self, call: str, details: Any) -> None:
+        """Record a call that reached the lock, and where it came in the order."""
+        self.service_calls[call].append(details)
+        self.call_order.append(call)
+
     def _changes(self, code_slot: int, usercode: str | None) -> bool:
         """Return whether writing ``usercode`` (None clears) changes the slot."""
         return self.codes.get(code_slot) != usercode
@@ -1263,26 +1310,28 @@ class MockLCMLock(BaseLock):
 
     async def async_is_device_available(self) -> bool:
         """Return whether the physical device (node) is reachable: the ``probe``."""
-        self.probe_times.append(time.monotonic())
+        # Asked by the method that called this one, before anything awaits.
+        if sys._getframe(1).f_code.co_name != _CONNECTION_CHECK:
+            self.attempt_times.append(time.monotonic())
         await self._async_through_fault("probe")
         return self._device_available
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Record the provider setup, which runs again on every reconnect."""
-        self.service_calls["setup"].append((config_entry.entry_id,))
+        self._record("setup", (config_entry.entry_id,))
         await self._async_through_fault("setup")
         await super().async_setup(config_entry)
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Record the teardown so tests can assert on remove_permanently."""
-        self.service_calls["unload"].append((remove_permanently,))
+        self._record("unload", (remove_permanently,))
         await super().async_unload(remove_permanently)
 
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
         """Perform hard refresh; records the scope it was asked for."""
-        self.service_calls["hard_refresh_codes"].append((slots,))
+        self._record("hard_refresh_codes", (slots,))
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
@@ -1302,12 +1351,12 @@ class MockLCMLock(BaseLock):
         )
         # Asked again: a held call answers for what the slot holds on release.
         if not self._changes(code_slot, usercode):
-            self.service_calls["noop_set_usercode"].append((code_slot, usercode, name))
+            self._record("noop_set_usercode", (code_slot, usercode, name))
             result = WriteResult.NO_CHANGE
         else:
             if fault is None or fault.kind is not FaultKind.IGNORE:
                 self.codes[code_slot] = usercode
-            self.service_calls["set_usercode"].append((code_slot, usercode, name))
+            self._record("set_usercode", (code_slot, usercode, name))
             result = WriteResult.CONFIRMED
         if fault is not None:
             await fault.async_after("set")
@@ -1329,12 +1378,12 @@ class MockLCMLock(BaseLock):
             "clear", (code_slot,), code_slot, changes=self._changes(code_slot, None)
         )
         if not self._changes(code_slot, None):
-            self.service_calls["noop_clear_usercode"].append((code_slot,))
+            self._record("noop_clear_usercode", (code_slot,))
             changed = False
         else:
             if fault is None or fault.kind is not FaultKind.IGNORE:
                 self.codes.pop(code_slot)
-            self.service_calls["clear_usercode"].append((code_slot,))
+            self._record("clear_usercode", (code_slot,))
             changed = True
         if fault is not None:
             await fault.async_after("clear")
@@ -1350,7 +1399,7 @@ class MockLCMLock(BaseLock):
         # when it is released, not when it was asked.
         scope = self._read_scope(slots)
         snapshot = self.codes.copy()
-        self.service_calls["get_usercodes"].append(snapshot)
+        self._record("get_usercodes", snapshot)
         codes = {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
         codes.update({slot: SlotCredential.unreadable() for slot in self.write_only})
         # Mirrors the base projection, including the part that matters: a slot

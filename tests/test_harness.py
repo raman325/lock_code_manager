@@ -58,6 +58,7 @@ from .common import (
     MockLCMPushLock,
     _async_step_timers_to,
     all_sync_managers,
+    async_advance_across_deadline,
     async_advance_clock,
     async_advance_sync_ticks,
     async_run_until_quiet,
@@ -282,6 +283,59 @@ async def test_ticking_until_without_settling_leaves_a_held_write_held(
     )
 
     await fault.async_wait_held()
+
+
+async def test_a_deadline_is_bracketed_by_a_tick_either_side(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """Held a tick short of the deadline and let go a tick past it passes."""
+    fired: list[Any] = []
+    started_at = time.monotonic()
+    async_call_later(hass, 60, fired.append)
+
+    await async_advance_across_deadline(
+        hass,
+        freezer,
+        started_at=started_at,
+        deadline=60,
+        held=lambda: not fired,
+        what="the timer",
+    )
+
+    assert time.monotonic() - started_at == pytest.approx(
+        60 + TICK_INTERVAL.total_seconds(), abs=CLOCK_STEP
+    )
+
+
+@pytest.mark.parametrize(
+    ("fires_after", "deadline", "message"),
+    [
+        pytest.param(30, 60, "let go a tick before", id="cut-short"),
+        pytest.param(90, 60, "still held a tick after", id="unbounded"),
+        pytest.param(90, 1, "under a tick", id="deadline-within-a-tick"),
+    ],
+)
+async def test_a_deadline_bracket_fails_on_either_side(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    fires_after: float,
+    deadline: float,
+    message: str,
+) -> None:
+    """A wait that ends early, one that outlasts its deadline, or a deadline too near to check."""
+    fired: list[Any] = []
+    unsub = async_call_later(hass, fires_after, fired.append)
+
+    with pytest.raises(pytest.fail.Exception, match=message):
+        await async_advance_across_deadline(
+            hass,
+            freezer,
+            started_at=time.monotonic(),
+            deadline=deadline,
+            held=lambda: not fired,
+            what="the timer",
+        )
+    unsub()
 
 
 async def test_tick_until_fails_on_a_condition_that_never_comes(
@@ -1153,25 +1207,44 @@ async def test_noop_sets_are_recorded_apart_from_sets(lock) -> None:
     assert lock.service_calls["set_usercode"] == [(1, "9999", "test1")]
 
 
-async def test_every_availability_check_is_recorded_when_asked(
+async def test_an_attempt_that_never_reaches_the_lock_is_recorded_at_its_gate(
     freezer: FrozenDateTimeFactory, hass: HomeAssistant, lock
 ) -> None:
     """
-    A write against a disconnected lock never reaches it, yet its check is recorded.
+    A write against a disconnected lock is recorded as an attempt; a connection check is not.
 
-    The integration's own check comes first and the device's after it, and
-    both are asked before an operation gives up on a lock that is not there.
+    The write stops at the availability check before it reaches the lock,
+    so that check is the only trace it leaves. The connection check asks the
+    same question on its own cadence, whichever layers it consults, and is
+    not an attempt at anything.
     """
     await async_advance_sync_ticks(hass, freezer)
-    lock.probe_times.clear()
+    lock.attempt_times.clear()
     lock.run_times.clear()
+
+    # Connected, the connection check asks the device too.
+    assert await lock.async_internal_is_reachable() is True
+    assert lock.attempt_times == []
     lock.set_connected(False)
 
     with pytest.raises(LockDisconnected):
         await lock.async_internal_set_usercode(1, "9999", "test1")
 
-    assert lock.probe_times == [time.monotonic()]
+    assert lock.attempt_times == [time.monotonic()]
     assert lock.run_times == []
+
+
+async def test_call_order_names_each_recorded_call_in_turn(lock) -> None:
+    """Reads, sets and clears, as they reached the lock, the ones changing nothing included."""
+    await lock.async_get_usercodes()
+    await lock.async_set_usercode(1, "1234")
+    await lock.async_clear_usercode(2)
+
+    assert lock.call_order[-3:] == [
+        "get_usercodes",
+        "noop_set_usercode",
+        "clear_usercode",
+    ]
 
 
 async def test_provider_setup_is_recorded(

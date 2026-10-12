@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -65,7 +66,7 @@ from .common import (
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_IN_SYNC_ENTITY,
     TWO_SLOTS_ON_LOCK_1,
-    async_advance_clock,
+    async_advance_across_deadline,
     async_advance_sync_ticks,
     async_blocking_stub,
     async_run_until_quiet,
@@ -325,18 +326,30 @@ async def test_a_new_pin_on_a_slot_the_lock_will_not_read_back_is_written_once(
     lock = mock_lock(entry)
     in_sync = in_sync_entity_id(hass, entry, 1)
     await async_advance_sync_ticks(hass, freezer)
+    # Withheld just after a read, so the next read is a whole poll away: a
+    # set that did not wait for one would come first.
+    reads = len(lock.service_calls["get_usercodes"])
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: len(lock.service_calls["get_usercodes"]) > reads,
+        max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 3,
+        what="a read of the lock",
+    )
+    withheld_from = len(lock.call_order)
     lock.write_only = {1}
     # Withheld before anything was written to it, the slot is set once so
     # the PIN last written is known. The lock has that code already, so the
-    # set changes nothing. The first read with the slot withheld starts it.
-    taken = await async_tick_until(
+    # set changes nothing. A read finding the slot withheld comes first.
+    await async_tick_until(
         hass,
         freezer,
-        lambda: bool(lock.service_calls["noop_set_usercode"]),
+        lambda: "noop_set_usercode" in lock.call_order[withheld_from:],
         max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 3,
         what="slot 1 set once withheld",
     )
-    assert taken > 0
+    since = lock.call_order[withheld_from:]
+    assert "get_usercodes" in since[: since.index("noop_set_usercode")], since
     await async_tick_until(
         hass,
         freezer,
@@ -1684,18 +1697,20 @@ class TestAsyncStopCancelsInFlightTick:
         await async_advance_sync_ticks(hass, freezer, settle=False)
         await wedge.async_wait_held()
 
-        tick = TICK_INTERVAL.total_seconds()
         unload = hass.async_create_task(
             hass.config_entries.async_unload(entry.entry_id)
         )
         await async_run_until_quiet()
-        await async_advance_clock(
-            hass, freezer, STOP_GRACE_SECONDS - tick, settle=False
+        await async_advance_across_deadline(
+            hass,
+            freezer,
+            started_at=time.monotonic(),
+            deadline=STOP_GRACE_SECONDS,
+            held=lambda: not unload.done(),
+            what="the unload waiting on the write",
         )
-        assert not unload.done(), "the unload gave the write less than its grace"
-        await async_advance_clock(hass, freezer, 2 * tick, settle=False)
 
-        assert unload.done(), "the unload is still waiting on the write"
+        assert unload.done()
         assert unload.result() is True
         assert entry.state is ConfigEntryState.NOT_LOADED
 

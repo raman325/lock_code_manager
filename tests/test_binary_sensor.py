@@ -2390,7 +2390,7 @@ async def test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced(
     await async_advance_clock(hass, freezer, 4 * BACKOFF_INITIAL_SECONDS, settle=False)
     assert _both(SyncState.SUSPENDED.value)
     assert lock.service_calls["set_usercode"] == []
-    offline = [at - went_offline for at in lock.probe_times if at >= went_offline]
+    offline = [at - went_offline for at in lock.attempt_times if at >= went_offline]
     # Both writes and one retry in the first ticks trip the lock's breaker.
     # After that only reads: the next one due, then one on the backoff.
     assert len(offline) == 5, offline
