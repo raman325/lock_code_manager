@@ -47,6 +47,7 @@ from .common import (
     MockCalendarEntity,
     MockLCMLock,
     MockLockEntity,
+    forget_all_faults,
     release_all_faults,
     sync_manager_of,
 )
@@ -77,22 +78,23 @@ def pytest_runtest_teardown(
     item: pytest.Item, nextitem: pytest.Item | None
 ) -> Generator[None]:
     """
-    Release every mock-lock fault before any fixture is torn down, and after.
+    Release every mock-lock fault before any fixture is torn down.
 
     A ``hang`` or ``drop_reply`` fault left installed holds a call the sync
     managers' stop then waits on, and on a frozen clock that wait never
     ends. Fixture teardown is too late to let go of it -- an autouse fixture
     is torn down after the config entries -- so this runs before the
     fixtures' finalizers. Teardown runs whether the test body ran or its
-    setup failed, so a fault a fixture installed is let go of too. Released
-    again once teardown ends, so nothing installed during it reaches the
-    next test.
+    setup failed, so a fault a fixture installed is let go of too. A fault
+    installed during teardown is only forgotten once it ends, not released:
+    by then the event loop a held call waits on may be closed, and the
+    next test must not see the fault either way.
     """
     release_all_faults()
     try:
         return (yield)
     finally:
-        release_all_faults()
+        forget_all_faults()
 
 
 @pytest.fixture(autouse=True)

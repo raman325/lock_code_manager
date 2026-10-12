@@ -42,7 +42,6 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     SUBENTRY_TYPE_USER,
-    TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.allocation import build_lock_instance
 from custom_components.lock_code_manager.domain.config import (
@@ -192,8 +191,8 @@ _MAX_STEPS_FOR_BACKGROUND = 200
 # A guard against something rescheduling itself forever, not a tuning knob:
 # the loop goes quiet within a handful of turns here.
 _MAX_TURNS_TO_QUIET = 1000
-# The same guard for timers: a sync tick's span holds a few each for the
-# tick, the coordinator's poll, confirmation reads and pending-write
+# The same guard for timers: an interval holds a few each for the sync
+# ticks, the coordinator's poll, confirmation reads and pending-write
 # deadlines.
 _MAX_TIMERS_PER_TICK = 1000
 # How far past a timer's due time a jump to it lands. The frozen clock moves
@@ -290,13 +289,19 @@ async def async_settle_background(
     )
 
 
-def _next_timer_due(loop: asyncio.AbstractEventLoop) -> float | None:
-    """Return when the event loop's next live timer is due, if it has one."""
+def _live_timers(loop: asyncio.AbstractEventLoop) -> list[asyncio.TimerHandle]:
+    """Return the event loop's scheduled timers that are not cancelled."""
     scheduled: list[asyncio.TimerHandle] = loop._scheduled  # type: ignore[attr-defined]
-    return min(
-        (handle.when() for handle in scheduled if not handle.cancelled()),
-        default=None,
-    )
+    return [handle for handle in scheduled if not handle.cancelled()]
+
+
+def _is_sync_tick(handle: asyncio.TimerHandle) -> bool:
+    """Return whether ``handle`` is a sync manager's interval timer."""
+    # Home Assistant's interval tracker arms its own bound method, and its
+    # ``action`` is the bound tick of the manager that started it.
+    tracker = getattr(handle._callback, "__self__", None)  # type: ignore[attr-defined]
+    action = getattr(tracker, "action", None)
+    return isinstance(getattr(action, "__self__", None), SlotSyncManager)
 
 
 async def _async_jump_clock(freezer: FrozenDateTimeFactory, seconds: float) -> None:
@@ -328,16 +333,19 @@ async def async_advance_sync_ticks(
     forces a sync manager's private state and calls its tick method, so a
     test driven through it is pinned to the sync manager's internals and
     never proves the scheduled tick runs at all. This one only moves time:
-    each step is one ``TICK_INTERVAL`` plus ``CLOCK_STEP``, so every sync
-    manager's interval timer -- armed at most one interval ago -- comes due
-    and fires once, together with whatever else falls due in that span (the
-    coordinator's poll, confirmation reads, pending-write deadlines). The
-    clock moves from one timer's due time to the next, running the loop
-    until quiet at each, so every timer fires at its own time and in due
-    order, with the work it set off run before the next one fires -- as it
-    would on a clock that was not frozen. Then the work the tick set off is
-    settled with ``async_settle_background``, which steps the clock a
-    fraction of a second at most and fails the test rather than hang.
+    each step moves the clock to the last of the sync managers' interval
+    timers -- each armed at most one interval ago -- so every one fires
+    exactly once, together with whatever else falls due on the way (the
+    coordinator's poll, confirmation reads, pending-write deadlines). A
+    timer re-arms a whole interval after it fires, past where the step
+    stops, so a step never runs a manager's tick twice, whatever the phase
+    it starts at. The clock moves from one timer's due time to the next,
+    running the loop until quiet at each, so every timer fires at its own
+    time and in due order, with the work it set off run before the next one
+    fires -- as it would on a clock that was not frozen. Then the work the
+    tick set off is settled with ``async_settle_background``, which steps
+    the clock a fraction of a second at most and fails the test rather than
+    hang. Fails the test if no sync manager has a tick scheduled.
 
     Pass ``settle=False`` when the test holds work in flight on purpose -- a
     ``hang`` fault on the mock lock -- since settling waits for every task
@@ -357,22 +365,33 @@ async def async_advance_sync_ticks(
     The first call after the freezer starts also fires every timer armed
     before it did: freezing jumps the clock to wall time.
     """
-    step = TICK_INTERVAL.total_seconds() + CLOCK_STEP
     loop = asyncio.get_running_loop()
     for _ in range(ticks):
-        end = loop.time() + step
-        for _ in range(_MAX_TIMERS_PER_TICK):
-            if (now := loop.time()) >= end:
-                break
-            due = _next_timer_due(loop)
-            goal = end if due is None else min(due, end)
-            await _async_jump_clock(freezer, max(goal + _PAST_DUE - now, 0.0))
-        else:
-            pytest.fail(
-                f"more than {_MAX_TIMERS_PER_TICK} timers came due within one sync tick"
-            )
+        if not (due := [h.when() for h in _live_timers(loop) if _is_sync_tick(h)]):
+            pytest.fail("no sync tick scheduled: is a Lock Code Manager entry loaded?")
+        await _async_step_timers_to(freezer, max(*due, loop.time()))
         if settle:
             await async_settle_background(hass, freezer)
+
+
+async def _async_step_timers_to(freezer: FrozenDateTimeFactory, end: float) -> None:
+    """
+    Move the frozen clock to ``end``, stopping at every timer due on the way.
+
+    Each jump lands just past the next timer's due time, or past ``end``,
+    whichever is first, and runs the loop until quiet there. Always jumps at
+    least once, so a timer already overdue fires even when ``end`` is now.
+    """
+    loop = asyncio.get_running_loop()
+    for _ in range(_MAX_TIMERS_PER_TICK):
+        timers = _live_timers(loop)
+        goal = min([end, *(handle.when() for handle in timers)]) + _PAST_DUE
+        await _async_jump_clock(freezer, max(goal - loop.time(), 0.0))
+        if loop.time() >= end:
+            return
+    pytest.fail(
+        f"more than {_MAX_TIMERS_PER_TICK} timers came due within one sync tick"
+    )
 
 
 async def async_tick_until(
@@ -680,14 +699,25 @@ _WRITE_ONLY_FAULTS = frozenset({FaultKind.IGNORE, FaultKind.REFUSE})
 # Every fault installed and not yet cleared, spent ones included, so
 # ``release_all_faults`` can let go of a held call the test forgot to
 # release: teardown stops the sync managers, which wait on an in-flight
-# tick, and a frozen clock never ends that wait.
-_INSTALLED_FAULTS: set[LockFault] = set()
+# tick, and a frozen clock never ends that wait. A dict, so they are
+# released in the order installed.
+_INSTALLED_FAULTS: dict[LockFault, None] = {}
 
 
 def release_all_faults() -> None:
     """Clear every fault installed on any mock lock, releasing held calls."""
     for fault in list(_INSTALLED_FAULTS):
         fault.clear()
+    _INSTALLED_FAULTS.clear()
+
+
+def forget_all_faults() -> None:
+    """
+    Drop every installed fault without releasing what it holds.
+
+    For after teardown, once the event loop a held call waits on may be
+    closed: releasing would wake that call on a loop that cannot run it.
+    """
     _INSTALLED_FAULTS.clear()
 
 
@@ -770,7 +800,7 @@ class LockFault:
         """Stop matching calls, and let any call this is holding go."""
         if self in self.lock.faults:
             self.lock.faults.remove(self)
-        _INSTALLED_FAULTS.discard(self)
+        _INSTALLED_FAULTS.pop(self, None)
         self._released.set()
 
     def raise_error(self, operation: LockOperation, slot: int | None) -> None:
@@ -867,7 +897,7 @@ class MockLCMLock(BaseLock):
         """Install a fault; the knobs below are the usual way in."""
         fault = LockFault(self, kind, operation, slot, error=error, times=times)
         self.faults.append(fault)
-        _INSTALLED_FAULTS.add(fault)
+        _INSTALLED_FAULTS[fault] = None
         return fault
 
     def ignore(
@@ -954,7 +984,8 @@ class MockLCMLock(BaseLock):
         Clear every fault installed on this lock, releasing any call one holds.
 
         Spent faults included: one whose ``times`` ran out matches nothing
-        more, but may still be holding the last call it met.
+        more, but may still be holding the last call it met. Released in the
+        order installed.
         """
         for fault in [fault for fault in _INSTALLED_FAULTS if fault.lock is self]:
             fault.clear()

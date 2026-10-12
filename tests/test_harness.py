@@ -9,6 +9,9 @@ fail loudly, rather than hang, when what it waits for never comes.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
+from collections.abc import Callable, Generator
+from datetime import datetime
 import time
 from typing import Any
 from unittest.mock import PropertyMock, patch
@@ -40,6 +43,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.sync import SlotSyncManager
 
 from .common import (
     BASE_CONFIG,
@@ -50,6 +54,8 @@ from .common import (
     FaultKind,
     MockLCMLock,
     MockLCMPushLock,
+    _async_step_timers_to,
+    all_sync_managers,
     async_advance_sync_ticks,
     async_run_until_quiet,
     async_settle_background,
@@ -111,21 +117,43 @@ async def test_settle_background_steps_the_clock_through_a_sleep(
 
 
 async def test_advancing_sync_ticks_moves_both_clocks(
-    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
 ) -> None:
-    """Pending-write deadlines and breaker windows see the time pass."""
+    """
+    Pending-write deadlines and breaker windows see the time pass.
+
+    Once the first call has lined the ticks up, each call after it moves
+    both clocks a whole interval, less the little the settling took.
+    """
+    await async_advance_sync_ticks(hass, freezer)
     monotonic, wall = time.monotonic(), dt_util.utcnow()
 
     await async_advance_sync_ticks(hass, freezer, 3)
 
-    assert time.monotonic() - monotonic >= 3 * TICK_INTERVAL.total_seconds()
-    assert dt_util.utcnow() - wall >= 3 * TICK_INTERVAL
+    moved = time.monotonic() - monotonic
+    assert moved > 2 * TICK_INTERVAL.total_seconds()
+    assert (dt_util.utcnow() - wall).total_seconds() == pytest.approx(moved, abs=1e-6)
+
+
+async def test_advancing_sync_ticks_fails_with_no_sync_tick_scheduled(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """With no entry loaded there is no tick to advance to, and it says so."""
+    with pytest.raises(pytest.fail.Exception, match="no sync tick scheduled"):
+        await async_advance_sync_ticks(hass, freezer)
 
 
 async def test_advancing_sync_ticks_fails_on_a_timer_that_never_stops(
-    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
 ) -> None:
     """A timer rearming itself every millisecond fails the test, not the run."""
+    await async_advance_sync_ticks(hass, freezer)
     loop = asyncio.get_running_loop()
     timers: list[asyncio.TimerHandle] = []
 
@@ -140,8 +168,24 @@ async def test_advancing_sync_ticks_fails_on_a_timer_that_never_stops(
         timers[-1].cancel()
 
 
-async def test_tick_until_fails_on_a_condition_that_never_comes(
+async def test_stepping_may_reach_the_end_on_its_last_allowed_jump(
     freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """The bound on jumps counts jumps: reaching the end on the last one is success."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + 0.5
+
+    with patch("tests.common._MAX_TIMERS_PER_TICK", 1):
+        await _async_step_timers_to(freezer, end)
+
+    assert loop.time() >= end
+
+
+async def test_tick_until_fails_on_a_condition_that_never_comes(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
 ) -> None:
     """The bound is the failure message, not a hang."""
     with pytest.raises(pytest.fail.Exception, match="the impossible not reached"):
@@ -253,6 +297,74 @@ async def test_a_timer_due_within_a_tick_fires_at_its_own_time(
     assert due <= fired_at < due + CLOCK_STEP
     assert sets_before == 0
     assert lock.service_calls["set_usercode"] == [(1, "4321", "test1")]
+
+
+@pytest.fixture
+def interval_ticks() -> Generator[list[tuple[int, float]]]:
+    """
+    Record every interval tick a sync manager runs: which manager, and when.
+
+    Requested before the entry sets up, so every manager's interval timer
+    calls the recorder. The interval timer passes the time it fired; the
+    first tick, which the manager runs as it starts, passes nothing and is
+    not recorded.
+    """
+    fired: list[tuple[int, float]] = []
+    tick = SlotSyncManager._async_tick
+
+    async def _recorded(self: SlotSyncManager, now: datetime | None = None) -> None:
+        if now is not None:
+            fired.append((id(self), asyncio.get_running_loop().time()))
+        await tick(self, now)
+
+    with patch.object(SlotSyncManager, "_async_tick", _recorded):
+        yield fired
+
+
+@pytest.mark.parametrize(
+    "move",
+    [
+        pytest.param(lambda now, due: due - now + 0.5, id="overdue"),
+        pytest.param(lambda now, due: due - now, id="due-as-it-starts"),
+        pytest.param(lambda now, due: due - now - 0.0005, id="due-within-a-step"),
+        pytest.param(lambda now, due: due - now - CLOCK_STEP, id="due-a-step-in"),
+        pytest.param(lambda now, due: 1.996, id="ticked-1.996"),
+        pytest.param(lambda now, due: 1.9995, id="ticked-1.9995"),
+        pytest.param(lambda now, due: 0.0, id="no-time-between"),
+    ],
+)
+async def test_each_advance_runs_every_sync_tick_exactly_once(
+    interval_ticks: list[tuple[int, float]],
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    move: Callable[[float, float], float],
+) -> None:
+    """
+    One call, one tick per sync manager, whatever the clock's phase when it starts.
+
+    A tick that fired early in a call re-arms a whole interval later; if
+    the call ran on past that, the same manager would tick twice, and a
+    test counting failures per tick would count two. The calls after the
+    first run back to back, as a test looping on ticks does.
+    """
+    managers = {
+        id(manager) for manager in all_sync_managers(lock_code_manager_config_entry)
+    }
+    loop = asyncio.get_running_loop()
+
+    async def _advance_once() -> None:
+        start = len(interval_ticks)
+        await async_advance_sync_ticks(hass, freezer)
+        fired = Counter(manager for manager, _ in interval_ticks[start:])
+        assert fired == dict.fromkeys(managers, 1)
+
+    await _advance_once()
+    next_due = max(at for _, at in interval_ticks) + TICK_INTERVAL.total_seconds()
+    freezer.tick(move(loop.time(), next_due))
+    for _ in range(6):
+        await _advance_once()
 
 
 # -- Breakers through real failures -------------------------------------------
@@ -600,6 +712,25 @@ async def test_clear_faults_releases_a_call_a_spent_fault_holds(
     assert write.done()
 
 
+async def test_clear_faults_releases_held_calls_in_install_order(
+    hass: HomeAssistant, lock
+) -> None:
+    """Held writes answer in the order their faults were installed."""
+    slots = range(3, 23)
+    faults = [lock.hang("set", slot) for slot in slots]
+    writes = [
+        hass.async_create_task(lock.async_set_usercode(slot, f"{slot:04}"))
+        for slot in slots
+    ]
+    for fault in faults:
+        await fault.async_wait_held()
+
+    lock.clear_faults()
+    await asyncio.gather(*writes)
+
+    assert [call[0] for call in lock.service_calls["set_usercode"]] == list(slots)
+
+
 async def test_a_held_read_answers_for_the_slots_managed_on_release(
     hass: HomeAssistant, lock
 ) -> None:
@@ -727,17 +858,20 @@ async def test_a_write_left_held_does_not_hang_teardown(
     await fault.async_wait_held()
 
 
-async def test_teardown_releases_faults_before_the_fixtures_and_after(
+async def test_teardown_releases_faults_before_the_fixtures_and_forgets_after(
     hass: HomeAssistant, lock, request: pytest.FixtureRequest
 ) -> None:
     """
     The teardown hook lets go of a held call before any fixture is torn down.
 
     The fixtures' finalizers -- the config entries' unload among them -- run
-    where the hook yields, so a call still held there would hang them. A
-    fault installed while they run is released once they end, so it cannot
-    reach the next test. Teardown runs even when setup failed, which is what
-    lets go of a fault a fixture installed.
+    where the hook yields, so a call still held there would hang them.
+    Teardown runs even when setup failed, which is what lets go of a fault a
+    fixture installed. A fault installed while the finalizers run is only
+    forgotten once they end, so it cannot reach the next test; what it
+    holds is left alone, since the event loop may be closed by then.
+    ``test_a_write_left_held_does_not_hang_teardown`` is the end-to-end
+    check that pytest runs the release before the finalizers.
     """
     fault = lock.hang("set", 1)
     write = hass.async_create_task(lock.async_set_usercode(1, "9999"))
@@ -748,10 +882,15 @@ async def test_teardown_releases_faults_before_the_fixtures_and_after(
     assert await _async_answer(write) is WriteResult.CONFIRMED
 
     late = lock.hang("clear", 2)
+    clear = hass.async_create_task(lock.async_clear_usercode(2))
     with pytest.raises(StopIteration):
         teardown.send(None)
-    assert late not in lock.faults
-    assert await lock.async_clear_usercode(2) is True
+    await late.async_wait_held()
+    lock.clear_faults()
+    await late.async_wait_held()
+
+    late.clear()
+    assert await _async_answer(clear) is True
 
 
 async def test_a_fault_used_as_a_context_manager_clears_on_exit(lock) -> None:
