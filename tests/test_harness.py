@@ -48,6 +48,7 @@ from custom_components.lock_code_manager.domain.sync import SlotSyncManager
 from .common import (
     BASE_CONFIG,
     CLOCK_STEP,
+    LIFELONG_TASKS,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     SLOT_1_PIN_ENTITY,
@@ -119,10 +120,11 @@ async def test_settle_background_steps_the_clock_through_a_sleep(
 async def test_settle_background_leaves_a_lifelong_task_running(
     freezer: FrozenDateTimeFactory, hass: HomeAssistant
 ) -> None:
-    """A client's listen loop never finishes, so settling neither waits on it nor ends it."""
+    """A registered listen loop never finishes, so settling neither waits on it nor ends it."""
     listening = hass.async_create_background_task(
         asyncio.Event().wait(), "zwave_js_entry_client_listen"
     )
+    LIFELONG_TASKS.add(listening)
     sleeper = hass.async_create_background_task(asyncio.sleep(0.1), "sleeper")
     try:
         await async_settle_background(hass, freezer)
@@ -130,8 +132,23 @@ async def test_settle_background_leaves_a_lifelong_task_running(
         assert sleeper.done()
         assert not listening.done()
     finally:
+        LIFELONG_TASKS.discard(listening)
         listening.cancel()
         await asyncio.gather(listening, return_exceptions=True)
+
+
+async def test_settle_background_waits_on_a_listen_loop_nobody_registered(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """Only registered tasks are skipped: one stuck under the same name is waited on."""
+    stuck = hass.async_create_background_task(
+        asyncio.Event().wait(), "zwave_js_entry_client_listen"
+    )
+
+    with pytest.raises(pytest.fail.Exception, match="background lock work"):
+        await async_settle_background(hass, freezer)
+
+    assert stuck.cancelled()
 
 
 async def test_advancing_sync_ticks_moves_both_clocks(

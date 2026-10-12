@@ -33,6 +33,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from tests.common import LIFELONG_TASKS
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -127,8 +128,15 @@ def mock_zwave_client_fixture(
             client.connected = True
 
         async def listen(driver_ready: asyncio.Event) -> None:
-            driver_ready.set()
-            await listen_block.wait()
+            # Runs as long as the integration is loaded, so settling skips it.
+            task = asyncio.current_task()
+            assert task is not None
+            LIFELONG_TASKS.add(task)
+            try:
+                driver_ready.set()
+                await listen_block.wait()
+            finally:
+                LIFELONG_TASKS.discard(task)
 
         async def disconnect():
             listen_block.set()
@@ -188,6 +196,8 @@ def mock_zwave_client_fixture(
         }
 
         yield client
+
+    LIFELONG_TASKS.clear()
 
 
 @pytest.fixture(name="server_version_side_effect")
