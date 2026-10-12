@@ -1121,10 +1121,18 @@ class MockLCMLock(BaseLock):
         # monotonic clock: its first step, whether or not it goes further.
         self.attempt_times: list[float] = []
         self.faults: list[LockFault] = []
-        # What the lock reports it can hold, which setup checks a native-user
-        # lock against. None, the default, is a slot-only lock: it reports
-        # nothing and is checked for nothing. Read on every ask, so a test
-        # can fix a lock that failed the check and have it pass the next one.
+        # What the lock reports it can hold. Setting it makes the mock a
+        # native-user lock as far as setup's capability check is concerned --
+        # BaseLock runs that check for native-user providers only -- but not
+        # in its user lifecycle: sets, clears and reads stay this mock's
+        # slot-level ones. The flag also sizes each write's deadline for the
+        # three exchanges a native-user write takes. None, the default, is a
+        # slot-only lock that is checked for nothing.
+        #
+        # BaseLock caches a probe that passes for the instance's lifetime, so
+        # a change after that is not seen. A probe that fails the check is
+        # dropped instead, so a lock that failed can be fixed here and is
+        # asked again when its integration next reloads.
         self.capabilities: LockCapabilities | None = None
         for act in _ON_BUILD:
             act(self)
@@ -1337,11 +1345,11 @@ class MockLCMLock(BaseLock):
 
     @property
     def supports_native_users(self) -> bool:
-        """Return whether the lock reports capabilities, as a native-user lock does."""
+        """Return whether setup checks this lock's capabilities, as a native-user lock's."""
         return self.capabilities is not None
 
     async def async_get_capabilities(self) -> LockCapabilities:
-        """Return what the lock reports it can hold; only a native-user lock is asked."""
+        """Return what the lock reports it can hold, when a test has given it that."""
         if self.capabilities is None:
             return await super().async_get_capabilities()
         return self.capabilities

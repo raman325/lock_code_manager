@@ -1743,7 +1743,8 @@ async def test_a_lock_failing_validation_at_setup_stays_in_the_entry_and_recover
     assert "set_usercode" not in lock.service_calls
 
     # Re-interviewed: the lock reports its room again, and its integration
-    # reloads.
+    # reloads. The same lock instance is checked again: the probe that failed
+    # was not kept, so this answer is the one the check sees.
     lock.capabilities = PIN_CAPABILITIES
     assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -1756,6 +1757,7 @@ async def test_a_lock_failing_validation_at_setup_stays_in_the_entry_and_recover
         what="slot 1 in sync once the lock passes its check",
     )
     assert issue_reg.async_get_issue(DOMAIN, setup_issue) is None
+    assert mock_lock(entry) is lock
     assert lock.codes[1] == "4321"
     assert await hass.config_entries.async_unload(entry.entry_id)
 

@@ -1240,6 +1240,10 @@ class TestSyncStateMachine:
         it: knowing nothing of what the lock held, it set and cleared slots
         on the strength of nothing at all. It waits for a read, then writes
         what that read shows is needed.
+
+        This guards the outcome, not a mechanism: several layers each keep
+        an unread slot from being written, so only removing all of them
+        fails it -- which is what a rebuilt sync core has to keep true.
         """
         entry = current_entry("Read First", {1: "4321", 2: "5678"})
         entry.add_to_hass(hass)

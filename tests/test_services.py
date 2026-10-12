@@ -7,6 +7,7 @@ import json
 import logging
 from unittest.mock import AsyncMock, patch
 
+from freezegun.api import FrozenDateTimeFactory
 import probatio as vol
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -32,7 +33,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import entity_registry as er, instance_id
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_CLEAR_CREDENTIALS,
@@ -91,10 +92,16 @@ from tests.providers.helpers import register_mock_service
 
 from .common import (
     LOCK_1_ENTITY_ID,
+    async_advance_sync_ticks,
+    async_set_slot_pin,
+    async_tick_until,
     mock_lock,
     reading_for,
     unnumbered_user_subentry,
 )
+
+# The logger every Lock Code Manager module logs under.
+DOMAIN_LOGGER = f"custom_components.{DOMAIN}"
 
 
 async def test_async_set_usercode_domain_function_rejects_empty_usercode(
@@ -237,18 +244,41 @@ async def test_deobfuscate_log_service_round_trips_configured_pins(
 
 
 async def test_the_actions_still_answer_once_every_entry_has_unloaded(
+    freezer: FrozenDateTimeFactory,
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     Regression for PR #928: the actions keep answering after the last entry unloads.
 
     Unloading the last entry dropped the integration's shared data, which the
     actions -- registered once, for good -- still read: they failed from
-    then on, until a restart, even once an entry was set up again.
+    then on, until a restart, even once an entry was set up again. The
+    masked PIN decoded here is one the integration itself logged.
     """
     entry = lock_code_manager_config_entry
+    caplog.set_level(logging.DEBUG, logger=DOMAIN_LOGGER)
+    await async_advance_sync_ticks(hass, freezer)
+    caplog.clear()
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: mock_lock(entry).codes[1] == "4321",
+        max_ticks=3,
+        what="the new PIN written",
+    )
+    # The write is logged with its PIN masked, as every PIN is.
+    masked = [
+        (record.getMessage(), arg)
+        for record in caplog.records
+        for arg in record.args or ()
+        if isinstance(arg, str) and arg.startswith("pin#")
+    ]
+    [token] = {token for _line, token in masked}
+    log_line = masked[0][0]
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -266,29 +296,29 @@ async def test_the_actions_still_answer_once_every_entry_has_unloaded(
             {ATTR_CONFIG_ENTRY_ID: entry.entry_id, CONF_NAME: "test1"},
             blocking=True,
         )
+    # No entry is loaded to say whose PIN it was.
     response = await hass.services.async_call(
         DOMAIN,
         SERVICE_DEOBFUSCATE_LOG,
-        {ATTR_TEXT: "no tokens here"},
+        {ATTR_TEXT: log_line},
         blocking=True,
         return_response=True,
     )
     assert response is not None
-    assert response["summary"]["total"] == 0
+    assert response["summary"]["unmatched_tokens"] == [token]
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    token = mask_pin("1234", 1, await instance_id.async_get(hass))
     response = await hass.services.async_call(
         DOMAIN,
         SERVICE_DEOBFUSCATE_LOG,
-        {ATTR_TEXT: f"Setting usercode on lock.test_1 slot 1 (pin={token})"},
+        {ATTR_TEXT: log_line},
         blocking=True,
         return_response=True,
     )
     assert response is not None
     assert response["summary"]["matched"] == 1
-    assert "(pin=1234)" in response["deobfuscated_text"]
+    assert "pin=4321" in response["deobfuscated_text"]
     await hass.services.async_call(
         DOMAIN,
         SERVICE_HARD_REFRESH_USERCODES,

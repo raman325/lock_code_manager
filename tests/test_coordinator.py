@@ -3,6 +3,8 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from datetime import timedelta
+import json
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -28,6 +30,7 @@ from homeassistant.core import Event, EventStateChangedData, HomeAssistant, call
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
+from homeassistant.helpers.json import ExtendedJSONEncoder
 from homeassistant.helpers.update_coordinator import (
     REQUEST_REFRESH_DEFAULT_COOLDOWN,
     UpdateFailed,
@@ -533,6 +536,14 @@ async def test_cold_start_repeated_failures_keep_raising(
             assert poll_coordinator._lock_breaker.failure_count == i
 
 
+async def _async_downloaded_diagnostics(
+    hass: HomeAssistant, entry: MockConfigEntry
+) -> dict[str, Any]:
+    """Return an entry's diagnostics as the downloaded report carries them."""
+    report = await async_get_config_entry_diagnostics(hass, entry)
+    return json.loads(json.dumps(report, cls=ExtendedJSONEncoder))
+
+
 async def test_a_lock_unread_since_startup_shows_nothing_until_it_answers(
     freezer: FrozenDateTimeFactory,
     hass: HomeAssistant,
@@ -546,6 +557,11 @@ async def test_a_lock_unread_since_startup_shows_nothing_until_it_answers(
     still answered nothing, every slot was skipped as missing from what was
     read, and the next read failed again. The slots show nothing and write
     nothing until a read succeeds; then they show what the lock holds.
+
+    The slots' states look the same either way, so what the integration
+    believes is read where a user sees it: the diagnostics report. It is
+    serialized as Home Assistant's download does rather than fetched over
+    HTTP, whose access log fails on the frozen clock.
     """
     entry = current_entry("Unread Since Startup", {1: "1234", 2: "2468"})
     entry.add_to_hass(hass)
@@ -570,11 +586,11 @@ async def test_a_lock_unread_since_startup_shows_nothing_until_it_answers(
         await async_advance_clock(
             hass, freezer, lock.usercode_scan_interval.total_seconds()
         )
-        # What a downloaded diagnostics report says of the lock.
-        diagnostics = await async_get_config_entry_diagnostics(hass, entry)
-        assert not diagnostics["locks"][LOCK_1_ENTITY_ID]["coordinator"][
-            "last_update_success"
-        ]
+        diagnostics = await _async_downloaded_diagnostics(hass, entry)
+        assert (
+            diagnostics["locks"][LOCK_1_ENTITY_ID]["coordinator"]["last_update_success"]
+            is False
+        )
     assert unanswered.hits == 5
     assert shown <= {STATE_UNAVAILABLE}
     assert [hass.states.get(entity_id).state for entity_id in (*in_syncs, *codes)] == [

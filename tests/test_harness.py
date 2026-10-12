@@ -25,19 +25,14 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE as TEXT_SERVICE_SET_VALUE,
 )
-from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    CONF_ENABLED,
-    CONF_PIN,
-    STATE_OFF,
-    STATE_ON,
-)
+from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     TICK_INTERVAL,
@@ -77,7 +72,6 @@ from .common import (
     async_tick_until,
     async_trip_slot_breaker,
     current_entry,
-    entry_users,
     in_sync_entity_id,
     mock_lock,
     release_all_faults,
@@ -1317,20 +1311,47 @@ async def test_a_lock_reports_no_capabilities_unless_given_some(lock) -> None:
     assert await lock.async_get_capabilities() is PIN_CAPABILITIES
 
 
-async def test_a_current_entry_sets_up_without_migrating_or_reading_the_lock(
-    hass: HomeAssistant, mock_lock_config_entry
+@pytest.mark.parametrize(
+    ("make_entry", "read_for_migration"),
+    [
+        pytest.param(
+            lambda: current_entry("Current", {1: "1234", 3: "0123"}), 0, id="current"
+        ),
+        # Both of its locks are read to migrate it.
+        pytest.param(
+            lambda: MockConfigEntry(
+                domain=DOMAIN, data=BASE_CONFIG, unique_id="Old Shape", version=1
+            ),
+            2,
+            id="old_shape",
+        ),
+    ],
+)
+async def test_a_current_entry_sets_up_without_a_migration_reading_the_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    make_entry: Callable[[], MockConfigEntry],
+    read_for_migration: int,
 ) -> None:
-    """Its users are where setup looks for them, so the only lock built is the entry's."""
-    entry = current_entry("Current", {1: "1234", 3: "0123"})
+    """
+    Only an entry in an older shape has its locks built and read to migrate it.
+
+    The migration reads each lock through an instance of its own, before the
+    entry builds the ones it keeps; an entry already current builds just
+    those, and the first call each makes to its lock is the entry's setup.
+    The old-shape case shows the count does see a migration.
+    """
+    entry = make_entry()
     entry.add_to_hass(hass)
     with when_mock_lock_built(lambda lock: lock) as built:
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
+    kept = [mock_lock(entry, lock_id) for lock_id in entry.data[CONF_LOCKS]]
+    # By identity: two instances of one lock compare equal.
+    migration_reads = [lock for lock in built if not any(lock is k for k in kept)]
+    assert len(migration_reads) == read_for_migration
+    assert all(lock.call_order == ["get_usercodes"] for lock in migration_reads)
+    assert all(lock.call_order[0] == "setup" for lock in kept)
     assert entry.version == CONFIG_ENTRY_VERSION
-    assert entry_users(entry) == {
-        "user1": {CONF_PIN: "1234", CONF_ENABLED: True},
-        "user3": {CONF_PIN: "0123", CONF_ENABLED: True},
-    }
-    assert built == [mock_lock(entry)]
     assert await hass.config_entries.async_unload(entry.entry_id)

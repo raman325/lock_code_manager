@@ -328,9 +328,12 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     check's asks; `noop_set_usercode` records sets that changed nothing, and `call_order`
     the order of everything `service_calls` records. `async_advance_across_deadline`
     checks a wait is held a tick before its deadline and let go a tick after
-  - `MockLCMLock.capabilities` makes the mock a native-user lock reporting what it
-    can hold (`PIN_CAPABILITIES`, `NO_PIN_CAPABILITIES`), so setup's capability
-    check runs against it; `None`, the default, keeps it slot-only.
+  - `MockLCMLock.capabilities` is what the mock reports it can hold
+    (`PIN_CAPABILITIES`, `NO_PIN_CAPABILITIES`). Setting it makes setup run its
+    capability check, which BaseLock runs for native-user providers only; the
+    mock's writes and reads stay slot-level. BaseLock caches a probe that
+    passes, so change it before setup or after a failed check; `None`, the
+    default, keeps the mock slot-only.
     `current_entry` builds an entry already in the current shape, so setting it
     up migrates nothing -- a migration reads the lock through an instance of its
     own, which a test watching what an entry builds or reads would see too
