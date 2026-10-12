@@ -50,7 +50,7 @@ from homeassistant.const import (
     CONF_PIN,
     Platform,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
@@ -1492,6 +1492,11 @@ class MockLCMPushLock(MockLCMLock):
     ``subscribe_error``, when set, is raised by every subscription attempt
     instead of subscribing, which is not counted then. It is set before
     ``when_mock_lock_built`` acts on the lock, so an act can set it.
+
+    A subscription is real: it listens for ``async_fire_mock_lock_use``, the
+    lock integration reporting a code use, and records the use as a provider
+    does. So an instance that never unsubscribed goes on hearing its lock,
+    exactly as a leaked subscription to a real lock would.
     """
 
     async def async_set_usercode(
@@ -1514,6 +1519,7 @@ class MockLCMPushLock(MockLCMLock):
         self.subscribe_calls = 0
         self.unsubscribe_calls = 0
         self.subscribe_error: Exception | None = None
+        self._stop_hearing_uses: Callable[[], None] | None = None
         super().__init__(*args, **kwargs)
 
     @property
@@ -1526,10 +1532,39 @@ class MockLCMPushLock(MockLCMLock):
         if self.subscribe_error is not None:
             raise self.subscribe_error
         self.subscribe_calls += 1
+        # Idempotent, as a provider's subscription must be.
+        if self._stop_hearing_uses is None:
+            self._stop_hearing_uses = self.hass.bus.async_listen(
+                EVENT_MOCK_LOCK_USE, self._async_on_lock_use
+            )
 
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from push-based value updates."""
         self.unsubscribe_calls += 1
+        if self._stop_hearing_uses is not None:
+            self._stop_hearing_uses()
+            self._stop_hearing_uses = None
+
+    @callback
+    def _async_on_lock_use(self, event: Event) -> None:
+        """Record a code use the lock integration reported on this lock."""
+        if event.data[ATTR_ENTITY_ID] == self.lock.entity_id:
+            self.async_fire_code_slot_event(event.data[CONF_SLOT], to_locked=False)
+
+
+# What the mock lock integration fires when a code is used on one of its locks;
+# a push mock's subscription is what hears it.
+EVENT_MOCK_LOCK_USE = f"{LOCK_DEVICE_DOMAIN}_lock_use"
+
+
+@callback
+def async_fire_mock_lock_use(
+    hass: HomeAssistant, lock_entity_id: str, code_slot: int
+) -> None:
+    """Report a use of the code in ``code_slot`` on a lock, as its integration does."""
+    hass.bus.async_fire(
+        EVENT_MOCK_LOCK_USE, {ATTR_ENTITY_ID: lock_entity_id, CONF_SLOT: code_slot}
+    )
 
 
 class MockLockEntity(LockEntity):
@@ -1614,13 +1649,20 @@ class MockCalendarEntity(CalendarEntity):
         return events
 
 
+# Where ``async_setup_mock_lock_entry`` keeps the calendars it added last.
+MOCK_CALENDARS_KEY = "lock_code_manager_calendars"
+
+
 async def async_setup_mock_lock_entry(hass: HomeAssistant) -> MockConfigEntry:
     """
     Set up the mock lock integration and return its config entry.
 
     Gives ``hass`` the two lock entities (``LOCK_1_ENTITY_ID`` and
     ``LOCK_2_ENTITY_ID``) and two calendars, the latter also stored under
-    ``hass.data["lock_code_manager_calendars"]``. A coroutine rather than
+    ``hass.data["lock_code_manager_calendars"]``. Each setup of the entry
+    builds its entities afresh, as a real integration does, so the entry can
+    be reloaded; the calendars keep their events across it, and
+    ``hass.data`` holds the ones currently added. A coroutine rather than
     only a fixture, so a test that builds its own Home Assistant per example
     -- a Hypothesis state machine -- sets up the same locks the suite does.
     The caller registers a config flow for ``LOCK_DEVICE_DOMAIN`` first
@@ -1670,17 +1712,25 @@ async def async_setup_mock_lock_entry(hass: HomeAssistant) -> MockConfigEntry:
         MockPlatform(async_setup_entry=async_setup_entry_lock_platform),
     )
 
-    calendars = hass.data["lock_code_manager_calendars"] = [
-        MockCalendarEntity("test_1"),
-        MockCalendarEntity("test_2"),
-    ]
-
     async def async_setup_entry_calendar_platform(
         hass: HomeAssistant,
         config_entry: ConfigEntry,
         async_add_entities: AddEntitiesCallback,
     ) -> None:
         """Set up test calendar platform via config entry."""
+        # An entity object is added once in its life, so a reload needs new
+        # ones; what the old ones held carries over.
+        previous = hass.data.get(MOCK_CALENDARS_KEY, [])
+        calendars = hass.data[MOCK_CALENDARS_KEY] = [
+            MockCalendarEntity(
+                name,
+                events=next(
+                    (old._events for old in previous if old.unique_id == slugify(name)),
+                    None,
+                ),
+            )
+            for name in ("test_1", "test_2")
+        ]
         async_add_entities(calendars)
 
     mock_platform(

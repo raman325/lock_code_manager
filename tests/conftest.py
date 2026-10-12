@@ -37,6 +37,7 @@ from custom_components.lock_code_manager.providers._base import BaseLock
 
 from .common import (
     BASE_CONFIG,
+    MOCK_CALENDARS_KEY,
     MockCalendarEntity,
     MockLCMLock,
     async_setup_mock_lock_entry,
@@ -304,7 +305,7 @@ def mock_calendars_fixture(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> list[MockCalendarEntity]:
     """Return the mock calendar entities created by mock_lock_config_entry."""
-    return hass.data["lock_code_manager_calendars"]
+    return hass.data[MOCK_CALENDARS_KEY]
 
 
 def get_in_sync_entity_obj(hass: HomeAssistant, entity_id: str):

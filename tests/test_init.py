@@ -1229,7 +1229,22 @@ def _cannot_subscribe(lock: MockLCMPushLock) -> MockLCMPushLock:
     return lock
 
 
-@pytest.mark.xfail(strict=True, reason="latent state-listener leak; see catalog")
+def _require(condition: bool, what: str) -> None:
+    """
+    Fail with ``Failed`` unless ``condition``: a broken setup, not the defect.
+
+    For tests that expect an ``AssertionError``, so one whose setup went
+    wrong cannot pass as the failure it was expecting.
+    """
+    if not condition:
+        pytest.fail(what)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="latent state-listener leak; see catalog",
+)
 async def test_a_lock_dropped_after_its_listener_started_never_sets_up_again(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1243,8 +1258,12 @@ async def test_a_lock_dropped_after_its_listener_started_never_sets_up_again(
     listener, so every reload of the lock's integration runs the dropped
     instance's provider setup again, after the entry has unloaded too. For a
     provider whose setup registers a listener of its own, that is a ghost
-    listener and every event twice. The shared-lock property machine leaves
-    its reload rule out once such a lock exists, for this.
+    listener and every event twice. The shared-lock property machine exempts
+    such an instance from its own check for this, and only that instance.
+
+    Only the last assertion is the defect; everything before it is the setup
+    reaching the state the defect needs, and fails as ``Failed`` if it does
+    not, so a broken setup is never mistaken for the expected failure.
     """
     entry = current_entry("Cannot Subscribe", {1: "1234"})
     entry.add_to_hass(hass)
@@ -1255,22 +1274,30 @@ async def test_a_lock_dropped_after_its_listener_started_never_sets_up_again(
         ),
         when_mock_lock_built(_cannot_subscribe) as built,
     ):
-        assert await hass.config_entries.async_setup(entry.entry_id)
+        _require(await hass.config_entries.async_setup(entry.entry_id), "entry set up")
         await hass.async_block_till_done()
+    _require(len(built) == 1, f"one lock built, not {len(built)}")
     [dropped] = built
-    assert entry.state is ConfigEntryState.LOADED
-    assert (
+    _require(entry.state is ConfigEntryState.LOADED, "entry loaded")
+    _require(
         er.async_get(hass).async_get_entity_id(
             BINARY_SENSOR_DOMAIN,
             DOMAIN,
             build_slot_unique_id(entry.entry_id, 1, ATTR_IN_SYNC, LOCK_1_ENTITY_ID),
         )
-        is None
+        is None,
+        "the lock dropped from the entry",
     )
-    assert await hass.config_entries.async_unload(entry.entry_id)
+    _require(
+        dropped.service_calls["setup"] == [(entry.entry_id,)], "one provider setup"
+    )
+    _require(await hass.config_entries.async_unload(entry.entry_id), "entry unloaded")
     await hass.async_block_till_done()
 
-    assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+    _require(
+        await hass.config_entries.async_reload(mock_lock_config_entry.entry_id),
+        "lock integration reloaded",
+    )
     await hass.async_block_till_done()
 
     assert dropped.service_calls["setup"] == [(entry.entry_id,)]

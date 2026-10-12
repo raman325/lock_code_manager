@@ -12,6 +12,7 @@ import asyncio
 from collections import Counter
 from collections.abc import Callable, Generator
 from datetime import datetime
+import logging
 import time
 from typing import Any
 from unittest.mock import PropertyMock, patch
@@ -25,14 +26,20 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE as TEXT_SERVICE_SET_VALUE,
 )
-from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+)
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 from custom_components import lock_code_manager
 from custom_components.lock_code_manager.const import (
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
@@ -56,10 +63,12 @@ from .common import (
     LIFELONG_TASKS,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    MOCK_CALENDARS_KEY,
     NO_PIN_CAPABILITIES,
     PIN_CAPABILITIES,
     SLOT_1_PIN_ENTITY,
     FaultKind,
+    MockCalendarEntity,
     MockLCMLock,
     MockLCMPushLock,
     _async_step_timers_to,
@@ -67,6 +76,7 @@ from .common import (
     async_advance_across_deadline,
     async_advance_clock,
     async_advance_sync_ticks,
+    async_fire_mock_lock_use,
     async_run_until_quiet,
     async_settle_background,
     async_step_clock_until,
@@ -1336,6 +1346,67 @@ async def test_a_subscribe_error_set_as_the_lock_is_built_is_raised_uncounted(
     lock.setup_push_subscription()
     assert lock.subscribe_calls == 1
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_push_subscription_hears_its_lock_until_it_unsubscribes(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A use the lock integration reports reaches a subscribed push mock, once.
+
+    Subscribing twice still listens once, and unsubscribing stops it.
+    """
+    uses: list[Event] = []
+    hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, uses.append)
+    entry = current_entry("Hears Uses", {1: "1234"})
+    entry.add_to_hass(hass)
+    with patch.dict(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMPushLock},
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    lock = _push_lock(entry, LOCK_1_ENTITY_ID)
+    lock.setup_push_subscription()
+
+    async_fire_mock_lock_use(hass, LOCK_2_ENTITY_ID, 1)
+    async_fire_mock_lock_use(hass, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert [event.data["config_entry_id"] for event in uses] == [entry.entry_id]
+
+    lock.teardown_push_subscription()
+    async_fire_mock_lock_use(hass, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert len(uses) == 1
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_the_mock_lock_entry_reloads_with_its_calendars(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    mock_calendars: list[MockCalendarEntity],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Reloading the mock lock integration brings its calendars back, events kept."""
+    start = dt_util.utcnow()
+    mock_calendars[0].create_event(
+        dtstart=start, dtend=start + TICK_INTERVAL, summary="kept"
+    )
+    caplog.clear()
+
+    assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
+    calendars = hass.data[MOCK_CALENDARS_KEY]
+    assert calendars is not mock_calendars
+    for calendar in calendars:
+        state = hass.states.get(calendar.entity_id)
+        assert state is not None
+        assert state.state != STATE_UNAVAILABLE
+    assert [event.summary for event in calendars[0]._events] == ["kept"]
 
 
 async def test_a_lock_reports_no_capabilities_unless_given_some(lock) -> None:
