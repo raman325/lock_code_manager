@@ -305,9 +305,9 @@ async def test_subscribe_push_updates_called_during_setup(
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        assert not lock._subscribe_called
+        assert lock.subscribe_calls == 0
         await lock.async_setup_internal(mock_lock_config_entry)
-        assert lock._subscribe_called
+        assert lock.subscribe_calls == 1
 
 
 async def test_unsubscribe_push_updates_called_during_unload(
@@ -326,9 +326,9 @@ async def test_unsubscribe_push_updates_called_during_unload(
         await push_lock.async_setup_internal(lcm_config_entry)
 
     # Unload
-    assert not push_lock._unsubscribe_called
+    assert push_lock.unsubscribe_calls == 0
     await push_lock.async_unload(remove_permanently=False)
-    assert push_lock._unsubscribe_called
+    assert push_lock.unsubscribe_calls == 1
 
 
 async def test_subscribe_push_not_called_for_non_push_lock(
@@ -349,7 +349,7 @@ async def test_subscribe_push_not_called_for_non_push_lock(
     ):
         await push_lock.async_setup_internal(lcm_config_entry)
         # subscribe_push_updates should NOT have been called
-        assert not push_lock._subscribe_called
+        assert push_lock.subscribe_calls == 0
 
 
 async def test_async_shutdown_cleans_up_drift_timer(

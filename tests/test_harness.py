@@ -1,0 +1,604 @@
+"""
+Tests for the test harness itself: clock helpers, the time-driven tick, fault knobs.
+
+A helper that silently does nothing makes every test built on it pass for
+the wrong reason, so each one is shown here to do what it says -- and to
+fail loudly, rather than hang, when what it waits for never comes.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any
+from unittest.mock import patch
+
+from freezegun.api import FrozenDateTimeFactory
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from homeassistant.components.text import (
+    ATTR_VALUE,
+    DOMAIN as TEXT_DOMAIN,
+    SERVICE_SET_VALUE as TEXT_SERVICE_SET_VALUE,
+)
+from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
+
+from custom_components.lock_code_manager.const import (
+    DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+    TICK_INTERVAL,
+)
+from custom_components.lock_code_manager.domain.credentials import WriteResult
+from custom_components.lock_code_manager.domain.exceptions import (
+    CodeRejectedError,
+    LockDisconnected,
+    LockOperationFailed,
+)
+from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+
+from .common import (
+    BASE_CONFIG,
+    LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
+    SLOT_1_PIN_ENTITY,
+    FaultKind,
+    MockLCMPushLock,
+    async_advance_sync_ticks,
+    async_run_until_quiet,
+    async_settle_background,
+    async_step_clock_until,
+    async_tick_until,
+    async_trip_slot_breaker,
+    in_sync_entity_id,
+    mock_lock,
+    release_all_faults,
+    sync_status,
+)
+
+# -- Clock helpers ----------------------------------------------------------
+
+
+async def test_step_clock_until_fails_and_cancels_instead_of_hanging(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """A wait the clock never reaches fails the test and cancels what waited."""
+    sleeper = hass.async_create_task(asyncio.sleep(60))
+
+    with pytest.raises(pytest.fail.Exception, match="after 3 clock steps"):
+        await async_step_clock_until(
+            hass, freezer, sleeper.done, max_steps=3, what="the sleeper"
+        )
+
+    assert sleeper.cancelled()
+
+
+async def test_run_until_quiet_fails_on_a_loop_that_never_rests(
+    hass: HomeAssistant,
+) -> None:
+    """Something rescheduling itself forever fails the test, not the run."""
+
+    async def spin() -> None:
+        while True:
+            await asyncio.sleep(0)
+
+    spinner = hass.async_create_task(spin())
+    try:
+        with pytest.raises(pytest.fail.Exception, match="still busy"):
+            await async_run_until_quiet()
+    finally:
+        spinner.cancel()
+        await asyncio.gather(spinner, return_exceptions=True)
+
+
+async def test_settle_background_steps_the_clock_through_a_sleep(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """A background task asleep on the frozen clock finishes by stepping it."""
+    sleeper = hass.async_create_background_task(asyncio.sleep(0.1), "sleeper")
+
+    await async_settle_background(hass, freezer)
+
+    assert sleeper.done()
+    assert not sleeper.cancelled()
+
+
+async def test_advancing_sync_ticks_moves_both_clocks(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """Pending-write deadlines and breaker windows see the time pass."""
+    monotonic, wall = time.monotonic(), dt_util.utcnow()
+
+    await async_advance_sync_ticks(hass, freezer, 3)
+
+    assert time.monotonic() - monotonic >= 3 * TICK_INTERVAL.total_seconds()
+    assert dt_util.utcnow() - wall >= 3 * TICK_INTERVAL
+
+
+async def test_tick_until_fails_on_a_condition_that_never_comes(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """The bound is the failure message, not a hang."""
+    with pytest.raises(pytest.fail.Exception, match="the impossible not reached"):
+        await async_tick_until(
+            hass, freezer, lambda: False, max_ticks=2, what="the impossible"
+        )
+
+
+# -- The time-driven sync tick ------------------------------------------------
+
+
+async def _async_change_pin(hass: HomeAssistant, pin: str) -> None:
+    """Set slot 1's PIN through its text entity."""
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        {ATTR_VALUE: pin},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+
+
+async def test_scheduled_tick_writes_a_changed_pin(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Moving time is enough for the sync to write a new PIN and report in sync.
+
+    Nothing here touches the sync manager: the write can only come from the
+    tick its interval timer schedules.
+    """
+    entry = lock_code_manager_config_entry
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    assert hass.states.get(in_sync).state == STATE_ON
+
+    await _async_change_pin(hass, "4321")
+    assert hass.states.get(in_sync).state == STATE_OFF
+
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=3,
+        what="slot 1 in sync",
+    )
+    assert lock.codes[1] == "4321"
+    assert lock.service_calls["set_usercode"] == [(1, "4321", "test1")]
+
+
+async def test_without_time_passing_no_tick_writes(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    The control for the test above: settle everything, but move no time.
+
+    Only a tick writes, so a PIN change with the clock standing still stays
+    out of sync and never reaches the lock.
+    """
+    entry = lock_code_manager_config_entry
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+
+    await _async_change_pin(hass, "4321")
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert hass.states.get(in_sync).state == STATE_OFF
+    assert lock.codes[1] == "1234"
+    assert not lock.service_calls["set_usercode"]
+
+
+# -- Breakers through real failures -------------------------------------------
+
+
+async def test_breaker_trips_on_real_failures_and_recovers(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Repeated failed writes, one per tick, suspend the slot; a new PIN resumes it.
+
+    The breaker is never touched: what suspends the slot is the sync's own
+    accounting of failures the lock really raised on ticks that really ran.
+    """
+    entry = lock_code_manager_config_entry
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    issue_id = f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
+    await async_advance_sync_ticks(hass, freezer)
+    await _async_change_pin(hass, "4321")
+
+    fault = await async_trip_slot_breaker(hass, freezer, entry, 1)
+
+    assert fault.hits == MAX_SYNC_ATTEMPTS
+    assert sync_status(hass, in_sync) == SyncState.SUSPENDED.value
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+    assert lock.codes[1] == "1234"
+
+    # Suspended means no more attempts, however long the lock is left alone.
+    await async_advance_sync_ticks(hass, freezer, 5)
+    assert fault.hits == MAX_SYNC_ATTEMPTS
+
+    fault.clear()
+    await _async_change_pin(hass, "5555")
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=3,
+        what="slot 1 back in sync",
+    )
+    assert lock.codes[1] == "5555"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_lock_breaker_trips_on_real_disconnects_and_recovers(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A lock that answers nothing suspends its out-of-sync slot; answering resumes it.
+
+    Every call failing is what makes the lock unreachable: a read that
+    succeeds is the lock's breaker's recovery signal.
+    """
+    entry = lock_code_manager_config_entry
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    await _async_change_pin(hass, "4321")
+
+    with lock.fail(None, error=LockDisconnected):
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: sync_status(hass, in_sync) == SyncState.SUSPENDED.value,
+            max_ticks=5,
+            what="slot 1 suspended",
+        )
+    assert lock.codes[1] == "1234"
+
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=5,
+        what="slot 1 back in sync",
+    )
+    assert lock.codes[1] == "4321"
+
+
+async def test_trip_slot_breaker_fails_loudly_on_a_slot_already_in_sync(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A slot with nothing to write never fails, and the helper says so."""
+    entry = lock_code_manager_config_entry
+    await async_advance_sync_ticks(hass, freezer)
+
+    with pytest.raises(pytest.fail.Exception, match="after 0 failed sets"):
+        await async_trip_slot_breaker(hass, freezer, entry, 1)
+
+    assert not mock_lock(entry).faults
+
+
+# -- Fault knobs ----------------------------------------------------------------
+
+
+@pytest.fixture
+def lock(hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry):
+    """Return lock 1's mock, for calling the fake directly."""
+    return mock_lock(lock_code_manager_config_entry)
+
+
+async def test_ignore_acknowledges_a_set_without_applying_it(lock) -> None:
+    """The set reports a change and is recorded; the lock keeps its code."""
+    fault = lock.ignore("set", 1)
+
+    assert await lock.async_set_usercode(1, "9999", "test1") is WriteResult.CONFIRMED
+
+    assert lock.codes[1] == "1234"
+    assert lock.service_calls["set_usercode"][-1] == (1, "9999", "test1")
+    assert fault.hits == 1
+
+
+async def test_ignore_acknowledges_a_clear_without_applying_it(lock) -> None:
+    """The clear reports a change; the code stays."""
+    lock.ignore("clear", 1)
+
+    assert await lock.async_clear_usercode(1) is True
+
+    assert lock.codes[1] == "1234"
+    assert lock.service_calls["clear_usercode"][-1] == (1,)
+
+
+async def test_refuse_raises_the_providers_rejection(lock) -> None:
+    """A refused set and a refused clear both raise ``CodeRejectedError``."""
+    lock.refuse("set", 1)
+    lock.refuse("clear", 2)
+
+    with pytest.raises(CodeRejectedError) as set_err:
+        await lock.async_set_usercode(1, "9999")
+    with pytest.raises(CodeRejectedError) as clear_err:
+        await lock.async_clear_usercode(2)
+
+    assert (set_err.value.code_slot, set_err.value.lock_entity_id) == (
+        1,
+        LOCK_1_ENTITY_ID,
+    )
+    assert clear_err.value.code_slot == 2
+    assert lock.codes == {1: "1234", 2: "5678"}
+
+
+async def test_fail_raises_before_the_lock_acts(lock) -> None:
+    """The default error, a given class, and a given instance."""
+    lock.fail("set", 1, times=1)
+    lock.fail("clear", 1, error=LockDisconnected, times=1)
+    instance = LockOperationFailed("this one")
+    lock.fail("get", error=instance, times=1)
+
+    with pytest.raises(LockOperationFailed, match="injected set failure"):
+        await lock.async_set_usercode(1, "9999")
+    with pytest.raises(LockDisconnected, match="injected clear failure"):
+        await lock.async_clear_usercode(1)
+    with pytest.raises(LockOperationFailed) as read_err:
+        await lock.async_get_usercodes()
+
+    assert read_err.value is instance
+    assert lock.codes[1] == "1234"
+
+
+async def test_times_limits_a_fault_then_it_removes_itself(lock) -> None:
+    """Two failures, then the lock answers again."""
+    fault = lock.fail("set", 1, times=2)
+
+    for _ in range(2):
+        with pytest.raises(LockOperationFailed):
+            await lock.async_set_usercode(1, "9999")
+    assert await lock.async_set_usercode(1, "9999") is WriteResult.CONFIRMED
+
+    assert fault.hits == 2
+    assert fault not in lock.faults
+
+
+async def test_a_fault_matches_only_its_slot_and_operation(lock) -> None:
+    """A set fault on slot 2 leaves slot 2's clears and slot 1's sets alone."""
+    lock.fail("set", 2)
+
+    assert await lock.async_set_usercode(1, "9999") is WriteResult.CONFIRMED
+    assert await lock.async_clear_usercode(2) is True
+    with pytest.raises(LockOperationFailed):
+        await lock.async_set_usercode(2, "8888")
+
+
+async def test_a_read_fault_matches_reads_whose_scope_holds_its_slot(lock) -> None:
+    """A full read covers every managed slot; a read of slot 2 does not cover 1."""
+    lock.fail("get", 1)
+
+    assert await lock.async_get_usercodes([2]) == {
+        2: SlotCredential.known("5678"),
+        1: SlotCredential.known("1234"),
+    }
+    with pytest.raises(LockOperationFailed):
+        await lock.async_get_usercodes()
+
+
+async def _async_answer(task: asyncio.Task[Any]) -> Any:
+    """Return what a released call answered, failing if it is still waiting."""
+    await async_run_until_quiet()
+    assert task.done(), "the call is still waiting"
+    return task.result()
+
+
+async def test_hang_holds_a_write_until_cleared(hass: HomeAssistant, lock) -> None:
+    """Held, nothing is applied; cleared, the write runs as normal."""
+    fault = lock.hang("set", 1)
+    write = hass.async_create_task(lock.async_set_usercode(1, "9999"))
+
+    await fault.async_wait_held()
+    assert not write.done()
+    assert lock.codes[1] == "1234"
+
+    fault.clear()
+    assert await _async_answer(write) is WriteResult.CONFIRMED
+    assert lock.codes[1] == "9999"
+
+
+async def test_drop_reply_applies_the_write_and_never_answers(
+    hass: HomeAssistant, lock
+) -> None:
+    """The lock holds the new code while the caller waits; cleared, it times out."""
+    fault = lock.drop_reply("set", 1)
+    write = hass.async_create_task(lock.async_set_usercode(1, "9999"))
+
+    await fault.async_wait_held()
+    assert not write.done()
+    assert lock.codes[1] == "9999"
+
+    fault.clear()
+    with pytest.raises(LockDisconnected, match="no reply"):
+        await _async_answer(write)
+
+
+async def test_drop_reply_on_a_read(hass: HomeAssistant, lock) -> None:
+    """A read whose answer never comes, until the fault is cleared."""
+    with lock.drop_reply("get") as fault:
+        read = hass.async_create_task(lock.async_get_usercodes())
+        await fault.async_wait_held()
+        assert not read.done()
+
+    with pytest.raises(LockDisconnected):
+        await _async_answer(read)
+
+
+async def test_wait_held_fails_when_nothing_is_held(lock) -> None:
+    """Waiting on a hold that never happens fails instead of waiting forever."""
+    fault = lock.hang("set", 1)
+
+    with pytest.raises(pytest.fail.Exception, match="no set held"):
+        await fault.async_wait_held()
+
+
+async def test_clearing_faults_releases_every_held_call(
+    hass: HomeAssistant, lock
+) -> None:
+    """``clear_faults`` and ``release_all_faults`` both let a held call go."""
+    first = lock.hang("set", 1)
+    held_first = hass.async_create_task(lock.async_set_usercode(1, "9999"))
+    await first.async_wait_held()
+    lock.clear_faults()
+    assert await _async_answer(held_first) is WriteResult.CONFIRMED
+    assert not lock.faults
+
+    second = lock.hang("clear", 2)
+    held_second = hass.async_create_task(lock.async_clear_usercode(2))
+    await second.async_wait_held()
+    release_all_faults()
+    assert await _async_answer(held_second) is True
+
+
+async def test_a_hang_holds_a_sync_write_in_flight(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A tick's write held at the lock leaves the slot syncing until released.
+
+    ``settle=False`` is what lets the tick run while the write stays held:
+    settling waits for every task, the held one included.
+    """
+    entry = lock_code_manager_config_entry
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    await _async_change_pin(hass, "4321")
+    fault = lock.hang("set", 1)
+
+    await async_advance_sync_ticks(hass, freezer, settle=False)
+    await fault.async_wait_held()
+
+    assert sync_status(hass, in_sync) == SyncState.SYNCING.value
+    assert lock.codes[1] == "1234"
+
+    fault.clear()
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=3,
+        what="slot 1 in sync",
+    )
+    assert lock.codes[1] == "4321"
+
+
+async def test_a_write_left_held_does_not_hang_teardown(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    End the test with a sync write still held, and leave it to the harness.
+
+    Unloading the entry stops the sync managers, which wait on the in-flight
+    tick, and on a frozen clock that wait never ends. The conftest hook
+    releases every fault between the test body and teardown; without it this
+    test passes its body and then hangs until pytest-timeout errors it.
+    """
+    entry = lock_code_manager_config_entry
+    await async_advance_sync_ticks(hass, freezer)
+    await _async_change_pin(hass, "4321")
+    fault = mock_lock(entry).hang("set", 1)
+
+    await async_advance_sync_ticks(hass, freezer, settle=False)
+
+    await fault.async_wait_held()
+
+
+async def test_a_fault_used_as_a_context_manager_clears_on_exit(lock) -> None:
+    """Leaving the block puts the lock back to answering."""
+    with lock.refuse("set", 1):
+        with pytest.raises(CodeRejectedError):
+            await lock.async_set_usercode(1, "9999")
+
+    assert not lock.faults
+    assert await lock.async_set_usercode(1, "9999") is WriteResult.CONFIRMED
+
+
+@pytest.mark.parametrize("kind", [FaultKind.IGNORE, FaultKind.REFUSE])
+@pytest.mark.parametrize("operation", ["get", None])
+async def test_write_only_faults_need_a_write(lock, kind, operation) -> None:
+    """A read cannot be ignored or refused, so asking for that is an error."""
+    with pytest.raises(ValueError, match="set or clear"):
+        lock.add_fault(kind, operation)
+
+
+# -- Recording ----------------------------------------------------------------
+
+
+async def test_noop_clears_are_recorded_apart_from_clears(lock) -> None:
+    """A clear of an empty slot is counted, and never as a clear that changed it."""
+    assert await lock.async_clear_usercode(3) is False
+    assert await lock.async_clear_usercode(3) is False
+    assert await lock.async_clear_usercode(1) is True
+
+    assert lock.service_calls["noop_clear_usercode"] == [(3,), (3,)]
+    assert lock.service_calls["clear_usercode"] == [(1,)]
+
+
+async def test_provider_setup_is_recorded(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Each lock's provider setup ran once, for this entry."""
+    entry = lock_code_manager_config_entry
+    for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        assert mock_lock(entry, lock_entity_id).service_calls["setup"] == [
+            (entry.entry_id,)
+        ]
+
+
+async def test_push_subscriptions_are_counted(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Setting an entry up subscribes once per lock; unloading it unsubscribes."""
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
+    entry.add_to_hass(hass)
+    with patch.dict(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMPushLock},
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    locks = [
+        mock_lock(entry, lock_id) for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
+    ]
+    assert all(isinstance(lock, MockLCMPushLock) for lock in locks)
+    assert [(lock.subscribe_calls, lock.unsubscribe_calls) for lock in locks] == [
+        (1, 0),
+        (1, 0),
+    ]
+
+    locks[0].subscribe_push_updates()
+    assert locks[0].subscribe_calls == 2
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    assert [lock.unsubscribe_calls for lock in locks] == [1, 1]

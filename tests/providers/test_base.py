@@ -1,13 +1,12 @@
 """Test base class."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection
+from collections.abc import AsyncIterator, Collection
 import contextlib
 from datetime import timedelta
 import itertools
 import logging
 import time
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -63,23 +62,16 @@ from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
 )
-from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, MockLCMLock
+from tests.common import (
+    BASE_CONFIG,
+    CLOCK_STEP,
+    LOCK_1_ENTITY_ID,
+    MockLCMLock,
+    async_run_paced,
+    async_settle_background,
+)
 
 TEST_OPERATION_DELAY = 0.01
-
-# Not a divisor of the delay, so no step lands exactly on a due time: frozen
-# monotonic readings are epoch-sized floats, and a step meeting the due time
-# exactly could round either way.
-_CLOCK_STEP = 0.003
-# Bounds on stepping the clock, in steps. Running the test's own operations
-# takes a few; letting the work they set off reach the lock takes a few per
-# operation. Both stay far short of the two-second sync tick, so stepping
-# never fires a timer that starts more work.
-_MAX_STEPS_FOR_OPERATIONS = 50
-_MAX_STEPS_FOR_BACKGROUND = 200
-# A guard against something rescheduling itself forever, not a tuning knob:
-# the loop goes quiet within a handful of turns here.
-_MAX_TURNS_TO_QUIET = 1000
 
 
 @pytest.fixture
@@ -99,96 +91,8 @@ async def paced_lock(
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     yield lock
     lock._min_operation_delay = 0.0
-    await _settle_background(hass, freezer)
+    await async_settle_background(hass, freezer)
     lock._last_operation_time = 0.0
-
-
-async def _run_until_quiet() -> None:
-    """
-    Yield until the event loop has nothing else ready to run.
-
-    A wait that comes due wakes its task, the task runs its operation and
-    wakes the next waiter, and that one reads the clock and starts its own
-    wait -- a loop turn per hop. Running until nothing is ready finishes the
-    whole chain at the current time, however many turns it takes.
-    """
-    loop = asyncio.get_running_loop()
-    for _ in range(_MAX_TURNS_TO_QUIET):
-        await asyncio.sleep(0)
-        if not loop._ready:  # type: ignore[attr-defined]
-            return
-    pytest.fail(f"event loop still busy after {_MAX_TURNS_TO_QUIET} turns")
-
-
-def _unfinished_tasks(hass: HomeAssistant) -> list[asyncio.Task[Any]]:
-    """Return the tasks Home Assistant tracks that have not finished."""
-    return [task for task in hass._tasks | hass._background_tasks if not task.done()]
-
-
-async def _step_clock_until(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    done: Callable[[], bool],
-    max_steps: int,
-    what: str,
-) -> None:
-    """
-    Step the frozen clock until ``done``, failing after ``max_steps``.
-
-    A failure cancels every unfinished task first. Left waiting on the frozen
-    clock, they would hang teardown instead of letting the test fail.
-    """
-    for _ in range(max_steps):
-        if done():
-            return
-        freezer.tick(_CLOCK_STEP)
-        await _run_until_quiet()
-    if done():
-        return
-    for task in _unfinished_tasks(hass):
-        task.cancel()
-    await _run_until_quiet()
-    pytest.fail(f"{what} still waiting after {max_steps} clock steps")
-
-
-async def _run_paced(
-    hass: HomeAssistant, freezer: FrozenDateTimeFactory, *operations: Awaitable[Any]
-) -> None:
-    """
-    Run ``operations`` together, stepping the frozen clock until all finish.
-
-    Each starts eagerly, so one that need not wait reaches the lock before
-    the clock moves. Raises what the first failing operation raised.
-    """
-    tasks = [hass.async_create_task(op, eager_start=True) for op in operations]
-    await _step_clock_until(
-        hass,
-        freezer,
-        lambda: all(task.done() for task in tasks),
-        _MAX_STEPS_FOR_OPERATIONS,
-        "operations",
-    )
-    await asyncio.gather(*tasks)
-
-
-async def _settle_background(
-    hass: HomeAssistant, freezer: FrozenDateTimeFactory
-) -> None:
-    """
-    Step the frozen clock until every task Home Assistant tracks finishes.
-
-    What the test's operations set off -- the confirmation read after a
-    write, the sync manager putting back the PIN the test overwrote --
-    waits its turn on the same clock, so it reaches the lock only as the
-    clock moves.
-    """
-    await _step_clock_until(
-        hass,
-        freezer,
-        lambda: not _unfinished_tasks(hass),
-        _MAX_STEPS_FOR_BACKGROUND,
-        "background lock work",
-    )
 
 
 def _assert_paced(run_times: list[float], start: float) -> None:
@@ -738,20 +642,20 @@ async def test_rate_limiting_set_usercode(
     await _arm_rate_limit(hass, paced_lock)
     start = time.monotonic()
 
-    await _run_paced(
+    await async_run_paced(
         hass, freezer, paced_lock.async_internal_set_usercode(1, "1111", "Test 1")
     )
     # Half the delay passes on its own, so the second waits only the rest.
     freezer.tick(TEST_OPERATION_DELAY / 2)
-    await _run_paced(
+    await async_run_paced(
         hass, freezer, paced_lock.async_internal_set_usercode(2, "2222", "Test 2")
     )
 
-    await _settle_background(hass, freezer)
+    await async_settle_background(hass, freezer)
 
     _assert_paced(paced_lock.run_times, start)
     first, second = paced_lock.run_times[:2]
-    assert second - first < TEST_OPERATION_DELAY + _CLOCK_STEP
+    assert second - first < TEST_OPERATION_DELAY + CLOCK_STEP
     assert paced_lock.service_calls["set_usercode"][:2] == [
         (1, "1111", "Test 1"),
         (2, "2222", "Test 2"),
@@ -770,13 +674,13 @@ async def test_rate_limiting_mixed_operations(
     await _arm_rate_limit(hass, paced_lock)
     start = time.monotonic()
 
-    await _run_paced(
+    await async_run_paced(
         hass, freezer, paced_lock.async_internal_set_usercode(1, "1111", "Test")
     )
     # A clear right after a set waits the whole delay: the pacing is per lock,
     # not per operation type.
-    await _run_paced(hass, freezer, paced_lock.async_internal_clear_usercode(2))
-    await _settle_background(hass, freezer)
+    await async_run_paced(hass, freezer, paced_lock.async_internal_clear_usercode(2))
+    await async_settle_background(hass, freezer)
 
     _assert_paced(paced_lock.run_times, start)
     assert paced_lock.service_calls["clear_usercode"] == [(2,)]
@@ -792,8 +696,8 @@ async def test_rate_limiting_get_usercodes(
     await _arm_rate_limit(hass, paced_lock)
     start = time.monotonic()
 
-    await _run_paced(hass, freezer, paced_lock.async_internal_get_usercodes())
-    await _run_paced(hass, freezer, paced_lock.async_internal_get_usercodes())
+    await async_run_paced(hass, freezer, paced_lock.async_internal_get_usercodes())
+    await async_run_paced(hass, freezer, paced_lock.async_internal_get_usercodes())
 
     assert len(paced_lock.run_times) == 2
     _assert_paced(paced_lock.run_times, start)
@@ -811,7 +715,7 @@ async def test_operations_are_serialized(
 
     # Operations that overlapped would wait out the same delay side by side
     # and reach the lock together.
-    await _run_paced(
+    await async_run_paced(
         hass,
         freezer,
         *(
@@ -820,7 +724,7 @@ async def test_operations_are_serialized(
         ),
     )
 
-    await _settle_background(hass, freezer)
+    await async_settle_background(hass, freezer)
 
     _assert_paced(paced_lock.run_times, start)
     assert paced_lock.service_calls["set_usercode"][:3] == [
@@ -840,17 +744,17 @@ async def test_connection_failure_does_not_rate_limit_next_operation(
 
     paced_lock.set_connected(False)
     with pytest.raises(LockDisconnected):
-        await _run_paced(
+        await async_run_paced(
             hass, freezer, paced_lock.async_internal_set_usercode(1, "1111", "Test 1")
         )
 
     # The failed attempt never reached the lock, so it is not an operation to
     # wait after: the next one runs at once.
     paced_lock.set_connected(True)
-    await _run_paced(
+    await async_run_paced(
         hass, freezer, paced_lock.async_internal_set_usercode(1, "2222", "Test 2")
     )
-    await _settle_background(hass, freezer)
+    await async_settle_background(hass, freezer)
 
     _assert_paced(paced_lock.run_times, start)
     assert paced_lock.service_calls["set_usercode"][0] == (1, "2222", "Test 2")
