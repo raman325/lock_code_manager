@@ -15,7 +15,11 @@ from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from zwave_js_server.const import CommandClass, NodeStatus
-from zwave_js_server.const.command_class.access_control import UserCredentialType
+from zwave_js_server.const.command_class.access_control import (
+    SetUserResult,
+    UserCredentialType,
+    UserCredentialUserType,
+)
 from zwave_js_server.const.command_class.lock import (
     LOCK_USERCODE_PROPERTY,
     LOCK_USERCODE_STATUS_PROPERTY,
@@ -24,6 +28,7 @@ from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
 )
 from zwave_js_server.exceptions import FailedZWaveCommand
+from zwave_js_server.model.access_control import SetUserOptions
 from zwave_js_server.model.node import Node
 from zwave_js_server.util.lock import get_usercode
 
@@ -44,6 +49,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from tests.common import (
     async_advance_clock,
+    async_run_until_quiet,
     async_tick_until,
     code_entity_id,
     in_sync_entity_id,
@@ -80,7 +86,8 @@ def record(node: Node) -> list[tuple[Any, ...]]:
     """
     Record the node events the client delivers, in order, as short tuples.
 
-    Value events record (event, property, key, new value); access-control
+    Value events record (event, property, key, new value), metadata events
+    (event, property, key, metadata type); access-control
     events (event, slot or user, data); notifications (event, type, event).
     """
     seen: list[tuple[Any, ...]] = []
@@ -88,9 +95,18 @@ def record(node: Node) -> list[tuple[Any, ...]]:
     def on(name: str):
         def handler(event: dict[str, Any]) -> None:
             args = event.get("args")
-            if name.startswith(("value", "metadata")):
+            if name.startswith("value"):
                 seen.append(
                     (name, args["property"], args["propertyKey"], args.get("newValue"))
+                )
+            elif name.startswith("metadata"):
+                seen.append(
+                    (
+                        name,
+                        args["property"],
+                        args["propertyKey"],
+                        args["metadata"]["type"],
+                    )
                 )
             elif name.startswith("credential"):
                 seen.append((name, args.credential_slot, getattr(args, "data", None)))
@@ -188,8 +204,8 @@ class TestUserCodeNode:
         FakeZWaveLock(zwave_client, lock_schlage_be469, supported_users=6)
 
         assert seen[-4:] == [
-            ("metadata updated", LOCK_USERCODE_STATUS_PROPERTY, 6, None),
-            ("metadata updated", LOCK_USERCODE_PROPERTY, 6, None),
+            ("metadata updated", LOCK_USERCODE_STATUS_PROPERTY, 6, "number"),
+            ("metadata updated", LOCK_USERCODE_PROPERTY, 6, "string"),
             ("value added", LOCK_USERCODE_STATUS_PROPERTY, 6, UserIDStatus.AVAILABLE),
             ("value added", LOCK_USERCODE_PROPERTY, 6, ""),
         ]
@@ -449,6 +465,103 @@ class TestSupervisedNode:
         assert fake_zwave_lock.holds(3) == "4321"
 
 
+class TestSupervisionComesFromTheDump:
+    """Whether Sets are supervised is the node's to say (DRV:8044-8051)."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, request: pytest.FixtureRequest, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The BE469 dump, with Supervision CC when the test is parametrized so."""
+        if hasattr(request, "param"):
+            return supervised_lock_state(lock_schlage_be469_state)
+        return lock_schlage_be469_state
+
+    async def test_an_outcome_on_a_node_without_supervision_is_refused(
+        self, zwave_client, lock_schlage_be469: Node
+    ) -> None:
+        """The BE469 advertises no Supervision CC, so no Set of it is supervised."""
+        with pytest.raises(ValueError, match="Supervision CC"):
+            FakeZWaveLock(
+                zwave_client, lock_schlage_be469, supervision=SupervisionStatus.SUCCESS
+            )
+
+    @pytest.mark.parametrize(
+        "lock_schlage_be469_state",
+        [pytest.param(None, id="supervised")],
+        indirect=True,
+    )
+    async def test_a_supervised_node_supervises_by_default(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """Success, so no read-back (AC:1195-1199)."""
+        await lock_helpers.async_set_credential(
+            lock_schlage_be469, 3, PIN, "4321", credential_slot=3
+        )
+
+        assert [(e.operation, e.slot) for e in fake_zwave_lock.exchanges] == [
+            ("set", 3)
+        ]
+
+    @pytest.mark.parametrize(
+        "lock_schlage_be469_state",
+        [pytest.param(None, id="supervised")],
+        indirect=True,
+    )
+    async def test_no_support_resends_unsupervised_and_reads_back(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """
+        NoSupport: the driver remembers it and resends unsupervised (DRV:8052-8064).
+
+        So the read-back decides, with the version 1 asterisk tolerance
+        (AC:245-265), and the next Set goes out unsupervised at once.
+        """
+        fake_zwave_lock.supervision = SupervisionStatus.NO_SUPPORT
+        fake_zwave_lock.code_display = "masked"
+
+        await lock_helpers.async_set_credential(
+            lock_schlage_be469, 3, PIN, "4321", credential_slot=3
+        )
+        await lock_helpers.async_set_credential(
+            lock_schlage_be469, 4, PIN, "8765", credential_slot=4
+        )
+
+        assert [(e.operation, e.slot) for e in fake_zwave_lock.exchanges] == [
+            ("set", 3),
+            ("set", 3),
+            ("get", 3),
+            ("set", 4),
+            ("get", 4),
+        ]
+        assert fake_zwave_lock.codes == {1: "9999", 2: "1234", 3: "4321", 4: "8765"}
+
+    @pytest.mark.parametrize(
+        "lock_schlage_be469_state",
+        [pytest.param(None, id="supervised")],
+        indirect=True,
+    )
+    @pytest.mark.parametrize(
+        "fake_zwave_lock_options",
+        [{"interviewed": False, "supervision": SupervisionStatus.SUCCESS}],
+    )
+    async def test_a_supervised_success_persists_values_without_metadata(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """``#persistCachedUserCode`` only sets the two values (AC:1683-1699)."""
+        seen = record(lock_schlage_be469)
+
+        await lock_helpers.async_set_credential(
+            lock_schlage_be469, 6, PIN, "4321", credential_slot=6
+        )
+
+        assert seen == [
+            ("value added", LOCK_USERCODE_STATUS_PROPERTY, 6, UserIDStatus.ENABLED),
+            ("value added", LOCK_USERCODE_PROPERTY, 6, "4321"),
+            ("credential added", 6, "4321"),
+        ]
+
+
 class TestCodeDisplay:
     """What the read-back sees on locks that do not show their codes."""
 
@@ -601,7 +714,11 @@ class TestCapabilities:
         """
         A slot past the lock's capacity reports StatusNotAvailable (MOCK_UC respondToUserGet).
 
-        Which removes its cached values (UCC:255-261).
+        ``persistUserCode`` removes both values, then both metadata (UCC:255-261).
+        Each metadata removal still raises ``metadata updated``, carrying the
+        default "any" the node falls back to (VDB:411-451, VAL:95-121), from
+        which the client recreates the value, valueless. A later report of
+        the slot creates metadata and adds the values again.
         """
         fake_zwave_lock.reinterview()
         fake_zwave_lock.capacity = 2
@@ -609,9 +726,23 @@ class TestCapabilities:
 
         fake_zwave_lock.report(5)
 
-        assert [e[:3] for e in seen] == [
-            ("value removed", LOCK_USERCODE_STATUS_PROPERTY, 5),
-            ("value removed", LOCK_USERCODE_PROPERTY, 5),
+        assert seen == [
+            ("value removed", LOCK_USERCODE_STATUS_PROPERTY, 5, None),
+            ("value removed", LOCK_USERCODE_PROPERTY, 5, None),
+            ("metadata updated", LOCK_USERCODE_STATUS_PROPERTY, 5, "any"),
+            ("metadata updated", LOCK_USERCODE_PROPERTY, 5, "any"),
+        ]
+        assert get_usercode(lock_schlage_be469, 5)["in_use"] is None
+        seen.clear()
+
+        fake_zwave_lock.capacity = 30
+        fake_zwave_lock.program(5, "5555")
+
+        assert seen == [
+            ("metadata updated", LOCK_USERCODE_STATUS_PROPERTY, 5, "number"),
+            ("metadata updated", LOCK_USERCODE_PROPERTY, 5, "string"),
+            ("value added", LOCK_USERCODE_STATUS_PROPERTY, 5, UserIDStatus.ENABLED),
+            ("value added", LOCK_USERCODE_PROPERTY, 5, "5555"),
         ]
 
 
@@ -830,6 +961,65 @@ class TestFaults:
         assert await ac.get_credential(PIN, 1) is None
         assert (await ac.get_credential(PIN, 1)).data == "9999"
         assert fault.hits == 1
+
+    async def test_a_lost_set_leaves_get_faults_for_later_reads(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """
+        A Set whose replies are lost decides its own read-back; a ``get`` fault waits.
+
+        The verification read's outcome follows from the lost Set
+        (AC:1186-1194), so it meets no fault meant for a later read.
+        """
+        fake_zwave_lock.drop_reply("set", 3)
+        later = fake_zwave_lock.drop_reply("get", 3, times=1)
+
+        with pytest.raises(HomeAssistantError):
+            await lock_helpers.async_set_credential(
+                lock_schlage_be469, 3, PIN, "4321", credential_slot=3
+            )
+        assert later.hits == 0
+
+        assert await lock_schlage_be469.access_control.get_credential(PIN, 3) is None
+        assert later.hits == 1
+
+    async def test_clear_faults_releases_a_spent_fault_still_holding(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        lock_schlage_be469: Node,
+    ) -> None:
+        """
+        A ``times=1`` hang is spent once it holds, and still released (as ``MockLCMLock``).
+
+        Waits on the loop going quiet, not on clock steps: nothing here runs
+        in an executor thread.
+        """
+        fault = fake_zwave_lock.hang("set", 3, times=1)
+        task = hass.async_create_task(
+            lock_helpers.async_set_credential(
+                lock_schlage_be469, 3, PIN, "4321", credential_slot=3
+            )
+        )
+        await fault.async_wait_held()
+        assert fault not in fake_zwave_lock.faults
+
+        fake_zwave_lock.clear_faults()
+        await async_run_until_quiet()
+
+        assert task.done()
+        assert fake_zwave_lock.holds(3) == "4321"
+
+    @pytest.mark.parametrize(
+        ("knob", "operation"),
+        [("ignore", "get"), ("refuse", "user"), ("ignore", None), ("refuse", None)],
+    )
+    async def test_a_fault_that_cannot_happen_is_refused(
+        self, fake_zwave_lock: FakeZWaveLock, knob: str, operation: str | None
+    ) -> None:
+        """Only a Set that stores or empties a slot is ignored or refused (as ``LockFault``)."""
+        with pytest.raises(ValueError, match="set or clear"):
+            getattr(fake_zwave_lock, knob)(operation)
 
     async def test_an_unmodeled_command_fails_loudly(
         self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
@@ -1230,3 +1420,140 @@ class TestUserCredentialCache:
             await fake_e2e_lock.async_set_usercode(4, "2468")
 
         assert fake_zwave_lock.holds(4) is None
+
+    async def test_a_delete_only_removes_a_credential_its_user_owns(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node, user: int
+    ) -> None:
+        """
+        A non-owner's Delete leaves the code, yet reports it deleted (MOCK_U3C:202-214, 1515-1530).
+
+        The driver believes the report: it drops its cached entry
+        (U3CC:2874-2925) and announces the deletion, so its cache and the
+        lock part ways.
+        """
+        other = await lock_helpers.async_set_user(lock_schlage_be469, user_name="b")
+        seen = record(lock_schlage_be469)
+
+        await lock_helpers.async_delete_credential(
+            lock_schlage_be469, other["user_id"], PIN, 3
+        )
+
+        assert fake_zwave_lock.holds(3) == "4321"
+        assert seen == [("credential deleted", 3, None)]
+        assert (
+            await lock_schlage_be469.access_control.get_all_credentials_cached() == []
+        )
+
+    async def test_a_delete_for_user_zero_is_ignored(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node, user: int
+    ) -> None:
+        """
+        (user 0, type, slot) is no valid Delete; the lock ignores it (MOCK_U3C:1510-1513).
+
+        No report, so the driver answers Error_Unknown (AC:158-161).
+        """
+        with pytest.raises(HomeAssistantError) as err:
+            await lock_helpers.async_delete_credential(lock_schlage_be469, 0, PIN, 3)
+
+        assert err.value.translation_key == "credential_rejected_unknown"
+        assert fake_zwave_lock.holds(3) == "4321"
+        assert (
+            len(await lock_schlage_be469.access_control.get_all_credentials_cached())
+            == 1
+        )
+
+    async def test_the_walk_follows_the_cursor_and_stops_where_a_report_is_lost(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node, user: int
+    ) -> None:
+        """
+        Get (0, None, 0), then each report's next pointer (AC:1747-1851).
+
+        The range between two credentials is purged as the walk passes it;
+        a lost report ends the walk there, purging nothing after it
+        (AC:1784-1786).
+        """
+        for slot in (4, 7):
+            # Cached from the lock's own report, then gone without one.
+            fake_zwave_lock.program(slot, f"{slot}{slot}{slot}{slot}")
+            del fake_zwave_lock.credentials[(PIN, slot)]
+        fake_zwave_lock.credentials[(PIN, 5)] = (user, "1357")
+        fake_zwave_lock.drop_reply("get", 5)
+        ac = lock_schlage_be469.access_control
+
+        credentials = await ac.get_all_credentials()
+
+        assert [(c.slot, c.data) for c in credentials] == [(3, "4321")]
+        gets = [e.slot for e in fake_zwave_lock.exchanges if e.operation == "get"]
+        assert gets == [0, 5]
+        assert [c.slot for c in await ac.get_all_credentials_cached()] == [3, 7]
+
+    async def test_a_lost_report_still_leaves_the_lock_its_own_checks(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node, user: int
+    ) -> None:
+        """
+        Only the report is lost: the lock refused the duplicate all the same.
+
+        So the driver answers Error_Unknown (AC:158-161) and the lock does
+        not hold the code (MOCK_U3C:1663-1683).
+        """
+        other = await lock_helpers.async_set_user(lock_schlage_be469, user_name="b")
+        fake_zwave_lock.drop_reply("set", 4)
+
+        with pytest.raises(HomeAssistantError) as err:
+            await lock_helpers.async_set_credential(
+                lock_schlage_be469, other["user_id"], PIN, "4321", credential_slot=4
+            )
+
+        assert err.value.translation_key == "credential_rejected_unknown"
+        assert fake_zwave_lock.holds(4) is None
+
+    async def test_a_bundled_credential_is_checked_after_the_user_is_added(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """
+        ``addUser`` adds the user, then ``setCredential`` checks the slot (AC:649-654, 1132-1135).
+
+        So a slot out of range raises Argument_Invalid with the user already
+        on the lock.
+        """
+        with pytest.raises(FailedZWaveCommand) as err:
+            await lock_helpers.async_set_user(
+                lock_schlage_be469,
+                user_name="a",
+                credential_type=PIN,
+                credential_data="4321",
+                credential_slot=31,
+            )
+
+        assert err.value.zwave_error_code == ZWaveErrorCode.ARGUMENT_INVALID
+        assert list(fake_zwave_lock.users) == [1]
+        assert fake_zwave_lock.credentials == {}
+
+    @pytest.mark.parametrize(
+        ("user_id", "options"),
+        [
+            pytest.param(31, SetUserOptions(user_name="a"), id="past_the_count"),
+            pytest.param(
+                2,
+                SetUserOptions(user_type=UserCredentialUserType.NON_ACCESS),
+                id="unadvertised_type",
+            ),
+        ],
+    )
+    async def test_a_user_set_the_lock_ignores_is_unknown(
+        self,
+        fake_zwave_lock: FakeZWaveLock,
+        lock_schlage_be469: Node,
+        user_id: int,
+        options: SetUserOptions,
+    ) -> None:
+        """
+        The lock ignores a User Set past its count or of an unadvertised type.
+
+        CC:0083.01.05.11.014/.030 (MOCK_U3C:821-843); no report is
+        Error_Unknown (AC:139-142).
+        """
+        result = await lock_schlage_be469.access_control.set_user(user_id, options)
+
+        assert result is SetUserResult.ERROR_UNKNOWN
+        assert user_id not in fake_zwave_lock.users

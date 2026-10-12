@@ -379,19 +379,23 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     `FailedZWaveCommand` 322 before any traffic.
   - Lock knobs: `supported_users`/`interviewed` (capacity, and whether the interview cached it:
     `reinterview()` or the provider's `getUsersCount` recovery caches it later), `code_display`
-    (`clear`, `masked`, `withheld`), `supervision` (`SupervisionStatus`, None for no Supervision
-    CC), `rejects_duplicates`/`duplicate_parameters` (refuse a code another slot holds and send
+    (`clear`, `masked`, `withheld`), `supervision` (Sets are supervised only on a dump advertising
+    Supervision CC; there it picks the reported outcome -- Success by default, Working, Fail,
+    NoSupport, after which the driver resends unsupervised -- and it is refused elsewhere),
+    `rejects_duplicates`/`duplicate_parameters` (refuse a code another slot holds and send
     Access Control notification 15 -- User Code CC cannot report it in-band), `codes` (what the
     lock holds when the dump caches asterisks). User Credential CC: `max_users`, `pin_slots`,
     `max_user_name_length`, `max_credential_hash_length` (above 0: no data read back);
-    duplicates are rejected in-band.
+    duplicates are rejected in-band, a Delete removes only a credential its user owns (yet is
+    reported deleted), and fresh reads follow the driver's cursor walk.
   - The lock acting on its own: `program(slot, code)` (keypad change, reported),
     `send_user_code_report(slot, status, code)` (any report, stale ones included), `report`,
     `notify_access_control`, `keypad_unlock`, `mark_dead`/`mark_alive`, `emit_statistics`
     (counters also move per exchange: `commandsTX`, `commandsRX`, `commandsDroppedTX`,
     `timeoutResponse`).
-  - Faults, named after `MockLCMLock`'s and returning a `NodeFault` (`times`, `hits`, `held`,
-    `async_wait_held`, context manager), act on radio exchanges -- `set`, `clear`, `get`
+  - Faults, named after `MockLCMLock`'s (ignore and refuse only on `set`/`clear`) and returning
+    a `NodeFault` (`times`, `hits`, `held`, `async_wait_held`, context manager), act on radio
+    exchanges -- `set`, `clear`, `get`
     (any Get: fresh read, walk, verification read), `user`: `ignore` (acknowledged, not
     applied; a supervised one reports Success anyway), `refuse` (not applied; supervised: Fail),
     `fail` (never acknowledged: `FailedZWaveCommand`, 204 by default), `hang`, `slow`,

@@ -256,6 +256,10 @@ class FaultKind(StrEnum):
     SLOW = "slow"
 
 
+# Only a Set that stores or empties a slot can be ignored or refused.
+_WRITE_ONLY_FAULTS = frozenset({FaultKind.IGNORE, FaultKind.REFUSE})
+
+
 @dataclass(eq=False)
 class NodeFault:
     """
@@ -301,6 +305,8 @@ class NodeFault:
         """Stop matching exchanges, and let any exchange held go."""
         if self in self.lock.faults:
             self.lock.faults.remove(self)
+        if self in self.lock.installed_faults:
+            self.lock.installed_faults.remove(self)
         untrack_fault(self)
         self._released.set()
 
@@ -390,9 +396,12 @@ class FakeZWaveLock:
     - ``code_display`` is what the lock puts in a report's code field for an
       occupied slot: the code, an asterisk per digit (``masked``), or nothing
       (``withheld``: zero padding, which the driver strips to "", UCC:1556).
-    - ``supervision`` is the Supervision status the lock reports for a Set
-      it applied, or None for a node without Supervision CC (the BE469). A Set
-      it did not apply is reported ``FAIL``; ``ignore`` makes it lie.
+    - ``supervision``: whether Sets are supervised comes from the dump
+      (``supervised_lock_state``); on such a node this chooses what the lock
+      reports for a Set it applies -- Success (the default), Working, Fail
+      (and it applies nothing) or NoSupport (the driver resends unsupervised)
+      -- and it is refused on a node without Supervision CC. A Set the lock
+      did not apply is reported Fail; ``ignore`` makes it lie.
     - ``rejects_duplicates``: the lock refuses a code another slot holds, and
       announces it with Access Control notification 15 (``duplicate_parameters``
       as its event parameters, if any). User Code CC has no in-band
@@ -433,12 +442,18 @@ class FakeZWaveLock:
         self.client = client
         self.node = node
         self.code_display: CodeDisplay = code_display
+        # Remembered by the driver once a Set came back NoSupport (DRV:8058-8063).
+        self._uc_supervision_unsupported = False
+        self._supervision: SupervisionStatus | None = None
         self.supervision = supervision
         self.rejects_duplicates = rejects_duplicates
         self.duplicate_parameters = duplicate_parameters
         self.max_user_name_length = max_user_name_length
         self.max_credential_hash_length = max_credential_hash_length
+        # Faults still matching exchanges, and every fault not yet cleared
+        # (spent ones may still hold the exchange they met last).
         self.faults: list[NodeFault] = []
+        self.installed_faults: list[NodeFault] = []
         # Every server command the fake answered, and every radio exchange.
         self.commands: list[dict[str, Any]] = []
         self.exchanges: list[_Exchange] = []
@@ -469,6 +484,31 @@ class FakeZWaveLock:
     # ------------------------------------------------------------------
     # The lock, seen from the test
     # ------------------------------------------------------------------
+
+    @property
+    def supervision(self) -> SupervisionStatus | None:
+        """Return the Supervision status the lock reports for a Set, if supervised."""
+        return self._supervision
+
+    @supervision.setter
+    def supervision(self, status: SupervisionStatus | None) -> None:
+        """
+        Choose the outcome a supervised Set reports; Success by default.
+
+        Whether a Set is supervised at all is the dump's to say: the driver
+        supervises only for a node advertising Supervision CC
+        (``SupervisionCC.mayUseSupervision``), so an outcome on a node that
+        does not is a test that cannot happen, and is refused.
+        """
+        supported = self._supports(SUPERVISION_CC_ID)
+        if status is not None and not supported:
+            raise ValueError(
+                "the node does not advertise Supervision CC, so its Sets are "
+                "never supervised; use supervised_lock_state for the dump"
+            )
+        self._supervision = (
+            status if status is not None or not supported else SupervisionStatus.SUCCESS
+        )
 
     def _supports(self, cc_id: int) -> bool:
         return any(cc.id == cc_id for cc in self.node.command_classes)
@@ -676,8 +716,18 @@ class FakeZWaveLock:
     # ------------------------------------------------------------------
 
     def _add_fault(self, kind: FaultKind, operation, slot, **kwargs: Any) -> NodeFault:
+        """
+        Install a fault, refusing one that cannot happen to its exchange.
+
+        As ``LockFault`` refuses them (``_WRITE_ONLY_FAULTS``): only a Set
+        that stores or empties a slot can be ignored or refused, so a fault
+        that would match nothing cannot pass a test for the wrong reason.
+        """
+        if kind in _WRITE_ONLY_FAULTS and operation not in ("set", "clear"):
+            raise ValueError(f"a {kind} fault needs a set or clear operation")
         fault = NodeFault(self, kind, operation, slot, **kwargs)
         self.faults.append(fault)
+        self.installed_faults.append(fault)
         track_fault(fault)
         return fault
 
@@ -760,8 +810,14 @@ class FakeZWaveLock:
         return self._add_fault(FaultKind.SLOW, operation, slot, seconds=seconds, **kw)
 
     def clear_faults(self) -> None:
-        """Clear every fault on this lock, releasing what they hold."""
-        for fault in list(self.faults):
+        """
+        Clear every fault installed on this lock, releasing what they hold.
+
+        Spent faults included, as ``MockLCMLock.clear_faults`` does: one whose
+        ``times`` ran out matches nothing more but may still hold the
+        exchange it met last.
+        """
+        for fault in list(self.installed_faults):
             fault.clear()
 
     async def _async_meet(
@@ -841,6 +897,7 @@ class FakeZWaveLock:
                     "writeable": True,
                     "label": f"User ID status ({slot})",
                     "states": {"0": "Available", "1": "Enabled", "2": "Disabled"},
+                    **_value_flags(LOCK_USERCODE_STATUS_PROPERTY),
                 },
             ),
             (
@@ -852,6 +909,7 @@ class FakeZWaveLock:
                     "minLength": 4,
                     "maxLength": 10,
                     "label": f"User Code ({slot})",
+                    **_value_flags(LOCK_USERCODE_PROPERTY),
                 },
             ),
         ):
@@ -860,6 +918,29 @@ class FakeZWaveLock:
             self._metadata.add((_UC, prop, slot))
             args = self._value_args(prop, slot)
             args["metadata"] = metadata
+            self._emit("metadata updated", args=args)
+
+    def _remove_uc_metadata(self, slot: int) -> None:
+        """
+        Remove a slot's metadata as ``removeMetadata`` does (UCC:255-261, VDB:411-451).
+
+        Each removal raises ``metadata updated``; the node replaces the
+        now-missing metadata with what the value defines -- nothing for these
+        dynamic values, so the default "any" (VAL:95-121, 139-141) -- and the
+        client recreates the value from it, with no value (PY_NODE
+        ``handle_metadata_updated``).
+        """
+        for prop in (LOCK_USERCODE_STATUS_PROPERTY, LOCK_USERCODE_PROPERTY):
+            if (_UC, prop, slot) not in self._metadata:
+                continue
+            self._metadata.discard((_UC, prop, slot))
+            args = self._value_args(prop, slot)
+            args["metadata"] = {
+                "type": "any",
+                "readable": True,
+                "writeable": True,
+                **_value_flags(prop),
+            }
             self._emit("metadata updated", args=args)
 
     def _emit(self, event: str, **data: Any) -> None:
@@ -1251,7 +1332,14 @@ class FakeZWaveLock:
         return {"result": _report_result(report, _USER_RESULT)}
 
     async def _ac_add_user(self, message):
-        """AC:601-737."""
+        """
+        ``addUser`` (AC:601-655).
+
+        The user is added first; a bundled credential then goes through
+        ``setCredential``, whose user and slot checks raise Argument_Invalid
+        only after the user's Set has reached the lock (AC:649-654,
+        AC:1132-1135).
+        """
         user_id, options = message["userId"], message.get("options") or {}
         credential = message.get("credential")
         self._assert_valid_user(user_id)
@@ -1261,13 +1349,8 @@ class FakeZWaveLock:
         user_result = _report_result(report, _USER_RESULT)
         if user_result != SetUserResult.OK or credential is None:
             return {"result": {"user": user_result}}
-        cred_result = await self._async_u3c_set_credential(
-            user_id,
-            credential["credentialType"],
-            credential["credentialSlot"],
-            credential["data"],
-        )
-        return {"result": {"user": user_result, "credential": cred_result}}
+        result = await self._ac_set_credential({"userId": user_id, **credential})
+        return {"result": {"user": user_result, "credential": result["result"]}}
 
     async def _ac_delete_user(self, message):
         """AC:874-919."""
@@ -1306,12 +1389,13 @@ class FakeZWaveLock:
         """
         Persist a User Code Report as ``persistUserCode`` does (UCC:245-270).
 
-        StatusNotAvailable removes the slot's values; anything else ensures
-        metadata, then sets the status, then the code.
+        StatusNotAvailable removes the slot's values, then their metadata;
+        anything else ensures metadata, then sets the status, then the code.
         """
         if status == UserIDStatus.STATUS_NOT_AVAILABLE:
             self._remove(_UC, LOCK_USERCODE_STATUS_PROPERTY, slot)
             self._remove(_UC, LOCK_USERCODE_PROPERTY, slot)
+            self._remove_uc_metadata(slot)
             return
         self._ensure_uc_metadata(slot)
         self._set(_UC, LOCK_USERCODE_STATUS_PROPERTY, slot, status)
@@ -1338,7 +1422,9 @@ class FakeZWaveLock:
         not, before matching it to the waiting transaction; a report that
         times out answers nothing (DRV:7959-7976).
         """
-        fault = await self._async_meet("get", slot)
+        # ``dropped``: the read follows a Set whose replies were all lost, so
+        # its outcome is already decided and it meets no fault of its own.
+        fault = None if dropped else await self._async_meet("get", slot)
         self.exchanges.append(_Exchange("get", slot))
         self.statistics["commandsTX"] += 1
         if dropped or (fault is not None and fault.kind is FaultKind.DROP_REPLY):
@@ -1363,18 +1449,31 @@ class FakeZWaveLock:
         self, operation: Literal["set", "clear"], slot: int, code: str | None
     ) -> tuple[SupervisionStatus | None, bool]:
         """
-        One User Code Set frame; return its Supervision status and whether it was lost.
+        One User Code Set; return its Supervision status and whether replies were lost.
 
-        The lock applies it unless a fault or a duplicate stops it. A lock
-        refusing a duplicate sends Access Control notification 15. With
-        Supervision CC the lock reports ``supervision`` for an applied Set and
-        Fail for a refused one; ``ignore`` reports Success without applying.
+        Supervised only on a node advertising Supervision CC, until a Set
+        comes back NoSupport (DRV:8044-8051, ``mayUseSupervision``). The lock
+        applies the Set unless a fault, the ``FAIL`` outcome or a duplicate
+        stops it; a lock refusing a duplicate sends Access Control
+        notification 15. A supervised Set reports ``supervision`` when
+        applied and Fail when refused; ``ignore`` reports it applied anyway.
+        NoSupport means the lock did not act on the encapsulated Set: the
+        driver remembers that and sends it again unsupervised
+        (DRV:8052-8064), so the verification read decides it.
         """
         self._uc_numusers_check(slot)
         fault = await self._async_meet(operation, slot)
         self.exchanges.append(_Exchange(operation, slot, code))
         self.statistics["commandsTX"] += 1
         kind = None if fault is None else fault.kind
+        lost = kind is FaultKind.DROP_REPLY
+        supervised = (
+            self._supports(SUPERVISION_CC_ID) and not self._uc_supervision_unsupported
+        )
+        if supervised and self.supervision is SupervisionStatus.NO_SUPPORT and not lost:
+            self.statistics["commandsRX"] += 1
+            self._uc_supervision_unsupported = True
+            return await self._async_uc_device_set(operation, slot, code)
         duplicate = (
             operation == "set"
             and self.rejects_duplicates
@@ -1382,7 +1481,11 @@ class FakeZWaveLock:
                 other != slot and held == code for other, held in self.codes.items()
             )
         )
-        applied = kind not in (FaultKind.IGNORE, FaultKind.REFUSE) and not duplicate
+        applied = (
+            kind not in (FaultKind.IGNORE, FaultKind.REFUSE)
+            and not duplicate
+            and not (supervised and self.supervision is SupervisionStatus.FAIL)
+        )
         if applied:
             if code is None:
                 self.uc_slots.pop(slot, None)
@@ -1393,8 +1496,7 @@ class FakeZWaveLock:
                 AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE,
                 self.duplicate_parameters,
             )
-        lost = kind is FaultKind.DROP_REPLY
-        if self.supervision is None:
+        if not supervised:
             return None, lost
         if lost:
             self.statistics["timeoutResponse"] += 1
@@ -1438,7 +1540,9 @@ class FakeZWaveLock:
             )
         elif supervision in (SupervisionStatus.SUCCESS, SupervisionStatus.WORKING):
             succeeded = True
-            self._uc_persist_report(user_id, status, code)
+            # #persistCachedUserCode (AC:1683-1699): the two values, no metadata.
+            self._set(_UC, LOCK_USERCODE_STATUS_PROPERTY, user_id, status)
+            self._set(_UC, LOCK_USERCODE_PROPERTY, user_id, code)
         else:
             verified = await self._async_uc_get(user_id)
             succeeded = (
@@ -1574,50 +1678,66 @@ class FakeZWaveLock:
         """
         One User Set (MOCK_U3C:743-1047), its report persisted and handled.
 
-        The lock truncates a name past its maximum (CC:0083.01.05.13.047) and
-        names a nameless user ``User-{id}``. The driver hands the solicited
-        report to the node's handler (AC:786), which raises the events.
+        The lock ignores -- sends no report, so the driver answers
+        Error_Unknown (AC:139-142) -- a user 0 Add or Modify, a user past its
+        count, and a user type or credential rule it does not advertise
+        (CC:0083.01.05.11.014/.015/.030/.039). It truncates a name past its
+        maximum (CC:0083.01.05.13.047) and names a nameless user
+        ``User-{id}``. The driver hands the report to the node's handler
+        (AC:786), which raises the events.
         """
         fault = await self._async_meet("user", user_id)
         self.statistics["commandsTX"] += 1
-        if fault is not None and fault.kind is FaultKind.DROP_REPLY:
+        report_type = self._u3c_lock_handles_user_set(operation, user_id, options)
+        if report_type is None or (
+            fault is not None and fault.kind is FaultKind.DROP_REPLY
+        ):
             self.statistics["timeoutResponse"] += 1
             return None
         self.statistics["commandsRX"] += 1
-        existing = self.users.get(user_id)
+        self._u3c_persist_user(user_id, report_type)
+        self._u3c_user_event(user_id, report_type)
+        return report_type
+
+    def _u3c_lock_handles_user_set(
+        self, operation: Literal["add", "modify", "delete"], user_id: int, options
+    ) -> UserReportType | None:
+        """Act on a User Set as MOCK_U3C:743-1047 does; None when ignored."""
+        if user_id > self.max_users or (operation != "delete" and user_id == 0):
+            return None
         if operation == "delete":
             self.users.pop(user_id, None)
             for key in [
                 k for k, (owner, _d) in self.credentials.items() if owner == user_id
             ]:
                 del self.credentials[key]
-            report_type = UserReportType.USER_DELETED
-        elif operation == "add" and existing is not None:
-            report_type = UserReportType.USER_ADD_REJECTED_LOCATION_OCCUPIED
-        elif operation == "modify" and existing is None:
-            report_type = UserReportType.USER_MODIFY_REJECTED_LOCATION_EMPTY
-        else:
-            name = (options.get("userName") or "")[: self.max_user_name_length]
-            user = LockUser(
-                user_type=options.get("userType", UserCredentialUserType.GENERAL),
-                active=options.get("active", True),
-                credential_rule=options.get(
-                    "credentialRule", UserCredentialRule.SINGLE
-                ),
-                user_name=name or f"User-{user_id}",
-            )
-            unchanged = existing == user
-            self.users[user_id] = user
-            report_type = (
-                UserReportType.USER_UNCHANGED
-                if unchanged
-                else UserReportType.USER_ADDED
-                if operation == "add"
-                else UserReportType.USER_MODIFIED
-            )
-        self._u3c_persist_user(user_id, report_type)
-        self._u3c_user_event(user_id, report_type)
-        return report_type
+            return UserReportType.USER_DELETED
+        user_type = options.get("userType", UserCredentialUserType.GENERAL)
+        rule = options.get("credentialRule", UserCredentialRule.SINGLE)
+        if user_type not in (
+            self._get(_U3C, "supportedUserTypes") or []
+        ) or rule not in (self._get(_U3C, "supportedCredentialRules") or []):
+            return None
+        existing = self.users.get(user_id)
+        if operation == "add" and existing is not None:
+            return UserReportType.USER_ADD_REJECTED_LOCATION_OCCUPIED
+        if operation == "modify" and existing is None:
+            return UserReportType.USER_MODIFY_REJECTED_LOCATION_EMPTY
+        name = (options.get("userName") or "")[: self.max_user_name_length]
+        user = LockUser(
+            user_type=user_type,
+            active=options.get("active", True),
+            credential_rule=rule,
+            user_name=name or f"User-{user_id}",
+        )
+        if existing == user:
+            return UserReportType.USER_UNCHANGED
+        self.users[user_id] = user
+        return (
+            UserReportType.USER_ADDED
+            if operation == "add"
+            else UserReportType.USER_MODIFIED
+        )
 
     def _u3c_credential_report(
         self,
@@ -1695,68 +1815,91 @@ class FakeZWaveLock:
         modify: bool = False,
     ) -> CredentialReportType | None:
         """
-        One Credential Set (MOCK_U3C:1423-1780); the report it answers with.
+        One Credential Set, and the report it answers with (MOCK_U3C:1423-1780).
 
-        None when the lock refuses a Delete it cannot act on, or the
-        report is lost, which the driver maps to Error_Unknown (AC:161).
+        None when the lock ignores the frame or its report is lost, which the
+        driver maps to Error_Unknown (AC:158-161). A lost report changes
+        nothing on the lock's side: it has already acted on the Set.
         """
         fault = await self._async_meet(operation, slot)
         self.exchanges.append(_Exchange(operation, slot, data))
         self.statistics["commandsTX"] += 1
-        if fault is not None and fault.kind is FaultKind.DROP_REPLY:
-            self._u3c_apply(operation, user_id, slot, data)
+        kind_of_fault = None if fault is None else fault.kind
+        answer = self._u3c_lock_handles_credential_set(
+            operation, user_id, kind, slot, data, modify, kind_of_fault
+        )
+        if answer is None or kind_of_fault is FaultKind.DROP_REPLY:
             self.statistics["timeoutResponse"] += 1
             return None
         self.statistics["commandsRX"] += 1
+        report_type, report_user, report_data = answer
+        self._u3c_credential_report(report_type, report_user, slot, report_data)
+        return report_type
+
+    def _u3c_lock_handles_credential_set(
+        self,
+        operation: Literal["set", "clear"],
+        user_id: int,
+        kind: int,
+        slot: int,
+        data: str | None,
+        modify: bool,
+        fault: FaultKind | None,
+    ) -> tuple[CredentialReportType, int, str | None] | None:
+        """
+        Act on a Credential Set as MOCK_U3C:1423-1780 does.
+
+        Returns the report (type, user, data) or None when the lock ignores
+        the frame. A Delete addressed to user 0 with a type and slot is an
+        invalid combination and ignored (MOCK_U3C:1476-1513); one addressed to
+        a user deletes the credential only if that user owns it
+        (MOCK_U3C:202-214), yet reports it deleted either way -- so the
+        driver drops its cached entry while the lock keeps the code.
+        """
         occupied = self.credentials.get((kind, slot))
         if operation == "clear":
-            if fault is not None and fault.kind is FaultKind.REFUSE:
-                # MOCK_U3C answers a Delete it cannot act on with nothing.
+            if user_id == 0 or fault is FaultKind.REFUSE:
                 return None
-            if fault is None or fault.kind is not FaultKind.IGNORE:
-                self.credentials.pop((kind, slot), None)
-            report_type = CredentialReportType.CREDENTIAL_DELETED
-            self._u3c_credential_report(report_type, user_id, slot, None)
-            return report_type
+            owned = occupied is not None and occupied[0] == user_id
+            if owned and fault is not FaultKind.IGNORE:
+                del self.credentials[(kind, slot)]
+            return CredentialReportType.CREDENTIAL_DELETED, user_id, None
         assert data is not None
         if user_id not in self.users:
-            report_type = CredentialReportType.WRONG_USER_UNIQUE_IDENTIFIER
-        elif not modify and occupied is not None:
-            report_type = CredentialReportType.CREDENTIAL_ADD_REJECTED_LOCATION_OCCUPIED
-            self._u3c_credential_report(report_type, occupied[0], slot, occupied[1])
-            return report_type
-        elif modify and occupied is None:
-            report_type = CredentialReportType.CREDENTIAL_MODIFY_REJECTED_LOCATION_EMPTY
-        elif modify and occupied[0] != user_id:
-            report_type = CredentialReportType.WRONG_USER_UNIQUE_IDENTIFIER
-        elif any(
+            return CredentialReportType.WRONG_USER_UNIQUE_IDENTIFIER, user_id, data
+        if not modify and occupied is not None:
+            return (
+                CredentialReportType.CREDENTIAL_ADD_REJECTED_LOCATION_OCCUPIED,
+                occupied[0],
+                occupied[1],
+            )
+        if modify and occupied is None:
+            return (
+                CredentialReportType.CREDENTIAL_MODIFY_REJECTED_LOCATION_EMPTY,
+                user_id,
+                data,
+            )
+        if modify and occupied[0] != user_id:
+            return CredentialReportType.WRONG_USER_UNIQUE_IDENTIFIER, user_id, data
+        if any(
             other != (kind, slot) and held == data
             for other, (_owner, held) in self.credentials.items()
             if other[0] == kind
         ):
-            report_type = CredentialReportType.DUPLICATE_CREDENTIAL
-        elif fault is not None and fault.kind is FaultKind.REFUSE:
-            report_type = CredentialReportType.MANUFACTURER_SECURITY_RULES
-        elif occupied is not None and occupied[1] == data:
-            report_type = CredentialReportType.CREDENTIAL_UNCHANGED
-        else:
-            if fault is None or fault.kind is not FaultKind.IGNORE:
-                self.credentials[(kind, slot)] = (user_id, data)
-            report_type = (
-                CredentialReportType.CREDENTIAL_MODIFIED
-                if modify
-                else CredentialReportType.CREDENTIAL_ADDED
-            )
-        self._u3c_credential_report(report_type, user_id, slot, data)
-        return report_type
-
-    def _u3c_apply(
-        self, operation: Literal["set", "clear"], user_id: int, slot: int, data
-    ) -> None:
-        if operation == "clear":
-            self.credentials.pop((_PIN, slot), None)
-        elif user_id in self.users:
-            self.credentials[(_PIN, slot)] = (user_id, data)
+            return CredentialReportType.DUPLICATE_CREDENTIAL, user_id, data
+        if fault is FaultKind.REFUSE:
+            return CredentialReportType.MANUFACTURER_SECURITY_RULES, user_id, data
+        if occupied is not None and occupied[1] == data:
+            return CredentialReportType.CREDENTIAL_UNCHANGED, user_id, data
+        if fault is not FaultKind.IGNORE:
+            self.credentials[(kind, slot)] = (user_id, data)
+        return (
+            CredentialReportType.CREDENTIAL_MODIFIED
+            if modify
+            else CredentialReportType.CREDENTIAL_ADDED,
+            user_id,
+            data,
+        )
 
     async def _async_u3c_set_credential(
         self, user_id: int, kind: int, slot: int, data: str
@@ -1768,67 +1911,118 @@ class FakeZWaveLock:
         )
         return _report_result(report, _CREDENTIAL_RESULT)
 
-    async def _async_u3c_get_credential(self, kind: int, slot: int) -> dict[str, Any]:
-        """
-        Credential Get (0, type, slot) (AC:961-964).
+    def _u3c_next_after(self, kind: int, slot: int) -> tuple[int, int]:
+        """MOCK_U3C:376-405: the next credential after (kind, slot), or (0, 0)."""
+        return next(
+            (ref for ref in sorted(self.credentials) if ref > (kind, slot)), (0, 0)
+        )
 
-        An empty slot answers a length-zero report naming user 0
-        (MOCK_U3C:1180-1196); the driver caches it as owned by user 0 and
-        returns it, since it carries a slot (AC:1729-1745).
+    async def _async_u3c_credential_get(
+        self, kind: int, slot: int
+    ) -> dict[str, Any] | None:
+        """
+        One Credential Get (0, kind, slot): the report, persisted, or None if lost.
+
+        The lock answers as MOCK_U3C:1049-1414 does: (0, 0) asks for the first
+        credential, (kind, slot) for that one; either names the next one. A
+        miss is a length-zero report naming user 0 (MOCK_U3C:1180-1196,
+        1376-1388), which the driver caches unless it names no slot
+        (U3CC:2981-2988). No event: a get response raises none (U3CH:66-107).
         """
         fault = await self._async_meet("get", slot)
         self.exchanges.append(_Exchange("get", slot))
         self.statistics["commandsTX"] += 1
         if fault is not None and fault.kind is FaultKind.DROP_REPLY:
             self.statistics["timeoutResponse"] += 1
-            return {}
+            return None
         self.statistics["commandsRX"] += 1
-        owner, data = self.credentials.get((kind, slot), (0, ""))
-        self._u3c_credential_report(
-            CredentialReportType.RESPONSE_TO_GET, owner, slot, data
+        ref = (
+            min(self.credentials, default=None)
+            if (kind, slot) == (0, 0)
+            else (kind, slot)
+            if (kind, slot) in self.credentials
+            else None
         )
-        cred: dict[str, Any] = {"userId": owner, "type": kind, "slot": slot}
-        if self._read_back:
-            cred["data"] = data
-        return {"credential": cred}
+        if ref is None:
+            report = {
+                "userId": 0,
+                "type": kind,
+                "slot": slot,
+                "data": "",
+                "next": (0, 0) if kind == 0 else self._u3c_next_after(kind, slot),
+            }
+        else:
+            owner, data = self.credentials[ref]
+            report = {
+                "userId": owner,
+                "type": ref[0],
+                "slot": ref[1],
+                "data": data,
+                "next": self._u3c_next_after(*ref),
+            }
+        if not self._read_back or report["type"] == 0:
+            report.pop("data")
+        if report["type"] != 0 and report["slot"] != 0:
+            self._u3c_credential_report(
+                CredentialReportType.RESPONSE_TO_GET,
+                report["userId"],
+                report["slot"],
+                report.get("data"),
+            )
+        return report
 
-    async def _async_u3c_walk_credentials(self) -> list[dict[str, Any]]:
+    async def _async_u3c_get_credential(self, kind: int, slot: int) -> dict[str, Any]:
         """
-        Walk the credentials (AC:1747-1851): what the lock holds replaces the cache.
+        ``getCredential`` (AC:961-964): any report naming a slot is a credential.
 
-        Stale cache entries in the walked range are purged; a lost report ends
-        the walk with what it has.
+        So an empty slot comes back as user 0's (AC:1729-1745).
         """
-        found: list[dict[str, Any]] = []
-        for kind, slot in sorted(self.credentials):
-            fault = await self._async_meet("get", slot)
-            self.exchanges.append(_Exchange("get", slot))
-            self.statistics["commandsTX"] += 1
-            if fault is not None and fault.kind is FaultKind.DROP_REPLY:
-                self.statistics["timeoutResponse"] += 1
-                return found
-            self.statistics["commandsRX"] += 1
-            owner, data = self.credentials[(kind, slot)]
-            cred: dict[str, Any] = {"userId": owner, "type": kind, "slot": slot}
-            if self._read_back:
-                cred["data"] = data
-            found.append(cred)
-        held = {(c["type"] << 16) | c["slot"] for c in found}
+        report = await self._async_u3c_credential_get(kind, slot)
+        if report is None or not report["slot"]:
+            return {}
+        return {"credential": _u3c_credential_data(report)}
+
+    def _u3c_purge(self, from_key: int, to_key: int) -> None:
+        """``#purgeCachedCredentials`` (AC:1645-1677) for user 0: the keys in [from, to)."""
         for cc_id, prop, key in list(self._values):
             if (
                 cc_id == _U3C
                 and prop in ("credentialOwner", "credential")
-                and key not in held
+                and from_key <= key < to_key
             ):
                 del self._values[(cc_id, prop, key)]
-        for cred in found:
-            self._u3c_credential_report(
-                CredentialReportType.RESPONSE_TO_GET,
-                cred["userId"],
-                cred["slot"],
-                cred.get("data"),
-            )
-        return found
+
+    async def _async_u3c_walk_credentials(self) -> list[dict[str, Any]]:
+        """
+        ``#queryCredentials_U3C(0, None, 0)`` (AC:1747-1851): the driver's cursor walk.
+
+        Get (0, None, 0) first, then the (type, slot) each report points to
+        next. Purges stale cache entries before the first credential, between
+        each and the next, and after the last; a report that never arrives
+        ends the walk where it is, purging nothing more (AC:1784-1786).
+        """
+        scope_end = 0x100 << 16
+        credentials: list[dict[str, Any]] = []
+        query = (0, 0)
+        while True:
+            report = await self._async_u3c_credential_get(*query)
+            if report is not None and not report["slot"] and not credentials:
+                self._u3c_purge(0, scope_end)
+            if report is None or not report["slot"]:
+                break
+            key = (report["type"] << 16) | report["slot"]
+            if not credentials:
+                self._u3c_purge((query[0] << 16) | query[1], key)
+            credentials.append(_u3c_credential_data(report))
+            next_type, next_slot = report["next"]
+            if (next_type, next_slot) == (0, 0):
+                self._u3c_purge(key + 1, scope_end)
+                break
+            if (next_type, next_slot) == query:
+                break
+            self._u3c_purge(key + 1, (next_type << 16) | next_slot)
+            query = (next_type, next_slot)
+        return credentials
 
 
 _ACCESS_CONTROL_EVENT_LABELS: dict[int, str] = {
@@ -1839,6 +2033,24 @@ _ACCESS_CONTROL_EVENT_LABELS: dict[int, str] = {
         "New user code not added due to duplicate code"
     ),
 }
+
+
+def _value_flags(prop: str) -> dict[str, bool]:
+    """
+    Return the flags the node merges into every metadata event (VAL:95-121).
+
+    The server forwards them from schema 28 on (``dumpMetadata``); only the
+    code is secret (UCC ``UserCodeCCValues``).
+    """
+    return {"stateful": True, "secret": prop == LOCK_USERCODE_PROPERTY}
+
+
+def _u3c_credential_data(report: dict[str, Any]) -> dict[str, Any]:
+    """``#mapCredentialData`` (AC:1729-1745): a report as a credential."""
+    cred = {"userId": report["userId"], "type": report["type"], "slot": report["slot"]}
+    if "data" in report:
+        cred["data"] = report["data"]
+    return cred
 
 
 def _uc_user_data(user_id: int, status: int) -> dict[str, Any] | None:
