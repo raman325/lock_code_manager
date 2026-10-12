@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "6daf612b7f53",
+  "strategy": "manual-commit",
+  "branch": "fix/allocation-progress-race",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/common.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6d/af612b7f53/0/metadata.json",
+      "transcript": "/6d/af612b7f53/0/full.jsonl",
+      "compact_transcript": "/6d/af612b7f53/0/transcript.jsonl",
+      "content_hash": "/6d/af612b7f53/0/content_hash.txt",
+      "prompt": "/6d/af612b7f53/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1642,
+    "cache_creation_tokens": 7661585,
+    "cache_read_tokens": 325977402,
+    "output_tokens": 860206,
+    "api_call_count": 759,
+    "subagent_tokens": {
+      "input_tokens": 142,
+      "cache_creation_tokens": 769621,
+      "cache_read_tokens": 14720862,
+      "output_tokens": 77853,
+      "api_call_count": 71
+    }
+  }
+}
