@@ -318,6 +318,13 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
 - Uses `pytest-homeassistant-custom-component` for HA test utilities
 - `tests/conftest.py`: Shared fixtures (`mock_lock_config_entry`, `lock_code_manager_config_entry`)
 - `tests/common.py`: `MockLCMLock` (in-memory provider), mock entities, test constants
+  - Fault knobs on `MockLCMLock` (`ignore`, `refuse`, `fail`, `hang`, `drop_reply`), each
+    targeting an operation and slot and returning a `LockFault` to clear
+  - Time helpers for the `freezer` fixture: `async_advance_sync_ticks` and `async_tick_until`
+    run the real scheduled sync tick by moving both clocks; `async_trip_slot_breaker` reaches
+    a breaker through real failures. Prefer these to `async_trigger_sync_tick` (drives sync
+    internals) and `async_advance_time` (fires timers but moves neither clock) in new tests
+- `tests/test_harness.py`: tests for the helpers and knobs above
 - `tests/providers/helpers.py`: Shared test mixins for service-based providers
 
 ### Test philosophy

@@ -47,6 +47,8 @@ from .common import (
     MockCalendarEntity,
     MockLCMLock,
     MockLockEntity,
+    forget_all_faults,
+    release_all_faults,
     sync_manager_of,
 )
 
@@ -69,6 +71,30 @@ TEST_DOMAIN = "test"
 def aiohttp_client(aiohttp_client, socket_enabled):
     """Return aiohttp_client and allow opening sockets."""
     return aiohttp_client
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_teardown(
+    item: pytest.Item, nextitem: pytest.Item | None
+) -> Generator[None]:
+    """
+    Release every mock-lock fault before any fixture is torn down.
+
+    A ``hang`` or ``drop_reply`` fault left installed holds a call the sync
+    managers' stop then waits on, and on a frozen clock that wait never
+    ends. Fixture teardown is too late to let go of it -- an autouse fixture
+    is torn down after the config entries -- so this runs before the
+    fixtures' finalizers. Teardown runs whether the test body ran or its
+    setup failed, so a fault a fixture installed is let go of too. A fault
+    installed during teardown is only forgotten once it ends, not released:
+    by then the event loop a held call waits on may be closed, and the
+    next test must not see the fault either way.
+    """
+    release_all_faults()
+    try:
+        return (yield)
+    finally:
+        forget_all_faults()
 
 
 @pytest.fixture(autouse=True)
@@ -364,7 +390,12 @@ async def async_trigger_sync_tick(
 
     Encapsulates the pattern of forcing an entity into a tickable state and
     triggering an immediate tick, useful for testing tick-based sync behavior
-    without waiting for the natural 5-second tick interval.
+    without waiting for the natural 2-second tick interval.
+
+    Drives the sync manager's internals: it forces ``_state`` and calls
+    ``_async_tick`` directly, so it proves nothing about the scheduled tick
+    and pins the test to the manager's private shape. New tests use
+    ``tests.common.async_advance_sync_ticks``, which only moves time.
     """
     manager = sync_manager_for(hass, entity_id)
     if set_dirty and manager._state not in (SyncState.LOADING, SyncState.OUT_OF_SYNC):
@@ -395,7 +426,9 @@ async def async_trigger_sync_tick_for_manager(
     Manually trigger a sync tick for a sync manager object.
 
     Useful when you already have the entity object or need to trigger
-    ticks on multiple managers in a loop.
+    ticks on multiple managers in a loop. Drives internals the same way
+    ``async_trigger_sync_tick`` does; new tests use
+    ``tests.common.async_advance_sync_ticks``.
     """
     if set_dirty and sync_manager._state not in (
         SyncState.LOADING,
@@ -418,6 +451,12 @@ async def async_advance_time(hass: HomeAssistant, delta: timedelta) -> None:
     spawned by a timer-fired tick can outlive the wait and leak across
     assertions. This helper passes ``wait_background_tasks=True`` to
     cover them.
+
+    It fires the timers that would be due, but moves neither clock:
+    ``time.monotonic`` (pending-write deadlines, rate limiting) and
+    ``dt_util.utcnow`` (breaker windows) stand still. A test that needs time
+    to pass for real uses ``tests.common.async_advance_sync_ticks`` with the
+    ``freezer`` fixture.
     """
     async_fire_time_changed(hass, dt_util.utcnow() + delta)
     await hass.async_block_till_done(wait_background_tasks=True)
