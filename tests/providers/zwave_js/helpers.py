@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from zwave_js_server.const import CommandClass
+from zwave_js_server.const.command_class.access_control import UserCredentialType
 from zwave_js_server.event import Event as ZwaveEvent
 
 from homeassistant.const import CONF_ENABLED
@@ -55,3 +56,78 @@ def make_uc_value_event(
             },
         },
     )
+
+
+def _make_access_control_event(
+    node_id: int, event_name: str, args: dict[str, Any]
+) -> ZwaveEvent:
+    """Create one of the driver's unified access-control node events."""
+    return ZwaveEvent(
+        type=event_name,
+        data={
+            "source": "node",
+            "event": event_name,
+            "nodeId": node_id,
+            "endpointIndex": 0,
+            "args": args,
+        },
+    )
+
+
+def make_credential_added_event(
+    node_id: int,
+    credential_slot: int,
+    credential_type: int = UserCredentialType.PIN_CODE,
+    user_id: int = 1,
+    credential_data: str | None = None,
+) -> ZwaveEvent:
+    """Build a 'credential added' ZwaveEvent for a given slot."""
+    args: dict = {
+        "userId": user_id,
+        "credentialType": credential_type,
+        "credentialSlot": credential_slot,
+    }
+    if credential_data is not None:
+        args["data"] = credential_data
+    return _make_access_control_event(node_id, "credential added", args)
+
+
+def make_credential_modified_event(
+    node_id: int,
+    credential_slot: int,
+    credential_type: int = UserCredentialType.PIN_CODE,
+    user_id: int = 1,
+    credential_data: str | None = None,
+) -> ZwaveEvent:
+    """Build a 'credential modified' ZwaveEvent for a given slot."""
+    args: dict = {
+        "userId": user_id,
+        "credentialType": credential_type,
+        "credentialSlot": credential_slot,
+    }
+    if credential_data is not None:
+        args["data"] = credential_data
+    return _make_access_control_event(node_id, "credential modified", args)
+
+
+def make_credential_deleted_event(
+    node_id: int,
+    credential_slot: int,
+    credential_type: int = UserCredentialType.PIN_CODE,
+    user_id: int = 1,
+) -> ZwaveEvent:
+    """Build a 'credential deleted' ZwaveEvent for a given slot."""
+    return _make_access_control_event(
+        node_id,
+        "credential deleted",
+        {
+            "userId": user_id,
+            "credentialType": credential_type,
+            "credentialSlot": credential_slot,
+        },
+    )
+
+
+def make_user_deleted_event(node_id: int, user_id: int) -> ZwaveEvent:
+    """Build a 'user deleted' ZwaveEvent for a given user."""
+    return _make_access_control_event(node_id, "user deleted", {"userId": user_id})

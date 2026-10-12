@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import Counter
-import copy
 from dataclasses import dataclass, field
 from itertools import count
 from typing import Any
@@ -23,8 +22,10 @@ from zwave_js_server.const.command_class.lock import (
     CodeSlotStatus,
 )
 from zwave_js_server.event import Event as ZwaveEvent
+from zwave_js_server.exceptions import NotFoundError
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
+from zwave_js_server.util.lock import get_code_slot_value
 
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
@@ -73,7 +74,13 @@ from tests.providers.zwave_js.conftest import (
     ZWAVE_JS_LCM_CONFIG_SLOTS,
     get_zwave_lock,
 )
-from tests.providers.zwave_js.helpers import make_uc_value_event
+from tests.providers.zwave_js.helpers import (
+    make_credential_added_event,
+    make_credential_deleted_event,
+    make_credential_modified_event,
+    make_uc_value_event,
+    make_user_deleted_event,
+)
 
 
 def async_capture_events(
@@ -325,6 +332,31 @@ class TestEvents:
         )
 
 
+def _user_code_value(
+    node: Node, code_slot: int, property_name: str, value: Any
+) -> None:
+    """Deliver one persisted User Code value for a slot as the node's value event."""
+    node.receive_event(
+        ZwaveEvent(
+            type="value updated",
+            data={
+                "source": "node",
+                "event": "value updated",
+                "nodeId": node.node_id,
+                "args": {
+                    "commandClassName": "User Code",
+                    "commandClass": CommandClass.USER_CODE,
+                    "endpoint": 0,
+                    "property": property_name,
+                    "propertyKey": code_slot,
+                    "newValue": value,
+                    "propertyName": property_name,
+                },
+            },
+        )
+    )
+
+
 def _user_code_report(node: Node, code_slot: int, status: int, code: str) -> None:
     """
     Deliver one User Code report for a slot, the way the driver persists it.
@@ -333,51 +365,14 @@ def _user_code_report(node: Node, code_slot: int, status: int, code: str) -> Non
     (``UserCodeCC.ts`` ``persistUserCode``), so the status is in the value
     database by the time the code's value event arrives.
     """
-    for property_name, value in (
-        (LOCK_USERCODE_STATUS_PROPERTY, status),
-        (LOCK_USERCODE_PROPERTY, code),
-    ):
-        node.receive_event(
-            ZwaveEvent(
-                type="value updated",
-                data={
-                    "source": "node",
-                    "event": "value updated",
-                    "nodeId": node.node_id,
-                    "args": {
-                        "commandClassName": "User Code",
-                        "commandClass": CommandClass.USER_CODE,
-                        "endpoint": 0,
-                        "property": property_name,
-                        "propertyKey": code_slot,
-                        "newValue": value,
-                        "propertyName": property_name,
-                    },
-                },
-            )
-        )
+    _user_code_value(node, code_slot, LOCK_USERCODE_STATUS_PROPERTY, status)
+    _user_code_value(node, code_slot, LOCK_USERCODE_PROPERTY, code)
 
 
 # A push lock is read only when asked, and Home Assistant debounces the asking:
 # a read asked for during the cooldown of the last one runs up to ten seconds
 # later. Five sync ticks, and a few more for the sync to act on what it read.
 DEBOUNCED_READ_TICKS = 8
-
-
-def _access_control_event(node: Node, name: str, args: dict[str, Any]) -> None:
-    """Deliver one of the driver's unified access-control events from the node."""
-    node.receive_event(
-        ZwaveEvent(
-            type=name,
-            data={
-                "source": "node",
-                "event": name,
-                "nodeId": node.node_id,
-                "endpointIndex": 0,
-                "args": args,
-            },
-        )
-    )
 
 
 @dataclass
@@ -388,16 +383,21 @@ class _UserCodeLock:
     Each occupied slot reads as an implicit user, numbered as its slot,
     carrying that slot's one PIN. Writes through Home Assistant's lock
     helpers change what the lock holds, are recorded, and leave what the
-    driver leaves (``AccessControl.setCredential`` and ``deleteCredential``
-    on the User Code path):
+    driver leaves on the unsupervised User Code path
+    (``AccessControl.setCredential`` and ``deleteCredential``). A supervised
+    success differs: the driver persists the code it wrote, in clear, with
+    no read-back, which this fake does not model.
 
     - A set reads the slot back, so the lock's report is persisted -- Enabled,
       with the code field as the lock shows it -- and then raises
       ``credential added``, or ``credential modified`` for a slot that held a
       code, carrying the PIN written.
-    - A clear succeeds whether or not the slot held anything, resets the
-      cached slot to Available with an empty code, and only for a slot that
-      held a code raises ``credential deleted`` and ``user deleted``.
+    - A clear succeeds whether or not the slot held anything and resets the
+      slot's cached values that exist to Available with an empty code, as
+      ``#clearCachedUserCodes`` does; only for a slot that held a code does
+      it raise ``credential deleted`` and ``user deleted``. The report the
+      unsupervised clear's verification read persists before that reset is
+      not modelled.
     - A fresh read of one slot persists the lock's report of it.
 
     What the lock itself reports later -- a stale Available, a keypad change
@@ -470,15 +470,16 @@ class _UserCodeLock:
         self.codes[credential_slot] = pin
         self.sets.append((credential_slot, pin))
         self.report(credential_slot)
-        _access_control_event(
-            self.node,
-            "credential modified" if existed else "credential added",
-            {
-                "userId": credential_slot,
-                "credentialType": UserCredentialType.PIN_CODE,
-                "credentialSlot": credential_slot,
-                "data": pin,
-            },
+        make_event = (
+            make_credential_modified_event if existed else make_credential_added_event
+        )
+        self.node.receive_event(
+            make_event(
+                self.node.node_id,
+                credential_slot,
+                user_id=credential_slot,
+                credential_data=pin,
+            )
         )
         return {"credential_slot": credential_slot, "user_id": user_id}
 
@@ -489,22 +490,26 @@ class _UserCodeLock:
         credential_type: UserCredentialType,
         credential_slot: int,
     ) -> None:
-        """Empty the slot, reset its cache, and announce it if it held a code."""
+        """Empty the slot, reset its cached values, and announce it if it held a code."""
         existed = self.codes.pop(credential_slot, None) is not None
         self.clears.append(credential_slot)
-        _user_code_report(self.node, credential_slot, CodeSlotStatus.AVAILABLE, "")
+        for property_name, value in (
+            (LOCK_USERCODE_STATUS_PROPERTY, CodeSlotStatus.AVAILABLE),
+            (LOCK_USERCODE_PROPERTY, ""),
+        ):
+            try:
+                get_code_slot_value(self.node, credential_slot, property_name)
+            except NotFoundError:
+                continue
+            _user_code_value(self.node, credential_slot, property_name, value)
         if existed:
-            _access_control_event(
-                self.node,
-                "credential deleted",
-                {
-                    "userId": credential_slot,
-                    "credentialType": UserCredentialType.PIN_CODE,
-                    "credentialSlot": credential_slot,
-                },
+            self.node.receive_event(
+                make_credential_deleted_event(
+                    self.node.node_id, credential_slot, user_id=credential_slot
+                )
             )
-            _access_control_event(
-                self.node, "user deleted", {"userId": credential_slot}
+            self.node.receive_event(
+                make_user_deleted_event(self.node.node_id, credential_slot)
             )
 
 
@@ -1282,15 +1287,14 @@ class TestMaskingLock:
         self, lock_schlage_be469_state: dict[str, Any]
     ) -> dict[str, Any]:
         """The node's value database as a masking lock fills it."""
-        state = copy.deepcopy(lock_schlage_be469_state)
-        for value in state["values"]:
+        for value in lock_schlage_be469_state["values"]:
             if (
                 value["commandClass"] == CommandClass.USER_CODE
                 and value["property"] == LOCK_USERCODE_PROPERTY
                 and value.get("value")
             ):
                 value["value"] = "*" * len(value["value"])
-        return state
+        return lock_schlage_be469_state
 
     @pytest.fixture
     def user_code_lock(self, user_code_lock: _UserCodeLock) -> _UserCodeLock:
@@ -1322,7 +1326,7 @@ class TestMaskingLock:
 
         writes = Counter(slot for slot, _pin in user_code_lock.sets)
         for slot, config in ZWAVE_JS_LCM_CONFIG_SLOTS.items():
-            assert writes[slot] <= 1
+            assert writes[slot] == 1
             assert _slot_states(hass, lcm_config_entry, lock_entity, slot) == (
                 STATE_ON,
                 config[CONF_PIN],
@@ -1343,9 +1347,13 @@ class TestMaskingLock:
         not show. Asked of the entry that set the shared lock up, slot 3 had
         no PIN, and the second entry's sensor showed none.
         """
-        # The creating entry's startup writes land first, so nothing the lock
-        # pushes overlaps the joining entry's first read of it.
-        await async_advance_sync_ticks(hass, freezer, 2)
+        # The creating entry's startup writes land first: a push while the
+        # joining entry's debounced first read waits cancels that read, and
+        # its slot would stay unavailable (an open bug, not tested here).
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, lcm_config_entry, lock_entity, slot
+            )
         second_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_second")
         second_entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(second_entry.entry_id)
