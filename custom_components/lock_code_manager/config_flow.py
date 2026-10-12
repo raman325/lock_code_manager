@@ -21,7 +21,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.data_entry_flow import UnknownFlow
+from homeassistant.data_entry_flow import UnknownFlow, UnknownStep
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -407,6 +407,14 @@ def _validate_user_form(
     return name, fields, errors, placeholders
 
 
+def _already_answered() -> UnknownFlow:
+    """Build the refusal for a second request to a step already answered."""
+    return UnknownFlow(
+        "Slot numbers for this step were already allocated by another "
+        "request for the same flow"
+    )
+
+
 class _AllocatesInProgress:
     """
     Run allocation as a progress task, so a long lock read is visible.
@@ -428,6 +436,9 @@ class _AllocatesInProgress:
 
     _allocation_task: asyncio.Task[_AllocationOutcome] | None = None
     _allocation_submission: dict[str, Any] | None = None
+    # Set once an allocation has been taken and was not refused: the step
+    # that submitted it has been answered for good.
+    _allocation_answered: bool = False
 
     async def _start_allocation(
         self,
@@ -440,8 +451,18 @@ class _AllocatesInProgress:
         held: Collection[int] = (),
     ) -> Any:
         """Start allocating for ``submission``; show progress while it runs."""
+        # Resolved before anything starts, so a missing sibling fails the
+        # same way whether the task finishes at once or only later.
+        allocated_step_id = f"{step_id}_allocated"
+        if (
+            allocated_step := getattr(self, f"async_step_{allocated_step_id}", None)
+        ) is None:
+            raise UnknownStep(
+                f"Handler {self.__class__.__name__} doesn't support step "
+                f"{allocated_step_id}"
+            )
         self._allocation_submission = submission
-        self._allocation_task = self.hass.async_create_task(
+        self._allocation_task = task = self.hass.async_create_task(
             _allocate_for(
                 self.hass,
                 config_entry,
@@ -451,23 +472,30 @@ class _AllocatesInProgress:
                 progress=self.async_update_progress,
             )
         )
-        if self._allocation_task.done():
+        if task.done() and not task.cancelled() and task.exception() is None:
             # Tasks start eagerly, so one with nothing to read has already
             # finished. It must not be shown as progress: Home Assistant
             # announces the step moved on as soon as it returns, before the
             # dialog has subscribed to hear it, and the dialog never leaves
             # the progress screen (issue #1639).
-            return await getattr(self, f"async_step_{step_id}_allocated")()
+            return await allocated_step()
         return self.async_show_progress(
             step_id=step_id,
             progress_action="allocating",
-            progress_task=self._allocation_task,
+            progress_task=task,
         )
 
     def _allocation_progress(self, step_id: str) -> Any | None:
-        """Return the progress result while allocating; None when nothing is."""
+        """
+        Return the progress result while allocating; None when nothing is.
+
+        Raises ``UnknownFlow`` when this step's submission was already
+        answered; see ``_take_allocation``.
+        """
         task = self._allocation_task
         if task is None:
+            if self._allocation_answered:
+                raise _already_answered()
             return None
         if not task.done():
             return self.async_show_progress(
@@ -481,23 +509,30 @@ class _AllocatesInProgress:
 
         A second request for a step the first one already answered gets the
         same answer Home Assistant gives a request for any step that is no
-        longer there. That is reachable: the flow sits on the progress-done
-        step for as long as answering it takes -- creating the entry and
-        setting the integration up -- so a duplicated request or a second
-        open dialog lands here. ``UnknownFlow`` becomes a 404 at the view and
-        leaves the flow alone; raising anything else would reach the user as
-        "Unknown error", which is what this step exists to stop, and aborting
-        would pull the flow out from under the request busy finishing it.
+        longer there. That is reachable on both paths, because the flow stays
+        where it was for as long as answering takes -- creating the entry and
+        setting the integration up. After progress, it sits on the
+        progress-done step, so the second request lands here. When allocation
+        finished at once, it is still on the submitting step's form, so the
+        second request passes the form's validation and reaches
+        ``_allocation_progress``, which refuses it the same way unless the
+        first was refused -- a refusal re-shows the form, and the user must be
+        able to submit it again.
+
+        ``UnknownFlow`` becomes a 404 at the view and leaves the flow alone;
+        raising anything else would reach the user as "Unknown error", which
+        is what this step exists to stop, and aborting would pull the flow out
+        from under the request busy finishing it.
         """
         task, submission = self._allocation_task, self._allocation_submission
         if task is None or submission is None:
-            raise UnknownFlow(
-                "Slot numbers for this step were already allocated by another "
-                "request for the same flow"
-            )
+            raise _already_answered()
         self._allocation_task = None
         self._allocation_submission = None
-        return submission, task.result()
+        outcome = task.result()
+        unavailable, _errors, _placeholders = outcome
+        self._allocation_answered = unavailable is not None
+        return submission, outcome
 
 
 class LockCodeManagerFlowHandler(

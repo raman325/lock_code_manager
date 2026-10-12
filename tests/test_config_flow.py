@@ -26,11 +26,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import (
     EVENT_DATA_ENTRY_FLOW_PROGRESS_UPDATE,
     UnknownFlow,
+    UnknownStep,
 )
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.lock_code_manager.config_flow import _check_common_slots
+from custom_components.lock_code_manager.config_flow import (
+    LockCodeManagerFlowHandler,
+    _check_common_slots,
+)
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -3197,6 +3201,138 @@ async def test_a_second_request_for_an_answered_step_is_not_an_unknown_error(
 
     assert result["type"] == "create_entry"
     assert flow_users(result) == {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+
+
+async def test_a_second_request_while_an_unread_entry_is_saved_is_turned_away(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A duplicated submission is refused while the first one saves the entry.
+
+    With nothing to wait on, allocation is answered within the request that
+    submitted the users, and Home Assistant leaves the flow on the users form
+    while it saves the entry. A second request carrying the same users -- a
+    client retry, a second open dialog -- gets the 404 a request for a step
+    already answered gets, and does not allocate and save a second entry
+    over the first.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+    users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
+    saving = asyncio.Event()
+    let_it_save = asyncio.Event()
+    finish_flow = ConfigEntriesFlowManager.async_finish_flow
+
+    async def _slow_first_save(self, flow, result):
+        if not saving.is_set():
+            saving.set()
+            await let_it_save.wait()
+        return await finish_flow(self, flow, result)
+
+    with patch.object(ConfigEntriesFlowManager, "async_finish_flow", _slow_first_save):
+        saved = hass.async_create_task(
+            hass.config_entries.flow.async_configure(flow_id, users)
+        )
+        await saving.wait()
+
+        with pytest.raises(UnknownFlow):
+            await hass.config_entries.flow.async_configure(flow_id, users)
+
+        let_it_save.set()
+        result = await saved
+
+    assert result["type"] == "create_entry"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_a_refusal_after_a_held_read_comes_back_to_the_users_form(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A read that runs long and then fails re-shows the users form with why.
+
+    The progress path end to end: the submission shows progress while the
+    read is held, the read never answers, and once Home Assistant re-enters
+    the step the refusal lands on the form the users were submitted from --
+    which takes the same users again once the lock answers.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+    users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
+
+    with when_mock_lock_built(lambda lock: lock.drop_reply("get")) as faults:
+        result = await hass.config_entries.flow.async_configure(flow_id, users)
+        assert result["type"] == "progress"
+        assert result["step_id"] == "yaml"
+
+        assert sum(fault.held for fault in faults) == 1
+        for fault in faults:
+            fault.clear()
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "yaml"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+
+    result = await async_configure_flow(hass, flow_id, users)
+    assert result["type"] == "create_entry"
+
+
+async def test_a_refusal_answered_at_once_can_be_submitted_again(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A refusal that needed no wait leaves the form open to another try.
+
+    Turning away a second request for a step already answered must not turn
+    away the user correcting a refused one.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+    users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
+
+    with when_mock_lock_built(lambda lock: lock.fail("get")):
+        result = await hass.config_entries.flow.async_configure(flow_id, users)
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+
+    result = await hass.config_entries.flow.async_configure(flow_id, users)
+    assert result["type"] == "create_entry"
+
+
+async def test_an_allocation_cancelled_as_it_starts_is_shown_as_progress(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Only an allocation that finished normally skips the progress step.
+
+    One cancelled before it could answer has no outcome to show, so the
+    submitting request is not where it surfaces.
+    """
+    flow_id = await _start_config_flow(hass)
+    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+
+    with patch(
+        "custom_components.lock_code_manager.config_flow.async_allocate_for",
+        AsyncMock(side_effect=asyncio.CancelledError),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+
+    assert result["type"] == "progress"
+    assert result["step_id"] == "ui"
+
+
+async def test_allocating_for_a_step_with_no_allocated_sibling_starts_nothing(
+    hass: HomeAssistant,
+) -> None:
+    """A step missing its ``_allocated`` sibling fails before any read starts.
+
+    Checked up front, so it fails the same way whether the allocation would
+    have finished at once or only after a long read.
+    """
+    flow = LockCodeManagerFlowHandler()
+    flow.hass = hass
+
+    with pytest.raises(UnknownStep):
+        await flow._start_allocation("missing", None, [LOCK_1_ENTITY_ID], 1, {})
+
+    assert flow._allocation_task is None
 
 
 async def test_every_user_subentry_field_has_a_label(

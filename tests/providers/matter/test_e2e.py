@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from matter_server.client.models.node import MatterNode
@@ -11,7 +10,7 @@ from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_USER, ConfigEntriesFlowManager
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -33,6 +32,8 @@ from custom_components.lock_code_manager.providers.matter import MatterLock
 # Module path where lock_helpers functions are imported in the provider
 from tests.common import flow_users, in_sync_entity_id
 from tests.conftest import async_advance_time, async_initial_tick
+
+from .conftest import matter_helpers_patched
 
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
 
@@ -332,15 +333,6 @@ class TestOutOfBandDeletion:
         assert hass.states.get(in_sync).state == STATE_ON
 
 
-@contextmanager
-def _matter_helpers_patched(helpers: dict[str, AsyncMock]) -> Iterator[None]:
-    """Answer every Matter lock helper the provider calls from ``helpers``."""
-    with ExitStack() as stack:
-        for name, mock in helpers.items():
-            stack.enter_context(patch(f"{_PROVIDER_MODULE}.{name}", mock))
-        yield
-
-
 class TestAddingThroughTheUserInterface:
     """A Matter lock has nothing for allocation to read, so the flow never waits.
 
@@ -349,6 +341,9 @@ class TestAddingThroughTheUserInterface:
     hears nothing: Home Assistant announces the step moved on before the
     dialog has subscribed to hear it, and setup sits on the progress screen
     for good (issue #1639).
+
+    These helpers never wait, so a flow that asked the lock would also skip
+    the progress screen; each test checks the lock was asked nothing.
     """
 
     @pytest.fixture(autouse=True)
@@ -356,10 +351,15 @@ class TestAddingThroughTheUserInterface:
         self, matter_mock_helpers: dict[str, AsyncMock]
     ) -> Iterator[None]:
         """Keep the helpers patched for the entry the flow creates and sets up."""
-        with _matter_helpers_patched(matter_mock_helpers):
+        with matter_helpers_patched(matter_mock_helpers):
             yield
 
-    async def _start_flow(self, hass: HomeAssistant, lock_entity_id: str) -> str:
+    async def _start_flow(
+        self,
+        hass: HomeAssistant,
+        lock_entity_id: str,
+        helpers: dict[str, AsyncMock],
+    ) -> str:
         """Start setup on the Matter lock and return the flow at its path menu."""
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
@@ -369,13 +369,20 @@ class TestAddingThroughTheUserInterface:
             flow_id, {CONF_NAME: "matter", CONF_LOCKS: [lock_entity_id]}
         )
         assert result["step_id"] == "choose_path"
+        for helper in helpers.values():
+            helper.reset_mock()
         return flow_id
 
     async def test_the_user_count_goes_straight_to_naming_the_first_user(
-        self, hass: HomeAssistant, lock_entity: er.RegistryEntry
+        self,
+        hass: HomeAssistant,
+        lock_entity: er.RegistryEntry,
+        matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
         """Submitting the count shows the first user's form, never progress."""
-        flow_id = await self._start_flow(hass, lock_entity.entity_id)
+        flow_id = await self._start_flow(
+            hass, lock_entity.entity_id, matter_mock_helpers
+        )
         await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "ui"})
 
         result = await hass.config_entries.flow.async_configure(
@@ -385,6 +392,7 @@ class TestAddingThroughTheUserInterface:
         assert result["type"] == "form"
         assert result["step_id"] == "code_slot"
         assert result["description_placeholders"] == {"user_num": 1, "num_users": 3}
+        assert _asked(matter_mock_helpers) == []
 
         for num in (1, 2, 3):
             result = await hass.config_entries.flow.async_configure(
@@ -400,19 +408,39 @@ class TestAddingThroughTheUserInterface:
         await hass.config_entries.async_unload(result["result"].entry_id)
 
     async def test_a_block_of_users_goes_straight_to_creating_the_entry(
-        self, hass: HomeAssistant, lock_entity: er.RegistryEntry
+        self,
+        hass: HomeAssistant,
+        lock_entity: er.RegistryEntry,
+        matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
         """Submitting the users block creates the entry, never progress."""
-        flow_id = await self._start_flow(hass, lock_entity.entity_id)
+        flow_id = await self._start_flow(
+            hass, lock_entity.entity_id, matter_mock_helpers
+        )
         await hass.config_entries.flow.async_configure(
             flow_id, {"next_step_id": "yaml"}
         )
         users = {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+        # Setting the new entry up asks the lock plenty; what counts is what
+        # was asked before the entry was handed over to be saved.
+        asked_before_saving: list[list[str]] = []
+        finish_flow = ConfigEntriesFlowManager.async_finish_flow
 
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_USERS: users}
-        )
+        async def _finish_flow(manager, flow, result):
+            asked_before_saving.append(_asked(matter_mock_helpers))
+            return await finish_flow(manager, flow, result)
+
+        with patch.object(ConfigEntriesFlowManager, "async_finish_flow", _finish_flow):
+            result = await hass.config_entries.flow.async_configure(
+                flow_id, {CONF_USERS: users}
+            )
 
         assert result["type"] == "create_entry"
         assert flow_users(result) == users
+        assert asked_before_saving == [[]]
         await hass.config_entries.async_unload(result["result"].entry_id)
+
+
+def _asked(helpers: dict[str, AsyncMock]) -> list[str]:
+    """Return the Matter helpers awaited since they were last reset."""
+    return sorted(name for name, helper in helpers.items() if helper.await_count)
