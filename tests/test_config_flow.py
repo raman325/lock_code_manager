@@ -6,10 +6,8 @@ import json
 import logging
 from pathlib import Path
 import re
-from typing import Any
 from unittest.mock import AsyncMock, PropertyMock, patch
 
-from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -34,7 +32,6 @@ from homeassistant.setup import async_setup_component
 
 from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
-    ALLOCATION_GRACE_SECONDS,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOT,
@@ -66,7 +63,6 @@ from .common import (
     LOCK_2_ENTITY_ID,
     LockFault,
     MockLCMLock,
-    async_advance_clock,
     async_configure_flow,
     async_discover_unclaimed_mqtt_lock,
     async_run_until_quiet,
@@ -104,31 +100,6 @@ def _holding(*occupied: int):
         }
 
     return patch.object(MockLCMLock, "async_get_usercodes", _read)
-
-
-async def _submit_past_the_grace(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    flow_id: str,
-    user_input: dict[str, Any],
-) -> Any:
-    """
-    Submit while the allocation is held, stepping the clock past its grace.
-
-    The submission waits ``ALLOCATION_GRACE_SECONDS`` for the allocation
-    before showing progress for it. Checks it is still waiting just short of
-    that and has answered just past it, so the grace is the one shipped.
-    """
-    submitting = hass.async_create_task(
-        hass.config_entries.flow.async_configure(flow_id, user_input)
-    )
-    await async_advance_clock(
-        hass, freezer, ALLOCATION_GRACE_SECONDS - 0.1, settle=False
-    )
-    assert not submitting.done(), "answered before the grace was up"
-    await async_advance_clock(hass, freezer, 0.2, settle=False)
-    assert submitting.done(), "still waiting after the grace was up"
-    return submitting.result()
 
 
 @pytest.fixture(name="bypass_entry_setup_and_unload", autouse=True)
@@ -2987,7 +2958,7 @@ def test_every_allocation_refusal_has_a_sentence(category: tuple[str, ...]) -> N
 
 
 async def test_ui_allocation_runs_as_a_progress_step(
-    hass: HomeAssistant, mock_lock_config_entry, freezer: FrozenDateTimeFactory
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """The count submission shows progress while the locks are read (#1536).
 
@@ -3006,8 +2977,8 @@ async def test_ui_allocation_runs_as_a_progress_step(
         return lock.hang("get")
 
     with when_mock_lock_built(_empty_and_slow_to_read) as faults:
-        result = await _submit_past_the_grace(
-            hass, freezer, flow_id, {CONF_NUM_USERS: 2}
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
         )
         assert result["type"] == "progress"
         assert result["step_id"] == "ui"
@@ -3085,7 +3056,7 @@ async def test_allocation_failing_unexpectedly_comes_back_to_the_form(
 
 
 async def test_reentering_the_step_while_the_read_runs_shows_progress_again(
-    hass: HomeAssistant, mock_lock_config_entry, freezer: FrozenDateTimeFactory
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """A poll of the flow while the locks are still being read stays on progress.
 
@@ -3104,8 +3075,8 @@ async def test_reentering_the_step_while_the_read_runs_shows_progress_again(
         return {slot: SlotCredential.empty() for slot in scope}
 
     with patch.object(MockLCMLock, "async_get_usercodes", _slow_read):
-        result = await _submit_past_the_grace(
-            hass, freezer, flow_id, {CONF_NUM_USERS: 2}
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
         )
         assert result["type"] == "progress"
         result = await hass.config_entries.flow.async_configure(flow_id)
@@ -3173,7 +3144,7 @@ async def test_progress_only_moves_forward_across_widening_passes(
 
 
 async def test_a_second_request_for_an_answered_step_is_not_an_unknown_error(
-    hass: HomeAssistant, mock_lock_config_entry, freezer: FrozenDateTimeFactory
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """A duplicated request reaches a step the first one already took.
 
@@ -3203,9 +3174,7 @@ async def test_a_second_request_for_an_answered_step_is_not_an_unknown_error(
         patch.object(MockLCMLock, "async_get_usercodes", _slow_read),
         patch.object(ConfigEntriesFlowManager, "async_finish_flow", _slow_save),
     ):
-        result = await _submit_past_the_grace(
-            hass,
-            freezer,
+        result = await hass.config_entries.flow.async_configure(
             flow_id,
             {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
         )
@@ -3273,7 +3242,7 @@ async def test_a_second_request_while_an_unread_entry_is_saved_is_turned_away(
 
 
 async def test_a_refusal_after_a_held_read_comes_back_to_the_users_form(
-    hass: HomeAssistant, mock_lock_config_entry, freezer: FrozenDateTimeFactory
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """A read that runs long and then fails re-shows the users form with why.
 
@@ -3286,7 +3255,7 @@ async def test_a_refusal_after_a_held_read_comes_back_to_the_users_form(
     users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
 
     with when_mock_lock_built(lambda lock: lock.drop_reply("get")) as faults:
-        result = await _submit_past_the_grace(hass, freezer, flow_id, users)
+        result = await hass.config_entries.flow.async_configure(flow_id, users)
         assert result["type"] == "progress"
         assert result["step_id"] == "yaml"
 
@@ -3304,56 +3273,22 @@ async def test_a_refusal_after_a_held_read_comes_back_to_the_users_form(
     assert result["type"] == "create_entry"
 
 
-async def test_a_read_answered_within_the_grace_goes_straight_to_the_users(
-    hass: HomeAssistant, mock_lock_config_entry, freezer: FrozenDateTimeFactory
-) -> None:
-    """A lock that answers quickly is not shown as progress at all (#1639).
-
-    A read that has to wait on the lock -- a round trip to a Z-Wave server, an
-    MQTT reply -- finishes moments after a progress step would be shown, and
-    the dialog, not yet listening for the flow to move on, would never hear
-    that it had. Answered within the grace, the count goes straight to the
-    first user's form.
-    """
-    flow_id = await _start_config_flow(hass)
-    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
-
-    def _empty_and_quick_to_read(lock: MockLCMLock) -> LockFault:
-        lock.codes.clear()
-        return lock.slow("get", seconds=ALLOCATION_GRACE_SECONDS / 4)
-
-    with when_mock_lock_built(_empty_and_quick_to_read) as faults:
-        submitting = hass.async_create_task(
-            hass.config_entries.flow.async_configure(flow_id, {CONF_NUM_USERS: 2})
-        )
-        await async_advance_clock(
-            hass, freezer, ALLOCATION_GRACE_SECONDS / 2, settle=False
-        )
-        assert submitting.done()
-
-    assert sum(fault.hits for fault in faults) == 1
-    result = submitting.result()
-    assert result["type"] == "form"
-    assert result["step_id"] == "code_slot"
-    assert result["description_placeholders"] == {"user_num": 1, "num_users": 2}
-
-
 async def test_a_refusal_after_a_held_read_comes_back_to_the_count_form(
-    hass: HomeAssistant, mock_lock_config_entry, freezer: FrozenDateTimeFactory
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """The guided path's refusal after progress lands on the count form.
 
     The same handoff as the users block takes, through the count step: the
-    read runs past the grace, never answers, and the refusal comes back on
-    the form the count was submitted from, which takes it again once the
-    lock answers.
+    read is held, so the submission shows progress, the read never answers,
+    and the refusal comes back on the form the count was submitted from,
+    which takes it again once the lock answers.
     """
     flow_id = await _start_config_flow(hass)
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
 
     with when_mock_lock_built(lambda lock: lock.drop_reply("get")) as faults:
-        result = await _submit_past_the_grace(
-            hass, freezer, flow_id, {CONF_NUM_USERS: 2}
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
         )
         assert result["type"] == "progress"
         assert result["step_id"] == "ui"

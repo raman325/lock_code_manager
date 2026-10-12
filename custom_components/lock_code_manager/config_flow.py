@@ -32,7 +32,6 @@ from homeassistant.util import slugify
 
 from . import async_release_locks
 from .const import (
-    ALLOCATION_GRACE_SECONDS,
     CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -417,8 +416,8 @@ class _AllocatesInProgress:
     step that takes the submission starts the task and shows progress; Home
     Assistant re-enters the step when the task finishes, the step hands off
     to its ``<step>_allocated`` sibling, and that one either proceeds or
-    re-shows the same form with the refusal. A task that finishes within
-    ``ALLOCATION_GRACE_SECONDS`` goes straight to progress-done instead.
+    re-shows the same form with the refusal. A task already finished when it
+    starts goes straight to progress-done.
     """
 
     # Provided by the FlowHandler this is mixed into.
@@ -430,7 +429,7 @@ class _AllocatesInProgress:
     _allocation_task: asyncio.Task[_AllocationOutcome] | None = None
     _allocation_submission: dict[str, Any] | None = None
 
-    async def _start_allocation(
+    def _start_allocation(
         self,
         step_id: str,
         config_entry: ConfigEntry | None,
@@ -452,9 +451,9 @@ class _AllocatesInProgress:
                 progress=self.async_update_progress,
             )
         )
-        # See ALLOCATION_GRACE_SECONDS for why. A wait that times out leaves
-        # the task running, for the progress step to follow.
-        await asyncio.wait({self._allocation_task}, timeout=ALLOCATION_GRACE_SECONDS)
+        # Not always progress: a task with nothing to read has already
+        # finished (tasks start eagerly), and showing it as progress lets the
+        # done-callback's event fire before any client listens for it.
         return self._allocation_progress(step_id)
 
     def _allocation_progress(self, step_id: str) -> Any | None:
@@ -477,13 +476,12 @@ class _AllocatesInProgress:
         longer there. That is reachable: the flow sits on the progress-done
         step for as long as answering it takes -- creating the entry and
         setting the integration up -- so a duplicated request or a second
-        open dialog lands here. A step whose allocation finished within the
-        grace is handed off through progress-done within the same request,
-        so its duplicate lands here too. ``UnknownFlow`` becomes a 404 at the
-        view and leaves the flow alone; raising anything else would reach the
-        user as "Unknown error", which is what this step exists to stop, and
-        aborting would pull the flow out from under the request busy finishing
-        it.
+        open dialog lands here. A step whose allocation finished at once is
+        handed off through progress-done within the same request, so its
+        duplicate lands here too. ``UnknownFlow`` becomes a 404 at the view and
+        leaves the flow alone; raising anything else would reach the user as
+        "Unknown error", which is what this step exists to stop, and aborting
+        would pull the flow out from under the request busy finishing it.
         """
         task, submission = self._allocation_task, self._allocation_submission
         if task is None or submission is None:
@@ -574,7 +572,7 @@ class LockCodeManagerFlowHandler(
             # the count alone decides whether they fit -- and a refusal here
             # is one the user can still act on. The ``None`` is the entry the
             # lock reads are made for: this flow is what creates it.
-            return await self._start_allocation(
+            return self._start_allocation(
                 "ui",
                 None,
                 self.data[CONF_LOCKS],
@@ -707,7 +705,7 @@ class LockCodeManagerFlowHandler(
                 # neither can land on one a lock already holds. The ``None``
                 # is the entry the lock reads are made for, which this flow
                 # has not created yet.
-                return await self._start_allocation(
+                return self._start_allocation(
                     "yaml",
                     None,
                     self.data[CONF_LOCKS],

@@ -237,12 +237,6 @@ PENDING_WRITE_TTL: float = 60.0
 # before the deadline and a lock that never keeps it is asked, not hammered.
 CONFIRM_READ_INTERVAL: float = PENDING_WRITE_TTL / 4
 
-# How long a config flow submission waits for slot allocation before showing
-# progress for it. A progress step whose task finishes before the dialog has
-# subscribed to the flow is never announced to it, and the dialog stays on the
-# progress screen; a read that answers within this is handed on directly.
-ALLOCATION_GRACE_SECONDS: float = 2.0
-
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=2)
 # How long ``SlotSyncManager.async_stop`` lets an in-flight tick finish before
