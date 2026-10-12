@@ -68,7 +68,7 @@ from .common import (
     PIN_CAPABILITIES,
     SLOT_1_PIN_ENTITY,
     FaultKind,
-    MockCalendarEntity,
+    LiveMockCalendars,
     MockLCMLock,
     MockLCMPushLock,
     _async_step_timers_to,
@@ -1384,12 +1384,18 @@ async def test_a_push_subscription_hears_its_lock_until_it_unsubscribes(
 async def test_the_mock_lock_entry_reloads_with_its_calendars(
     hass: HomeAssistant,
     mock_lock_config_entry,
-    mock_calendars: list[MockCalendarEntity],
+    mock_calendars: LiveMockCalendars,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Reloading the mock lock integration brings its calendars back, events kept."""
+    """
+    Reloading the mock lock integration brings its calendars back, events kept.
+
+    The fixture follows the reload: an event made through it afterwards is on
+    the calendar Home Assistant has now.
+    """
     start = dt_util.utcnow()
-    mock_calendars[0].create_event(
+    before_reload = mock_calendars[0]
+    before_reload.create_event(
         dtstart=start, dtend=start + TICK_INTERVAL, summary="kept"
     )
     caplog.clear()
@@ -1400,13 +1406,19 @@ async def test_the_mock_lock_entry_reloads_with_its_calendars(
     assert [
         record for record in caplog.records if record.levelno >= logging.ERROR
     ] == []
-    calendars = hass.data[MOCK_CALENDARS_KEY]
-    assert calendars is not mock_calendars
-    for calendar in calendars:
+    live = hass.data[MOCK_CALENDARS_KEY]
+    assert mock_calendars[0] is live[0] is not before_reload
+    for calendar in mock_calendars:
         state = hass.states.get(calendar.entity_id)
         assert state is not None
         assert state.state != STATE_UNAVAILABLE
-    assert [event.summary for event in calendars[0]._events] == ["kept"]
+
+    mock_calendars[1].create_event(
+        dtstart=start, dtend=start + TICK_INTERVAL, summary="after"
+    )
+    assert [event.summary for event in live[0]._events] == ["kept"]
+    assert [event.summary for event in live[1]._events] == ["after"]
+    assert hass.states.get(live[1].entity_id).attributes["message"] == "after"
 
 
 async def test_a_lock_reports_no_capabilities_unless_given_some(lock) -> None:

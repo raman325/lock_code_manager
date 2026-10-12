@@ -355,7 +355,8 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     entities and calendars) that the `mock_lock_config_entry` fixture provides, for a
     test that builds its own Home Assistant per example. Each setup builds fresh
     entities, so the entry can be reloaded; calendars keep their events, and
-    `hass.data[MOCK_CALENDARS_KEY]` holds the current ones
+    `hass.data[MOCK_CALENDARS_KEY]` holds the current ones. The `mock_calendars`
+    fixture looks them up on every use, so it follows a reload
   - `@pytest.mark.paced` keeps the providers' real delay between lock operations; such a
     test settles with `settle=False`, since settling only steps a fraction of a second
   - Settling skips the tasks registered in `LIFELONG_TASKS`: ones an integration under test
@@ -418,16 +419,22 @@ Two complementary layers exist alongside the example-based suites:
   state and the mock locks' records. Each example builds its own Home
   Assistant on its own loop and frozen clock (Hypothesis keeps the real
   one). It caps examples at 20 steps and reports one bug; most failures
-  shrink in seconds, the slowest seen took about a minute. Every step is
-  bounded in real time: a step that overruns, or whose work never finishes
-  however far the clock is stepped, fails as `ExampleHung` on every replay,
-  so a hang shrinks like any other failure, and teardown after one is
-  bounded and always takes the example's Home Assistant off the harness's
-  running list, so the session goes on. The test's pytest timeout is raised
-  to 420 seconds, past Hypothesis's own cutoff for a slow shrink, as a
-  last-resort backstop only: the suite's 60 seconds could cut a shrink
-  short, and a timeout firing inside an example is taken by Hypothesis for
-  that example's failure and reported as flaky.
+  shrink in seconds, the slowest seen took about a minute.
+  Every step is bounded in its own loop, by steps of the frozen clock -- an
+  asyncio timeout would never fire there, since that clock moves only when
+  stepped: a step waiting on work that never finishes fails as
+  `ExampleHung`, the same on every replay, so a hang shrinks like any other
+  failure. Shrinking one replays it many times, but each replay pays its
+  bound in clock steps, not real time: hangs measured shrank in 2 to 5
+  seconds. Teardown is bounded, drains the loop, and
+  always takes the example's Home Assistant off the harness's running list,
+  so the session goes on. A synchronous spin that never yields is bounded by
+  nothing in the machine: only the test's pytest timeout catches it, and
+  Hypothesis then reports it unshrunk. That timeout is raised to 420
+  seconds, past Hypothesis's own cutoff for a slow shrink, as a last-resort
+  backstop only: the suite's 60 seconds could cut a shrink short, and a
+  timeout firing inside an example is taken by Hypothesis for that example's
+  failure and reported as flaky.
 - **TypeScript (Bombadil)** — `ts/pbt/` contains a browser harness that mounts
   the built cards with a scripted mock `hass` plus a chaos panel, and a
   Bombadil spec (`ts/pbt/spec.ts`) with temporal-logic properties (no PIN leaks

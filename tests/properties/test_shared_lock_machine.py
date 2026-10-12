@@ -39,24 +39,23 @@ live instance up again.
 Each example builds its own Home Assistant on its own loop and frozen clock:
 Hypothesis reuses function-scoped fixtures across examples, so nothing here
 may lean on them. Home Assistant starts in the first step, with any entries
-the example boots with. Every step is bounded in real time: one that runs
-past its bound is cancelled, and if it will not let go its loop is stopped
-under it, and it fails as ``ExampleHung`` -- the same failure on every
-replay, so a hang shrinks like any other failure. Teardown after a hang is
-bounded too, and always takes the example's Home Assistant off the list of
-running instances, so one hung example fails alone.
+the example boots with. Every step is bounded in its own loop, by steps of
+the frozen clock: one waiting on work that never finishes fails as
+``ExampleHung``, the same on every replay, so a hang shrinks like any other
+failure. Teardown is bounded too: it drains the loop, and always takes the
+example's Home Assistant off the harness's list of running instances, so one
+hung example fails alone.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from collections.abc import Callable, Coroutine
-from contextlib import ExitStack
+from collections.abc import Awaitable, Callable, Coroutine
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
-import threading
 from typing import Any
 from unittest.mock import patch
 
@@ -91,6 +90,7 @@ from homeassistant.core import CoreState, Event, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_IN_SYNC,
@@ -105,6 +105,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
 )
 
 from ..common import (
+    CLOCK_STEP,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     LOCK_DEVICE_DOMAIN,
@@ -117,7 +118,6 @@ from ..common import (
     async_run_until_quiet,
     async_settle_background,
     async_setup_mock_lock_entry,
-    async_tick_until,
     code_entity_id,
     current_entry,
     in_sync_entity_id,
@@ -141,17 +141,17 @@ READ_INTERVAL = timedelta(minutes=1)
 # A slot comes up in sync within a tick or two; a second entry joining a lock
 # waits out the coordinator's ten-second debounced read first.
 MAX_TICKS_TO_SYNC = 8
-# Steps take milliseconds of real time. One still running after this is
-# waiting on something that will never come, and is reported as hung.
-STEP_SECONDS = 5.0
-# A step past its bound is cancelled this many times, this far apart, before
-# its loop is stopped under it: a step can swallow a cancellation.
-CANCEL_ATTEMPTS = 3
-CANCEL_GRACE_SECONDS = 0.5
-# Bounds on stopping Home Assistant and its executor in teardown. Home
-# Assistant's own stop waits minutes on a task that never ends.
-STOP_SECONDS = 2.0
-EXECUTOR_SECONDS = 2.0
+# How long, in steps of the frozen clock, an operation may wait before it has
+# hung. The loop's clock moves only when something steps it, so an asyncio
+# timeout around a call that never returns would never fire: stepping the
+# clock while the call waits is what bounds it, and does so the same way on
+# every replay. A synchronous spin that never yields is bounded by nothing
+# here; only the test's pytest timeout backstop catches it, unshrunk.
+OPERATION_STEPS = 1000
+# Stopping Home Assistant steps the clock a second at a time, past the
+# timeouts of its own stop stages, which are minutes long in all.
+STOP_STEP_SECONDS = 1.0
+STOP_STEPS = 300
 FROZEN_AT = "2026-01-01 12:00:00+00:00"
 # Every lifecycle defect this machine has caught needed fewer than ten steps,
 # and shorter examples are what keep a failure's shrink to seconds.
@@ -166,7 +166,7 @@ class _LockIntegrationFlow(ConfigFlow):
 
 
 class ExampleHung(Exception):
-    """A step, or the teardown, still running past its bound in real time."""
+    """A step, or the teardown, waiting on work that never finishes."""
 
 
 class FailedSetup(StrEnum):
@@ -242,6 +242,13 @@ class SharedLockMachine(RuleBasedStateMachine):
         runner.configure_event_loop(self.loop)
         self._stack = ExitStack()
         self._hass_cm = None
+        self._entered = False
+        # What starting a test Home Assistant changes, so teardown can put it
+        # back however far starting got: it joins the harness's list of
+        # running instances, and sets the default time zone, before anything
+        # that can fail or hang.
+        self._instances_before = list(INSTANCES)
+        self._time_zone = dt_util.get_default_time_zone()
         # One fixed instant for every example, so a replay during shrinking
         # starts on the same clock readings as the run that failed. Hypothesis
         # keeps the real clock, for its own timing.
@@ -262,14 +269,25 @@ class SharedLockMachine(RuleBasedStateMachine):
             self._hass_cm = async_test_home_assistant(
                 self.loop, initial_state=CoreState.starting
             )
-            self.hass: HomeAssistant = self._run(self._hass_cm.__aenter__())
+            self.hass: HomeAssistant = self._run(
+                self._async_bounded(self._hass_cm.__aenter__(), "build"), "build"
+            )
+            self._entered = True
             # What the autouse custom-integration fixture does for the
             # fixture's Home Assistant, which this one is not.
             self.hass.data.pop(loader.DATA_CUSTOM_COMPONENTS, None)
-            self.lock_entry = self._run(async_setup_mock_lock_entry(self.hass))
+            self.lock_entry = self._run(
+                self._async_bounded(async_setup_mock_lock_entry(self.hass), "build"),
+                "build",
+            )
             # Set up before any entry exists, so each setup below sets up its
             # own entry rather than every entry of the domain.
-            assert self._run(async_setup_component(self.hass, DOMAIN, {}))
+            assert self._run(
+                self._async_bounded(
+                    async_setup_component(self.hass, DOMAIN, {}), "build"
+                ),
+                "build",
+            )
             self.hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, self._on_use)
         except BaseException:
             self._close()
@@ -277,47 +295,45 @@ class SharedLockMachine(RuleBasedStateMachine):
 
     # Plumbing.
 
-    def _run[T](
-        self, coro: Coroutine[Any, Any, T], *, seconds: float = STEP_SECONDS
+    def _run[T](self, coro: Coroutine[Any, Any, T], what: str) -> T:
+        """
+        Run one step's coroutine, failing as ``ExampleHung`` on work that never ends.
+
+        The harness's own bounds -- stepping the clock until background work
+        finishes, running the loop until it is quiet -- fail the step when
+        they run out. Whichever of them it was, the step is waiting on work
+        that never finishes, and fails as that, with a message naming only
+        the step, so every replay fails the same way.
+        """
+        try:
+            return self.loop.run_until_complete(coro)
+        except pytest.fail.Exception as err:
+            self.hung = True
+            raise ExampleHung(f"{what}: {err}") from None
+
+    async def _async_bounded[T](
+        self,
+        operation: Awaitable[T],
+        what: str,
+        *,
+        step: float = CLOCK_STEP,
+        steps: int = OPERATION_STEPS,
     ) -> T:
         """
-        Run one step's coroutine, raising ``ExampleHung`` if it overruns ``seconds``.
+        Await ``operation``, stepping the frozen clock while it waits.
 
-        A watchdog thread cancels the step once it overruns, then again, and
-        stops the loop under it if it still will not let go. Whatever the
-        step did after its bound -- finished, raised, swallowed the
-        cancellation -- it hung, and fails as that, so every replay of the
-        same hang fails the same way.
+        Raises ``ExampleHung`` once it has waited ``steps`` steps, having
+        cancelled it.
         """
-        what = getattr(coro, "__qualname__", "step")
-        task = self.loop.create_task(coro)
-        finished = threading.Event()
-        overran: list[bool] = []
-
-        def _watch() -> None:
-            if finished.wait(seconds):
-                return
-            overran.append(True)
-            for _ in range(CANCEL_ATTEMPTS):
-                self.loop.call_soon_threadsafe(task.cancel)
-                if finished.wait(CANCEL_GRACE_SECONDS):
-                    return
-            self.loop.call_soon_threadsafe(self.loop.stop)
-
-        watchdog = threading.Thread(target=_watch, name="step watchdog", daemon=True)
-        watchdog.start()
-        try:
-            result = self.loop.run_until_complete(task)
-        except BaseException:
-            if not overran:
-                raise
-        finally:
-            finished.set()
-            watchdog.join()
-        if overran:
-            self.hung = True
-            raise ExampleHung(f"{what} still running after {seconds:.0f}s")
-        return result
+        task = asyncio.ensure_future(operation)
+        for _ in range(steps):
+            await async_run_until_quiet()
+            if task.done():
+                return task.result()
+            self.freezer.tick(step)
+        task.cancel()
+        self.hung = True
+        raise ExampleHung(f"{what} never finished")
 
     def _on_build(self, lock: MockLCMLock) -> None:
         """Give each mock lock its physical code table, and what its rule asks."""
@@ -342,27 +358,24 @@ class SharedLockMachine(RuleBasedStateMachine):
 
     async def _async_settle(self) -> None:
         """
-        Let everything the step set off finish, on the frozen clock.
+        Let everything a step set off finish, on the frozen clock.
 
-        Work that never finishes, however far the clock is stepped, is the
-        step hanging, and fails as that.
+        The one way anything here settles, so work that never finishes is
+        found by the same bound, and fails the same way, wherever it was set
+        off.
         """
         await async_run_until_quiet()
-        try:
-            await async_settle_background(self.hass, self.freezer)
-        except pytest.fail.Exception as err:
-            self.hung = True
-            raise ExampleHung(str(err)) from None
+        await async_settle_background(self.hass, self.freezer)
 
-    def _act(self, operation: Callable[[], Coroutine[Any, Any, Any]]) -> Any:
+    def _act(self, operation: Callable[[], Coroutine[Any, Any, Any]], what: str) -> Any:
         """Run one operation through Home Assistant, then settle what it set off."""
 
         async def _act_and_settle() -> Any:
-            result = await operation()
+            result = await self._async_bounded(operation(), what)
             await self._async_settle()
             return result
 
-        return self._run(_act_and_settle())
+        return self._run(_act_and_settle(), what)
 
     def _instances(self, lock_entity_id: str | None = None) -> list[MockLCMLock]:
         """Return the instances entries built, for one lock or for all."""
@@ -445,7 +458,9 @@ class SharedLockMachine(RuleBasedStateMachine):
         """Set up the entry at ``index`` and check it loaded."""
         entry = self.positions[index].entry
         assert entry is not None
-        assert self._act(lambda: self.hass.config_entries.async_setup(entry.entry_id))
+        assert self._act(
+            lambda: self.hass.config_entries.async_setup(entry.entry_id), "set_up"
+        )
 
     # Rules.
 
@@ -463,7 +478,9 @@ class SharedLockMachine(RuleBasedStateMachine):
     def unload(self, data: st.DataObject) -> None:
         index = self._pick(data, self._loaded, "entry")
         entry = self.positions[index].entry
-        assert self._act(lambda: self.hass.config_entries.async_unload(entry.entry_id))
+        assert self._act(
+            lambda: self.hass.config_entries.async_unload(entry.entry_id), "unload"
+        )
         self.positions[index].loaded = False
 
     @precondition(lambda self: self._indices(self._enabled))
@@ -471,7 +488,9 @@ class SharedLockMachine(RuleBasedStateMachine):
     def reload(self, data: st.DataObject) -> None:
         index = self._pick(data, self._enabled, "entry")
         entry = self.positions[index].entry
-        assert self._act(lambda: self.hass.config_entries.async_reload(entry.entry_id))
+        assert self._act(
+            lambda: self.hass.config_entries.async_reload(entry.entry_id), "reload"
+        )
         self._came_up(index)
 
     @precondition(lambda self: self._indices(self._enabled))
@@ -482,7 +501,8 @@ class SharedLockMachine(RuleBasedStateMachine):
         assert self._act(
             lambda: self.hass.config_entries.async_set_disabled_by(
                 entry.entry_id, ConfigEntryDisabler.USER
-            )
+            ),
+            "disable",
         )
         self.positions[index].loaded = False
         self.positions[index].disabled = True
@@ -493,7 +513,10 @@ class SharedLockMachine(RuleBasedStateMachine):
         index = self._pick(data, self._disabled, "entry")
         entry = self.positions[index].entry
         assert self._act(
-            lambda: self.hass.config_entries.async_set_disabled_by(entry.entry_id, None)
+            lambda: self.hass.config_entries.async_set_disabled_by(
+                entry.entry_id, None
+            ),
+            "enable",
         )
         self.positions[index].disabled = False
         self._came_up(index)
@@ -503,7 +526,9 @@ class SharedLockMachine(RuleBasedStateMachine):
     def remove(self, data: st.DataObject) -> None:
         index = self._pick(data, self._present, "entry")
         entry = self.positions[index].entry
-        self._act(lambda: self.hass.config_entries.async_remove(entry.entry_id))
+        self._act(
+            lambda: self.hass.config_entries.async_remove(entry.entry_id), "remove"
+        )
         self.positions[index] = _Position()
 
     @precondition(lambda self: len(self._indices(self._loaded)) >= 2)
@@ -528,7 +553,7 @@ class SharedLockMachine(RuleBasedStateMachine):
                 )
             )
 
-        assert all(self._act(_unload_both))
+        assert all(self._act(_unload_both, "unload_two_at_once"))
         for index in indices:
             self.positions[index].loaded = False
 
@@ -604,7 +629,7 @@ class SharedLockMachine(RuleBasedStateMachine):
                 self.hass, started["flow_id"], {CONF_LOCKS: list(locks)}
             )
 
-        result = self._act(_submit)
+        result = self._act(_submit, "options flow")
         assert result["type"] is FlowResultType.CREATE_ENTRY, result
         assert entry.data[CONF_LOCKS] == list(locks)
 
@@ -647,10 +672,18 @@ class SharedLockMachine(RuleBasedStateMachine):
             self.dropped_without_push.add(id(failed))
         self._came_up(index, failed=lock)
 
-    @initialize(data=st.data(), locks=LOCK_LISTS)
-    def start(self, data: st.DataObject, locks: list[str]) -> None:
+    @initialize(
+        booting=st.lists(
+            st.tuples(st.integers(min_value=0, max_value=ENTRY_COUNT - 1), LOCK_LISTS),
+            unique_by=lambda booted: booted[0],
+            # At least one: set_up covers an entry set up after the start.
+            min_size=1,
+            max_size=ENTRY_COUNT,
+        )
+    )
+    def start(self, booting: list[tuple[int, list[str]]]) -> None:
         """
-        Start Home Assistant, with the entries it boots with.
+        Start Home Assistant, with the entries it boots with, each on its own locks.
 
         Those entries set up together, as Home Assistant sets up every entry
         at boot, and finish setting up once it has started. Every lock built
@@ -658,27 +691,16 @@ class SharedLockMachine(RuleBasedStateMachine):
         an entry joining a lock another entry is building reaches it before
         it is ready (#865).
         """
-        indices = data.draw(
-            st.lists(
-                st.integers(min_value=0, max_value=ENTRY_COUNT - 1),
-                unique=True,
-                max_size=ENTRY_COUNT,
-            ),
-            label="booting",
-        )
-        entries = [self._entry(index, locks) for index in indices]
+        entries = [self._entry(index, locks) for index, locks in booting]
         hass = self.hass
 
-        async def _boot() -> None:
-            assert all(
-                await asyncio.gather(
-                    *(
-                        hass.config_entries.async_setup(entry.entry_id)
-                        for entry in entries
-                    )
-                )
+        async def _set_up_all() -> list[bool]:
+            return await asyncio.gather(
+                *(hass.config_entries.async_setup(entry.entry_id) for entry in entries)
             )
-            await async_run_until_quiet()
+
+        async def _boot() -> None:
+            assert all(await self._async_bounded(_set_up_all(), "start"))
             hass.set_state(CoreState.running)
             hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
             await async_run_until_quiet()
@@ -690,26 +712,14 @@ class SharedLockMachine(RuleBasedStateMachine):
 
         self._hang_builds = True
         try:
-            self._run(_boot())
+            self._run(_boot(), "start")
         finally:
             self._hang_builds = False
             for fault in self._held_setups:
                 fault.clear()
             self._held_setups.clear()
-        for index in indices:
+        for index, _locks in booting:
             self._came_up(index)
-
-    @rule()
-    def a_sync_tick_passes(self) -> None:
-        """
-        Let one sync tick's worth of time pass.
-
-        Always possible, so a state where little else is -- nothing set up
-        yet -- still has a step to take.
-        """
-        self._run(
-            async_advance_clock(self.hass, self.freezer, TICK_INTERVAL.total_seconds())
-        )
 
     @precondition(lambda self: any(self._held(lock) for lock in LOCKS))
     @rule()
@@ -744,11 +754,14 @@ class SharedLockMachine(RuleBasedStateMachine):
 
         unsubscribe = hass.bus.async_listen("state_changed", _record)
         try:
-            self._run(
-                async_advance_clock(
-                    hass, self.freezer, READ_INTERVAL.total_seconds() + 1
+
+            async def _async_read_interval() -> None:
+                await async_advance_clock(
+                    hass, self.freezer, READ_INTERVAL.total_seconds() + 1, settle=False
                 )
-            )
+                await self._async_settle()
+
+            self._run(_async_read_interval(), "a_read_interval_passes")
         finally:
             unsubscribe()
 
@@ -788,7 +801,7 @@ class SharedLockMachine(RuleBasedStateMachine):
         async def _report() -> None:
             async_fire_mock_lock_use(self.hass, PUSH_LOCK, index + 1)
 
-        self._act(_report)
+        self._act(_report, "push_lock_reports_a_use")
         uses = self.credential_uses[entry.entry_id] - before
         assert uses == 1, f"one use of slot {index + 1} reached {entry.title} {uses}x"
 
@@ -806,7 +819,8 @@ class SharedLockMachine(RuleBasedStateMachine):
             for instance in self._live_all()
         ]
         assert self._act(
-            lambda: self.hass.config_entries.async_reload(self.lock_entry.entry_id)
+            lambda: self.hass.config_entries.async_reload(self.lock_entry.entry_id),
+            "reload_the_locks_integration",
         )
         for instance, setups in live:
             assert len(instance.service_calls["setup"]) == setups + 1, (
@@ -850,14 +864,19 @@ class SharedLockMachine(RuleBasedStateMachine):
                 for (in_sync_id, code_id), pin in expected.items()
             )
 
-        self._run(
-            async_tick_until(
-                hass,
-                self.freezer,
-                _in_sync,
-                max_ticks=MAX_TICKS_TO_SYNC,
-                what="every loaded entry's slots in sync with the lock's codes",
-            )
+        async def _async_ticks_until_in_sync() -> bool:
+            for _ in range(MAX_TICKS_TO_SYNC):
+                if _in_sync():
+                    return True
+                await async_advance_clock(
+                    hass, self.freezer, TICK_INTERVAL.total_seconds(), settle=False
+                )
+                await self._async_settle()
+            return _in_sync()
+
+        assert self._run(_async_ticks_until_in_sync(), "loaded_slots_are_in_sync"), (
+            f"slots not in sync with the lock's codes after {MAX_TICKS_TO_SYNC} "
+            f"sync ticks: {expected}"
         )
 
     @invariant()
@@ -956,34 +975,65 @@ class SharedLockMachine(RuleBasedStateMachine):
         Unload every entry and stop this example's Home Assistant, bounded.
 
         Held faults are let go first, or the unloads wait on them forever.
-        After a hang the loop may hold a task that never ends, so nothing more
-        is driven through Home Assistant: it is stopped within a bound, and
-        whether or not that stop finished, taken off the harness's list of
-        running instances -- left there, the harness aborts the whole session
-        rather than failing this test. A teardown that hangs itself fails the
-        example as hung, once everything is closed.
+        After a hang nothing is driven through Home Assistant but its stop.
+        Whatever happened, every task left on the loop is cancelled and
+        drained, so none is collected pending in a later test; every
+        instance this example started comes off the harness's list of
+        running ones, and the time zone is put back, however far starting it
+        got -- an instance left on that list aborts the whole session; and
+        the executors are shut down, so no thread outlives the test. A
+        teardown that hangs itself fails the example as hung, once
+        everything is closed.
         """
-        started = hasattr(self, "hass")
+        built = hasattr(self, "hass")
         teardown_hang: ExampleHung | None = None
         try:
             release_all_faults()
-            if started and not self.hung:
+            if built and not self.hung:
                 try:
-                    self._run(self._async_unload_all())
+                    self._run(self._async_unload_all(), "teardown")
                 except ExampleHung as err:
                     teardown_hang = err
+            if built:
+                with suppress(ExampleHung):
+                    self._run(
+                        self._async_bounded(
+                            self.hass.async_stop(force=True),
+                            "stop",
+                            step=STOP_STEP_SECONDS,
+                            steps=STOP_STEPS,
+                        ),
+                        "teardown",
+                    )
+            self._run(self._async_drain(), "teardown")
         finally:
-            # Stopped before Home Assistant is, so its stop runs on real time.
+            # Stopped before the executors are: their shutdown times itself
+            # on the monotonic clock.
             self._frozen.stop()
             try:
-                if started:
-                    self._stop_home_assistant()
+                if self._entered:
+                    assert self._hass_cm is not None
+                    # Undoes what entering it did; awaits nothing.
+                    self.loop.run_until_complete(
+                        self._hass_cm.__aexit__(None, None, None)
+                    )
             finally:
+                dt_util.set_default_time_zone(self._time_zone)
                 self._stack.close()
                 try:
-                    self.loop.run_until_complete(
-                        self.loop.shutdown_default_executor(EXECUTOR_SECONDS)
-                    )
+                    # One still on the list never finished stopping, which is
+                    # what would have shut its import executor down. Home
+                    # Assistant's executors bound their own shutdown,
+                    # interrupting a thread that will not finish.
+                    for instance in [
+                        instance
+                        for instance in INSTANCES
+                        if not any(instance is old for old in self._instances_before)
+                    ]:
+                        INSTANCES.remove(instance)
+                        instance.import_executor.shutdown()
+                    # Awaited, so the thread it shuts down in is gone too.
+                    self.loop.run_until_complete(self.loop.shutdown_default_executor())
                 finally:
                     self.loop.close()
                     asyncio.set_event_loop(None)
@@ -993,27 +1043,28 @@ class SharedLockMachine(RuleBasedStateMachine):
     async def _async_unload_all(self) -> None:
         for entry in self.hass.config_entries.async_entries(DOMAIN):
             if entry.state is ConfigEntryState.LOADED:
-                await self.hass.config_entries.async_unload(entry.entry_id)
+                await self._async_bounded(
+                    self.hass.config_entries.async_unload(entry.entry_id), "teardown"
+                )
         await self._async_settle()
 
-    def _stop_home_assistant(self) -> None:
-        """Stop Home Assistant within a bound, and take it off the running list."""
-        hass = self.hass
-        stopped = True
-        try:
-            self._run(hass.async_stop(force=True), seconds=STOP_SECONDS)
-        except ExampleHung:
-            stopped = False
-        assert self._hass_cm is not None
-        # Restores what starting it changed; awaits nothing.
-        self.loop.run_until_complete(self._hass_cm.__aexit__(None, None, None))
-        # A finished stop takes it off the list a loop turn after closing.
-        self.loop.run_until_complete(asyncio.sleep(0))
-        if hass in INSTANCES:
-            INSTANCES.remove(hass)
-        if not stopped:
-            # Its stop never reached the step that shuts this executor down.
-            hass.import_executor.shutdown()
+    async def _async_drain(self) -> None:
+        """Cancel every task left on the loop and let them finish, bounded."""
+        current = asyncio.current_task()
+        tasks = [task for task in asyncio.all_tasks() if task is not current]
+        for task in tasks:
+            task.cancel()
+        for _ in range(OPERATION_STEPS):
+            await async_run_until_quiet()
+            if all(task.done() for task in tasks):
+                return
+            self.freezer.tick(CLOCK_STEP)
+        for task in tasks:
+            if not task.done():
+                # It swallows cancellation and will never finish. The step
+                # that started it has failed as hung already; collected pending
+                # in some later test, it would only log that again there.
+                task._log_destroy_pending = False  # type: ignore[attr-defined]
 
 
 # As many examples as the profile asks for. The explain phase reruns a shrunk
@@ -1029,10 +1080,11 @@ SharedLockMachine.TestCase.settings = settings(
     report_multiple_bugs=False,
 )
 TestSharedLockMachine = SharedLockMachine.TestCase
-# A last-resort backstop, never the way a hang is reported: each step's own
-# bound reports that, as ExampleHung, the same on every replay. The suite's
-# whole-test timeout raises inside whatever example is running, which
-# Hypothesis would take for that example's own failure, replay, and report as
-# flaky; so it is raised past Hypothesis's own cutoff for a slow shrink, which
-# stops shrinking and reports what it has before this ever fires.
+# A last-resort backstop. A hang that awaits is each step's own bound to
+# report, as ExampleHung, the same on every replay; this catches only what
+# that bound cannot -- a synchronous spin that never yields -- and then
+# unshrunk. The suite's whole-test timeout raises inside whatever example is
+# running, which Hypothesis would take for that example's own failure, replay,
+# and report as flaky; so it is raised past Hypothesis's own cutoff for a slow
+# shrink, which stops shrinking and reports what it has before this fires.
 TestSharedLockMachine.pytestmark = [pytest.mark.timeout(BACKSTOP_SECONDS)]

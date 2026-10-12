@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Collection, Iterator
+from collections.abc import Awaitable, Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -1597,7 +1597,8 @@ class MockCalendarEntity(CalendarEntity):
     def __init__(self, name: str, events: list[CalendarEvent] | None = None) -> None:
         """Initialize entity."""
         self._attr_name = name.capitalize()
-        self._events = events or []
+        # The list given, empty or not, so a calendar rebuilt over it shares it.
+        self._events = [] if events is None else events
 
         self._attr_unique_id = slugify(name)
 
@@ -1651,6 +1652,30 @@ class MockCalendarEntity(CalendarEntity):
 
 # Where ``async_setup_mock_lock_entry`` keeps the calendars it added last.
 MOCK_CALENDARS_KEY = "lock_code_manager_calendars"
+
+
+class LiveMockCalendars(Sequence[MockCalendarEntity]):
+    """
+    The mock lock integration's calendars as added now, looked up on every use.
+
+    Reloading the integration replaces its calendar entities, so holding on to
+    the list from before would act on entities Home Assistant has removed.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Read the calendars from ``hass``."""
+        self._hass = hass
+
+    def _current(self) -> list[MockCalendarEntity]:
+        return self._hass.data[MOCK_CALENDARS_KEY]
+
+    def __getitem__(self, index: Any) -> Any:
+        """Return the calendar, or the slice of calendars, added now at ``index``."""
+        return self._current()[index]
+
+    def __len__(self) -> int:
+        """Return how many calendars are added now."""
+        return len(self._current())
 
 
 async def async_setup_mock_lock_entry(hass: HomeAssistant) -> MockConfigEntry:
