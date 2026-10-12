@@ -17,21 +17,28 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    ConfigEntryDisabler,
+    ConfigEntryState,
+)
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    ATTR_NAME,
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CONFIG_ENTRY_ID,
     ATTR_TARGET,
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
@@ -45,7 +52,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.sync import TICK_INTERVAL
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
-from tests.common import async_configure_flow
+from tests.common import async_configure_flow, user_subentries
 
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
 
@@ -410,3 +417,92 @@ class TestReauthLockSwap:
         await hass.async_block_till_done()
 
         assert await _fresh_store().async_load() is None
+
+
+def _entry_on_slot_3(hass: HomeAssistant, standing: str) -> MockConfigEntry:
+    """
+    Add a second entry on the virtual lock that holds slot 3 but syncs nothing.
+
+    ``standing`` is how it stopped syncing: switched off by the user, or a
+    setup that failed. Either way its user still holds the number.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [VIRTUAL_LOCK_ENTITY_ID]},
+        subentries_data=user_subentries(
+            {3: {CONF_NAME: "slot3", CONF_PIN: "5555", CONF_ENABLED: True}}
+        ),
+        unique_id=f"test_virtual_e2e_{standing}",
+        disabled_by=ConfigEntryDisabler.USER if standing == "disabled" else None,
+    )
+    entry.add_to_hass(hass)
+    if standing == "setup_failed":
+        entry.mock_state(hass, ConfigEntryState.SETUP_ERROR)
+    return entry
+
+
+@pytest.mark.parametrize("standing", ["disabled", "setup_failed"])
+class TestASlotHeldByAnEntryThatSyncsNothing:
+    """
+    A slot whose entry syncs nothing is still that entry's.
+
+    Not wanted on the lock, since nobody syncs it, but whatever sits there
+    belongs to that entry's user rather than to nobody.
+    """
+
+    async def test_a_use_is_credited_to_its_user(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+        standing: str,
+    ) -> None:
+        """The code is that user's, so its use is announced as theirs."""
+        holder = _entry_on_slot_3(hass, standing)
+        events: list[Event] = []
+        hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, events.append)
+
+        get_virtual_lock(hass, lcm_config_entry).async_fire_code_slot_event(3, False)
+        await hass.async_block_till_done()
+
+        assert [
+            (event.data[ATTR_NAME], event.data[ATTR_CONFIG_ENTRY_ID])
+            for event in events
+        ] == [("slot3", holder.entry_id)]
+
+    async def test_a_duplicate_of_its_code_names_it_managed(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+        standing: str,
+    ) -> None:
+        """
+        A PIN refused for duplicating that slot's code says the slot is managed.
+
+        "Unmanaged" would send the user hunting for a code nobody configured,
+        when the clash is with another entry's user.
+        """
+        _entry_on_slot_3(hass, standing)
+        lock = get_virtual_lock(hass, lcm_config_entry)
+        await lock.async_internal_set_usercode(3, "5555")
+        await lock.coordinator.async_refresh()
+
+        await hass.services.async_call(
+            TEXT_DOMAIN,
+            SERVICE_SET_VALUE,
+            service_data={ATTR_VALUE: "5555"},
+            target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+            blocking=True,
+        )
+        for tick in range(2):
+            async_fire_time_changed(
+                hass, dt_util.utcnow() + TICK_INTERVAL * (tick + 1) * 2
+            )
+            await hass.async_block_till_done()
+
+        issue = ir.async_get(hass).async_get_issue(
+            DOMAIN, f"slot_disabled_{lcm_config_entry.entry_id}_1"
+        )
+        assert issue is not None
+        assert (
+            "PIN duplicates managed slot 3" in issue.translation_placeholders["reason"]
+        )

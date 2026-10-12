@@ -24,7 +24,7 @@ from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
 from .locks import borrowed_lock_instance
 from .occupancy import LockOccupancy, Occupancy
-from .queries import get_managed_slots
+from .queries import slots_configured_on
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -288,7 +288,9 @@ async def async_read_occupancy(
         claimed_by_other_entries=frozenset(
             slot
             for lock_entity_id in locks
-            for slot in get_managed_slots(hass, lock_entity_id, excluding=config_entry)
+            for slot in slots_configured_on(
+                hass, lock_entity_id, excluding=config_entry
+            )
         ),
     )
 

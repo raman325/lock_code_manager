@@ -864,7 +864,7 @@ async def test_a_scheduled_read_re_ensures_the_subscription(
     zui_api_responder.set_result("sendCommand", {"userIdStatus": 0})
 
     with patch(
-        "custom_components.lock_code_manager.providers._base.get_managed_slots",
+        "custom_components.lock_code_manager.providers._base.slots_configured_on",
         return_value={1},
     ):
         await lock.async_get_users()
@@ -893,7 +893,7 @@ async def test_a_poll_continues_when_the_subscription_cannot_be_refreshed(
             AsyncMock(side_effect=LockDisconnected("no topic")),
         ),
         patch(
-            "custom_components.lock_code_manager.providers._base.get_managed_slots",
+            "custom_components.lock_code_manager.providers._base.slots_configured_on",
             return_value={1},
         ),
     ):

@@ -14,6 +14,7 @@ from homeassistant.components.calendar import (
     DOMAIN as CALENDAR_DOMAIN,
     SERVICE_GET_EVENTS,
 )
+from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
@@ -1168,6 +1169,48 @@ async def test_subscribe_lock_codes_slot_metadata(
     assert slot_1 is not None
     assert slot_1.get(CONF_NAME) == "test1"
     assert slot_1.get(ATTR_MANAGED) is True
+
+
+async def test_subscribe_lock_codes_attributes_a_disabled_entrys_slot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    A slot held by a disabled entry on a shared lock is shown as that entry's.
+
+    Its user still holds the number, so the lock's view names the entry that
+    owns it rather than leaving the slot looking like nobody's.
+    """
+    holder = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=user_subentries(
+            {3: {CONF_NAME: "held", CONF_PIN: "9999", CONF_ENABLED: True}}
+        ),
+        title="holder",
+        unique_id="holder",
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    holder.add_to_hass(hass)
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    await lock.coordinator.async_refresh()
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    event = await ws_client.receive_json()
+
+    slot_3 = next(s for s in event["event"][CONF_SLOTS] if s[ATTR_SLOT] == 3)
+    assert slot_3[ATTR_CONFIG_ENTRY_ID] == holder.entry_id
+    assert slot_3[ATTR_CONFIG_ENTRY_TITLE] == "holder"
 
 
 async def test_set_usercode_operation_failure(

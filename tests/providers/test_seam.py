@@ -308,7 +308,7 @@ async def test_get_usercodes_includes_empty_managed_slots(hass: HomeAssistant) -
         )
     }
     with patch(
-        "custom_components.lock_code_manager.providers._base.get_managed_slots",
+        "custom_components.lock_code_manager.providers._base.slots_configured_on",
         return_value={1, 2, 3},
     ):
         result = await lock.async_get_usercodes()
@@ -331,7 +331,7 @@ async def test_get_usercodes_surfaces_unmanaged_occupied_slots(
         )
     }
     with patch(
-        "custom_components.lock_code_manager.providers._base.get_managed_slots",
+        "custom_components.lock_code_manager.providers._base.slots_configured_on",
         return_value={1},
     ):
         result = await lock.async_get_usercodes()
@@ -392,7 +392,7 @@ async def test_project_users_to_slots_is_type_parametric(
     }
 
     with patch(
-        "custom_components.lock_code_manager.providers._base.get_managed_slots",
+        "custom_components.lock_code_manager.providers._base.slots_configured_on",
         return_value={1, 2, 3},
     ):
         pin_slots = await lock._project_users_to_slots(CredentialType.PIN)

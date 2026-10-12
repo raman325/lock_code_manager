@@ -368,7 +368,7 @@ class TestAsyncGetUsers:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={11, 12},
             ),
             patch(
@@ -402,7 +402,7 @@ class TestAsyncGetUsers:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={1, 2, 3, 11},
             ),
             patch(
@@ -436,7 +436,7 @@ class TestAsyncGetUsers:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={7, 8},
             ),
             patch(
@@ -476,7 +476,7 @@ class TestAsyncGetUsers:
         """
         lock = zigbee2mqtt_lock_connected
         managed = patch(
-            "custom_components.lock_code_manager.providers._base.get_managed_slots",
+            "custom_components.lock_code_manager.providers._base.slots_configured_on",
             return_value={1, 2},
         )
 
@@ -521,7 +521,7 @@ class TestAsyncGetUsers:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={1},
             ),
             silence(),
@@ -549,7 +549,7 @@ class TestAsyncGetUsers:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={1, 2},
             ),
             patch(
@@ -601,7 +601,7 @@ class TestAsyncGetUsers:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={1},
             ),
             pytest.raises(LockDisconnected, match="not a Zigbee2MQTT lock"),
@@ -645,7 +645,7 @@ class TestAsyncGetUsers:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={21},
             ),
             patch(
@@ -675,7 +675,7 @@ class TestAsyncSetClearHardRefresh:
         lock = zigbee2mqtt_lock_connected
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value=set(),
             ),
             patch(
@@ -889,7 +889,7 @@ class TestAsyncSetClearHardRefresh:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={4},
             ),
             pytest.raises(LockDisconnected, match="Device not available"),
@@ -1049,7 +1049,7 @@ class TestAsyncSetClearHardRefresh:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value={12},
             ),
             patch(
@@ -1089,7 +1089,7 @@ class TestScopedRead:
 
         with (
             patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.slots_configured_on",
                 return_value=set(),
             ),
             patch(_PUBLISH, side_effect=_answering_publish(lock, {2: "1234"})),

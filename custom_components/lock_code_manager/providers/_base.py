@@ -57,9 +57,9 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ..domain.queries import (
-    find_entry_for_lock_slot,
+    configured_owner,
     get_entry_config,
-    get_managed_slots,
+    slots_configured_on,
 )
 from ..domain.util import (
     lock_display_name,
@@ -566,10 +566,7 @@ class BaseLock:
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
         """Return whether a code slot is managed by any LCM config entry for this lock."""
-        return (
-            find_entry_for_lock_slot(self.hass, self.lock.entity_id, code_slot)
-            is not None
-        )
+        return configured_owner(self.hass, self.lock.entity_id, code_slot) is not None
 
     @final
     def _check_duplicate_code(self, code_slot: int, usercode: str) -> None:
@@ -2289,8 +2286,8 @@ class BaseLock:
 
     @property
     def managed_slots(self) -> set[int]:
-        """Return slot numbers managed by any Lock Code Manager config entry that includes this lock."""
-        return get_managed_slots(self.hass, self.lock.entity_id)
+        """Return the slot numbers any entry's users hold on this lock, disabled included."""
+        return slots_configured_on(self.hass, self.lock.entity_id)
 
     @final
     @callback
@@ -2316,9 +2313,7 @@ class BaseLock:
         credential_user: str | None = None
 
         if code_slot is not None and (
-            config_entry := find_entry_for_lock_slot(
-                self.hass, lock_entity_id, int(code_slot)
-            )
+            config_entry := configured_owner(self.hass, lock_entity_id, int(code_slot))
         ):
             # The user comes from the configuration rather than from the name
             # text entity: that entity can be disabled, and it reads

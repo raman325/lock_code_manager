@@ -32,7 +32,9 @@ MODULE = "custom_components.lock_code_manager.providers.zwave_js_ui"
 # so the MQTT-enabled check it makes is bound in that module, not this
 # provider's -- which still makes its own for the subscription paths.
 MQTT_BASE = "custom_components.lock_code_manager.providers._mqtt"
-MANAGED_SLOTS = "custom_components.lock_code_manager.providers._base.get_managed_slots"
+MANAGED_SLOTS = (
+    "custom_components.lock_code_manager.providers._base.slots_configured_on"
+)
 # User Code Command Class (99), endpoint 0 -- the ``sendCommand`` target every
 # credential operation addresses.
 CC_USER_CODE_ID = 99

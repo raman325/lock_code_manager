@@ -131,7 +131,7 @@ class EntryConfig:
         An entry from before users had subentries is read the way it was
         written. Migration only runs when an entry is set up, so a disabled
         entry keeps its old shape for as long as it stays disabled -- and it
-        is still consulted: ``get_managed_slots`` asks every entry which
+        is still consulted: ``slots_configured_on`` asks every entry which
         numbers it holds on a lock, and an answer of "none" from an entry
         that holds five lets a new entry be issued the same five, and the
         unmanaged-code sweep raise a repair to delete each one.

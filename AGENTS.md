@@ -71,8 +71,16 @@ entities.
 - Each provider implements: `async_get_users()`, `async_set_credential()`, `async_delete_credential()`,
   `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
-- `BaseLock` provides `managed_slots` property (aggregates slots across all config entries for the lock)
+- `BaseLock` provides `managed_slots` property (aggregates slots across all config entries for the lock,
+  disabled ones included; it is `slots_configured_on`)
   and `async_call_service()` helper (wraps HA service calls with `LockDisconnected` error handling)
+- Config questions -- which entry's configuration lists this lock or slot -- go through the named
+  questions in `domain/queries.py` (`entries_configuring`, `slots_configured_on`, `configured_owner`,
+  `syncing_owner`, `another_enabled_entry_configures`). Each counts a different set of entries;
+  ask the one you mean rather than filtering `async_entries` by hand. Live lock-instance ownership
+  is a separate question and filters by load state on purpose: `_find_shared_lock_instance` and
+  `_lock_instance_held_by_another_entry` in `__init__.py`, and `iter_loaded_lcm_entries` /
+  `get_managed_locks` for the locks loaded entries hold
 
 **Coordinator** (`coordinator.py`)
 
