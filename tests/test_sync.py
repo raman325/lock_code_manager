@@ -5,23 +5,36 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.const import CONF_PIN, STATE_OFF, STATE_ON, STATE_UNKNOWN
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import (
+    CONF_PIN,
+    SERVICE_TURN_ON,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
     async_create_issue,
     async_get as async_get_issue_registry,
 )
+from homeassistant.helpers.update_coordinator import REQUEST_REFRESH_DEFAULT_COOLDOWN
 
 from custom_components.lock_code_manager.const import (
     BACKOFF_FAILURE_THRESHOLD,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     PENDING_WRITE_TTL,
+    STOP_GRACE_SECONDS,
+    TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
@@ -31,6 +44,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockBusy,
+    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
     LockOperationUnsupported,
@@ -41,18 +55,32 @@ from custom_components.lock_code_manager.domain.sync import (
     SlotSyncManager,
     value_entity_key,
 )
+from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 
 from .common import (
     LOCK_1_ENTITY_ID,
     SLOT_1_ACTIVE_ENTITY,
+    SLOT_1_ENABLED_ENTITY,
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_IN_SYNC_ENTITY,
+    TWO_SLOTS_ON_LOCK_1,
+    async_advance_across_deadline,
+    async_advance_sync_ticks,
     async_blocking_stub,
+    async_run_until_quiet,
+    async_set_slot_pin,
+    async_switch_slot,
+    async_tick_until,
+    async_trip_slot_breaker,
+    in_sync_entity_id,
+    mock_lock,
     recording_listener,
     short_stop_grace,
     sync_manager_of,
+    sync_status,
+    when_mock_lock_built,
 )
 from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj, sync_manager_for
 
@@ -278,6 +306,74 @@ class TestCalculateInSync:
         )
 
 
+async def test_a_new_pin_on_a_slot_the_lock_will_not_read_back_is_written_once(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Regression for PR #962: a PIN change on a slot whose code the lock withholds is written.
+
+    A lock that reports a slot occupied without saying what it holds gave
+    nothing to compare the new PIN against, so the slot read in sync and the
+    new PIN never reached the lock. It is written once, and the slot then
+    stays quiet: the PIN last written is what the lock is taken to hold. A
+    set of the code the slot already holds changes nothing, so the lock's
+    record of those is what shows a slot rewritten for nothing.
+    """
+    entry = lock_code_manager_config_entry
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    # Withheld just after a read, so the next read is a whole poll away: a
+    # set that did not wait for one would come first.
+    reads = len(lock.service_calls["get_usercodes"])
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: len(lock.service_calls["get_usercodes"]) > reads,
+        max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 3,
+        what="a read of the lock",
+    )
+    withheld_from = len(lock.call_order)
+    lock.write_only = {1}
+    # Withheld before anything was written to it, the slot is set once so
+    # the PIN last written is known. The lock has that code already, so the
+    # set changes nothing. A read finding the slot withheld comes first.
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: "noop_set_usercode" in lock.call_order[withheld_from:],
+        max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 3,
+        what="slot 1 set once withheld",
+    )
+    since = lock.call_order[withheld_from:]
+    assert "get_usercodes" in since[: since.index("noop_set_usercode")], since
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=5,
+        what="slot 1 in sync once withheld",
+    )
+
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=6,
+        what="slot 1 in sync with the new PIN",
+    )
+    await async_advance_sync_ticks(hass, freezer, 5)
+
+    assert lock.codes[1] == "4321"
+    assert lock.service_calls["noop_set_usercode"] == [(1, "1234", "test1")]
+    assert lock.service_calls["set_usercode"] == [(1, "4321", "test1")]
+    assert hass.states.get(in_sync).state == STATE_ON
+
+
 class TestTryUpgradeStateTracking:
     """Tests for upgrading catch-all to targeted state tracking."""
 
@@ -459,6 +555,54 @@ class TestSlotDisabledIssueCleanup:
         # The issue should be deleted since slot is back in sync
         assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
 
+    async def test_a_slot_disabled_for_a_refused_code_loses_its_repair_once_fixed(
+        self,
+        freezer: FrozenDateTimeFactory,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        Regression for PR #987: a disabled slot's repair goes once the slot is fixed.
+
+        A code the lock refuses switches the slot off and raises the repair.
+        Giving the slot a new PIN and switching it back on put the code on the
+        lock, and the repair stayed behind, reporting a problem that was gone.
+        """
+        entry = lock_code_manager_config_entry
+        lock = mock_lock(entry)
+        in_sync = in_sync_entity_id(hass, entry, 1)
+        issue_registry = async_get_issue_registry(hass)
+        issue_id = f"slot_disabled_{entry.entry_id}_1"
+        await async_advance_sync_ticks(hass, freezer)
+
+        lock.refuse("set", 1, times=1)
+        await async_set_slot_pin(hass, entry, 1, "4321")
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: hass.states.get(in_sync).state == STATE_ON and 1 not in lock.codes,
+            max_ticks=5,
+            what="slot 1 disabled and cleared",
+        )
+        assert hass.states.get(SLOT_1_ENABLED_ENTITY).state == STATE_OFF
+        assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+        await async_set_slot_pin(hass, entry, 1, "5555")
+        await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: (
+                hass.states.get(in_sync).state == STATE_ON
+                and lock.codes.get(1) == "5555"
+            ),
+            max_ticks=6,
+            what="slot 1 back in sync with its new PIN",
+        )
+
+        assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
     async def test_loading_branch_does_not_auto_clear_stale_issues(
         self,
         hass: HomeAssistant,
@@ -521,6 +665,77 @@ class TestSlotDisabledIssueCleanup:
         assert manager._state is SyncState.IN_SYNC
         assert issue_registry.async_get_issue(DOMAIN, slot_disabled_id) is not None
         assert issue_registry.async_get_issue(DOMAIN, slot_suspended_id) is not None
+
+    async def test_a_restart_finding_the_slots_in_sync_keeps_their_repairs(
+        self,
+        freezer: FrozenDateTimeFactory,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+    ) -> None:
+        """
+        Regression for PR #1243: a restart neither wipes repairs nor reads them as fixed.
+
+        Slot 1 is suspended by sets that kept failing, and slot 2 disabled
+        by a code the lock refused. While Home Assistant is down, slot 1's
+        PIN is programmed at the keypad. Unloading deleted every repair, and
+        the first look after starting, finding both slots in sync, deleted
+        any left -- though nobody had seen them, and starting up fixes
+        nothing.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN, data=TWO_SLOTS_ON_LOCK_1, unique_id="Restart Repairs"
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        lock = mock_lock(entry)
+        issue_registry = async_get_issue_registry(hass)
+        suspended_id = f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
+        disabled_id = f"slot_disabled_{entry.entry_id}_2"
+        await async_advance_sync_ticks(hass, freezer)
+
+        await async_set_slot_pin(hass, entry, 1, "4321")
+        (await async_trip_slot_breaker(hass, freezer, entry, 1)).clear()
+        lock.refuse("set", 2, times=1)
+        await async_set_slot_pin(hass, entry, 2, "8642")
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: 2 not in lock.codes,
+            max_ticks=5,
+            what="slot 2 disabled and cleared",
+        )
+        assert lock.codes == {1: "1234"}
+
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        assert issue_registry.async_get_issue(DOMAIN, suspended_id) is not None
+        assert issue_registry.async_get_issue(DOMAIN, disabled_id) is not None
+        # The lock keeps its codes across the restart, the one the keypad
+        # added included; the mock built anew would start from its defaults.
+        with when_mock_lock_built(
+            lambda rebuilt: setattr(rebuilt, "codes", {1: "4321"})
+        ):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+        rebuilt = mock_lock(entry)
+        in_syncs = [in_sync_entity_id(hass, entry, slot_num) for slot_num in (1, 2)]
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: all(
+                hass.states.get(in_sync).state == STATE_ON for in_sync in in_syncs
+            ),
+            max_ticks=3,
+            what="both slots in sync after the restart",
+        )
+        await async_advance_sync_ticks(hass, freezer, 3)
+
+        assert rebuilt.service_calls["set_usercode"] == []
+        assert rebuilt.service_calls["clear_usercode"] == []
+        assert issue_registry.async_get_issue(DOMAIN, suspended_id) is not None
+        assert issue_registry.async_get_issue(DOMAIN, disabled_id) is not None
+
+        await hass.config_entries.async_unload(entry.entry_id)
 
 
 class TestLockOperationFailedRetry:
@@ -948,6 +1163,67 @@ class TestSyncStateMachine:
 
         manager.request_sync_check()
         assert manager._state is SyncState.SUSPENDED
+
+    async def test_a_lock_failing_its_setup_check_gets_no_writes_until_it_passes(
+        self,
+        freezer: FrozenDateTimeFactory,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        Regression for PR #1346: a lock whose setup fails its check is left alone until it passes.
+
+        The lock's integration reloads and the lock fails the check its setup
+        makes, as a lock reporting no room for codes after a re-interview
+        does. Sync went on writing to it every tick, and the failures raised
+        a slot repair calling it a bug on top of the accurate one about the
+        lock's setup. The slot waits, suspended, and is written once the lock
+        passes the check again.
+        """
+        entry = lock_code_manager_config_entry
+        lock = mock_lock(entry)
+        in_sync = in_sync_entity_id(hass, entry, 1)
+        issue_registry = async_get_issue_registry(hass)
+        setup_issue = per_lock_issue_id("lock_setup_failed", LOCK_1_ENTITY_ID)
+        await async_advance_sync_ticks(hass, freezer)
+
+        check = lock.fail(
+            "setup",
+            error=LockCodeManagerProviderError(
+                "lock does not advertise PIN credential support"
+            ),
+        )
+        assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+        await async_advance_sync_ticks(hass, freezer)
+        assert issue_registry.async_get_issue(DOMAIN, setup_issue) is not None
+        await async_set_slot_pin(hass, entry, 1, "4321")
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        assert sync_status(hass, in_sync) == SyncState.SUSPENDED.value
+        assert lock.service_calls["set_usercode"] == []
+        assert [
+            issue.issue_id
+            for issue in issue_registry.issues.values()
+            if issue.domain == DOMAIN and issue.issue_id.startswith("slot_")
+        ] == []
+
+        check.clear()
+        assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: hass.states.get(in_sync).state == STATE_ON,
+            # The refresh its setup asks for waits out the coordinator's debounce.
+            max_ticks=int(
+                REQUEST_REFRESH_DEFAULT_COOLDOWN / TICK_INTERVAL.total_seconds()
+            )
+            + 3,
+            what="slot 1 in sync once the lock passes its check",
+        )
+        assert lock.codes[1] == "4321"
+        assert lock.service_calls["set_usercode"] == [(1, "4321", "test1")]
+        assert issue_registry.async_get_issue(DOMAIN, setup_issue) is None
 
     async def test_syncing_to_suspended_on_unexpected_error(
         self,
@@ -1399,6 +1675,44 @@ class TestAsyncStopCancelsInFlightTick:
         # The tick was cancelled while holding the lock's turn; it must
         # have given it back on the way out.
         assert not lock_provider._aio_lock.locked()
+
+    async def test_unloading_beside_a_write_that_never_returns_takes_only_the_grace(
+        self,
+        freezer: FrozenDateTimeFactory,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        Regression for #1552: an unload waits out the stop grace, not the write's deadline.
+
+        A write the lock never answers kept the unload, and so a reload or
+        removal, waiting for the write's whole ten-minute deadline. The
+        unload ends once the grace has passed, with the entry unloaded.
+        """
+        entry = lock_code_manager_config_entry
+        wedge = mock_lock(entry).hang("set", 1)
+        await async_advance_sync_ticks(hass, freezer)
+        await async_set_slot_pin(hass, entry, 1, "4321")
+        await async_advance_sync_ticks(hass, freezer, settle=False)
+        await wedge.async_wait_held()
+
+        unload = hass.async_create_task(
+            hass.config_entries.async_unload(entry.entry_id)
+        )
+        await async_run_until_quiet()
+        await async_advance_across_deadline(
+            hass,
+            freezer,
+            started_at=time.monotonic(),
+            deadline=STOP_GRACE_SECONDS,
+            held=lambda: not unload.done(),
+            what="the unload waiting on the write",
+        )
+
+        assert unload.done()
+        assert unload.result() is True
+        assert entry.state is ConfigEntryState.NOT_LOADED
 
     async def test_async_stop_lets_a_write_finish_inside_the_grace(
         self,

@@ -318,12 +318,23 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
 - Uses `pytest-homeassistant-custom-component` for HA test utilities
 - `tests/conftest.py`: Shared fixtures (`mock_lock_config_entry`, `lock_code_manager_config_entry`)
 - `tests/common.py`: `MockLCMLock` (in-memory provider), mock entities, test constants
-  - Fault knobs on `MockLCMLock` (`ignore`, `refuse`, `fail`, `hang`, `drop_reply`), each
-    targeting an operation and slot and returning a `LockFault` to clear
+  - Fault knobs on `MockLCMLock` (`ignore`, `refuse`, `fail`, `hang`, `drop_reply`, `slow`),
+    each targeting an operation and slot and returning a `LockFault` to clear. Besides `set`,
+    `clear` and `get`, the `setup` and `probe` (device availability check) operations can be
+    faulted by name. `when_mock_lock_built` acts on each mock lock as an entry builds it, for
+    faults that must be in place before setup or codes a lock keeps across a restart.
+    `attempt_times` records each set, clear or read asking the device availability check --
+    the only trace an attempt on an offline lock leaves -- and leaves out the connection
+    check's asks; `noop_set_usercode` records sets that changed nothing, and `call_order`
+    the order of everything `service_calls` records. `async_advance_across_deadline`
+    checks a wait is held a tick before its deadline and let go a tick after
   - Time helpers for the `freezer` fixture: `async_advance_sync_ticks` and `async_tick_until`
-    run the real scheduled sync tick by moving both clocks; `async_trip_slot_breaker` reaches
+    run the real scheduled sync tick by moving both clocks; `async_advance_clock` moves them
+    any distance, for deadlines and the stop grace; `async_trip_slot_breaker` reaches
     a breaker through real failures. Prefer these to `async_trigger_sync_tick` (drives sync
     internals) and `async_advance_time` (fires timers but moves neither clock) in new tests
+  - `@pytest.mark.paced` keeps the providers' real delay between lock operations; such a
+    test settles with `settle=False`, since settling only steps a fraction of a second
   - Settling skips the tasks registered in `LIFELONG_TASKS`: ones an integration under test
     runs for its whole life, like the Z-Wave JS client's listen loop, which its fixture
     registers. So the provider end-to-end harnesses can use these helpers too

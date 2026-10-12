@@ -209,13 +209,27 @@ def assert_no_deprecation_reports() -> Generator[None]:
         pytest.fail("\n".join(ours))
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Register this suite's markers."""
+    config.addinivalue_line(
+        "markers",
+        "paced: keep the providers' real minimum delay between lock operations",
+    )
+
+
 @pytest.fixture(autouse=True)
 def disable_rate_limiting(request: pytest.FixtureRequest):
     """
     Disable BaseLock rate limiting for most tests to speed them up.
 
     We patch __post_init__ to set _min_operation_delay=0.0 on new instances.
+    A test marked ``paced`` keeps the real delay, so the pacing it checks is
+    the one the providers ship with; it needs the ``freezer`` to get through
+    the waits.
     """
+    if request.node.get_closest_marker("paced") is not None:
+        yield
+        return
     original_post_init = getattr(BaseLock, "__post_init__", None)
 
     def patched_post_init(self):
