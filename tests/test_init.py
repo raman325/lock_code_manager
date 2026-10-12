@@ -4,8 +4,9 @@ import asyncio
 import copy
 from datetime import timedelta
 import logging
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -2831,6 +2832,155 @@ async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_
     assert lock.coordinator.data[pin_address(9)] == SlotCredential.known("1357")
 
     assert await hass.config_entries.async_unload(second_entry.entry_id)
+
+
+async def _reads_over_scan_intervals(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    lock: MockLCMLock,
+    intervals: int,
+) -> int:
+    """
+    Count the reads a lock answers over ``intervals`` scan intervals.
+
+    Any refresh already requested runs first, so only what runs on a timer is
+    counted: the scheduled poll, and the drift check when the lock has one.
+    """
+    freezer.tick(timedelta(seconds=REQUEST_REFRESH_DEFAULT_COOLDOWN + 1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    reads_before = len(lock.service_calls["get_usercodes"])
+    for _ in range(intervals):
+        freezer.tick(lock.usercode_scan_interval + timedelta(seconds=1))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    return len(lock.service_calls["get_usercodes"]) - reads_before
+
+
+def _in_sync_entry_on_the_second_lock(
+    slot_num: int, *, disable_polling: bool
+) -> MockConfigEntry:
+    """
+    Build an entry with one user on the second lock, whose code it already holds.
+
+    Nothing is left to write, so no sync reads the lock back: every read a
+    settled lock answers is on a timer.
+    """
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_2_ENTITY_ID],
+            CONF_SLOTS: {
+                slot_num: {
+                    CONF_NAME: f"user{slot_num}",
+                    # The code MockLCMLock starts out holding there.
+                    CONF_PIN: {1: "1234", 2: "5678"}[slot_num],
+                    CONF_ENABLED: True,
+                }
+            },
+        },
+        unique_id=f"Slot {slot_num}",
+        pref_disable_polling=disable_polling,
+    )
+
+
+async def _set_up(hass: HomeAssistant, *entries: MockConfigEntry) -> MockLCMLock:
+    """Set up ``entries`` in order and return the second lock, which they share."""
+    for entry in entries:
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    lock = entries[0].runtime_data.locks[LOCK_2_ENTITY_ID]
+    assert all(entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock for entry in entries)
+    assert not lock.supports_push
+    assert lock.coordinator is not None and lock.coordinator.last_update_success
+    return lock
+
+
+async def test_disable_polling_stops_the_scheduled_poll(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    freezer: FrozenDateTimeFactory,
+):
+    """An entry with "Disable polling" set has its lock read once, then never polled."""
+    lock = await _set_up(
+        hass, _in_sync_entry_on_the_second_lock(1, disable_polling=True)
+    )
+
+    assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 0
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_disable_polling_leaves_the_drift_check_running(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    freezer: FrozenDateTimeFactory,
+):
+    """
+    "Disable polling" stops the scheduled poll, not the drift check.
+
+    The lock is still hard refreshed on its own interval, and that is every
+    read it answers.
+    """
+    with patch.object(
+        MockLCMLock,
+        "hard_refresh_interval",
+        new_callable=PropertyMock,
+        return_value=timedelta(minutes=2),
+    ):
+        lock = await _set_up(
+            hass, _in_sync_entry_on_the_second_lock(1, disable_polling=True)
+        )
+    drift_checks_before = len(lock.service_calls["hard_refresh_codes"])
+
+    reads = await _reads_over_scan_intervals(hass, freezer, lock, 4)
+
+    drift_checks = len(lock.service_calls["hard_refresh_codes"]) - drift_checks_before
+    assert drift_checks == 2
+    assert reads == drift_checks
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("first_disables", "second_disables", "polled"),
+    [
+        (True, False, True),
+        (False, True, True),
+        (True, True, False),
+    ],
+    ids=["builder-disables", "joiner-disables", "both-disable"],
+)
+async def test_a_shared_lock_is_polled_unless_every_holder_disables_polling(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    freezer: FrozenDateTimeFactory,
+    first_disables: bool,
+    second_disables: bool,
+    polled: bool,
+):
+    """
+    A lock two entries share is polled while either of them allows polling.
+
+    The first entry builds the lock and the second shares it, so the cases
+    name which side disables polling: one entry still allowing it keeps the
+    lock polled once per scan interval, and only both disabling it stops that.
+    """
+    lock = await _set_up(
+        hass,
+        _in_sync_entry_on_the_second_lock(1, disable_polling=first_disables),
+        _in_sync_entry_on_the_second_lock(2, disable_polling=second_disables),
+    )
+
+    reads = await _reads_over_scan_intervals(hass, freezer, lock, 3)
+
+    assert reads == (3 if polled else 0)
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_update_listener_slot_removal_handles_missing_and_failing_coordinators(

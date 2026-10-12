@@ -123,6 +123,7 @@ from .domain.pin_generator import (
 )
 from .domain.queries import (
     another_enabled_entry_configures,
+    entries_holding,
     get_entry_config,
     subentry_id_for_slot,
 )
@@ -1067,10 +1068,8 @@ def _lock_instance_held_by_another_entry(
     is accepted.
     """
     return any(
-        runtime_data.locks.get(lock_entity_id) is lock
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        if entry.entry_id != config_entry.entry_id
-        and (runtime_data := getattr(entry, "runtime_data", None)) is not None
+        entry.entry_id != config_entry.entry_id
+        for entry in entries_holding(hass, lock_entity_id, lock)
     )
 
 

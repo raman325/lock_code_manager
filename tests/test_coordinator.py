@@ -2053,3 +2053,28 @@ async def test_a_busy_poll_after_a_failed_one_does_not_report_a_recovery(
         pytest.raises(UpdateFailed),
     ):
         await poll_coordinator.async_get_usercodes()
+
+
+async def test_a_lock_no_entry_holds_is_polled_whatever_the_entries_prefer(
+    hass: HomeAssistant,
+    poll_lock: MockLCMLock,
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    lcm_config_entry: MockConfigEntry,
+    freezer,
+) -> None:
+    """
+    "Disable polling" is read from the entries holding the lock, and none does here.
+
+    An entry that does not hold the lock has no say, so with no holder at all
+    the lock keeps the default and is polled.
+    """
+    hass.config_entries.async_update_entry(lcm_config_entry, pref_disable_polling=True)
+    poll_coordinator.async_add_listener(lambda: None)
+    await poll_coordinator.async_refresh()
+    reads_before = len(poll_lock.service_calls["get_usercodes"])
+
+    freezer.tick(poll_lock.usercode_scan_interval + timedelta(seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert len(poll_lock.service_calls["get_usercodes"]) == reads_before + 1

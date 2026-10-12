@@ -1,5 +1,5 @@
 """
-Config-only queries across Lock Code Manager entries (no provider dependency).
+Queries across Lock Code Manager entries (no provider dependency).
 
 "Which entry manages this lock or slot" has more than one honest answer,
 because callers need different sets of entries counted. Each set has one
@@ -35,14 +35,18 @@ asking:
   leaves an entry.
 
 Who holds a live lock instance is a different question, about runtime
-objects rather than configuration: acquisition and release ask it in
-``__init__`` (``_find_shared_lock_instance`` and
-``_lock_instance_held_by_another_entry``).
+objects rather than configuration:
+
+- ``entries_holding``: every entry holding one lock instance, in any state.
+  Release (``_lock_instance_held_by_another_entry`` in ``__init__``), and
+  whether the lock's coordinator honours "Disable polling". Acquisition asks
+  a narrower question (``_find_shared_lock_instance`` in ``__init__``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -51,6 +55,9 @@ from homeassistant.util import slugify
 
 from ..const import CONF_SLOT, DOMAIN, SUBENTRY_TYPE_USER
 from .config import EntryConfig
+
+if TYPE_CHECKING:
+    from ..providers import BaseLock
 
 # The states in which an entry's ``runtime_data`` is the one its last setup
 # completed with. Home Assistant only starts unloading a loaded entry.
@@ -244,6 +251,26 @@ def another_enabled_entry_configures(
     return any(
         entry.entry_id != config_entry.entry_id
         for entry, _config in _configuring(_enabled_entries(hass), lock_entity_id)
+    )
+
+
+def entries_holding(
+    hass: HomeAssistant, lock_entity_id: str, lock: BaseLock
+) -> Iterator[ConfigEntry]:
+    """
+    Yield every entry holding this very lock instance, in any state.
+
+    An entry holds an instance while it sits in the entry's
+    ``runtime_data.locks``: put there when the entry builds or shares it,
+    taken out when the entry lets go. Asked by identity, not configuration:
+    an entry can list a lock it does not hold, and an entry setting up while
+    another unloads can hold a second instance for the same lock.
+    """
+    return (
+        entry
+        for entry in _every_entry(hass)
+        if (runtime_data := getattr(entry, "runtime_data", None)) is not None
+        and runtime_data.locks.get(lock_entity_id) is lock
     )
 
 
