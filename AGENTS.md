@@ -324,6 +324,8 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     run the real scheduled sync tick by moving both clocks; `async_trip_slot_breaker` reaches
     a breaker through real failures. Prefer these to `async_trigger_sync_tick` (drives sync
     internals) and `async_advance_time` (fires timers but moves neither clock) in new tests
+  - Settling ignores tasks an integration under test runs for its whole life (the Z-Wave JS
+    client's listen loop), so the provider end-to-end harnesses can use these helpers too
 - `tests/test_harness.py`: tests for the helpers and knobs above
 - `tests/providers/helpers.py`: Shared test mixins for service-based providers
 

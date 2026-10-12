@@ -9,6 +9,7 @@ import json
 from typing import Any
 from unittest.mock import patch
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -29,6 +30,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
@@ -39,16 +41,20 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
+    MAX_SYNC_ATTEMPTS,
     TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 from tests.common import (
+    async_advance_sync_ticks,
     async_configure_flow,
+    async_tick_until,
     code_entity_id,
     in_sync_entity_id,
     slot_entity_id,
+    sync_status,
 )
 from tests.conftest import async_advance_time, sync_manager_for
 
@@ -416,6 +422,53 @@ class TestRefusedSet:
             assert in_sync.state == STATE_OFF
             assert sync_manager_for(hass, entity_id)._slot_breaker.failure_count > 0
 
+    async def test_refused_writes_suspend_the_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock_discovered: er.RegistryEntry,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """
+        Regression for #1624: a set the lock refuses is a failed write, and suspends.
+
+        zwave-js-ui reports the api call a success and carries the lock's
+        Supervision Fail in its result. Read as written, the slot showed in
+        sync while the lock held nothing, and repeated refusals never added
+        up to a suspended slot.
+        """
+        lock_entity_id = zui_lock_discovered.entity_id
+        issue_registry = ir.async_get(hass)
+        issue_ids = {
+            slot_num: f"slot_suspended_{lcm_config_entry.entry_id}_{lock_entity_id}_{slot_num}"
+            for slot_num in E2E_SLOT_PINS
+        }
+
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: all(
+                issue_registry.async_get_issue(DOMAIN, issue_id)
+                for issue_id in issue_ids.values()
+            ),
+            max_ticks=len(E2E_SLOT_PINS) * (MAX_SYNC_ATTEMPTS + 2),
+            what="every refused slot suspended",
+        )
+
+        assert user_code_table.codes == {}
+        for slot_num in E2E_SLOT_PINS:
+            in_sync = in_sync_entity_id(
+                hass, lcm_config_entry, slot_num, lock_entity_id
+            )
+            assert hass.states.get(in_sync).state == STATE_OFF
+            assert sync_status(hass, in_sync) == SyncState.SUSPENDED.value
+        refused = [
+            args for args in send_commands(zui_api_responder) if args[1] == "set"
+        ]
+        assert len(refused) == len(E2E_SLOT_PINS) * MAX_SYNC_ATTEMPTS
+
 
 class TestRefusedClear:
     """A clear the lock refused under Supervision is a failed write."""
@@ -532,6 +585,47 @@ class TestPushUpdates:
         assert zui_lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
             E2E_SLOT_PINS[2]
         )
+
+    async def test_a_stale_available_leaves_a_synced_slot_alone(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock_discovered: er.RegistryEntry,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """
+        Regression for #1471: a stale Available on a synced slot is not believed.
+
+        Some locks announce a slot Available once a code lands on it. Taken
+        at its word, it unwound the synced slot, and sync wrote the code again.
+        """
+        lock_entity_id = zui_lock_discovered.entity_id
+        in_sync = in_sync_entity_id(hass, lcm_config_entry, 2, lock_entity_id)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: (
+                user_code_table.codes == E2E_SLOT_PINS
+                and hass.states.get(in_sync).state == STATE_ON
+            ),
+            max_ticks=len(E2E_SLOT_PINS) + 2,
+            what="every slot synced",
+        )
+        sets = [args for args in send_commands(zui_api_responder) if args[1] == "set"]
+
+        fire_zui_node_value(
+            hass, "user_code/endpoint_0/userIdStatus/2", STATUS_AVAILABLE
+        )
+        await async_advance_sync_ticks(hass, freezer, 3)
+
+        assert hass.states.get(in_sync).state == STATE_ON
+        code = code_entity_id(hass, lcm_config_entry, 2, lock_entity_id)
+        assert hass.states.get(code).state == E2E_SLOT_PINS[2]
+        assert [
+            args for args in send_commands(zui_api_responder) if args[1] == "set"
+        ] == sets
 
 
 class TestSharedLock:

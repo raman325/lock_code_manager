@@ -116,6 +116,24 @@ async def test_settle_background_steps_the_clock_through_a_sleep(
     assert not sleeper.cancelled()
 
 
+async def test_settle_background_leaves_a_lifelong_task_running(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """A client's listen loop never finishes, so settling neither waits on it nor ends it."""
+    listening = hass.async_create_background_task(
+        asyncio.Event().wait(), "zwave_js_entry_client_listen"
+    )
+    sleeper = hass.async_create_background_task(asyncio.sleep(0.1), "sleeper")
+    try:
+        await async_settle_background(hass, freezer)
+
+        assert sleeper.done()
+        assert not listening.done()
+    finally:
+        listening.cancel()
+        await asyncio.gather(listening, return_exceptions=True)
+
+
 async def test_advancing_sync_ticks_moves_both_clocks(
     freezer: FrozenDateTimeFactory,
     hass: HomeAssistant,

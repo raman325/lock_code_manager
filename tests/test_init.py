@@ -37,6 +37,8 @@ from homeassistant.const import (
     CONF_PIN,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
+    STATE_OFF,
+    STATE_ON,
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
@@ -79,6 +81,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
+    TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.config import (
     EntryConfig,
@@ -120,9 +123,11 @@ from .common import (
     async_blocking_stub,
     async_disable_and_reload,
     async_discover_unclaimed_mqtt_lock,
+    async_tick_until,
     code_entity_id,
     entry_users,
     in_sync_entity_id,
+    mock_lock,
     short_stop_grace,
     sync_manager_of,
     write_entry_config,
@@ -2832,6 +2837,69 @@ async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_
     assert lock.coordinator.data[pin_address(9)] == SlotCredential.known("1357")
 
     assert await hass.config_entries.async_unload(second_entry.entry_id)
+
+
+@pytest.mark.parametrize("leave", ["disable", "reload"])
+async def test_a_shared_polled_lock_sees_a_change_after_the_entry_that_built_it_leaves(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    freezer: FrozenDateTimeFactory,
+    leave: str,
+):
+    """
+    Regression for #1629: a shared lock is still polled after its builder leaves.
+
+    The lock's coordinator belonged to the entry that built it, so disabling
+    or reloading that entry shut it down, and the lock was never read again
+    for the entry still sharing it: a code changed at the keypad stayed
+    unseen. The second entry's slot is the only one of its own on the lock.
+    """
+    first_entry, second_entry = _sharing_entries()
+    for entry in (first_entry, second_entry):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    lock = mock_lock(second_entry, LOCK_2_ENTITY_ID)
+    in_sync = in_sync_entity_id(hass, second_entry, 3, LOCK_2_ENTITY_ID)
+    # The joining entry's slot waits on a debounced read of the lock first.
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=8,
+        what="slot 3 in sync",
+    )
+
+    if leave == "disable":
+        assert await hass.config_entries.async_set_disabled_by(
+            first_entry.entry_id, ConfigEntryDisabler.USER
+        )
+    else:
+        assert await hass.config_entries.async_reload(first_entry.entry_id)
+    await hass.async_block_till_done()
+    reads_before = len(lock.service_calls["get_usercodes"])
+    lock.codes[3] = "0000"
+
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_OFF,
+        # A scan interval of ticks, and one more to act on the poll ending it.
+        max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 1,
+        what="the keypad change seen on slot 3",
+    )
+    assert len(lock.service_calls["get_usercodes"]) > reads_before
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=3,
+        what="slot 3 back in sync",
+    )
+    assert lock.codes[3] == "2468"
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def _reads_over_scan_intervals(
