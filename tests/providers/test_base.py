@@ -24,6 +24,7 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
     STATE_ON,
+    STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
@@ -34,6 +35,7 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.update_coordinator import REQUEST_REFRESH_DEFAULT_COOLDOWN
 
 from custom_components.lock_code_manager.const import (
     ATTR_CONFIG_ENTRY_ID,
@@ -43,10 +45,13 @@ from custom_components.lock_code_manager.const import (
     ATTR_SOURCE,
     ATTR_SYNC_STATUS,
     ATTR_TARGET,
+    BACKOFF_INITIAL_SECONDS,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+    TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.credentials import (
@@ -78,7 +83,11 @@ from tests.common import (
     BASE_CONFIG,
     CLOCK_STEP,
     LOCK_1_ENTITY_ID,
+    LOCK_DEVICE_DOMAIN,
+    NO_PIN_CAPABILITIES,
+    PIN_CAPABILITIES,
     MockLCMLock,
+    MockLCMPushLock,
     async_advance_across_deadline,
     async_advance_clock,
     async_advance_sync_ticks,
@@ -87,6 +96,8 @@ from tests.common import (
     async_set_slot_pin,
     async_settle_background,
     async_tick_until,
+    code_entity_id,
+    current_entry,
     in_sync_entity_id,
     mock_lock,
     sync_status,
@@ -630,6 +641,63 @@ async def test_connection_transition_on_device_availability(
         lock.coordinator.async_request_refresh.assert_awaited()
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_a_lock_back_from_a_device_outage_gets_its_new_pin_promptly(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for PR #1289: a lock back from a device-only outage is written within a connection check.
+
+    The lock's device dropped off while its integration stayed loaded, as a
+    Matter node does behind a running Matter server. Only the integration
+    was watched for coming back, so recovery waited on the backoff's next
+    probe -- minutes, doubling up to half an hour -- before the PIN changed
+    meanwhile reached the lock, and the lock stayed unsubscribed until then.
+    """
+    with patch.dict(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {LOCK_DEVICE_DOMAIN: MockLCMPushLock},
+    ):
+        entry = current_entry("Device Outage", {1: "1234"})
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer)
+    assert hass.states.get(in_sync).state == STATE_ON
+
+    lock.set_device_available(False)
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: sync_status(hass, in_sync) == SyncState.SUSPENDED.value,
+        max_ticks=MAX_SYNC_ATTEMPTS + 3,
+        what="slot 1 suspended on the unreachable lock",
+    )
+    # Long enough for the probes to fail too, each doubling the backoff: the
+    # next one is minutes away when the device comes back.
+    await async_advance_clock(hass, freezer, 3 * BACKOFF_INITIAL_SECONDS)
+    assert lock.codes[1] == "1234"
+    assert lock.unsubscribe_calls == 1
+    subscribed = lock.subscribe_calls
+
+    lock.set_device_available(True)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        # A connection check, and a tick to write and one to confirm.
+        max_ticks=int(lock.connection_check_interval / TICK_INTERVAL) + 3,
+        what="slot 1 in sync once the device is back",
+    )
+    assert lock.codes[1] == "4321"
+    assert lock.subscribe_calls > subscribed
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize(
@@ -1204,6 +1272,58 @@ async def test_async_setup_internal_creates_coordinator_when_setup_fails(
     assert lock._setup_succeeded is True
 
 
+async def test_a_lock_whose_setup_raised_comes_up_with_its_integration(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for PR #1048: a lock whose setup raised comes up with its integration.
+
+    The lock's integration was down at startup, and the provider's setup
+    raised. That ended the lock's setup before its coordinator existed, so
+    its entities stayed unavailable after the integration came back, until
+    the entry was reloaded by hand.
+    """
+    entry = current_entry("Setup Raised", {1: "4321"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(
+        lambda lock: (
+            lock.fail("setup", error=LockDisconnected),
+            lock.fail("get", error=LockDisconnected),
+        )
+    ) as built:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    [down] = built
+    per_lock = [in_sync_entity_id(hass, entry, 1), code_entity_id(hass, entry, 1)]
+    await async_advance_sync_ticks(hass, freezer, 5)
+    assert [hass.states.get(entity_id).state for entity_id in per_lock] == [
+        STATE_UNAVAILABLE
+    ] * 2
+    lock = mock_lock(entry)
+    assert "set_usercode" not in lock.service_calls
+
+    for fault in down:
+        fault.clear()
+    assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(per_lock[0]).state == STATE_ON,
+        # The refresh the lock's setup asks for waits out the debounce, then
+        # the slot is compared, written and confirmed.
+        max_ticks=int(REQUEST_REFRESH_DEFAULT_COOLDOWN / TICK_INTERVAL.total_seconds())
+        + 5,
+        what="slot 1 in sync once the lock's integration is back",
+    )
+    assert hass.states.get(per_lock[1]).state == "4321"
+    assert lock.codes[1] == "4321"
+    assert lock.service_calls["setup"] == [(entry.entry_id,)] * 2
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_async_setup_internal_absorbs_a_failed_first_read(
     hass: HomeAssistant,
 ):
@@ -1450,6 +1570,49 @@ async def test_setup_internal_defers_provider_io_when_integration_not_connected(
     await lock.async_unload(False)
 
 
+async def test_a_lock_not_connected_at_setup_gets_entities_that_come_up_with_it(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for #225: a lock not connected at setup has entities, which come up with it.
+
+    Setup waited for the lock's integration to connect ("not connected yet,
+    waiting N s") before creating anything, so an entry set up before its
+    lock was ready had no entities at all, and the dashboards built on them
+    failed. They exist from the start, unavailable, and come up -- and the
+    slot is written -- once the lock connects.
+    """
+    entry = current_entry("Not Connected", {1: "4321"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(lambda lock: lock.set_connected(False)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    lock = mock_lock(entry)
+    per_lock = [in_sync_entity_id(hass, entry, 1), code_entity_id(hass, entry, 1)]
+    await async_advance_sync_ticks(hass, freezer, 5)
+    assert [hass.states.get(entity_id).state for entity_id in per_lock] == [
+        STATE_UNAVAILABLE
+    ] * 2
+    assert lock.call_order == []
+
+    lock.set_connected(True)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(per_lock[0]).state == STATE_ON,
+        # A connection check, then the refresh it asks for, a write, and its
+        # confirmation.
+        max_ticks=int(lock.connection_check_interval / TICK_INTERVAL) + 3,
+        what="slot 1 in sync once the lock connects",
+    )
+    assert hass.states.get(per_lock[1]).state == "4321"
+    assert lock.codes[1] == "4321"
+    assert lock.service_calls["setup"] == [(entry.entry_id,)]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_setup_complete_set_when_setup_raises_unexpectedly(
     hass: HomeAssistant,
 ):
@@ -1546,6 +1709,57 @@ async def test_setup_internal_structural_failure_degrades_and_recovers_on_reload
 
     await lock.coordinator.async_shutdown()
     await lock.async_unload(False)
+
+
+async def test_a_lock_failing_validation_at_setup_stays_in_the_entry_and_recovers(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for PR #1344: a lock failing validation at setup stays, visibly, in the entry.
+
+    A lock reporting no room for PIN codes -- a Z-Wave lock re-included and
+    interviewed while asleep -- failed the check setup makes and was
+    dropped from the entry: no entities, no repair, only a log line, and
+    nothing to bring it back short of a reload once the lock was fixed.
+    """
+    issue_reg = ir.async_get(hass)
+    setup_issue = per_lock_issue_id("lock_setup_failed", LOCK_1_ENTITY_ID)
+    entry = current_entry("Failed Validation", {1: "4321"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(
+        lambda lock: setattr(lock, "capabilities", NO_PIN_CAPABILITIES)
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_advance_sync_ticks(hass, freezer, 5)
+    assert issue_reg.async_get_issue(DOMAIN, setup_issue) is not None
+    assert sync_status(hass, in_sync) == SyncState.SUSPENDED.value
+    # Still read: the code sensor shows what the lock holds.
+    assert hass.states.get(code_entity_id(hass, entry, 1)).state == "1234"
+    lock = mock_lock(entry)
+    assert "set_usercode" not in lock.service_calls
+
+    # Re-interviewed: the lock reports its room again, and its integration
+    # reloads. The same lock instance is checked again: the probe that failed
+    # was not kept, so this answer is the one the check sees.
+    lock.capabilities = PIN_CAPABILITIES
+    assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=int(REQUEST_REFRESH_DEFAULT_COOLDOWN / TICK_INTERVAL.total_seconds())
+        + 3,
+        what="slot 1 in sync once the lock passes its check",
+    )
+    assert issue_reg.async_get_issue(DOMAIN, setup_issue) is None
+    assert mock_lock(entry) is lock
+    assert lock.codes[1] == "4321"
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_setup_validation_failure_raises_and_clears_repair_issue(

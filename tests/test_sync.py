@@ -15,6 +15,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     CONF_PIN,
+    SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_OFF,
     STATE_ON,
@@ -74,6 +75,7 @@ from .common import (
     async_switch_slot,
     async_tick_until,
     async_trip_slot_breaker,
+    current_entry,
     in_sync_entity_id,
     mock_lock,
     recording_listener,
@@ -1224,6 +1226,52 @@ class TestSyncStateMachine:
         assert lock.codes[1] == "4321"
         assert lock.service_calls["set_usercode"] == [(1, "4321", "test1")]
         assert issue_registry.async_get_issue(DOMAIN, setup_issue) is None
+
+    async def test_nothing_is_set_or_cleared_before_the_lock_is_read(
+        self,
+        freezer: FrozenDateTimeFactory,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+    ) -> None:
+        """
+        Regression for PR #250: nothing is set or cleared on a lock before it is read.
+
+        The first read of the lock failed, and the sync went ahead without
+        it: knowing nothing of what the lock held, it set and cleared slots
+        on the strength of nothing at all. It waits for a read, then writes
+        what that read shows is needed.
+
+        This guards the outcome, not a mechanism: several layers each keep
+        an unread slot from being written, so only removing all of them
+        fails it -- which is what a rebuilt sync core has to keep true.
+        """
+        entry = current_entry("Read First", {1: "4321", 2: "5678"})
+        entry.add_to_hass(hass)
+        with when_mock_lock_built(
+            lambda lock: lock.fail("get", error=LockDisconnected)
+        ) as built:
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+        [unread] = built
+        lock = mock_lock(entry)
+        # Slot 1 wants a new code, slot 2 none at all.
+        await async_switch_slot(hass, entry, 2, SERVICE_TURN_OFF)
+        await async_advance_sync_ticks(hass, freezer, 10)
+        assert {"set_usercode", "clear_usercode"}.isdisjoint(lock.call_order)
+        assert lock.codes == {1: "1234", 2: "5678"}
+
+        unread.clear()
+        in_syncs = [in_sync_entity_id(hass, entry, slot) for slot in (1, 2)]
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: all(hass.states.get(e).state == STATE_ON for e in in_syncs),
+            # The next poll, a write each and their confirmations.
+            max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 5,
+            what="both slots in sync once the lock is read",
+        )
+        assert lock.codes == {1: "4321"}
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
     async def test_syncing_to_suspended_on_unexpected_error(
         self,

@@ -31,7 +31,9 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
+from custom_components import lock_code_manager
 from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     TICK_INTERVAL,
@@ -41,6 +43,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
+    ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.domain.sync import SlotSyncManager
@@ -49,9 +52,12 @@ from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DE
 from .common import (
     BASE_CONFIG,
     CLOCK_STEP,
+    CONFIG_ENTRY_VERSION,
     LIFELONG_TASKS,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    NO_PIN_CAPABILITIES,
+    PIN_CAPABILITIES,
     SLOT_1_PIN_ENTITY,
     FaultKind,
     MockLCMLock,
@@ -66,6 +72,7 @@ from .common import (
     async_step_clock_until,
     async_tick_until,
     async_trip_slot_breaker,
+    current_entry,
     in_sync_entity_id,
     mock_lock,
     release_all_faults,
@@ -1290,3 +1297,78 @@ async def test_push_subscriptions_are_counted(
 
     await hass.config_entries.async_unload(entry.entry_id)
     assert [lock.unsubscribe_calls for lock in locks] == [1, 1]
+
+
+async def test_a_lock_reports_no_capabilities_unless_given_some(lock) -> None:
+    """The mock is slot-only until a test gives it capabilities to report."""
+    assert not lock.supports_native_users
+    with pytest.raises(ProviderNotImplementedError):
+        await lock.async_get_capabilities()
+
+    lock.capabilities = NO_PIN_CAPABILITIES
+    assert lock.supports_native_users
+    assert await lock.async_get_capabilities() is NO_PIN_CAPABILITIES
+    lock.capabilities = PIN_CAPABILITIES
+    assert await lock.async_get_capabilities() is PIN_CAPABILITIES
+
+
+@pytest.mark.parametrize(
+    ("make_entry", "migrated", "read_for_migration"),
+    [
+        pytest.param(
+            lambda: current_entry("Current", {1: "1234", 3: "0123"}),
+            False,
+            0,
+            id="current",
+        ),
+        # Both of its locks are read to migrate it.
+        pytest.param(
+            lambda: MockConfigEntry(
+                domain=DOMAIN, data=BASE_CONFIG, unique_id="Old Shape", version=1
+            ),
+            True,
+            2,
+            id="old_shape",
+        ),
+    ],
+)
+async def test_a_current_entry_sets_up_without_a_migration(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    make_entry: Callable[[], MockConfigEntry],
+    migrated: bool,
+    read_for_migration: int,
+) -> None:
+    """
+    Only an entry in an older shape is migrated, and has its locks read for it.
+
+    Home Assistant asks the integration to migrate an entry whose version is
+    not the current one, and only then. A migration from before version 4
+    also reads each lock, through an instance of its own built before the
+    ones the entry keeps; an entry already current builds just those, and
+    the first call each makes to its lock is the entry's setup. The
+    old-shape case shows both checks do see a migration.
+    """
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    assert (entry.version == CONFIG_ENTRY_VERSION) is not migrated
+    with (
+        patch.object(
+            lock_code_manager,
+            "async_migrate_entry",
+            wraps=lock_code_manager.async_migrate_entry,
+        ) as migrate,
+        when_mock_lock_built(lambda lock: lock) as built,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert migrate.called is migrated
+    kept = [mock_lock(entry, lock_id) for lock_id in entry.data[CONF_LOCKS]]
+    # By identity: two instances of one lock compare equal.
+    migration_reads = [lock for lock in built if not any(lock is k for k in kept)]
+    assert len(migration_reads) == read_for_migration
+    assert all(lock.call_order == ["get_usercodes"] for lock in migration_reads)
+    assert all(lock.call_order[0] == "setup" for lock in kept)
+    assert entry.version == CONFIG_ENTRY_VERSION
+    assert await hass.config_entries.async_unload(entry.entry_id)

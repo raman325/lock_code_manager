@@ -27,6 +27,7 @@ from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 from zwave_js_server.util.lock import get_code_slot_value
 
+from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
     ATTR_VALUE,
@@ -36,6 +37,7 @@ from homeassistant.components.text import (
 from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    ATTR_NAME,
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
@@ -44,13 +46,16 @@ from homeassistant.const import (
     STATE_ON,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    EVENT_CREDENTIAL_USED,
 )
 from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
@@ -587,6 +592,29 @@ async def _async_settle_in_sync(
     )
 
 
+def _keypad_unlock(node: Node, user_id: int) -> None:
+    """Deliver the notification a lock sends when a code unlocks it at the keypad."""
+    node.receive_event(
+        ZwaveEvent(
+            type="notification",
+            data={
+                "source": "node",
+                "event": "notification",
+                "nodeId": node.node_id,
+                "endpointIndex": 0,
+                "ccId": CommandClass.NOTIFICATION,
+                "args": {
+                    "type": 6,  # Access Control
+                    "event": 6,  # Keypad unlock operation
+                    "label": "Access Control",
+                    "eventLabel": "Keypad unlock operation",
+                    "parameters": {"userId": user_id},
+                },
+            },
+        )
+    )
+
+
 def _entry_on_slot_3(lock_entity: er.RegistryEntry, unique_id: str) -> MockConfigEntry:
     """Build a second entry on the Z-Wave JS lock, its one user on slot 3."""
     return MockConfigEntry(
@@ -932,6 +960,45 @@ class TestSharedCoordinatorLifetime:
         assert user_code_lock.codes[3] == "5555"
 
         await hass.config_entries.async_unload(second_entry.entry_id)
+
+    async def test_a_keypad_use_after_reloading_beside_an_unloaded_sibling_counts_once(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        lock_schlage_be469: Node,
+    ) -> None:
+        """
+        Regression for #1476: a code used once is recorded once after a reload.
+
+        With the second entry unloaded, reloading the first left its old lock
+        instance listening -- another entry still listed the lock -- and the
+        reload, finding no loaded entry to share with, built a second one.
+        Every keypad use then reached the bus, and the user's event entity,
+        twice.
+        """
+        second_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_second")
+        second_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(second_entry.entry_id)
+        await hass.async_block_till_done()
+        assert await hass.config_entries.async_unload(second_entry.entry_id)
+        assert await hass.config_entries.async_reload(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+        recorded: list[Event[EventStateChangedData]] = []
+        async_track_state_change_event(
+            hass,
+            slot_entity_id(
+                hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+            ),
+            recorded.append,
+        )
+
+        _keypad_unlock(lock_schlage_be469, user_id=1)
+        await hass.async_block_till_done()
+
+        assert [event.data[ATTR_NAME] for event in used] == ["slot1"]
+        assert len(recorded) == 1
 
     @pytest.mark.parametrize(
         "creating_entry_last", [True, False], ids=["creating_last", "creating_first"]

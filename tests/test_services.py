@@ -7,6 +7,7 @@ import json
 import logging
 from unittest.mock import AsyncMock, patch
 
+from freezegun.api import FrozenDateTimeFactory
 import probatio as vol
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -19,6 +20,7 @@ from homeassistant.components.event import (
     DOMAIN as EVENT_DOMAIN,
 )
 from homeassistant.const import (
+    ATTR_ENTITY_ID,
     ATTR_NAME,
     CONF_CONDITION,
     CONF_ENABLED,
@@ -66,6 +68,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_DISABLE_USER,
     SERVICE_ENABLE_USER,
     SERVICE_GENERATE_PIN,
+    SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_SET_CONDITION,
     SERVICE_SET_CREDENTIAL,
     SERVICE_USE_CREDENTIAL,
@@ -87,7 +90,20 @@ from custom_components.lock_code_manager.providers.schlage import (
 )
 from tests.providers.helpers import register_mock_service
 
-from .common import LOCK_1_ENTITY_ID, reading_for, unnumbered_user_subentry
+from .common import (
+    LOCK_1_ENTITY_ID,
+    async_advance_sync_ticks,
+    async_set_slot_pin,
+    async_tick_until,
+    mock_lock,
+    reading_for,
+    unnumbered_user_subentry,
+)
+
+# The logger every Lock Code Manager module logs under.
+DOMAIN_LOGGER = f"custom_components.{DOMAIN}"
+# The line a lock logs for each set, its PIN masked.
+SET_USERCODE_LOG = "Setting usercode on %s slot %s (pin=%s, source=%s)"
 
 
 async def test_async_set_usercode_domain_function_rejects_empty_usercode(
@@ -227,6 +243,91 @@ async def test_deobfuscate_log_service_round_trips_configured_pins(
         "matched": 2,
         "unmatched_tokens": ["pin#deadbeef"],
     }
+
+
+async def test_the_actions_still_answer_once_every_entry_has_unloaded(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Regression for PR #928: the actions keep answering after the last entry unloads.
+
+    Unloading the last entry dropped the integration's shared data, which the
+    actions -- registered once, for good -- still read: they failed from
+    then on, until a restart, even once an entry was set up again. The
+    masked PIN decoded here is one the integration itself logged.
+    """
+    entry = lock_code_manager_config_entry
+    caplog.set_level(logging.DEBUG, logger=DOMAIN_LOGGER)
+    await async_advance_sync_ticks(hass, freezer)
+    caplog.clear()
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: mock_lock(entry).codes[1] == "4321",
+        max_ticks=3,
+        what="the new PIN written",
+    )
+    # The write is logged with its PIN masked, as every PIN is.
+    writes = [
+        record
+        for record in caplog.records
+        if record.msg == SET_USERCODE_LOG and record.args[:2] == (LOCK_1_ENTITY_ID, 1)
+    ]
+    assert len(writes) == 1, f"expected one logged write to slot 1, got {writes}"
+    log_line = writes[0].getMessage()
+    token = writes[0].args[2]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Nothing manages the lock now, so there is nothing to refresh.
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ENABLE_USER,
+            {ATTR_CONFIG_ENTRY_ID: entry.entry_id, CONF_NAME: "test1"},
+            blocking=True,
+        )
+    # No entry is loaded to say whose PIN it was.
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DEOBFUSCATE_LOG,
+        {ATTR_TEXT: log_line},
+        blocking=True,
+        return_response=True,
+    )
+    assert response is not None
+    assert response["summary"]["unmatched_tokens"] == [token]
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DEOBFUSCATE_LOG,
+        {ATTR_TEXT: log_line},
+        blocking=True,
+        return_response=True,
+    )
+    assert response is not None
+    assert response["summary"]["matched"] == 1
+    assert "pin=4321" in response["deobfuscated_text"]
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    assert mock_lock(entry).service_calls["hard_refresh_codes"] == [(None,)]
 
 
 async def test_add_user_service(

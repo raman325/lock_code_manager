@@ -4,6 +4,7 @@ import asyncio
 import copy
 from datetime import timedelta
 import logging
+import sys
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -24,6 +25,7 @@ from homeassistant.components.text import (
 )
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
+    SOURCE_USER,
     ConfigEntryDisabler,
     ConfigEntryState,
 )
@@ -42,6 +44,7 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
@@ -82,6 +85,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
+    SUBENTRY_TYPE_USER,
     TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.domain.config import (
@@ -117,18 +121,24 @@ from .common import (
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     LOCK_DEVICE_DOMAIN,
+    NO_PIN_CAPABILITIES,
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_NAME_ENTITY,
     MockLCMLock,
+    MockLCMPushLock,
     all_sync_managers,
+    async_advance_clock,
     async_advance_sync_ticks,
     async_blocking_stub,
+    async_configure_options,
     async_disable_and_reload,
     async_discover_unclaimed_mqtt_lock,
+    async_run_until_quiet,
     async_set_slot_pin,
     async_tick_until,
     async_trip_slot_breaker,
     code_entity_id,
+    current_entry,
     entry_users,
     in_sync_entity_id,
     mock_lock,
@@ -628,6 +638,50 @@ async def test_entry_setup_and_unload_before_ha_started(
     await hass.config_entries.async_remove(config_entry.entry_id)
 
 
+async def test_an_entry_set_up_during_startup_reaches_its_lock_once_started(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for #247: an entry set up while Home Assistant starts does not hold startup.
+
+    Setting the entry up waited on its lock, so a lock whose integration was
+    still coming up held Home Assistant's startup on "Initial setup for
+    entities". The entry loads at once and leaves the lock alone; the lock
+    is read, then written, once startup is over.
+    """
+    entry = current_entry("Set Up During Startup", {1: "4321"})
+    entry.add_to_hass(hass)
+    # Starting before any of Lock Code Manager is set up, as at boot.
+    hass.set_state(CoreState.starting)
+    with when_mock_lock_built(lambda lock: lock) as built:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.LOADED
+        # A slow startup: a scan interval passes and the lock is still left alone.
+        await async_advance_clock(hass, freezer, 60)
+        assert built == []
+
+        hass.set_state(CoreState.running)
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+        await hass.async_block_till_done()
+    [lock] = built
+    assert lock.call_order[:2] == ["setup", "get_usercodes"]
+
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        # A tick to compare, one to write and one to confirm, with headroom.
+        max_ticks=6,
+        what="slot 1 in sync once started",
+    )
+    assert lock.codes[1] == "4321"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 @pytest.mark.parametrize("config", [{}])
 async def test_migration_v1_to_v2_calendar_to_entity_id(
     hass: HomeAssistant,
@@ -739,6 +793,62 @@ async def test_overlapping_locks_both_entries_get_entities(
         assert lock.coordinator is not None
 
     await hass.config_entries.async_unload(entry_2.entry_id)
+
+
+async def test_two_entries_sharing_a_lock_at_startup_both_come_up(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for #865: the second entry sharing a lock at startup gets its entities.
+
+    Both entries set up while Home Assistant starts, and the lock's own setup
+    takes a while. The second entry to reach the lock found it built but
+    not yet set up, created none of its per-lock entities, and they stayed
+    unavailable until a reload.
+    """
+    entries = [
+        current_entry("Startup A", {1: "1234"}),
+        current_entry("Startup B", {3: "0123"}),
+    ]
+    # Starting before any of Lock Code Manager is set up, as at boot.
+    hass.set_state(CoreState.starting)
+    with when_mock_lock_built(
+        lambda lock: lock.slow("setup", seconds=5, times=1)
+    ) as slow_setups:
+        for entry in entries:
+            entry.add_to_hass(hass)
+            assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        hass.set_state(CoreState.running)
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+        await async_run_until_quiet()
+        [slow_setup] = slow_setups
+        await slow_setup.async_wait_held()
+        await async_advance_clock(hass, freezer, 6)
+
+    per_lock = [
+        (in_sync_entity_id(hass, entry, slot), code_entity_id(hass, entry, slot))
+        for entry, slot in zip(entries, (1, 3), strict=True)
+    ]
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: all(
+            (state := hass.states.get(in_sync)) is not None and state.state == STATE_ON
+            for in_sync, _code in per_lock
+        ),
+        # The second entry's slot waits on a debounced read of the lock first.
+        max_ticks=8,
+        what="both entries' slots in sync",
+    )
+    assert [hass.states.get(code).state for _in_sync, code in per_lock] == [
+        "1234",
+        "0123",
+    ]
+    for entry in entries:
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 def _entry_with_shared_lock(unique_id: str, slot_num: int) -> MockConfigEntry:
@@ -906,6 +1016,210 @@ async def test_lock_leaving_one_entry_is_not_removed_permanently(
 
     await hass.config_entries.async_unload(entry_a.entry_id)
     await hass.async_block_till_done()
+
+
+async def test_dropping_a_lock_another_entry_manages_keeps_its_repair(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for PR #1482: dropping a lock from one entry keeps what another relies on.
+
+    The lock was taken out of one entry through its options while the other
+    entry managing it was unloaded. It was torn down as though it were
+    leaving Lock Code Manager altogether, which deletes the state meant to
+    outlive an unload: the provider's stored codes, and the repair saying
+    the lock failed its setup -- which still holds for the other entry.
+    """
+    issue_reg = ir.async_get(hass)
+    setup_issue = per_lock_issue_id("lock_setup_failed", LOCK_1_ENTITY_ID)
+    entry_a = current_entry(
+        "Dropping A", {1: "1234"}, (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
+    )
+    entry_b = current_entry("Keeping B", {3: "0123"})
+    # Lock 1 reports no room for PIN codes, so it fails its setup check.
+    with when_mock_lock_built(
+        lambda lock: (
+            setattr(lock, "capabilities", NO_PIN_CAPABILITIES)
+            if lock.lock.entity_id == LOCK_1_ENTITY_ID
+            else None
+        )
+    ):
+        for entry in (entry_a, entry_b):
+            entry.add_to_hass(hass)
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+    lock = mock_lock(entry_a)
+    assert issue_reg.async_get_issue(DOMAIN, setup_issue) is not None
+    assert await hass.config_entries.async_unload(entry_b.entry_id)
+    await hass.async_block_till_done()
+
+    started = await hass.config_entries.options.async_init(entry_a.entry_id)
+    result = await async_configure_options(
+        hass, started["flow_id"], {CONF_LOCKS: [LOCK_2_ENTITY_ID]}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert entry_a.data[CONF_LOCKS] == [LOCK_2_ENTITY_ID]
+    assert lock.service_calls["unload"] == [(False,)]
+    assert issue_reg.async_get_issue(DOMAIN, setup_issue) is not None
+    assert await hass.config_entries.async_unload(entry_a.entry_id)
+
+
+async def test_dropping_one_lock_leaves_the_other_locks_codes_alone(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for #1538: removing one lock from an entry leaves its other lock alone.
+
+    Reported as the credentials on the lock that stayed being wiped when the
+    other lock was removed through the options. Never reproduced, so this
+    pins what has to hold: nothing is cleared or rewritten on the lock that
+    stays, and its slots stay in sync.
+    """
+    pins = {1: "1357", 2: "2468"}
+    entry = current_entry("Two Locks", pins, (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID))
+    entry.add_to_hass(hass)
+    # Both locks already hold the entry's codes, which are not the mock's own.
+    with when_mock_lock_built(lambda lock: setattr(lock, "codes", dict(pins))):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    kept = mock_lock(entry, LOCK_1_ENTITY_ID)
+    in_syncs = [in_sync_entity_id(hass, entry, slot) for slot in (1, 2)]
+    await async_advance_sync_ticks(hass, freezer)
+    assert [hass.states.get(in_sync).state for in_sync in in_syncs] == [STATE_ON] * 2
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await async_configure_options(
+        hass, started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    await async_advance_sync_ticks(hass, freezer, 5)
+
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    # Still the instance the entry writes through, so nothing went elsewhere.
+    assert mock_lock(entry, LOCK_1_ENTITY_ID) is kept
+    assert kept.codes == pins
+    assert {"set_usercode", "clear_usercode"}.isdisjoint(kept.call_order)
+    assert [hass.states.get(in_sync).state for in_sync in in_syncs] == [STATE_ON] * 2
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def _async_unload_cleanly(
+    hass: HomeAssistant, entry: MockConfigEntry, caplog: pytest.LogCaptureFixture
+) -> MockLCMLock:
+    """Unload ``entry``, checking it ends unloaded with nothing logged as an error."""
+    lock = mock_lock(entry)
+    caplog.clear()
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.NOT_LOADED
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
+    return lock
+
+
+async def test_unloading_beside_a_sibling_disabled_since_startup_unloads_cleanly(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """
+    Regression for PR #251: an entry unloads cleanly beside a disabled sibling on its lock.
+
+    Unloading asked every entry configuring the lock about the lock it was
+    holding, and a sibling disabled since before it ever loaded had nothing
+    to answer with: the unload raised.
+    """
+    entry_a = current_entry("Unloading A", {1: "1234"})
+    entry_b = current_entry("Disabled B", {3: "0123"})
+    entry_b.add_to_hass(hass)
+    await hass.config_entries.async_set_disabled_by(
+        entry_b.entry_id, ConfigEntryDisabler.USER
+    )
+    entry_a.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry_a.entry_id)
+    await hass.async_block_till_done()
+    assert entry_b.state is ConfigEntryState.NOT_LOADED
+
+    lock = await _async_unload_cleanly(hass, entry_a, caplog)
+
+    assert lock.service_calls["unload"] == [(False,)]
+
+
+async def test_a_sibling_disabled_while_sharing_the_lock_leaves_it_to_the_other(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """
+    A sibling disabled while sharing the lock lets go of it; the other entry tears it down.
+
+    Disabling the sibling unloads it without touching the lock the other
+    entry still holds, and that entry's own unload is then the one that
+    tears the lock down -- once, and cleanly.
+    """
+    entry_a = current_entry("Unloading A", {1: "1234"})
+    entry_b = current_entry("Disabled B", {3: "0123"})
+    for entry in (entry_a, entry_b):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.config_entries.async_set_disabled_by(
+        entry_b.entry_id, ConfigEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+    assert entry_b.state is ConfigEntryState.NOT_LOADED
+    assert mock_lock(entry_a).service_calls["unload"] == []
+
+    lock = await _async_unload_cleanly(hass, entry_a, caplog)
+
+    assert lock.service_calls["unload"] == [(False,)]
+
+
+async def test_a_reload_beside_an_unloaded_sibling_leaves_one_push_subscription(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    Regression for #1476: reloading beside an unloaded sibling keeps one subscription.
+
+    The lock was torn down only when no other entry listed it, so the entry
+    reloading beside an unloaded sibling kept its old instance subscribed --
+    and, finding no loaded entry to share with, built a second one. Two
+    subscriptions to one lock reported every use of a code twice.
+    """
+    entry_a = current_entry("Push A", {1: "1234"})
+    entry_b = current_entry("Push B", {3: "0123"})
+    with (
+        patch.dict(
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+            {LOCK_DEVICE_DOMAIN: MockLCMPushLock},
+        ),
+        when_mock_lock_built(lambda lock: lock) as built,
+    ):
+        for entry in (entry_a, entry_b):
+            entry.add_to_hass(hass)
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+        assert await hass.config_entries.async_unload(entry_b.entry_id)
+        await hass.async_block_till_done()
+        assert await hass.config_entries.async_reload(entry_a.entry_id)
+        await hass.async_block_till_done()
+
+    # One per load of entry A; entry B shared the first.
+    assert len(built) == 2
+    assert [lock.subscribe_calls - lock.unsubscribe_calls for lock in built] == [0, 1]
+
+    assert await hass.config_entries.async_unload(entry_a.entry_id)
+    await hass.async_block_till_done()
+    assert [lock.subscribe_calls - lock.unsubscribe_calls for lock in built] == [0, 0]
 
 
 @pytest.mark.parametrize("config", [{}])
@@ -3548,6 +3862,55 @@ async def test_the_options_form_offers_a_failed_entry_s_saved_locks(
 
     [locks_key] = result["data_schema"].schema
     assert locks_key.default() == [LOCK_1_ENTITY_ID]
+
+
+async def test_a_failed_entry_checks_a_lock_it_adds_against_the_users_it_saved_since(
+    hass: HomeAssistant, mock_lock_config_entry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Regression for PR #1632: an entry that failed to load is checked against what it stores.
+
+    Home Assistant keeps what a failed setup built, and the entry's settings
+    were read from it: a user added to the entry after the failure was
+    invisible to the options form, which let the entry take on a lock where
+    another entry already held that user's number.
+    """
+    entry = current_entry("Failed To Load", {1: "1234"})
+    entry.add_to_hass(hass)
+    # A platform that will not import fails the setup partway through, after
+    # it has built what Home Assistant then keeps. Only that one module is
+    # hidden, and only for the setup.
+    with monkeypatch.context() as hidden:
+        hidden.setitem(sys.modules, f"{lock_code_manager.__name__}.event", None)
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+    started = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+    )
+    started = await hass.config_entries.subentries.async_configure(
+        started["flow_id"], {"next_step_id": "one"}
+    )
+    added = await hass.config_entries.subentries.async_configure(
+        started["flow_id"], {CONF_NAME: "Visitor", CONF_ENABLED: True, CONF_PIN: "2468"}
+    )
+    assert added["type"] is FlowResultType.CREATE_ENTRY
+    # The lock holds a code on 2, so the visitor is issued 3.
+    assert added["data"][CONF_SLOT] == 3
+    other = current_entry("Holds Three", {3: "1357"}, (LOCK_2_ENTITY_ID,))
+    other.add_to_hass(hass)
+
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    [locks_key] = started["data_schema"].schema
+    assert locks_key.default() == [LOCK_1_ENTITY_ID]
+    result = await async_configure_options(
+        hass, started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "slots_already_configured"}
+    assert result["description_placeholders"]["common_slots"] == "3"
 
 
 async def test_a_loaded_entry_answers_from_its_cached_config(
