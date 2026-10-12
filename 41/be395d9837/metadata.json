@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "41be395d9837",
+  "strategy": "manual-commit",
+  "branch": "fix/allocation-progress-race",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/41/be395d9837/0/metadata.json",
+      "transcript": "/41/be395d9837/0/full.jsonl",
+      "compact_transcript": "/41/be395d9837/0/transcript.jsonl",
+      "content_hash": "/41/be395d9837/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1686,
+    "cache_creation_tokens": 7710835,
+    "cache_read_tokens": 334303820,
+    "output_tokens": 881610,
+    "api_call_count": 779
+  }
+}
