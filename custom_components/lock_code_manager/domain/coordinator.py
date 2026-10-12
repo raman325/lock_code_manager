@@ -187,12 +187,11 @@ class LockUsercodeUpdateCoordinator(
         checks, connection checks, the first read, pushes and confirmation
         reads keep their own timers.
         """
-        if self.update_interval is not None:
-            holders = list(
-                entries_holding(self.hass, self._lock.lock.entity_id, self._lock)
-            )
-            if holders and all(entry.pref_disable_polling for entry in holders):
-                return
+        holders = list(
+            entries_holding(self.hass, self._lock.lock.entity_id, self._lock)
+        )
+        if holders and all(entry.pref_disable_polling for entry in holders):
+            return
         super()._schedule_refresh()
 
     @callback
@@ -202,12 +201,13 @@ class LockUsercodeUpdateCoordinator(
 
         The rule is otherwise asked only when a poll is due to be scheduled,
         and nothing schedules one for a lock every holder had stopped polling.
-        A poll already scheduled is left where it is, rather than pushed a
-        full interval later on every join.
+        A poll is scheduled only if the rule allows one, none is scheduled
+        already, and something listens: Home Assistant polls only for
+        listeners, and a scheduled poll is left where it is rather than pushed
+        a full interval later on every join.
         """
-        if self._shutdown_requested or self._unsub_refresh is not None:
-            return
-        self._schedule_refresh()
+        if self._listeners and self._unsub_refresh is None:
+            self._schedule_refresh()
 
     def desired_credential(
         self, address: CredentialAddress, *, owner: ConfigEntry | None = None

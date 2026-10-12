@@ -2858,7 +2858,7 @@ async def _reads_over_scan_intervals(
 
 
 def _entry_on_the_second_lock(
-    slot_num: int | None, *, disable_polling: bool
+    slot_num: int | None, *, disable_polling: bool, unique_id: str | None = None
 ) -> MockConfigEntry:
     """
     Build an entry on the second lock, with one user whose code it already holds.
@@ -2882,7 +2882,7 @@ def _entry_on_the_second_lock(
     return MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [LOCK_2_ENTITY_ID], CONF_SLOTS: slots},
-        unique_id=f"Users {slot_num}",
+        unique_id=unique_id or f"Users {slot_num}",
         pref_disable_polling=disable_polling,
     )
 
@@ -3043,6 +3043,29 @@ async def test_an_entry_joining_leaves_a_scheduled_poll_where_it_is(
     await hass.async_block_till_done()
 
     assert len(lock.service_calls["get_usercodes"]) == reads_before + 1
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_shared_lock_nothing_listens_to_is_not_polled(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    freezer: FrozenDateTimeFactory,
+):
+    """
+    A lock whose holders have no users is not polled, even once an entry joins.
+
+    Home Assistant polls only for listeners, and no entity listens here, so
+    the joiner allowing polling starts nothing.
+    """
+    lock = await _set_up(
+        hass,
+        _entry_on_the_second_lock(None, disable_polling=False, unique_id="Builder"),
+        _entry_on_the_second_lock(None, disable_polling=False, unique_id="Joiner"),
+    )
+
+    assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 0
 
     for entry in hass.config_entries.async_entries(DOMAIN):
         assert await hass.config_entries.async_unload(entry.entry_id)
