@@ -102,6 +102,8 @@ from .common import (
 
 # The logger every Lock Code Manager module logs under.
 DOMAIN_LOGGER = f"custom_components.{DOMAIN}"
+# The line a lock logs for each set, its PIN masked.
+SET_USERCODE_LOG = "Setting usercode on %s slot %s (pin=%s, source=%s)"
 
 
 async def test_async_set_usercode_domain_function_rejects_empty_usercode(
@@ -271,14 +273,14 @@ async def test_the_actions_still_answer_once_every_entry_has_unloaded(
         what="the new PIN written",
     )
     # The write is logged with its PIN masked, as every PIN is.
-    masked = [
-        (record.getMessage(), arg)
+    writes = [
+        record
         for record in caplog.records
-        for arg in record.args or ()
-        if isinstance(arg, str) and arg.startswith("pin#")
+        if record.msg == SET_USERCODE_LOG and record.args[:2] == (LOCK_1_ENTITY_ID, 1)
     ]
-    [token] = {token for _line, token in masked}
-    log_line = masked[0][0]
+    assert len(writes) == 1, f"expected one logged write to slot 1, got {writes}"
+    log_line = writes[0].getMessage()
+    token = writes[0].args[2]
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 

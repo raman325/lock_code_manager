@@ -1125,14 +1125,17 @@ class MockLCMLock(BaseLock):
         # native-user lock as far as setup's capability check is concerned --
         # BaseLock runs that check for native-user providers only -- but not
         # in its user lifecycle: sets, clears and reads stay this mock's
-        # slot-level ones. The flag also sizes each write's deadline for the
-        # three exchanges a native-user write takes. None, the default, is a
-        # slot-only lock that is checked for nothing.
+        # slot-level ones. The flag also sizes the operation deadlines as for
+        # a native-user lock: three exchanges per write, and one per managed
+        # slot plus one per clear. None, the default, is a slot-only lock
+        # that is checked for nothing.
         #
-        # BaseLock caches a probe that passes for the instance's lifetime, so
-        # a change after that is not seen. A probe that fails the check is
-        # dropped instead, so a lock that failed can be fixed here and is
-        # asked again when its integration next reloads.
+        # BaseLock caches the first answer it gets, for the instance's
+        # lifetime, whichever caller asked -- allocation's slot-range ask and
+        # the write path's capacity checks keep even an answer with no PIN
+        # room. Only setup's check drops an answer that fails it. So fixing
+        # this after a failed setup check is seen at the lock integration's
+        # next reload only if nothing else asked in between.
         self.capabilities: LockCapabilities | None = None
         for act in _ON_BUILD:
             act(self)
@@ -1345,7 +1348,13 @@ class MockLCMLock(BaseLock):
 
     @property
     def supports_native_users(self) -> bool:
-        """Return whether setup checks this lock's capabilities, as a native-user lock's."""
+        """
+        Return whether this mock answers as a native-user lock does.
+
+        Setup then checks its capabilities, and each write's deadline is
+        sized for three exchanges and each clear's for one per managed slot
+        plus one. Its writes and reads stay slot-level.
+        """
         return self.capabilities is not None
 
     async def async_get_capabilities(self) -> LockCapabilities:
