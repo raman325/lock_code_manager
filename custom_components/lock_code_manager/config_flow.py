@@ -416,7 +416,8 @@ class _AllocatesInProgress:
     step that takes the submission starts the task and shows progress; Home
     Assistant re-enters the step when the task finishes, the step hands off
     to its ``<step>_allocated`` sibling, and that one either proceeds or
-    re-shows the same form with the refusal.
+    re-shows the same form with the refusal. A task already finished when it
+    starts goes straight to progress-done.
     """
 
     # Provided by the FlowHandler this is mixed into.
@@ -450,11 +451,10 @@ class _AllocatesInProgress:
                 progress=self.async_update_progress,
             )
         )
-        return self.async_show_progress(
-            step_id=step_id,
-            progress_action="allocating",
-            progress_task=self._allocation_task,
-        )
+        # Not always progress: a task with nothing to read has already
+        # finished (tasks start eagerly), and showing it as progress lets the
+        # done-callback's event fire before any client listens for it.
+        return self._allocation_progress(step_id)
 
     def _allocation_progress(self, step_id: str) -> Any | None:
         """Return the progress result while allocating; None when nothing is."""
@@ -476,7 +476,9 @@ class _AllocatesInProgress:
         longer there. That is reachable: the flow sits on the progress-done
         step for as long as answering it takes -- creating the entry and
         setting the integration up -- so a duplicated request or a second
-        open dialog lands here. ``UnknownFlow`` becomes a 404 at the view and
+        open dialog lands here. A step whose allocation finished at once is
+        handed off through progress-done within the same request, so its
+        duplicate lands here too. ``UnknownFlow`` becomes a 404 at the view and
         leaves the flow alone; raising anything else would reach the user as
         "Unknown error", which is what this step exists to stop, and aborting
         would pull the flow out from under the request busy finishing it.

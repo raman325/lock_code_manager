@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import ExitStack, contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -263,6 +264,20 @@ def matter_mock_helpers() -> dict[str, AsyncMock]:
     return helpers
 
 
+@contextmanager
+def matter_helpers_patched(helpers: dict[str, AsyncMock]) -> Iterator[None]:
+    """
+    Answer every Matter lock helper the provider calls from ``helpers``.
+
+    Patched where the provider imports them, for as long as anything the test
+    sets up -- an entry, or a flow creating one -- may call them.
+    """
+    with ExitStack() as stack:
+        for name, mock in helpers.items():
+            stack.enter_context(patch(f"{_PROVIDER_MODULE}.{name}", mock))
+        yield
+
+
 @pytest.fixture
 async def lcm_config_entry(
     hass: HomeAssistant,
@@ -286,35 +301,7 @@ async def lcm_config_entry(
         unique_id="test_matter_e2e",
     )
     lcm_entry.add_to_hass(hass)
-    with (
-        patch(
-            f"{_PROVIDER_MODULE}.get_lock_info", matter_mock_helpers["get_lock_info"]
-        ),
-        patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            matter_mock_helpers["get_lock_users"],
-        ),
-        patch(
-            f"{_PROVIDER_MODULE}.set_lock_credential",
-            matter_mock_helpers["set_lock_credential"],
-        ),
-        patch(
-            f"{_PROVIDER_MODULE}.get_lock_credential_status",
-            matter_mock_helpers["get_lock_credential_status"],
-        ),
-        patch(
-            f"{_PROVIDER_MODULE}.set_lock_user",
-            matter_mock_helpers["set_lock_user"],
-        ),
-        patch(
-            f"{_PROVIDER_MODULE}.clear_lock_credential",
-            matter_mock_helpers["clear_lock_credential"],
-        ),
-        patch(
-            f"{_PROVIDER_MODULE}.clear_lock_user",
-            matter_mock_helpers["clear_lock_user"],
-        ),
-    ):
+    with matter_helpers_patched(matter_mock_helpers):
         assert await hass.config_entries.async_setup(lcm_entry.entry_id)
         await hass.async_block_till_done()
 

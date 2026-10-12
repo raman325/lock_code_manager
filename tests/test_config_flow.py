@@ -61,15 +61,18 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    LockFault,
     MockLCMLock,
     async_configure_flow,
     async_discover_unclaimed_mqtt_lock,
+    async_run_until_quiet,
     entry_users,
     flow_slots,
     flow_users,
     reading_for,
     unnumbered_user_subentry,
     user_subentries,
+    when_mock_lock_built,
 )
 from .providers.zigbee2mqtt.conftest import async_discover_z2m_lock
 
@@ -2960,14 +2963,20 @@ async def test_ui_allocation_runs_as_a_progress_step(
     """The count submission shows progress while the locks are read (#1536).
 
     A lock that answers one index per round trip can take a minute or more;
-    the dialog reports the read instead of freezing. The read reports how
-    many locks have answered, and the flow moves on once it is done.
+    the dialog reports the read instead of freezing. The read is held here,
+    as a slow lock holds it, so it is still running when the submission is
+    answered. The read reports how many locks have answered, and the flow
+    moves on once it is done.
     """
     flow_id = await _start_config_flow(hass)
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
     updates = async_capture_events(hass, EVENT_DATA_ENTRY_FLOW_PROGRESS_UPDATE)
 
-    with _holding():
+    def _empty_and_slow_to_read(lock: MockLCMLock) -> LockFault:
+        lock.codes.clear()
+        return lock.hang("get")
+
+    with when_mock_lock_built(_empty_and_slow_to_read) as faults:
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NUM_USERS: 2}
         )
@@ -2975,6 +2984,9 @@ async def test_ui_allocation_runs_as_a_progress_step(
         assert result["step_id"] == "ui"
         assert result["progress_action"] == "allocating"
 
+        assert sum(fault.held for fault in faults) == 1
+        for fault in faults:
+            fault.clear()
         await hass.async_block_till_done()
         result = await hass.config_entries.flow.async_configure(flow_id)
 
@@ -3186,6 +3198,134 @@ async def test_a_second_request_for_an_answered_step_is_not_an_unknown_error(
 
     assert result["type"] == "create_entry"
     assert flow_users(result) == {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
+
+
+async def test_a_second_request_while_an_unread_entry_is_saved_is_turned_away(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A duplicated submission is refused while the first one saves the entry.
+
+    With nothing to wait on, allocation is answered within the request that
+    submitted the users, and the flow must not still be on the users form
+    while that request saves the entry: a second request carrying the same
+    users -- a client retry, a second open dialog -- would pass the form,
+    allocate again and save a second entry over the first. It gets the 404 a
+    request for a step already answered gets.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+    users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
+    saving = asyncio.Event()
+    let_it_save = asyncio.Event()
+    finish_flow = ConfigEntriesFlowManager.async_finish_flow
+
+    async def _slow_first_save(self, flow, result):
+        if not saving.is_set():
+            saving.set()
+            await let_it_save.wait()
+        return await finish_flow(self, flow, result)
+
+    with patch.object(ConfigEntriesFlowManager, "async_finish_flow", _slow_first_save):
+        saved = hass.async_create_task(
+            hass.config_entries.flow.async_configure(flow_id, users)
+        )
+        await async_run_until_quiet()
+        assert saving.is_set(), "the submitting request did not save the entry"
+
+        with pytest.raises(UnknownFlow):
+            await hass.config_entries.flow.async_configure(flow_id, users)
+
+        let_it_save.set()
+        result = await saved
+
+    assert result["type"] == "create_entry"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_a_refusal_after_a_held_read_comes_back_to_the_users_form(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A read that runs long and then fails re-shows the users form with why.
+
+    The progress path end to end: the submission shows progress while the
+    read is held, the read never answers, and once Home Assistant re-enters
+    the step the refusal lands on the form the users were submitted from --
+    which takes the same users again once the lock answers.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+    users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
+
+    with when_mock_lock_built(lambda lock: lock.drop_reply("get")) as faults:
+        result = await hass.config_entries.flow.async_configure(flow_id, users)
+        assert result["type"] == "progress"
+        assert result["step_id"] == "yaml"
+
+        assert sum(fault.held for fault in faults) == 1
+        for fault in faults:
+            fault.clear()
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "yaml"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+
+    result = await async_configure_flow(hass, flow_id, users)
+    assert result["type"] == "create_entry"
+
+
+async def test_a_refusal_after_a_held_read_comes_back_to_the_count_form(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The guided path's refusal after progress lands on the count form.
+
+    The same handoff as the users block takes, through the count step: the
+    read is held, so the submission shows progress, the read never answers,
+    and the refusal comes back on the form the count was submitted from,
+    which takes it again once the lock answers.
+    """
+    flow_id = await _start_config_flow(hass)
+    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+
+    with when_mock_lock_built(lambda lock: lock.drop_reply("get")) as faults:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+        assert result["type"] == "progress"
+        assert result["step_id"] == "ui"
+
+        assert sum(fault.held for fault in faults) == 1
+        for fault in faults:
+            fault.clear()
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "ui"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+
+    result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+    assert result["type"] == "form"
+    assert result["step_id"] == "code_slot"
+
+
+async def test_a_refusal_answered_at_once_can_be_submitted_again(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A refusal that needed no wait leaves the form open to another try.
+
+    The refusal comes back on the users form, not on a step that has already
+    taken the allocation, so the user correcting it is not turned away.
+    """
+    flow_id = await _start_yaml_config_flow(hass)
+    users = {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}}
+
+    with when_mock_lock_built(lambda lock: lock.fail("get")):
+        result = await hass.config_entries.flow.async_configure(flow_id, users)
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+
+    result = await hass.config_entries.flow.async_configure(flow_id, users)
+    assert result["type"] == "create_entry"
 
 
 async def test_every_user_subentry_field_has_a_label(

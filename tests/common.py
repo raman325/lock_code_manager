@@ -1711,9 +1711,13 @@ async def async_configure_flow(
     """
     Submit to a config flow, waiting out any progress step it shows.
 
-    Allocation runs as a progress task (#1536): the step that takes the
-    submission shows progress, Home Assistant re-enters it when the task is
-    done, and the next result is what the user would see.
+    Allocation runs as a progress task (#1536): while a lock read is still
+    running, the step that takes the submission shows progress, Home
+    Assistant re-enters it when the task is done, and the next result is what
+    the user would see. An allocation already finished when it starts -- no
+    lock to read, or a read that never waits, as the mock lock's does -- is
+    answered in the submitting request itself, so there is nothing to wait
+    out (#1639).
     """
     result = await hass.config_entries.flow.async_configure(flow_id, user_input)
     while result["type"] == FlowResultType.SHOW_PROGRESS:
