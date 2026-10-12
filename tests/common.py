@@ -15,7 +15,9 @@ import sys
 import time
 from typing import Any, Literal, Self
 from unittest.mock import patch
+import weakref
 
+import freezegun.api
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -293,28 +295,114 @@ def unfinished_tasks(hass: HomeAssistant) -> list[asyncio.Task[Any]]:
     ]
 
 
+# Executor work each event loop has handed a thread and not yet had back.
+# Counted per loop, and only once the result is back on the loop -- not when
+# the thread finishes, which comes a moment before the loop hears of it -- so
+# a loop that is quiet with nothing counted is waiting on the clock or on
+# nothing, never on a thread. ``count_executor_work`` does the counting.
+_EXECUTOR_WORK: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, int] = (
+    weakref.WeakKeyDictionary()
+)
+# How long, in real seconds, executor work may run while a test waits on it.
+# Generous: it only has to separate a slow machine from a stuck thread.
+EXECUTOR_WORK_CAP_SECONDS = 60.0
+# How long the loop's thread sleeps between looks at executor work, so the
+# threads get the processor.
+_EXECUTOR_POLL_SECONDS = 0.001
+
+
+class ExecutorWorkStuck(Exception):
+    """Executor work still running after ``EXECUTOR_WORK_CAP_SECONDS``."""
+
+
+@contextmanager
+def count_executor_work() -> Iterator[None]:
+    """
+    Count the work every event loop hands its executors, while inside.
+
+    Wraps ``run_in_executor``, the one way in for Home Assistant's executor
+    jobs, its imports and its setup alike, so the clock helpers can tell a
+    loop waiting on a thread from one waiting on the clock.
+    """
+    original = asyncio.BaseEventLoop.run_in_executor
+
+    def _finished(loop: asyncio.AbstractEventLoop) -> None:
+        _EXECUTOR_WORK[loop] -= 1
+
+    def run_in_executor(
+        self: asyncio.BaseEventLoop, executor: Any, func: Any, *args: Any
+    ) -> asyncio.Future[Any]:
+        future = original(self, executor, func, *args)
+        _EXECUTOR_WORK[self] = _EXECUTOR_WORK.get(self, 0) + 1
+        future.add_done_callback(lambda _future: _finished(self))
+        return future
+
+    with patch.object(asyncio.BaseEventLoop, "run_in_executor", run_in_executor):
+        yield
+
+
+def executor_work_in_flight() -> bool:
+    """Return whether the running loop is waiting on executor work."""
+    return _EXECUTOR_WORK.get(asyncio.get_running_loop(), 0) > 0
+
+
+async def async_wait_out_executor_work(what: str) -> None:
+    """
+    Wait, in real time and without moving the clock, for executor work to come back.
+
+    Real threads do not run faster for the frozen clock being stepped, so
+    stepping it while they work spends steps on nothing: a budget of them
+    runs out on a slow machine while an import is still under way. Raises
+    ``ExecutorWorkStuck`` once it has waited ``EXECUTOR_WORK_CAP_SECONDS``.
+    A stuck thread is not the code under test hanging, so it is not
+    reported as that.
+    """
+    started = freezegun.api.real_monotonic()
+    while executor_work_in_flight():
+        if freezegun.api.real_monotonic() - started >= EXECUTOR_WORK_CAP_SECONDS:
+            raise ExecutorWorkStuck(
+                f"executor work still running after "
+                f"{EXECUTOR_WORK_CAP_SECONDS:.0f}s, waiting for {what}"
+            )
+        time.sleep(_EXECUTOR_POLL_SECONDS)
+        await async_run_until_quiet()
+
+
 async def async_step_clock_until(
-    hass: HomeAssistant,
+    hass: HomeAssistant | None,
     freezer: FrozenDateTimeFactory,
     done: Callable[[], bool],
     max_steps: int,
     what: str,
+    *,
+    step: float = CLOCK_STEP,
 ) -> None:
     """
     Step the frozen clock until ``done``, failing after ``max_steps``.
 
+    A step is taken only while no executor work is in flight; that is waited
+    out in real time instead (``async_wait_out_executor_work``). So the
+    budget counts only waits on the clock, and what a test sees does not
+    depend on how fast the machine's threads are.
+
     A failure cancels every unfinished task first. Left waiting on the frozen
     clock, they would hang teardown instead of letting the test fail.
     """
-    for _ in range(max_steps):
+    steps = 0
+    while not done():
+        await async_wait_out_executor_work(what)
         if done():
             return
-        freezer.tick(CLOCK_STEP)
+        if steps == max_steps:
+            break
+        steps += 1
+        freezer.tick(step)
         await async_run_until_quiet()
-    if done():
+    else:
         return
-    for task in unfinished_tasks(hass):
-        task.cancel()
+    if hass is not None:
+        for task in unfinished_tasks(hass):
+            task.cancel()
     await async_run_until_quiet()
     pytest.fail(f"{what} still waiting after {max_steps} clock steps")
 

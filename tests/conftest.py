@@ -40,6 +40,7 @@ from .common import (
     LiveMockCalendars,
     MockLCMLock,
     async_setup_mock_lock_entry,
+    count_executor_work,
     forget_all_faults,
     release_all_faults,
     sync_manager_of,
@@ -88,6 +89,13 @@ def pytest_runtest_teardown(
         return (yield)
     finally:
         forget_all_faults()
+
+
+@pytest.fixture(autouse=True)
+def counted_executor_work() -> Generator[None]:
+    """Count executor work, so the clock helpers never step past a thread."""
+    with count_executor_work():
+        yield
 
 
 @pytest.fixture(autouse=True)

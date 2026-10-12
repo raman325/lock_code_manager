@@ -13,10 +13,12 @@ from collections import Counter
 from collections.abc import Callable, Generator
 from datetime import datetime
 import logging
+import threading
 import time
 from typing import Any
 from unittest.mock import PropertyMock, patch
 
+import freezegun.api
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -67,6 +69,7 @@ from .common import (
     NO_PIN_CAPABILITIES,
     PIN_CAPABILITIES,
     SLOT_1_PIN_ENTITY,
+    ExecutorWorkStuck,
     FaultKind,
     LiveMockCalendars,
     MockLCMLock,
@@ -106,6 +109,64 @@ async def test_step_clock_until_fails_and_cancels_instead_of_hanging(
         )
 
     assert sleeper.cancelled()
+
+
+async def test_settling_waits_out_executor_work_without_spending_steps(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """
+    Work on an executor thread is waited out in real time, not in clock steps.
+
+    The thread takes far longer than two steps of the loop, and the clock
+    does not move while it works.
+    """
+
+    async def _waits_on_a_thread() -> None:
+        await hass.async_add_executor_job(time.sleep, 0.3)
+
+    waiter = hass.async_create_task(_waits_on_a_thread())
+    before = time.monotonic()
+
+    await async_step_clock_until(
+        hass, freezer, waiter.done, max_steps=2, what="the thread"
+    )
+
+    assert waiter.done()
+    assert time.monotonic() == before
+
+
+async def test_a_wait_on_the_clock_still_fails_in_steps_and_fast(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """With no executor work in flight, a wait the clock never reaches fails fast."""
+    sleeper = hass.async_create_task(asyncio.sleep(3600))
+    started = freezegun.api.real_monotonic()
+
+    with pytest.raises(pytest.fail.Exception, match="after 50 clock steps"):
+        await async_step_clock_until(
+            hass, freezer, sleeper.done, max_steps=50, what="the sleeper"
+        )
+
+    assert freezegun.api.real_monotonic() - started < 1
+
+
+async def test_a_stuck_thread_fails_as_stuck_executor_work(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """Executor work past its cap fails as that, not as the code under test hanging."""
+    release = threading.Event()
+    stuck = hass.async_add_executor_job(release.wait)
+    try:
+        with (
+            patch("tests.common.EXECUTOR_WORK_CAP_SECONDS", 0.2),
+            pytest.raises(ExecutorWorkStuck, match="still running after"),
+        ):
+            await async_step_clock_until(
+                hass, freezer, stuck.done, max_steps=50, what="the stuck thread"
+            )
+    finally:
+        release.set()
+        await stuck
 
 
 async def test_run_until_quiet_fails_on_a_loop_that_never_rests(

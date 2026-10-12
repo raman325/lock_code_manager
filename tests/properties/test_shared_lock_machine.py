@@ -39,8 +39,8 @@ live instance up again.
 Each example builds its own Home Assistant on its own loop and frozen clock:
 Hypothesis reuses function-scoped fixtures across examples, so nothing here
 may lean on them. Home Assistant starts in the first step, with any entries
-the example boots with. Every step is bounded in its own loop -- what it
-awaits by real time, what it sets off by steps of the frozen clock -- and one
+the example boots with. Every step is bounded in its own loop by steps of the
+frozen clock, spent only while no executor thread is working, and one
 waiting on work that never finishes fails as ``ExampleHung``, the same on
 every replay, so a hang shrinks like any other failure. Teardown is bounded
 too: it drains the loop, and always takes the example's Home Assistant off
@@ -56,12 +56,10 @@ from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
-import time
 from typing import Any
 from unittest.mock import patch
 
 import freezegun
-import freezegun.api
 from freezegun.api import FrozenDateTimeFactory
 from hypothesis import Phase, settings, strategies as st
 from hypothesis.stateful import (
@@ -120,6 +118,7 @@ from ..common import (
     async_run_until_quiet,
     async_settle_background,
     async_setup_mock_lock_entry,
+    async_step_clock_until,
     code_entity_id,
     current_entry,
     in_sync_entity_id,
@@ -143,20 +142,15 @@ READ_INTERVAL = timedelta(minutes=1)
 # A slot comes up in sync within a tick or two; a second entry joining a lock
 # waits out the coordinator's ten-second debounced read first.
 MAX_TICKS_TO_SYNC = 8
-# How long, in real seconds, an operation may wait before it has hung. Not
-# frozen-clock time: the loop's clock moves only when something steps it, so
-# an asyncio timeout around a call that never returns would never fire, and
-# the operations here wait on the loop and on executor threads, which a
-# stepped clock does not hurry -- a budget of steps runs out in microseconds
-# while a loaded machine is still importing a platform. Generous, since a
-# true hang pays it on every replay while it shrinks. A synchronous spin that
-# never yields is bounded by nothing here; only the test's pytest timeout
-# backstop catches it, unshrunk.
-HANG_SECONDS = 20.0
-# How long the loop thread sleeps between looks at an operation that is
-# waiting on something other than the loop: executor threads get the CPU, and
-# what they finish is picked up on the next look.
-POLL_SECONDS = 0.002
+# How long, in steps of the frozen clock, an operation may wait before it has
+# hung. The loop's clock moves only when something steps it, so an asyncio
+# timeout around a call that never returns would never fire: stepping the
+# clock while the call waits is what bounds it. Steps are spent only while no
+# executor work is in flight -- threads are waited out in real time -- so the
+# budget counts waits on the clock alone, the same on every replay however
+# fast the machine is. A synchronous spin that never yields is bounded by
+# nothing here; only the test's pytest timeout backstop catches it, unshrunk.
+OPERATION_STEPS = 1000
 # Steps of the frozen clock for draining the loop in teardown, where nothing
 # is waited on but cancellations.
 DRAIN_STEPS = 1000
@@ -170,17 +164,6 @@ STEP_COUNT = 20
 # The suite's whole-test timeout, raised for this test: a last-resort backstop
 # only, past Hypothesis's own cutoff for a slow shrink.
 BACKSTOP_SECONDS = 420
-
-
-def _real_monotonic() -> float:
-    """
-    Return the monotonic clock's real reading, the freezer notwithstanding.
-
-    Looked up on freezegun's own module at each call: freezing replaces every
-    module attribute that is the real clock function, so one imported here
-    under any name would read frozen time while it is frozen.
-    """
-    return freezegun.api.real_monotonic()
 
 
 class _LockIntegrationFlow(ConfigFlow):
@@ -334,34 +317,30 @@ class SharedLockMachine(RuleBasedStateMachine):
             raise ExampleHung(f"{what}: {err}") from None
 
     async def _async_bounded[T](
-        self, operation: Awaitable[T], what: str, *, step: float = 0.0
+        self, operation: Awaitable[T], what: str, *, step: float = CLOCK_STEP
     ) -> T:
         """
-        Await ``operation``, failing as ``ExampleHung`` once it has waited too long.
+        Await ``operation``, stepping the frozen clock ``step`` at a time while it waits.
 
-        Too long is ``HANG_SECONDS`` of real time. Whenever the loop is quiet
-        and the operation is not done, what it waits on is a thread or
-        nothing, so the loop thread sleeps a moment and lets threads run. The
-        frozen clock is left where it is, so where an operation ends on it does
-        not depend on how fast those threads were -- unless ``step`` asks for it
-        to move that far each time the loop goes quiet, for an operation that
-        waits on the clock itself.
+        Raises ``ExampleHung`` once it has waited ``OPERATION_STEPS`` steps,
+        having cancelled it. Executor work it waits on is waited out in real
+        time and spends no step, as in every clock helper of the harness.
         """
         task = asyncio.ensure_future(operation)
-        deadline = _real_monotonic() + HANG_SECONDS
-        while True:
-            await async_run_until_quiet()
-            if task.done():
-                return task.result()
-            if _real_monotonic() >= deadline:
-                break
-            if step:
-                self.freezer.tick(step)
-            else:
-                time.sleep(POLL_SECONDS)
-        task.cancel()
-        self.hung = True
-        raise ExampleHung(f"{what} never finished")
+        try:
+            await async_step_clock_until(
+                getattr(self, "hass", None),
+                self.freezer,
+                task.done,
+                OPERATION_STEPS,
+                what,
+                step=step,
+            )
+        except pytest.fail.Exception:
+            task.cancel()
+            self.hung = True
+            raise ExampleHung(f"{what} never finished") from None
+        return task.result()
 
     def _on_build(self, lock: MockLCMLock) -> None:
         """Give each mock lock its physical code table, and what its rule asks."""

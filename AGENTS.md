@@ -357,6 +357,13 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     entities, so the entry can be reloaded; calendars keep their events, and
     `hass.data[MOCK_CALENDARS_KEY]` holds the current ones. The `mock_calendars`
     fixture looks them up on every use, so it follows a reload
+  - The clock helpers never spend a step while executor threads have work in flight:
+    the autouse `counted_executor_work` fixture counts what each loop hands
+    `run_in_executor` until the result is back on the loop, and
+    `async_step_clock_until` waits that out in real time instead, so a step budget
+    counts only waits on the clock, whatever the machine's speed. Work running past
+    `EXECUTOR_WORK_CAP_SECONDS` (60) fails as `ExecutorWorkStuck`, not as the code
+    under test hanging
   - `@pytest.mark.paced` keeps the providers' real delay between lock operations; such a
     test settles with `settle=False`, since settling only steps a fraction of a second
   - Settling skips the tasks registered in `LIFELONG_TASKS`: ones an integration under test
@@ -420,17 +427,9 @@ Two complementary layers exist alongside the example-based suites:
   Assistant on its own loop and frozen clock (Hypothesis keeps the real
   one). It caps examples at 20 steps and reports one bug; most failures
   shrink in seconds, the slowest seen took about a minute.
-  Every step is bounded in its own loop, and fails as `ExampleHung`, the
-  same on every replay, so a hang shrinks like any other failure. An
-  operation it awaits is bounded by 20 seconds of real time -- an asyncio
-  timeout would never fire on the frozen clock, and a budget of clock steps
-  ran out on a loaded CI runner while Home Assistant was still importing on
-  its executor threads; the longest wait measured under load was about half
-  a second. Work the step set off in the background is bounded by steps of
-  the frozen clock. So a background hang shrinks in seconds, but an awaited
-  call that never returns pays 20 seconds on every replay: its shrink runs
-  into Hypothesis's own five-minute cutoff and reports what it has, about
-  six minutes in all. Teardown is bounded, drains the loop, and
+  Every step is bounded in its own loop by steps of the frozen clock, and
+  fails as `ExampleHung`, the same on every replay, so a hang shrinks like
+  any other failure, in seconds. Teardown is bounded, drains the loop, and
   always takes the example's Home Assistant off the harness's running list,
   so the session goes on. A synchronous spin that never yields is bounded by
   nothing in the machine: only the test's pytest timeout catches it, and
