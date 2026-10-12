@@ -420,13 +420,17 @@ Two complementary layers exist alongside the example-based suites:
   Assistant on its own loop and frozen clock (Hypothesis keeps the real
   one). It caps examples at 20 steps and reports one bug; most failures
   shrink in seconds, the slowest seen took about a minute.
-  Every step is bounded in its own loop, by steps of the frozen clock -- an
-  asyncio timeout would never fire there, since that clock moves only when
-  stepped: a step waiting on work that never finishes fails as
-  `ExampleHung`, the same on every replay, so a hang shrinks like any other
-  failure. Shrinking one replays it many times, but each replay pays its
-  bound in clock steps, not real time: hangs measured shrank in 2 to 5
-  seconds. Teardown is bounded, drains the loop, and
+  Every step is bounded in its own loop, and fails as `ExampleHung`, the
+  same on every replay, so a hang shrinks like any other failure. An
+  operation it awaits is bounded by 20 seconds of real time -- an asyncio
+  timeout would never fire on the frozen clock, and a budget of clock steps
+  ran out on a loaded CI runner while Home Assistant was still importing on
+  its executor threads; the longest wait measured under load was about half
+  a second. Work the step set off in the background is bounded by steps of
+  the frozen clock. So a background hang shrinks in seconds, but an awaited
+  call that never returns pays 20 seconds on every replay: its shrink runs
+  into Hypothesis's own five-minute cutoff and reports what it has, about
+  six minutes in all. Teardown is bounded, drains the loop, and
   always takes the example's Home Assistant off the harness's running list,
   so the session goes on. A synchronous spin that never yields is bounded by
   nothing in the machine: only the test's pytest timeout catches it, and

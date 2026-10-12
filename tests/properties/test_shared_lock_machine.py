@@ -39,12 +39,12 @@ live instance up again.
 Each example builds its own Home Assistant on its own loop and frozen clock:
 Hypothesis reuses function-scoped fixtures across examples, so nothing here
 may lean on them. Home Assistant starts in the first step, with any entries
-the example boots with. Every step is bounded in its own loop, by steps of
-the frozen clock: one waiting on work that never finishes fails as
-``ExampleHung``, the same on every replay, so a hang shrinks like any other
-failure. Teardown is bounded too: it drains the loop, and always takes the
-example's Home Assistant off the harness's list of running instances, so one
-hung example fails alone.
+the example boots with. Every step is bounded in its own loop -- what it
+awaits by real time, what it sets off by steps of the frozen clock -- and one
+waiting on work that never finishes fails as ``ExampleHung``, the same on
+every replay, so a hang shrinks like any other failure. Teardown is bounded
+too: it drains the loop, and always takes the example's Home Assistant off
+the harness's list of running instances, so one hung example fails alone.
 """
 
 from __future__ import annotations
@@ -56,10 +56,12 @@ from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
+import time
 from typing import Any
 from unittest.mock import patch
 
 import freezegun
+import freezegun.api
 from freezegun.api import FrozenDateTimeFactory
 from hypothesis import Phase, settings, strategies as st
 from hypothesis.stateful import (
@@ -141,17 +143,26 @@ READ_INTERVAL = timedelta(minutes=1)
 # A slot comes up in sync within a tick or two; a second entry joining a lock
 # waits out the coordinator's ten-second debounced read first.
 MAX_TICKS_TO_SYNC = 8
-# How long, in steps of the frozen clock, an operation may wait before it has
-# hung. The loop's clock moves only when something steps it, so an asyncio
-# timeout around a call that never returns would never fire: stepping the
-# clock while the call waits is what bounds it, and does so the same way on
-# every replay. A synchronous spin that never yields is bounded by nothing
-# here; only the test's pytest timeout backstop catches it, unshrunk.
-OPERATION_STEPS = 1000
+# How long, in real seconds, an operation may wait before it has hung. Not
+# frozen-clock time: the loop's clock moves only when something steps it, so
+# an asyncio timeout around a call that never returns would never fire, and
+# the operations here wait on the loop and on executor threads, which a
+# stepped clock does not hurry -- a budget of steps runs out in microseconds
+# while a loaded machine is still importing a platform. Generous, since a
+# true hang pays it on every replay while it shrinks. A synchronous spin that
+# never yields is bounded by nothing here; only the test's pytest timeout
+# backstop catches it, unshrunk.
+HANG_SECONDS = 20.0
+# How long the loop thread sleeps between looks at an operation that is
+# waiting on something other than the loop: executor threads get the CPU, and
+# what they finish is picked up on the next look.
+POLL_SECONDS = 0.002
+# Steps of the frozen clock for draining the loop in teardown, where nothing
+# is waited on but cancellations.
+DRAIN_STEPS = 1000
 # Stopping Home Assistant steps the clock a second at a time, past the
 # timeouts of its own stop stages, which are minutes long in all.
 STOP_STEP_SECONDS = 1.0
-STOP_STEPS = 300
 FROZEN_AT = "2026-01-01 12:00:00+00:00"
 # Every lifecycle defect this machine has caught needed fewer than ten steps,
 # and shorter examples are what keep a failure's shrink to seconds.
@@ -159,6 +170,17 @@ STEP_COUNT = 20
 # The suite's whole-test timeout, raised for this test: a last-resort backstop
 # only, past Hypothesis's own cutoff for a slow shrink.
 BACKSTOP_SECONDS = 420
+
+
+def _real_monotonic() -> float:
+    """
+    Return the monotonic clock's real reading, the freezer notwithstanding.
+
+    Looked up on freezegun's own module at each call: freezing replaces every
+    module attribute that is the real clock function, so one imported here
+    under any name would read frozen time while it is frozen.
+    """
+    return freezegun.api.real_monotonic()
 
 
 class _LockIntegrationFlow(ConfigFlow):
@@ -312,25 +334,31 @@ class SharedLockMachine(RuleBasedStateMachine):
             raise ExampleHung(f"{what}: {err}") from None
 
     async def _async_bounded[T](
-        self,
-        operation: Awaitable[T],
-        what: str,
-        *,
-        step: float = CLOCK_STEP,
-        steps: int = OPERATION_STEPS,
+        self, operation: Awaitable[T], what: str, *, step: float = 0.0
     ) -> T:
         """
-        Await ``operation``, stepping the frozen clock while it waits.
+        Await ``operation``, failing as ``ExampleHung`` once it has waited too long.
 
-        Raises ``ExampleHung`` once it has waited ``steps`` steps, having
-        cancelled it.
+        Too long is ``HANG_SECONDS`` of real time. Whenever the loop is quiet
+        and the operation is not done, what it waits on is a thread or
+        nothing, so the loop thread sleeps a moment and lets threads run. The
+        frozen clock is left where it is, so where an operation ends on it does
+        not depend on how fast those threads were -- unless ``step`` asks for it
+        to move that far each time the loop goes quiet, for an operation that
+        waits on the clock itself.
         """
         task = asyncio.ensure_future(operation)
-        for _ in range(steps):
+        deadline = _real_monotonic() + HANG_SECONDS
+        while True:
             await async_run_until_quiet()
             if task.done():
                 return task.result()
-            self.freezer.tick(step)
+            if _real_monotonic() >= deadline:
+                break
+            if step:
+                self.freezer.tick(step)
+            else:
+                time.sleep(POLL_SECONDS)
         task.cancel()
         self.hung = True
         raise ExampleHung(f"{what} never finished")
@@ -1001,7 +1029,6 @@ class SharedLockMachine(RuleBasedStateMachine):
                             self.hass.async_stop(force=True),
                             "stop",
                             step=STOP_STEP_SECONDS,
-                            steps=STOP_STEPS,
                         ),
                         "teardown",
                     )
@@ -1054,7 +1081,7 @@ class SharedLockMachine(RuleBasedStateMachine):
         tasks = [task for task in asyncio.all_tasks() if task is not current]
         for task in tasks:
             task.cancel()
-        for _ in range(OPERATION_STEPS):
+        for _ in range(DRAIN_STEPS):
             await async_run_until_quiet()
             if all(task.done() for task in tasks):
                 return
