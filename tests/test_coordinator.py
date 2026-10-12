@@ -41,10 +41,16 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockBusy,
     LockDisconnected,
 )
+from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
-from .common import MockLCMLock, MockLCMPushLock, write_entry_config
+from .common import (
+    LOCK_2_ENTITY_ID,
+    MockLCMLock,
+    MockLCMPushLock,
+    write_entry_config,
+)
 
 
 def _make_lock(
@@ -2053,3 +2059,45 @@ async def test_a_busy_poll_after_a_failed_one_does_not_report_a_recovery(
         pytest.raises(UpdateFailed),
     ):
         await poll_coordinator.async_get_usercodes()
+
+
+async def test_a_lock_instance_no_entry_holds_is_polled(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    freezer,
+) -> None:
+    """
+    "Disable polling" is read from the entries holding this very lock instance.
+
+    An entry with polling disabled holds another instance of the same lock --
+    the way an entry setting up while another unloads builds its own -- and
+    that is no say over this one. With no holder at all the lock keeps the
+    default and is polled.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_2_ENTITY_ID], CONF_SLOTS: {}},
+        pref_disable_polling=True,
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert LOCK_2_ENTITY_ID in entry.runtime_data.locks
+    lock = async_create_lock_instance(
+        hass, dr.async_get(hass), er.async_get(hass), entry, LOCK_2_ENTITY_ID
+    )
+    assert isinstance(lock, MockLCMLock)
+    assert lock is not entry.runtime_data.locks[LOCK_2_ENTITY_ID]
+    coordinator = _make_coordinator(hass, lock)
+    coordinator.async_add_listener(lambda: None)
+    await coordinator.async_refresh()
+    reads_before = len(lock.service_calls["get_usercodes"])
+
+    freezer.tick(lock.usercode_scan_interval + timedelta(seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert len(lock.service_calls["get_usercodes"]) == reads_before + 1
+
+    await coordinator.async_shutdown()
+    assert await hass.config_entries.async_unload(entry.entry_id)

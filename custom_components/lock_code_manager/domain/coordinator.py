@@ -36,7 +36,7 @@ from ..const import (
 from .credentials import CredentialAddress, CredentialType, pin_address
 from .exceptions import LockBusy, LockCodeManagerError
 from .models import SlotCredential
-from .queries import get_entry_config, syncing_owner
+from .queries import entries_holding, get_entry_config, syncing_owner
 from .resilience import CircuitBreaker
 from .util import per_lock_issue_id
 
@@ -117,7 +117,8 @@ class LockUsercodeUpdateCoordinator(
             # one of them: Lock Code Manager shuts it down once the last entry
             # holding the lock lets go (``async_unload_lock``). The "Disable
             # polling" system option, which Home Assistant reads from a
-            # coordinator's own entry, therefore does not apply.
+            # coordinator's own entry, is read from every entry holding the
+            # lock instead (``_schedule_refresh``).
             config_entry=None,
         )
         self.data: dict[CredentialAddress, SlotCredential] = {}
@@ -174,6 +175,39 @@ class LockUsercodeUpdateCoordinator(
     def lock(self) -> BaseLock:
         """Return the lock."""
         return self._lock
+
+    @callback
+    def _schedule_refresh(self) -> None:
+        """
+        Schedule the next poll, unless every entry holding the lock disables it.
+
+        One entry still allowing polling keeps the lock polled, and so does a
+        lock no entry holds. Like Home Assistant's own check, this stops only
+        the scheduled poll, and a poll already scheduled still runs. Drift
+        checks, connection checks, the first read, pushes and confirmation
+        reads keep their own timers.
+        """
+        holders = list(
+            entries_holding(self.hass, self._lock.lock.entity_id, self._lock)
+        )
+        if holders and all(entry.pref_disable_polling for entry in holders):
+            return
+        super()._schedule_refresh()
+
+    @callback
+    def note_holder_joined(self) -> None:
+        """
+        Re-check polling once another entry has taken this lock instance.
+
+        The rule is otherwise asked only when a poll is due to be scheduled,
+        and nothing schedules one for a lock every holder had stopped polling.
+        A poll is scheduled only if the rule allows one, none is scheduled
+        already, and something listens: Home Assistant polls only for
+        listeners, and a scheduled poll is left where it is rather than pushed
+        a full interval later on every join.
+        """
+        if self._listeners and self._unsub_refresh is None:
+            self._schedule_refresh()
 
     def desired_credential(
         self, address: CredentialAddress, *, owner: ConfigEntry | None = None
