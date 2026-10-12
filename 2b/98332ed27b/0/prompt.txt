@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>add5d7099389aec99</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/88689b8f-7a06-4f90-9808-9d17aef5d545/tasks/add5d7099389aec99.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix #1639 allocation progress race" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've committed the fix for #1639 on `fix/allocation-progress-race` as **1635e8ef** (not pushed). The full suite passes, `custom_components` is at 100% coverage, and `prek run --all-files` passes.
+
+**Premise check: confirmed.** On a Matter-only entry, the allocation task has already finished when `async_create_task` returns.
+- The installed HA (2026.9.4) starts tasks eagerly by default (`homeassistant/core.py` ~L788–827, `eager_start=True` → `create_eager_task`).
+- On the Matter path, every part of `async_allocate_for` returns before awaiting anything:
+  - `async_check_slot_capacity` (`domain/allocation.py:157`) and `async_max_slot` (`:371`) skip the lock with `continue`.
+  - `async_read_occupancy` (`:261`) only reads when `credential_index_follows_slot`.
+  - `borrowed_lock_instance` just yields, and nothing on the way waits on the event loop.
+- A scratch test on the Matter harness (since deleted) showed `task.done() == True` right after `_start_allocation`, while the step still returned `progress`.
+
+**Diff** (`custom_components/lock_code_manager/config_flow.py`):
+- `_start_allocation` is now `async`. If the task is already done, it returns `await getattr(self, f"async_step_{step_id}_allocated")()`, so `_take_allocation` takes the finished task exactly as before. Otherwise it shows progress as today.
+- It has one comment stating the trap, plus a one-line addition to the mixin's docstring. The two callers now `await` it.
+- This is a legal transition in HA. The "Show progress can only transition to…" check (`data_entry_flow.py` ~L405) only applies when the current step is a progress step. Here it is the `ui`/`yaml` form. Returning a non-progress result also calls `async_cancel_progress_task()`, which does nothing because no progress task was ever registered.
+
+**Which flows use the mixin:** only the config flow, on the `ui` and `yaml` paths. The subentry and options allocation paths (`config_flow.py` ~L963, 1044, 1127) call `_allocate_for` directly and never show progress, so they needed no change.
+
+**Tests:**
+- **New, `tests/providers/matter/test_e2e.py::TestAddingThroughTheUserInterface`:**
+  - `test_the_user_count_goes_straight_to_naming_the_first_user`: submitting a count of 3 returns `code_slot` with `{"user_num": 1, "num_users": 3}` directly, and three forms later the entry is created.
+  - `test_a_block_of_users_goes_straight_to_creating_the_entry`: the `yaml` submission returns `create_entry` directly.
+  - Both fail without the fix (`'progress' == 'form'` and `'progress' == 'create_entry'`). I checked this with `config_flow.py` reverted to origin/main in an rsync copy under `/private/tmp/claude-501/`, which was then deleted.
+- **Changed, `tests/test_config_flow.py::test_ui_allocation_runs_as_a_progress_step`:** with the fix, this was the one existing test that failed. Its patched `MockLCMLock` read also finished without waiting, so the step stopped returning progress. It now holds the read with `when_mock_lock_built` (codes cleared, `hang("get")`), checks one read is held while the step is on `progress`, then releases it and checks the flow reaches `code_slot` with the same progress events `[0.0, 0.5, 1.0]`.
+  - Guard check: I mutated the condition to `if True:` (never show progress). This test failed, along with `test_reentering_the_step_while_the_read_runs_shows_progress_again` and `test_a_second_request_for_an_answered_step_is_not_an_unknown_error`.
+
+**Things to know:**
+- **The fix only covers allocations that finish instantly.** A task that finishes after the step returns but before the dialog subscribes still strands it. Z-Wave JS reads via `get_users_cached()` / `get_all_credentials_cached()` (`providers/zwave_js.py:286`), which is a round trip to the local zwave-js-server. That is a real wait, but it may only take milliseconds, so the issue's claim that "a slow Z-Wave lock never loses this race" may not hold for fast servers. Only a frontend change (re-fetch the flow after subscribing) closes that window. I did not change anything for this.
+- **Other locks also skip the progress screen now.** The `MockLCMLock` read finished without waiting, so any provider whose read answers from memory, without waiting on the loop, goes straight to the next step too, not just Matter. That is why the existing progress test had to hold its read explicitly.
+- I ran `yarn install` in the worktree so prek's eslint hook could run. That left `node_modules` alongside the `.venv`, and neither is committed.</result>
+<usage><subagent_tokens>172905</subagent_tokens><tool_uses>46</tool_uses><duration_ms>439877</duration_ms></usage>
+</task-notification>
+
+---
+
+lets do a PR upstream
+
+---
+
+CI failed on 1648. Fix that then continue on the harness PR
