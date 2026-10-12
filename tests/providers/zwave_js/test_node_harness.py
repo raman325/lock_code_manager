@@ -16,6 +16,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.access_control import (
+    SetCredentialResult,
     SetUserResult,
     UserCredentialType,
     UserCredentialUserType,
@@ -541,6 +542,70 @@ class TestSupervisionComesFromTheDump:
         [pytest.param(None, id="supervised")],
         indirect=True,
     )
+    async def test_a_lost_no_support_report_is_a_read_back_of_an_untouched_slot(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """
+        No report means no NoSupport, so no resend (DRV:7998-8002, 8052-8064).
+
+        The driver reads back (AC:1186-1194); the lock never acted on the
+        supervised Set, so the slot is as it was and the answer Error_Unknown.
+        """
+        fake_zwave_lock.supervision = SupervisionStatus.NO_SUPPORT
+        fake_zwave_lock.drop_reply("set", 3)
+
+        with pytest.raises(HomeAssistantError) as err:
+            await lock_helpers.async_set_credential(
+                lock_schlage_be469, 3, PIN, "4321", credential_slot=3
+            )
+
+        assert err.value.translation_key == "credential_rejected_unknown"
+        assert fake_zwave_lock.holds(3) is None
+        assert [(e.operation, e.slot) for e in fake_zwave_lock.exchanges] == [
+            ("set", 3),
+            ("get", 3),
+        ]
+
+    @pytest.mark.parametrize(
+        "lock_schlage_be469_state",
+        [pytest.param(None, id="supervised")],
+        indirect=True,
+    )
+    @pytest.mark.parametrize("knob", ["ignore", "refuse"])
+    async def test_a_write_fault_meets_the_resend_after_no_support(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node, knob: str
+    ) -> None:
+        """
+        The NoSupport frame writes nothing; the resend does (DRV:8052-8064).
+
+        So a one-shot fault aimed at the write is spent on the resend.
+        """
+        fake_zwave_lock.supervision = SupervisionStatus.NO_SUPPORT
+        fault = getattr(fake_zwave_lock, knob)("set", 3, times=1)
+
+        with pytest.raises(HomeAssistantError):
+            await lock_helpers.async_set_credential(
+                lock_schlage_be469, 3, PIN, "4321", credential_slot=3
+            )
+
+        assert fault.hits == 1
+        assert fake_zwave_lock.holds(3) is None
+
+    @pytest.mark.parametrize(
+        "lock_schlage_be469_state",
+        [pytest.param(None, id="supervised")],
+        indirect=True,
+    )
+    async def test_none_is_no_outcome(self, fake_zwave_lock: FakeZWaveLock) -> None:
+        """Unsupervised is the dump's to decide, not a value of the outcome knob."""
+        with pytest.raises(ValueError, match="no Supervision outcome"):
+            fake_zwave_lock.supervision = None
+
+    @pytest.mark.parametrize(
+        "lock_schlage_be469_state",
+        [pytest.param(None, id="supervised")],
+        indirect=True,
+    )
     @pytest.mark.parametrize(
         "fake_zwave_lock_options",
         [{"interviewed": False, "supervision": SupervisionStatus.SUCCESS}],
@@ -1002,7 +1067,8 @@ class TestFaults:
             )
         )
         await fault.async_wait_held()
-        assert fault not in fake_zwave_lock.faults
+        # Spent, so it meets nothing more, yet installed until cleared.
+        assert fault in fake_zwave_lock.faults
 
         fake_zwave_lock.clear_faults()
         await async_run_until_quiet()
@@ -1557,3 +1623,74 @@ class TestUserCredentialCache:
 
         assert result is SetUserResult.ERROR_UNKNOWN
         assert user_id not in fake_zwave_lock.users
+
+    @pytest.mark.parametrize("pin", ["123", "12345678901"])
+    async def test_a_pin_of_the_wrong_length_is_ignored(
+        self,
+        fake_zwave_lock: FakeZWaveLock,
+        lock_schlage_be469: Node,
+        user: int,
+        pin: str,
+    ) -> None:
+        """
+        Data shorter or longer than the advertised lengths is ignored (MOCK_U3C:1561-1570).
+
+        CC:0083.01.0A.11.014/.015: no report, so Error_Unknown (AC:158-161).
+        The driver itself checks no length; Home Assistant's helper does, so
+        this goes to the API directly.
+        """
+        result = await lock_schlage_be469.access_control.set_credential(
+            user, PIN, 4, pin
+        )
+
+        assert result is SetCredentialResult.ERROR_UNKNOWN
+        assert fake_zwave_lock.holds(4) is None
+
+    async def test_a_type_with_no_settable_length_ignores_every_pin(
+        self, zwave_client, lock_schlage_be469: Node
+    ) -> None:
+        """Min and max length 0: Add and Modify are ignored (MOCK_U3C:1552-1559, CC:0083.01.0A.11.023)."""
+        fake = FakeZWaveLock(zwave_client, lock_schlage_be469, pin_lengths=(0, 0))
+        fake.program(1, "1234")
+
+        result = await lock_schlage_be469.access_control.set_credential(
+            1, PIN, 2, "4321"
+        )
+
+        assert result is SetCredentialResult.ERROR_UNKNOWN
+        assert fake.holds(2) is None
+
+    async def test_deleting_user_zero_deletes_everyone(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node, user: int
+    ) -> None:
+        """
+        A user-0 Delete removes every user and credential (MOCK_U3C:752-781).
+
+        ``deleteUser`` checks no user ID (AC:875-882); the User Deleted report
+        for user 0 clears the driver's whole user and credential cache
+        (U3CC:2317-2346) and raises ``user deleted`` for user 0 (U3CH:45-52).
+        """
+        seen = record(lock_schlage_be469)
+        ac = lock_schlage_be469.access_control
+
+        assert await ac.delete_user(0) is SetUserResult.OK
+
+        assert (fake_zwave_lock.users, fake_zwave_lock.credentials) == ({}, {})
+        assert await ac.get_users_cached() == []
+        assert await ac.get_all_credentials_cached() == []
+        assert seen == [("user deleted", 0)]
+
+    async def test_a_credential_of_another_type_is_cached_under_its_type(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node, user: int
+    ) -> None:
+        """The report's own type keys the cache entry (U3CC:2995-3022), as the walk's purge does."""
+        rfid = UserCredentialType.RFID_CODE
+        fake_zwave_lock.credentials[(rfid, 1)] = (user, "abcd")
+        ac = lock_schlage_be469.access_control
+
+        await ac.get_all_credentials()
+
+        assert [(c.type, c.slot) for c in await ac.get_all_credentials_cached()] == [
+            (PIN, 3),
+            (rfid, 1),
+        ]

@@ -256,6 +256,18 @@ class FaultKind(StrEnum):
     SLOW = "slow"
 
 
+# The User Credential values the fake caches per user and per credential.
+_U3C_ENTRY_PROPERTIES = frozenset(
+    {
+        "userType",
+        "userActive",
+        "credentialRule",
+        "userName",
+        "credential",
+        "credentialOwner",
+    }
+)
+
 # Only a Set that stores or empties a slot can be ignored or refused.
 _WRITE_ONLY_FAULTS = frozenset({FaultKind.IGNORE, FaultKind.REFUSE})
 
@@ -305,8 +317,6 @@ class NodeFault:
         """Stop matching exchanges, and let any exchange held go."""
         if self in self.lock.faults:
             self.lock.faults.remove(self)
-        if self in self.lock.installed_faults:
-            self.lock.installed_faults.remove(self)
         untrack_fault(self)
         self._released.set()
 
@@ -436,6 +446,7 @@ class FakeZWaveLock:
         pin_slots: int = 30,
         max_user_name_length: int = 16,
         max_credential_hash_length: int = 0,
+        pin_lengths: tuple[int, int] = (4, 10),
         codes: dict[int, str] | None = None,
     ) -> None:
         """Wrap ``node``, seed the driver cache from its dump, and install."""
@@ -445,15 +456,18 @@ class FakeZWaveLock:
         # Remembered by the driver once a Set came back NoSupport (DRV:8058-8063).
         self._uc_supervision_unsupported = False
         self._supervision: SupervisionStatus | None = None
-        self.supervision = supervision
+        if supervision is not None:
+            self.supervision = supervision
+        elif self._supports(SUPERVISION_CC_ID):
+            self.supervision = SupervisionStatus.SUCCESS
         self.rejects_duplicates = rejects_duplicates
         self.duplicate_parameters = duplicate_parameters
         self.max_user_name_length = max_user_name_length
         self.max_credential_hash_length = max_credential_hash_length
-        # Faults still matching exchanges, and every fault not yet cleared
-        # (spent ones may still hold the exchange they met last).
+        self.pin_lengths = pin_lengths
+        # Every fault not yet cleared; a spent one matches nothing more but
+        # may still hold the exchange it met last.
         self.faults: list[NodeFault] = []
-        self.installed_faults: list[NodeFault] = []
         # Every server command the fake answered, and every radio exchange.
         self.commands: list[dict[str, Any]] = []
         self.exchanges: list[_Exchange] = []
@@ -491,24 +505,27 @@ class FakeZWaveLock:
         return self._supervision
 
     @supervision.setter
-    def supervision(self, status: SupervisionStatus | None) -> None:
+    def supervision(self, status: SupervisionStatus) -> None:
         """
-        Choose the outcome a supervised Set reports; Success by default.
+        Choose the outcome a supervised Set reports.
 
         Whether a Set is supervised at all is the dump's to say: the driver
         supervises only for a node advertising Supervision CC
         (``SupervisionCC.mayUseSupervision``), so an outcome on a node that
-        does not is a test that cannot happen, and is refused.
+        does not is a test that cannot happen, and is refused -- as is None,
+        which is no outcome.
         """
-        supported = self._supports(SUPERVISION_CC_ID)
-        if status is not None and not supported:
+        if status is None:
+            raise ValueError(
+                "None is no Supervision outcome; whether Sets are supervised "
+                "is decided by the dump"
+            )
+        if not self._supports(SUPERVISION_CC_ID):
             raise ValueError(
                 "the node does not advertise Supervision CC, so its Sets are "
                 "never supervised; use supervised_lock_state for the dump"
             )
-        self._supervision = (
-            status if status is not None or not supported else SupervisionStatus.SUCCESS
-        )
+        self._supervision = status
 
     def _supports(self, cc_id: int) -> bool:
         return any(cc.id == cc_id for cc in self.node.command_classes)
@@ -727,7 +744,6 @@ class FakeZWaveLock:
             raise ValueError(f"a {kind} fault needs a set or clear operation")
         fault = NodeFault(self, kind, operation, slot, **kwargs)
         self.faults.append(fault)
-        self.installed_faults.append(fault)
         track_fault(fault)
         return fault
 
@@ -817,18 +833,30 @@ class FakeZWaveLock:
         ``times`` ran out matches nothing more but may still hold the
         exchange it met last.
         """
-        for fault in list(self.installed_faults):
+        for fault in list(self.faults):
             fault.clear()
 
     async def _async_meet(
-        self, operation: NodeOperation, slot: int
+        self,
+        operation: NodeOperation,
+        slot: int,
+        *,
+        passes: frozenset[FaultKind] = frozenset(),
     ) -> NodeFault | None:
-        fault = next((f for f in self.faults if f.matches(operation, slot)), None)
+        """Return the fault an exchange meets; ``passes`` kinds wait for a later one."""
+        fault = next(
+            (
+                f
+                for f in self.faults
+                if f.kind not in passes
+                and not (f.times is not None and f.hits >= f.times)
+                and f.matches(operation, slot)
+            ),
+            None,
+        )
         if fault is None:
             return None
         fault.hits += 1
-        if fault.times is not None and fault.hits >= fault.times:
-            self.faults.remove(fault)
         await fault.async_before()
         return fault
 
@@ -1006,8 +1034,8 @@ class FakeZWaveLock:
             _PIN,
             {
                 "numberOfCredentialSlots": self.pin_slots,
-                "minCredentialLength": 4,
-                "maxCredentialLength": 10,
+                "minCredentialLength": self.pin_lengths[0],
+                "maxCredentialLength": self.pin_lengths[1],
                 "maxCredentialHashLength": self.max_credential_hash_length,
                 "supportsCredentialLearn": False,
             },
@@ -1462,15 +1490,26 @@ class FakeZWaveLock:
         (DRV:8052-8064), so the verification read decides it.
         """
         self._uc_numusers_check(slot)
-        fault = await self._async_meet(operation, slot)
+        supervised = (
+            self._supports(SUPERVISION_CC_ID) and not self._uc_supervision_unsupported
+        )
+        no_support = supervised and self.supervision is SupervisionStatus.NO_SUPPORT
+        # A NoSupport frame writes nothing, so faults aimed at the write
+        # (ignore, refuse) wait for the frame that does: the resend.
+        fault = await self._async_meet(
+            operation, slot, passes=_WRITE_ONLY_FAULTS if no_support else frozenset()
+        )
         self.exchanges.append(_Exchange(operation, slot, code))
         self.statistics["commandsTX"] += 1
         kind = None if fault is None else fault.kind
         lost = kind is FaultKind.DROP_REPLY
-        supervised = (
-            self._supports(SUPERVISION_CC_ID) and not self._uc_supervision_unsupported
-        )
-        if supervised and self.supervision is SupervisionStatus.NO_SUPPORT and not lost:
+        if no_support:
+            if lost:
+                # No report, so no NoSupport to act on: the driver takes the
+                # undefined result as unsupervised and reads back
+                # (DRV:7998-8002, AC:1186-1194), finding what the lock kept.
+                self.statistics["timeoutResponse"] += 1
+                return None, False
             self.statistics["commandsRX"] += 1
             self._uc_supervision_unsupported = True
             return await self._async_uc_device_set(operation, slot, code)
@@ -1617,6 +1656,15 @@ class FakeZWaveLock:
 
     def _u3c_persist_user(self, user_id: int, report_type: UserReportType) -> None:
         """U3CC:2314-2470: the driver's cache of one User Report."""
+        if user_id == 0:
+            # U3CC:2317-2346: user 0 deleted clears every cached user and
+            # credential; any other user-0 report caches nothing.
+            if report_type == UserReportType.USER_DELETED:
+                for value_key in [
+                    k for k in self._values if k[1] in _U3C_ENTRY_PROPERTIES
+                ]:
+                    del self._values[value_key]
+            return
         if report_type in (
             UserReportType.USER_DELETED,
             UserReportType.USER_MODIFY_REJECTED_LOCATION_EMPTY,
@@ -1705,6 +1753,12 @@ class FakeZWaveLock:
         """Act on a User Set as MOCK_U3C:743-1047 does; None when ignored."""
         if user_id > self.max_users or (operation != "delete" and user_id == 0):
             return None
+        if operation == "delete" and user_id == 0:
+            # MOCK_U3C:752-781 (CC:0083.01.05.11.007/.010): every user and
+            # credential goes, reported as user 0's deletion.
+            self.users.clear()
+            self.credentials.clear()
+            return UserReportType.USER_DELETED
         if operation == "delete":
             self.users.pop(user_id, None)
             for key in [
@@ -1745,6 +1799,7 @@ class FakeZWaveLock:
         user_id: int,
         slot: int,
         data: str | None,
+        kind: int = _PIN,
     ) -> None:
         """
         Persist and handle one Credential Report (U3CC:2874-3040, U3CH:56-108).
@@ -1753,7 +1808,7 @@ class FakeZWaveLock:
         modifications, read-back rejections and get responses cache its owner
         and, when the lock sent it back, its data. Then the events.
         """
-        key = (_PIN << 16) | slot
+        key = (kind << 16) | slot
         sent = data if self._read_back else None
         if report_type in (
             CredentialReportType.CREDENTIAL_DELETED,
@@ -1766,7 +1821,7 @@ class FakeZWaveLock:
                 endpointIndex=0,
                 args={
                     "userId": user_id,
-                    "credentialType": _PIN,
+                    "credentialType": kind,
                     "credentialSlot": slot,
                 },
             )
@@ -1797,7 +1852,7 @@ class FakeZWaveLock:
             return
         args: dict[str, Any] = {
             "userId": user_id,
-            "credentialType": _PIN,
+            "credentialType": kind,
             "credentialSlot": slot,
         }
         if sent is not None:
@@ -1833,7 +1888,7 @@ class FakeZWaveLock:
             return None
         self.statistics["commandsRX"] += 1
         report_type, report_user, report_data = answer
-        self._u3c_credential_report(report_type, report_user, slot, report_data)
+        self._u3c_credential_report(report_type, report_user, slot, report_data, kind)
         return report_type
 
     def _u3c_lock_handles_credential_set(
@@ -1865,6 +1920,12 @@ class FakeZWaveLock:
                 del self.credentials[(kind, slot)]
             return CredentialReportType.CREDENTIAL_DELETED, user_id, None
         assert data is not None
+        # MOCK_U3C:1552-1570: an Add or Modify with no settable length
+        # (CC:0083.01.0A.11.023), or data longer than the maximum (.014) or
+        # shorter than the minimum (.015), is ignored.
+        shortest, longest = self.pin_lengths
+        if longest == 0 or not shortest <= len(data) <= longest:
+            return None
         if user_id not in self.users:
             return CredentialReportType.WRONG_USER_UNIQUE_IDENTIFIER, user_id, data
         if not modify and occupied is not None:
@@ -1936,13 +1997,12 @@ class FakeZWaveLock:
             self.statistics["timeoutResponse"] += 1
             return None
         self.statistics["commandsRX"] += 1
-        ref = (
-            min(self.credentials, default=None)
-            if (kind, slot) == (0, 0)
-            else (kind, slot)
-            if (kind, slot) in self.credentials
-            else None
-        )
+        if (kind, slot) == (0, 0):
+            ref = min(self.credentials, default=None)
+        elif (kind, slot) in self.credentials:
+            ref = (kind, slot)
+        else:
+            ref = None
         if ref is None:
             report = {
                 "userId": 0,
@@ -1968,6 +2028,7 @@ class FakeZWaveLock:
                 report["userId"],
                 report["slot"],
                 report.get("data"),
+                report["type"],
             )
         return report
 
