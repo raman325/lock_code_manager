@@ -1839,6 +1839,8 @@ async def _async_setup_new_locks(
             )
             runtime_data.locks[lock_entity_id] = existing_lock
             await existing_lock.async_wait_for_setup()
+            if existing_lock.coordinator is not None:
+                existing_lock.coordinator.note_holder_joined()
             return existing_lock
 
         lock = runtime_data.locks[lock_entity_id] = async_create_lock_instance(

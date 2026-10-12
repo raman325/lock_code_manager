@@ -2857,29 +2857,32 @@ async def _reads_over_scan_intervals(
     return len(lock.service_calls["get_usercodes"]) - reads_before
 
 
-def _in_sync_entry_on_the_second_lock(
-    slot_num: int, *, disable_polling: bool
+def _entry_on_the_second_lock(
+    slot_num: int | None, *, disable_polling: bool
 ) -> MockConfigEntry:
     """
-    Build an entry with one user on the second lock, whose code it already holds.
+    Build an entry on the second lock, with one user whose code it already holds.
 
     Nothing is left to write, so no sync reads the lock back: every read a
-    settled lock answers is on a timer.
+    settled lock answers is on a timer. ``None`` builds an entry with no users
+    at all, which gives the lock no entity of its own to request a refresh.
     """
+    slots = (
+        {}
+        if slot_num is None
+        else {
+            slot_num: {
+                CONF_NAME: f"user{slot_num}",
+                # The code MockLCMLock starts out holding there.
+                CONF_PIN: {1: "1234", 2: "5678"}[slot_num],
+                CONF_ENABLED: True,
+            }
+        }
+    )
     return MockConfigEntry(
         domain=DOMAIN,
-        data={
-            CONF_LOCKS: [LOCK_2_ENTITY_ID],
-            CONF_SLOTS: {
-                slot_num: {
-                    CONF_NAME: f"user{slot_num}",
-                    # The code MockLCMLock starts out holding there.
-                    CONF_PIN: {1: "1234", 2: "5678"}[slot_num],
-                    CONF_ENABLED: True,
-                }
-            },
-        },
-        unique_id=f"Slot {slot_num}",
+        data={CONF_LOCKS: [LOCK_2_ENTITY_ID], CONF_SLOTS: slots},
+        unique_id=f"Users {slot_num}",
         pref_disable_polling=disable_polling,
     )
 
@@ -2903,9 +2906,7 @@ async def test_disable_polling_stops_the_scheduled_poll(
     freezer: FrozenDateTimeFactory,
 ):
     """An entry with "Disable polling" set has its lock read once, then never polled."""
-    lock = await _set_up(
-        hass, _in_sync_entry_on_the_second_lock(1, disable_polling=True)
-    )
+    lock = await _set_up(hass, _entry_on_the_second_lock(1, disable_polling=True))
 
     assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 0
 
@@ -2930,9 +2931,7 @@ async def test_disable_polling_leaves_the_drift_check_running(
         new_callable=PropertyMock,
         return_value=timedelta(minutes=2),
     ):
-        lock = await _set_up(
-            hass, _in_sync_entry_on_the_second_lock(1, disable_polling=True)
-        )
+        lock = await _set_up(hass, _entry_on_the_second_lock(1, disable_polling=True))
     drift_checks_before = len(lock.service_calls["hard_refresh_codes"])
 
     reads = await _reads_over_scan_intervals(hass, freezer, lock, 4)
@@ -2946,19 +2945,26 @@ async def test_disable_polling_leaves_the_drift_check_running(
 
 
 @pytest.mark.parametrize(
-    ("first_disables", "second_disables", "polled"),
+    ("first_disables", "second_slot", "second_disables", "polled"),
     [
-        (True, False, True),
-        (False, True, True),
-        (True, True, False),
+        (True, 2, False, True),
+        (True, None, False, True),
+        (False, 2, True, True),
+        (True, 2, True, False),
     ],
-    ids=["builder-disables", "joiner-disables", "both-disable"],
+    ids=[
+        "builder-disables",
+        "builder-disables-joiner-has-no-users",
+        "joiner-disables",
+        "both-disable",
+    ],
 )
 async def test_a_shared_lock_is_polled_unless_every_holder_disables_polling(
     hass: HomeAssistant,
     mock_lock_config_entry,
     freezer: FrozenDateTimeFactory,
     first_disables: bool,
+    second_slot: int | None,
     second_disables: bool,
     polled: bool,
 ):
@@ -2968,16 +2974,75 @@ async def test_a_shared_lock_is_polled_unless_every_holder_disables_polling(
     The first entry builds the lock and the second shares it, so the cases
     name which side disables polling: one entry still allowing it keeps the
     lock polled once per scan interval, and only both disabling it stops that.
+    A joiner with no users adds no entity that would refresh the lock, so its
+    joining alone has to start the poll.
     """
     lock = await _set_up(
         hass,
-        _in_sync_entry_on_the_second_lock(1, disable_polling=first_disables),
-        _in_sync_entry_on_the_second_lock(2, disable_polling=second_disables),
+        _entry_on_the_second_lock(1, disable_polling=first_disables),
+        _entry_on_the_second_lock(second_slot, disable_polling=second_disables),
     )
 
     reads = await _reads_over_scan_intervals(hass, freezer, lock, 3)
 
     assert reads == (3 if polled else 0)
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_re_enabling_polling_on_one_holder_resumes_the_poll(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    freezer: FrozenDateTimeFactory,
+):
+    """
+    Turning "Disable polling" back off on one holder polls the shared lock again.
+
+    Home Assistant saves the option and reloads that entry. The other entry
+    keeps the lock's coordinator alive through the reload, and the reloaded
+    entry has no users, so nothing but its rejoining can restart the poll.
+    """
+    keeper = _entry_on_the_second_lock(1, disable_polling=True)
+    toggled = _entry_on_the_second_lock(None, disable_polling=True)
+    lock = await _set_up(hass, keeper, toggled)
+    assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 0
+
+    hass.config_entries.async_update_entry(toggled, pref_disable_polling=False)
+    assert await hass.config_entries.async_reload(toggled.entry_id)
+    await hass.async_block_till_done()
+    assert toggled.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
+
+    assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 3
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_entry_joining_leaves_a_scheduled_poll_where_it_is(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    freezer: FrozenDateTimeFactory,
+):
+    """
+    A poll already scheduled when another entry joins still runs when it was due.
+
+    Rescheduling it on every join would push it a full interval later each
+    time. The joiner has no users, so nothing else reads the lock.
+    """
+    lock = await _set_up(hass, _entry_on_the_second_lock(1, disable_polling=False))
+    assert await _reads_over_scan_intervals(hass, freezer, lock, 1) == 1
+    freezer.tick(lock.usercode_scan_interval / 2)
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    reads_before = len(lock.service_calls["get_usercodes"])
+
+    await _set_up(hass, _entry_on_the_second_lock(None, disable_polling=False))
+    freezer.tick(lock.usercode_scan_interval / 2 + timedelta(seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert len(lock.service_calls["get_usercodes"]) == reads_before + 1
 
     for entry in hass.config_entries.async_entries(DOMAIN):
         assert await hass.config_entries.async_unload(entry.entry_id)
