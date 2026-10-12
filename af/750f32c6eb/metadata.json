@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "af750f32c6eb",
+  "strategy": "manual-commit",
+  "branch": "test/regression-batch3b",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "tests/conftest.py",
+    "tests/test_harness.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/af/750f32c6eb/0/metadata.json",
+      "transcript": "/af/750f32c6eb/0/full.jsonl",
+      "compact_transcript": "/af/750f32c6eb/0/transcript.jsonl",
+      "content_hash": "/af/750f32c6eb/0/content_hash.txt",
+      "prompt": "/af/750f32c6eb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1684,
+    "cache_creation_tokens": 7706401,
+    "cache_read_tokens": 333867481,
+    "output_tokens": 879433,
+    "api_call_count": 778,
+    "subagent_tokens": {
+      "input_tokens": 198,
+      "cache_creation_tokens": 1065304,
+      "cache_read_tokens": 18222637,
+      "output_tokens": 104907,
+      "api_call_count": 98
+    }
+  }
+}
