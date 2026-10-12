@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "27d65f51e2ea",
+  "strategy": "manual-commit",
+  "branch": "fix/allocation-progress-race",
+  "checkpoints_count": 19,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/27/d65f51e2ea/0/metadata.json",
+      "transcript": "/27/d65f51e2ea/0/full.jsonl",
+      "compact_transcript": "/27/d65f51e2ea/0/transcript.jsonl",
+      "content_hash": "/27/d65f51e2ea/0/content_hash.txt",
+      "prompt": "/27/d65f51e2ea/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1628,
+    "cache_creation_tokens": 7639535,
+    "cache_read_tokens": 323300844,
+    "output_tokens": 848848,
+    "api_call_count": 752,
+    "subagent_tokens": {
+      "input_tokens": 1782,
+      "cache_creation_tokens": 6996180,
+      "cache_read_tokens": 291424661,
+      "output_tokens": 891905,
+      "api_call_count": 884
+    }
+  }
+}
