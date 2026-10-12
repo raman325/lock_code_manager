@@ -100,6 +100,7 @@ from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import (
     LockBusy,
     LockDisconnected,
+    ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.domain.queries import get_entry_config
@@ -1220,6 +1221,59 @@ async def test_a_reload_beside_an_unloaded_sibling_leaves_one_push_subscription(
     assert await hass.config_entries.async_unload(entry_a.entry_id)
     await hass.async_block_till_done()
     assert [lock.subscribe_calls - lock.unsubscribe_calls for lock in built] == [0, 0]
+
+
+def _cannot_subscribe(lock: MockLCMPushLock) -> MockLCMPushLock:
+    """Make a push lock's subscription unimplemented, and return the lock."""
+    lock.subscribe_error = ProviderNotImplementedError(lock, "setup_push_subscription")
+    return lock
+
+
+@pytest.mark.xfail(strict=True, reason="latent state-listener leak; see catalog")
+async def test_a_lock_dropped_after_its_listener_started_never_sets_up_again(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A lock dropped after its state listener started never runs its setup again.
+
+    A push lock whose subscription is not implemented fails its setup after
+    the listener on its integration's config entry is registered. The entry
+    drops the lock and stops its coordinator, but nothing removes that
+    listener, so every reload of the lock's integration runs the dropped
+    instance's provider setup again, after the entry has unloaded too. For a
+    provider whose setup registers a listener of its own, that is a ghost
+    listener and every event twice. The shared-lock property machine leaves
+    its reload rule out once such a lock exists, for this.
+    """
+    entry = current_entry("Cannot Subscribe", {1: "1234"})
+    entry.add_to_hass(hass)
+    with (
+        patch.dict(
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+            {LOCK_DEVICE_DOMAIN: MockLCMPushLock},
+        ),
+        when_mock_lock_built(_cannot_subscribe) as built,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    [dropped] = built
+    assert entry.state is ConfigEntryState.LOADED
+    assert (
+        er.async_get(hass).async_get_entity_id(
+            BINARY_SENSOR_DOMAIN,
+            DOMAIN,
+            build_slot_unique_id(entry.entry_id, 1, ATTR_IN_SYNC, LOCK_1_ENTITY_ID),
+        )
+        is None
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert dropped.service_calls["setup"] == [(entry.entry_id,)]
 
 
 @pytest.mark.parametrize("config", [{}])

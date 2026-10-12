@@ -1299,6 +1299,45 @@ async def test_push_subscriptions_are_counted(
     assert [lock.unsubscribe_calls for lock in locks] == [1, 1]
 
 
+async def test_a_subscribe_error_set_as_the_lock_is_built_is_raised_uncounted(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A build act can set ``subscribe_error``, and every subscription then raises it.
+
+    It survives the push lock's own initializer, and a subscription it stops
+    is not counted; cleared, subscribing counts again.
+    """
+    error = LockDisconnected("subscription refused")
+
+    def _refuse_subscriptions(lock: MockLCMPushLock) -> MockLCMPushLock:
+        lock.subscribe_error = error
+        return lock
+
+    entry = current_entry("Refuses Subscriptions", {1: "1234"})
+    entry.add_to_hass(hass)
+    with (
+        patch.dict(
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+            {"test": MockLCMPushLock},
+        ),
+        when_mock_lock_built(_refuse_subscriptions) as built,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    [lock] = built
+    assert lock.subscribe_error is error
+    assert lock.subscribe_calls == 0
+    with pytest.raises(LockDisconnected):
+        lock.setup_push_subscription()
+    assert lock.subscribe_calls == 0
+
+    lock.subscribe_error = None
+    lock.setup_push_subscription()
+    assert lock.subscribe_calls == 1
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_a_lock_reports_no_capabilities_unless_given_some(lock) -> None:
     """The mock is slot-only until a test gives it capabilities to report."""
     assert not lock.supports_native_users

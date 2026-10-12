@@ -20,12 +20,20 @@ from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    MockModule,
+    MockPlatform,
     async_fire_mqtt_message,
+    mock_integration,
+    mock_platform,
 )
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
-from homeassistant.components.calendar import CalendarEntity, CalendarEvent
-from homeassistant.components.lock import LockEntity
+from homeassistant.components.calendar import (
+    DOMAIN as CALENDAR_DOMAIN,
+    CalendarEntity,
+    CalendarEvent,
+)
+from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN, LockEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
@@ -40,11 +48,13 @@ from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
+    Platform,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.config_flow import LockCodeManagerFlowHandler
@@ -1476,7 +1486,13 @@ class MockLCMLock(BaseLock):
 
 @dataclass(repr=False, eq=False)
 class MockLCMPushLock(MockLCMLock):
-    """Mock lock that supports push-based updates."""
+    """
+    Mock lock that supports push-based updates.
+
+    ``subscribe_error``, when set, is raised by every subscription attempt
+    instead of subscribing, which is not counted then. It is set before
+    ``when_mock_lock_built`` acts on the lock, so an act can set it.
+    """
 
     async def async_set_usercode(
         self, code_slot: int, usercode: str, *args: Any, **kwargs: Any
@@ -1489,13 +1505,16 @@ class MockLCMPushLock(MockLCMLock):
 
     def __init__(self, *args, **kwargs):
         """Initialize mock push lock."""
-        super().__init__(*args, **kwargs)
+        # Before the base initializer, which runs the build acts: what an act
+        # sets here must not be overwritten once it returns.
         self._supports_push = True
         # Counted rather than flagged: a provider's setup must be idempotent
         # and runs again on every reconnect, so the number of times something
         # subscribed is what a double subscription shows up as.
         self.subscribe_calls = 0
         self.unsubscribe_calls = 0
+        self.subscribe_error: Exception | None = None
+        super().__init__(*args, **kwargs)
 
     @property
     def supports_push(self) -> bool:
@@ -1503,7 +1522,9 @@ class MockLCMPushLock(MockLCMLock):
         return self._supports_push
 
     def setup_push_subscription(self) -> None:
-        """Subscribe to push-based value updates."""
+        """Subscribe to push-based value updates, or raise ``subscribe_error``."""
+        if self.subscribe_error is not None:
+            raise self.subscribe_error
         self.subscribe_calls += 1
 
     def teardown_push_subscription(self) -> None:
@@ -1591,6 +1612,87 @@ class MockCalendarEntity(CalendarEntity):
                 continue
             events.append(event)
         return events
+
+
+async def async_setup_mock_lock_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """
+    Set up the mock lock integration and return its config entry.
+
+    Gives ``hass`` the two lock entities (``LOCK_1_ENTITY_ID`` and
+    ``LOCK_2_ENTITY_ID``) and two calendars, the latter also stored under
+    ``hass.data["lock_code_manager_calendars"]``. A coroutine rather than
+    only a fixture, so a test that builds its own Home Assistant per example
+    -- a Hypothesis state machine -- sets up the same locks the suite does.
+    The caller registers a config flow for ``LOCK_DEVICE_DOMAIN`` first
+    (``mock_config_flow``), without which the entry does not set up.
+    """
+
+    async def async_setup_entry_init(
+        hass: HomeAssistant, config_entry: ConfigEntry
+    ) -> bool:
+        """Set up test config entry."""
+        await hass.config_entries.async_forward_entry_setups(
+            config_entry, [Platform.CALENDAR, Platform.LOCK]
+        )
+        return True
+
+    async def async_unload_entry_init(
+        hass: HomeAssistant, config_entry: ConfigEntry
+    ) -> bool:
+        """Unload test config entry."""
+        for platform in (Platform.CALENDAR, Platform.LOCK):
+            await hass.config_entries.async_forward_entry_unload(config_entry, platform)
+        return True
+
+    mock_platform(hass, f"{LOCK_DEVICE_DOMAIN}.config_flow")
+    mock_integration(
+        hass,
+        MockModule(
+            LOCK_DEVICE_DOMAIN,
+            async_setup_entry=async_setup_entry_init,
+            async_unload_entry=async_unload_entry_init,
+        ),
+    )
+
+    config_entry = MockConfigEntry(domain=LOCK_DEVICE_DOMAIN)
+
+    async def async_setup_entry_lock_platform(
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        async_add_entities: AddEntitiesCallback,
+    ) -> None:
+        """Set up test lock platform via config entry."""
+        async_add_entities([MockLockEntity("test_1"), MockLockEntity("test_2")])
+
+    mock_platform(
+        hass,
+        f"{LOCK_DEVICE_DOMAIN}.{LOCK_DOMAIN}",
+        MockPlatform(async_setup_entry=async_setup_entry_lock_platform),
+    )
+
+    calendars = hass.data["lock_code_manager_calendars"] = [
+        MockCalendarEntity("test_1"),
+        MockCalendarEntity("test_2"),
+    ]
+
+    async def async_setup_entry_calendar_platform(
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        async_add_entities: AddEntitiesCallback,
+    ) -> None:
+        """Set up test calendar platform via config entry."""
+        async_add_entities(calendars)
+
+    mock_platform(
+        hass,
+        f"{LOCK_DEVICE_DOMAIN}.{CALENDAR_DOMAIN}",
+        MockPlatform(async_setup_entry=async_setup_entry_calendar_platform),
+    )
+
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    return config_entry
 
 
 def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
