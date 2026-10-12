@@ -18,6 +18,7 @@ from homeassistant.config_entries import (
     SOURCE_REAUTH,
     SOURCE_USER,
     ConfigEntriesFlowManager,
+    ConfigEntryDisabler,
     ConfigEntryState,
 )
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
@@ -2530,6 +2531,42 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         _assert_options_error_renders(result)
         assert list(get_entry_config(entry).locks) == [LOCK_1_ENTITY_ID]
         assert not entry.options
+
+    async def test_options_flow_refuses_a_lock_whose_slots_a_disabled_entry_holds(
+        self, hass: HomeAssistant, mock_lock_config_entry
+    ) -> None:
+        """
+        A disabled entry's numbers on a lock are still taken.
+
+        Its users keep their numbers while it is switched off, and enabling it
+        again would put two entries' credentials on the same slots.
+        """
+        _entry_with_users(
+            hass,
+            [LOCK_2_ENTITY_ID],
+            {"Alice": {CONF_ENABLED: True, CONF_PIN: "1111"}},
+            title="other",
+            unique_id="other",
+            disabled_by=ConfigEntryDisabler.USER,
+        )
+        entry = _entry_with_users(
+            hass,
+            [LOCK_1_ENTITY_ID],
+            {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+        )
+        await _async_set_up(hass, entry)
+        started = await hass.config_entries.options.async_init(entry.entry_id)
+
+        result = await hass.config_entries.options.async_configure(
+            started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+        )
+
+        assert result["errors"] == {"base": "slots_already_configured"}
+        assert result["description_placeholders"] == {
+            "lock": LOCK_2_ENTITY_ID,
+            "entry_title": "other",
+            "common_slots": "1",
+        }
 
     async def test_options_flow_accepts_a_shared_lock_when_the_numbers_differ(
         self, hass: HomeAssistant, mock_lock_config_entry

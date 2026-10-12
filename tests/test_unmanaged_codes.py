@@ -7,18 +7,26 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryDisabler
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from custom_components.lock_code_manager import async_migrate_entry
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.unmanaged import unmanaged_issue_id
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, MockLCMLock
+from .common import (
+    BASE_CONFIG,
+    LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
+    MockLCMLock,
+    user_subentries,
+)
 
 STRANDED_SLOT = 7
 STRANDED_PIN = "4242"
@@ -129,6 +137,42 @@ async def test_a_managed_code_raises_nothing(hass: HomeAssistant, stranded) -> N
     """The entry's own codes are not somebody else's problem."""
     for slot in get_entry_config(stranded).slots:
         assert _issue(hass, slot) is None
+
+
+async def test_a_disabled_entrys_code_on_a_shared_lock_is_not_reported(
+    hass: HomeAssistant, mock_lock_config_entry, stranded_before_setup
+) -> None:
+    """
+    A code a disabled entry's user holds is that entry's, not a stranger's.
+
+    Reported as unmanaged, the repair would offer to delete it, and enabling
+    the entry again would find its user's code gone.
+    """
+    MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=user_subentries(
+            {
+                STRANDED_SLOT: {
+                    CONF_NAME: "held",
+                    CONF_PIN: STRANDED_PIN,
+                    CONF_ENABLED: True,
+                }
+            }
+        ),
+        unique_id="holder",
+        disabled_by=ConfigEntryDisabler.USER,
+    ).add_to_hass(hass)
+    entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="swept")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.version == 5
+
+    assert _issue(hass) is None
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 async def test_a_code_appearing_after_the_sweep_is_not_reported(

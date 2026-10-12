@@ -180,10 +180,10 @@ def _check_common_slots(
         lock, common_slots, entry_title = next(
             (lock, common_slots, entry.title)
             for lock in locks
-            for entry in entries_configuring(hass, lock)
+            for entry, config in entries_configuring(hass, lock)
             if (
                 common_slots := sorted(
-                    get_entry_config(entry).slot_numbers & {int(s) for s in slots_list}
+                    config.slot_numbers & {int(s) for s in slots_list}
                 )
             )
             and not (config_entry and config_entry == entry)

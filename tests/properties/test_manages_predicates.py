@@ -9,10 +9,15 @@ callers rely on today. Getting one wrong is silent in both directions:
 * **missing an entry it should count** lets a new entry be issued numbers
   another one holds, or reports another entry's code as unmanaged.
 
-The expected answers are computed here from the drawn entries alone, so the
-oracle states each set without going through the code under test. The
-configuration each entry answers with follows ``get_entry_config``: a loaded
-or unloading entry answers from its cached view, any other from storage.
+Each question is checked two ways:
+
+* **against the code it replaced.** The functions it was moved from are frozen
+  below exactly as they stood before the move, so a difference from them is a
+  behavior change, whatever the oracle says.
+* **against an oracle** computed from the drawn entries alone, which states
+  each set without going through any of that code. The configuration each
+  entry answers with follows ``get_entry_config``: a loaded or unloading entry
+  answers from its cached view, any other from storage.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from pytest_homeassistant_custom_component.common import (
 from homeassistant.config_entries import (
     SOURCE_IGNORE,
     SOURCE_USER,
+    ConfigEntry,
     ConfigEntryDisabler,
     ConfigEntryState,
 )
@@ -44,6 +50,7 @@ from custom_components.lock_code_manager.domain.queries import (
     another_enabled_entry_configures,
     configured_owner,
     entries_configuring,
+    get_entry_config,
     slots_configured_on,
     syncing_owner,
 )
@@ -133,6 +140,77 @@ ENTRY_SPECS = st.builds(
 ENTRY_SETS = st.lists(ENTRY_SPECS, max_size=5)
 
 
+# Frozen references: the predicates these questions replaced, with their
+# bodies exactly as they stood on main at a9c8e2af. Do not edit them to follow
+# the code; they are what "no behavior change" is measured against.
+
+
+def _frozen_get_managed_slots(
+    hass: HomeAssistant,
+    lock_entity_id: str,
+    *,
+    excluding: ConfigEntry | None = None,
+) -> set[int]:
+    """``domain.queries.get_managed_slots``."""
+    return {
+        slot_num
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry is not excluding
+        and (config := get_entry_config(entry)).has_lock(lock_entity_id)
+        for slot_num in config.slot_numbers
+    }
+
+
+_FROZEN_KEEPS_ITS_SLOTS_STATES = frozenset(
+    {
+        ConfigEntryState.LOADED,
+        ConfigEntryState.SETUP_IN_PROGRESS,
+        ConfigEntryState.SETUP_RETRY,
+        ConfigEntryState.NOT_LOADED,
+        ConfigEntryState.UNLOAD_IN_PROGRESS,
+    }
+)
+
+
+def _frozen_find_entry_for_lock_slot(
+    hass: HomeAssistant,
+    lock_entity_id: str,
+    code_slot: int | str,
+    *,
+    keeping_slots: bool = False,
+) -> ConfigEntry | None:
+    """``domain.queries.find_entry_for_lock_slot``."""
+    return next(
+        (
+            entry
+            for entry in hass.config_entries.async_entries(
+                DOMAIN,
+                include_disabled=not keeping_slots,
+                include_ignore=not keeping_slots,
+            )
+            if (not keeping_slots or entry.state in _FROZEN_KEEPS_ITS_SLOTS_STATES)
+            and (config := get_entry_config(entry)).has_lock(lock_entity_id)
+            and config.has_slot(code_slot)
+        ),
+        None,
+    )
+
+
+def _frozen_lock_managed_by_other_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    lock_entity_id: str,
+) -> bool:
+    """``__init__._lock_managed_by_other_entry``."""
+    return any(
+        entry.entry_id != config_entry.entry_id
+        and get_entry_config(entry).has_lock(lock_entity_id)
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+    )
+
+
 def _layout_entry(layout: Layout, **kwargs: Any) -> MockConfigEntry:
     """Build an entry whose locks and users are ``layout``."""
     return MockConfigEntry(
@@ -203,11 +281,14 @@ def test_entries_configuring_lists_every_entry_in_any_state(
     def probe(hass: HomeAssistant, entries: list[MockConfigEntry]) -> None:
         for lock in LOCKS:
             expected = [
-                entry
+                (entry, spec.answers_with)
                 for spec, entry in zip(specs, entries, strict=True)
                 if spec.configures(lock)
             ]
-            assert list(entries_configuring(hass, lock)) == expected
+            assert [
+                (entry, Layout(frozenset(config.locks), config.slot_numbers))
+                for entry, config in entries_configuring(hass, lock)
+            ] == expected
 
     _with_entries(specs, probe)
 
@@ -231,7 +312,9 @@ def test_slots_configured_on_counts_every_entry_in_any_state(
                 if entry is not left_out and spec.configures(lock)
                 for slot in spec.answers_with.slots
             }
-            assert slots_configured_on(hass, lock, excluding=left_out) == expected
+            actual = slots_configured_on(hass, lock, excluding=left_out)
+            assert actual == _frozen_get_managed_slots(hass, lock, excluding=left_out)
+            assert actual == expected
 
     _with_entries(specs, probe)
 
@@ -248,7 +331,9 @@ def test_configured_owner_is_the_first_entry_listing_the_slot(
                 expected = _first(
                     specs, entries, lambda spec: spec.configures_slot(lock, slot)
                 )
-                assert configured_owner(hass, lock, slot) is expected
+                actual = configured_owner(hass, lock, slot)
+                assert actual is _frozen_find_entry_for_lock_slot(hass, lock, slot)
+                assert actual is expected
 
     _with_entries(specs, probe)
 
@@ -269,7 +354,11 @@ def test_syncing_owner_counts_only_entries_keeping_their_slots(
                         spec.keeps_its_slots and spec.configures_slot(lock, slot)
                     ),
                 )
-                assert syncing_owner(hass, lock, slot) is expected
+                actual = syncing_owner(hass, lock, slot)
+                assert actual is _frozen_find_entry_for_lock_slot(
+                    hass, lock, slot, keeping_slots=True
+                )
+                assert actual is expected
 
     _with_entries(specs, probe)
 
@@ -287,6 +376,8 @@ def test_another_enabled_entry_configures_ignores_disabled_and_ignored(
                     entry is not asking and spec.enabled and spec.configures(lock)
                     for spec, entry in zip(specs, entries, strict=True)
                 )
-                assert another_enabled_entry_configures(hass, asking, lock) is expected
+                actual = another_enabled_entry_configures(hass, asking, lock)
+                assert actual is _frozen_lock_managed_by_other_entry(hass, asking, lock)
+                assert actual is expected
 
     _with_entries(specs, probe)

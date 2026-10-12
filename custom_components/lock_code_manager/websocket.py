@@ -583,8 +583,8 @@ def _get_slot_entity_ids(
     ent_reg = er.async_get(hass)
     return {
         slot_int: _build_slot_entities(ent_reg, entry.entry_id, slot_int)
-        for entry in entries_configuring(hass, lock_entity_id)
-        for slot_int in get_entry_config(entry).slot_numbers
+        for entry, config in entries_configuring(hass, lock_entity_id)
+        for slot_int in config.slot_numbers
     }
 
 

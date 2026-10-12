@@ -9,12 +9,15 @@ Every entry listing the lock, in any load state, disabled and ignored
 included -- a number held by an entry that is switched off is still that
 entry's:
 
-- ``entries_configuring``: the entries themselves. The slot entities a lock's
-  view shows, and the config flow's check for slots already configured.
+- ``entries_configuring``: the entries themselves, each with the configuration
+  it answers with. The slot entities a lock's view shows, and the config
+  flow's check for slots already configured.
 - ``slots_configured_on``: the slot numbers their users hold. Read scope,
   operation budgets, confirmation scope, the websocket's ``managed`` flag,
-  the unmanaged-code sweep, and the numbers allocation treats as claimed by
-  other entries.
+  the unmanaged-code sweep, the numbers allocation treats as claimed by
+  other entries, and the Akuvox and Schlage tag passes -- which write: they
+  assign each untagged user on the device to one of these numbers that no
+  tagged user holds.
 - ``configured_owner``: the entry holding one slot, first match wins.
   Duplicate-code attribution, and crediting a credential use to an entry.
 
@@ -162,11 +165,14 @@ def _owner(
 
 def entries_configuring(
     hass: HomeAssistant, lock_entity_id: str
-) -> Iterator[ConfigEntry]:
-    """Yield every entry listing the lock, in any state, disabled included."""
-    return (
-        entry for entry, _config in _configuring(_every_entry(hass), lock_entity_id)
-    )
+) -> Iterator[tuple[ConfigEntry, EntryConfig]]:
+    """
+    Yield every entry listing the lock, in any state, disabled included.
+
+    Each comes with the configuration it answers with, so a caller reading
+    its slots does not build that view a second time.
+    """
+    return _configuring(_every_entry(hass), lock_entity_id)
 
 
 def slots_configured_on(
@@ -190,8 +196,10 @@ def slots_configured_on(
     """
     return {
         slot_num
-        for entry, config in _configuring(_every_entry(hass), lock_entity_id)
-        if entry is not excluding
+        for _entry, config in _configuring(
+            (entry for entry in _every_entry(hass) if entry is not excluding),
+            lock_entity_id,
+        )
         for slot_num in config.slot_numbers
     }
 
