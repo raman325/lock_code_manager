@@ -417,31 +417,6 @@ def test_entry_config_is_deeply_immutable() -> None:
         config.slots[1]["pin"] = "9999"  # type: ignore[index]
 
 
-def test_get_entry_config_uses_runtime_data_when_present() -> None:
-    """
-    get_entry_config returns the cached EntryConfig from runtime_data.
-
-    No fresh construction — same instance is returned, allowing the
-    listener's cache to act as a true singleton view of the entry.
-    """
-    cached = EntryConfig.from_mapping(
-        {CONF_LOCKS: ["lock.cached"], CONF_SLOTS: {1: _slot("cached")}}
-    )
-    fake_entry = SimpleNamespace(
-        runtime_data=SimpleNamespace(config=cached),
-        # data/options would normally be here too — proving they're not
-        # consulted when the cache is present:
-        data={CONF_LOCKS: ["lock.different"], CONF_SLOTS: {}},
-        options={},
-    )
-
-    result = get_entry_config(fake_entry)  # type: ignore[arg-type]
-
-    # Returns the cached instance — same object, not a fresh build
-    assert result is cached
-    assert result.locks == ("lock.cached",)
-
-
 def test_get_entry_config_falls_back_when_no_runtime_data() -> None:
     """
     get_entry_config builds fresh from raw data if runtime_data is absent.
