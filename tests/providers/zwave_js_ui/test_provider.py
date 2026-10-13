@@ -25,7 +25,12 @@ from custom_components.lock_code_manager.domain.exceptions import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 
-from .conftest import ZUI_API_BASE, ZUI_NODE_ID, ZWaveJSUIApiResponder
+from .conftest import (
+    ZUI_API_BASE,
+    ZUI_NO_ACK_MESSAGE,
+    ZUI_NODE_ID,
+    ZWaveJSUIApiResponder,
+)
 
 MODULE = "custom_components.lock_code_manager.providers.zwave_js_ui"
 # The operational preamble every operation runs first lives on BaseMqttLock,
@@ -195,7 +200,7 @@ class TestAsyncGetUsers:
         def _handler(_api_base: str, request: dict[str, Any]) -> dict[str, Any]:
             slot = request["args"][2][0]
             if slot == 2:
-                return {"success": False, "message": "Command failed", "result": None}
+                return {"success": False, "message": ZUI_NO_ACK_MESSAGE, "result": None}
             return {"success": True, "result": {"userIdStatus": 1, "userCode": "1234"}}
 
         zui_api_responder.set_handler("sendCommand", _handler)
@@ -307,7 +312,7 @@ class TestAsyncGetUsers:
 
         def _handler(_api_base: str, request: dict[str, Any]) -> dict[str, Any]:
             if request["args"][2][0] == 1:
-                return {"success": False, "message": "Command failed", "result": None}
+                return {"success": False, "message": ZUI_NO_ACK_MESSAGE, "result": None}
             return {
                 "success": True,
                 "result": {"userIdStatus": 1, "userCode": "****"},
@@ -402,7 +407,9 @@ class TestAsyncSetCredential:
         """A refusal must not leave the coordinator believing the write landed."""
         lock = zui_gateway_resolved
         lock.coordinator = MagicMock()
-        zui_api_responder.set_result("sendCommand", None, success=False, message="nope")
+        zui_api_responder.set_result(
+            "sendCommand", None, success=False, message=ZUI_NO_ACK_MESSAGE
+        )
 
         with pytest.raises(LockOperationFailed):
             await _set_credential(lock)
@@ -461,7 +468,9 @@ class TestAsyncDeleteCredential:
         """A refused clear must not report the slot empty."""
         lock = zui_gateway_resolved
         lock.coordinator = MagicMock()
-        zui_api_responder.set_result("sendCommand", None, success=False, message="nope")
+        zui_api_responder.set_result(
+            "sendCommand", None, success=False, message=ZUI_NO_ACK_MESSAGE
+        )
 
         with pytest.raises(LockOperationFailed):
             await _delete_credential(lock)

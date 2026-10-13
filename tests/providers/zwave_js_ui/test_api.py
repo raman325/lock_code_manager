@@ -38,6 +38,7 @@ from .conftest import (
     ZUI_GATEWAY_NAME,
     ZUI_HOME_HEX,
     ZUI_NODE_ID,
+    ZUI_NOT_CONNECTED_MESSAGE,
     ZUI_PREFIX,
     ZWaveJSUIApiResponder,
     _minimal_lock,
@@ -534,7 +535,7 @@ async def test_gateway_that_refuses_getinfo_is_skipped(
 
     def _handler(api_base: str, _request: dict[str, Any]) -> dict[str, Any]:
         if api_base == OTHER_API_BASE:
-            return {"success": False, "message": "driver not ready"}
+            return {"success": False, "message": ZUI_NOT_CONNECTED_MESSAGE}
         return {"success": True, "result": {"homeid": ZUI_HOME_ID}}
 
     zui_api_responder.set_handler("getInfo", _handler)

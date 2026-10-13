@@ -99,7 +99,7 @@ def _capacity_is_the_node_id(_api_base: str, request: dict[str, Any]) -> dict[st
         result = target["nodeId"]
     elif method == "get":
         result = {"userIdStatus": STATUS_AVAILABLE}
-    return {"success": True, "message": "", "result": result}
+    return {"success": True, "result": result}
 
 
 class UserCodeTable:
@@ -137,7 +137,7 @@ class UserCodeTable:
             self.codes.pop(slot_num, None)
         elif method == "getUsersCount":
             result = LOCK_CAPACITY
-        return {"success": True, "message": "", "result": result}
+        return {"success": True, "result": result}
 
 
 def send_commands(responder: ZWaveJSUIApiResponder) -> list[list[Any]]:
@@ -380,7 +380,7 @@ class RefusingUserCodeTable(UserCodeTable):
         """Refuse the named methods; answer everything else as the table would."""
         _target, method, _method_args = request["args"]
         if method in self.refused:
-            return {"success": True, "message": "", "result": SUPERVISION_FAIL}
+            return {"success": True, "result": SUPERVISION_FAIL}
         return super().__call__(api_base, request)
 
 
@@ -1182,10 +1182,11 @@ class TestLateDiscoveryData:
 
 class DroppingUserCodeTable(UserCodeTable):
     """
-    A node that drops sets to some slots and will not answer reads of others.
+    A node that drops sets to some slots, and whose reports for others are lost.
 
-    A dropped set is acknowledged like any other and changes nothing; a
-    refused read fails the api call.
+    A dropped set is acknowledged like any other and changes nothing. A Get
+    whose report never arrives resolves with nothing (node-zwave-js
+    Driver.ts:7959-7976), so the gateway answers success with no result.
     """
 
     def __init__(
@@ -1194,7 +1195,7 @@ class DroppingUserCodeTable(UserCodeTable):
         drops: frozenset[int] = frozenset(),
         unreadable: frozenset[int] = frozenset(),
     ) -> None:
-        """Drop sets to ``drops``, refuse reads of ``unreadable``."""
+        """Drop sets to ``drops``; lose the reports of ``unreadable``."""
         super().__init__()
         self.drops = drops
         self.unreadable = unreadable
@@ -1203,9 +1204,9 @@ class DroppingUserCodeTable(UserCodeTable):
         """Drop or refuse the named slots; answer everything else as the table would."""
         _target, method, method_args = request["args"]
         if method == "set" and method_args[0] in self.drops:
-            return {"success": True, "message": "", "result": None}
+            return {"success": True, "result": None}
         if method == "get" and method_args[0] in self.unreadable:
-            return {"success": False, "message": "Timeout", "result": None}
+            return {"success": True, "result": None}
         return super().__call__(api_base, request)
 
 
@@ -1276,7 +1277,7 @@ class TestApiOnlyOpenBugs:
         strict=True,
         reason=(
             "open: a write the lock dropped reads in sync when the read that "
-            "would confirm it is refused while other slots answer"
+            "would confirm it goes unanswered while other slots answer"
         ),
     )
     @pytest.mark.parametrize(
