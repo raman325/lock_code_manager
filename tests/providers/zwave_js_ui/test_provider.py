@@ -602,7 +602,8 @@ async def test_a_multi_level_prefix_is_named_in_the_read_s_failure(
     ``home/zwave/nodeID_20/...`` cannot be told apart from a NAMED gateway's
     location segment, so the gateway is searched for under ``home`` and not
     found. Reported as a gateway that is down, the operator could not tell
-    which to fix; the read names the prefix instead.
+    which to fix; the read names the prefix instead. The public read path of
+    ``test_api.py``'s resolution-level test.
     """
     lock = build_zui_lock(
         hass,
@@ -611,5 +612,8 @@ async def test_a_multi_level_prefix_is_named_in_the_read_s_failure(
         ),
     )
 
-    with pytest.raises(LockDisconnected, match="multi-level prefix"):
+    with pytest.raises(LockDisconnected, match="multi-level prefix") as caught:
         await lock.async_get_users([1])
+
+    # The prefix it actually searched, so the wrong guess is visible.
+    assert "home/_CLIENTS" in str(caught.value)

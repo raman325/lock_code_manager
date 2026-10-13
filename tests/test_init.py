@@ -5714,7 +5714,8 @@ async def test_a_blip_during_the_deferred_setup_retry_is_retried_again(
     lock.set_connected(True)
 
     # Two connection checks: the first retry meets the blip, the second runs.
-    await async_advance_clock(hass, freezer, 2 * 30 + 5)
+    check = lock.connection_check_interval.total_seconds()
+    await async_advance_clock(hass, freezer, 2 * check + 5)
     if blip.hits != 1:
         pytest.fail("setup: the deferred retry never met the blip")
     in_sync = in_sync_entity_id(hass, entry, 1)
