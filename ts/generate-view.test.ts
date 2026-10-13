@@ -361,6 +361,20 @@ describe('getSlotMapping', () => {
         expect(result.mainEntities).toHaveLength(1);
         expect(result.mainEntities[0].entity_id).toBe('switch.slot_1_enabled');
     });
+
+    it("takes each slot's own active and event entities, not slot 1's (PR #36)", () => {
+        // Every slot's card showed slot 1's active entity once there were two.
+        const entities: LockCodeManagerEntityEntry[] = [
+            createTestEntity(1, ACTIVE_KEY, 'binary_sensor.active_1'),
+            createTestEntity(1, CODE_EVENT_KEY, 'event.code_1'),
+            createTestEntity(2, ACTIVE_KEY, 'binary_sensor.active_2'),
+            createTestEntity(2, CODE_EVENT_KEY, 'event.code_2')
+        ];
+        const result = getSlotMapping(2, entities, configEntryData);
+
+        expect(result.pinActiveEntity?.entity_id).toBe('binary_sensor.active_2');
+        expect(result.codeEventEntity?.entity_id).toBe('event.code_2');
+    });
 });
 
 describe('getSlotMapping per-credential in-sync sensors', () => {

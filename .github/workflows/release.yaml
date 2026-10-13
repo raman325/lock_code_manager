@@ -31,11 +31,34 @@ jobs:
           sed -i "/VERSION = /c\VERSION = \"${VERSION}\"" "${WORKSPACE}/custom_components/lock_code_manager/const.py"
           sed -i "/version/c\  \"version\": \"${VERSION}\"" "${WORKSPACE}/custom_components/lock_code_manager/manifest.json"
         # yamllint enable rule:line-length
+      # A sed pattern that stops matching edits nothing and exits 0, so the
+      # asset would ship with 0.0.0 (#763, #1290); one that matches more
+      # than the version line ships a broken file. Fail the release instead.
+      - name: Check the stamped version
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+          INTEGRATION: custom_components/lock_code_manager
+        run: |
+          grep -qF "\"version\": \"${VERSION}\"" "${INTEGRATION}/manifest.json"
+          grep -qF "VERSION = \"${VERSION}\"" "${INTEGRATION}/const.py"
+          for file in manifest.json const.py; do
+            test "$(git diff --numstat -- "${INTEGRATION}/${file}" | cut -f1,2)" = "$(printf '1\t1')"
+          done
+          python3 -m json.tool "${INTEGRATION}/manifest.json" > /dev/null
+          python3 -m py_compile "${INTEGRATION}/const.py"
       # Pack the lock_code_manager dir as a zip and upload to the release
       - name: ZIP Lock Code Manager Dir
         run: |
           cd ${{ github.workspace }}/custom_components/lock_code_manager
           zip lock_code_manager.zip -r ./
+      # Checked before upload: once uploaded, HACS can already install it.
+      - name: Check the zip
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+          ZIP: ${{ github.workspace }}/custom_components/lock_code_manager/lock_code_manager.zip
+        run: |
+          unzip -p "${ZIP}" manifest.json | grep -qF "\"version\": \"${VERSION}\""
+          unzip -p "${ZIP}" const.py | grep -qF "VERSION = \"${VERSION}\""
       - name: Upload zip to release
         uses: svenstaro/upload-release-action@v2
         with:
@@ -44,3 +67,14 @@ jobs:
           asset_name: lock_code_manager.zip
           tag: ${{ github.event.release.tag_name }}
           overwrite: true
+      # And the asset the release now holds, in case the upload went wrong
+      # (#35: an asset went out unstamped).
+      - name: Check the released asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+        run: |
+          gh release download "${VERSION}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern lock_code_manager.zip --dir "${RUNNER_TEMP}/asset"
+          unzip -p "${RUNNER_TEMP}/asset/lock_code_manager.zip" manifest.json \
+            | grep -qF "\"version\": \"${VERSION}\""

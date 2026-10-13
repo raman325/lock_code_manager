@@ -176,6 +176,17 @@ def assert_flow_results_serialize() -> Generator[None]:
         yield
 
 
+# How Home Assistant reports a deprecated constant or alias used from an
+# integration (homeassistant/helpers/deprecation.py); the fourth argument is
+# the integration.
+DEPRECATED_USE_FORMATS = frozenset(
+    {
+        "The deprecated %s %s was %s from %s.%s Use %s instead, please %s",
+        "The deprecated %s %s was %s from %s.%s Use %s instead",
+    }
+)
+
+
 @pytest.fixture(autouse=True)
 def assert_no_deprecation_reports() -> Generator[None]:
     """
@@ -189,29 +200,49 @@ def assert_no_deprecation_reports() -> Generator[None]:
     one back. Watching the log is what closes that gap, because the log is the
     only place the warning ever appeared.
 
-    Home Assistant deduplicates these by call site for the life of the
-    process, so the first test to reach a reintroduced call is the one that
-    fails; later tests over the same line stay silent.
+    Home Assistant deduplicates frame reports by call site for the life of
+    the process, so the first test to reach a reintroduced call is the one
+    that fails; later tests over the same line stay silent.
+
+    A deprecated constant or alias is reported on the logger of the module
+    that defines it, not the frame helper's (#531's ``Config`` alias, PR
+    #592's lock state constants), so the whole ``homeassistant`` logger tree
+    is watched. It is matched on Home Assistant's own format string and the
+    integration argument, not on the rendered wording;
+    ``test_packaging.py`` checks that format still exists, and catches what
+    a module does at import, before any test runs.
     """
     reports: list[str] = []
 
     class _Collect(logging.Handler):
-        """Keep every frame report, so the filtering below is ours to choose."""
+        """Keep every report that names this integration."""
 
         def emit(self, record: logging.LogRecord) -> None:
-            reports.append(record.getMessage())
+            # Cheap checks on the unformatted record first, and never raise
+            # out of a logging call in the code under test.
+            try:
+                if record.name == "homeassistant.helpers.frame":
+                    message = record.getMessage()
+                    if f"'{DOMAIN}'" in message:
+                        reports.append(message)
+                elif (
+                    record.msg in DEPRECATED_USE_FORMATS
+                    and isinstance(record.args, tuple)
+                    and record.args[3] == DOMAIN
+                ):
+                    reports.append(record.getMessage())
+            except Exception:  # noqa: BLE001
+                self.handleError(record)
 
-    logger = logging.getLogger("homeassistant.helpers.frame")
+    logger = logging.getLogger("homeassistant")
     handler = _Collect()
     logger.addHandler(handler)
     try:
         yield
     finally:
         logger.removeHandler(handler)
-    # Reports name the integration they blame, and the mock integrations these
-    # tests register are not ours to fix.
-    if ours := [report for report in reports if f"'{DOMAIN}'" in report]:
-        pytest.fail("\n".join(ours))
+    if reports:
+        pytest.fail("\n".join(reports))
 
 
 def pytest_configure(config: pytest.Config) -> None:
