@@ -38,9 +38,7 @@ from .common import (
     async_run_until_quiet,
     async_set_slot_pin,
     async_step_clock_until,
-    async_tick_until,
     current_entry,
-    in_sync_entity_id,
     mock_lock,
     when_mock_lock_built,
 )
@@ -58,19 +56,7 @@ async def _async_hold_a_write(
     entry = MockConfigEntry(
         domain=DOMAIN, data=TWO_SLOTS_ON_LOCK_1, unique_id="Holding lock 1"
     )
-    entry.add_to_hass(hass)
-    setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
-    await async_step_clock_until(hass, freezer, setup.done, 100, "first setup")
-    if not setup.result():
-        pytest.fail("setup: the first entry did not set up")
-    in_syncs = [in_sync_entity_id(hass, entry, slot) for slot in (1, 2)]
-    await async_tick_until(
-        hass,
-        freezer,
-        lambda: all(hass.states.get(e).state == STATE_ON for e in in_syncs),
-        max_ticks=5,
-        what="both slots in sync",
-    )
+    await _async_set_up_on_lock_1(hass, freezer, entry, 1, 2)
     lock = mock_lock(entry)
     held = lock.hang("set", 1)
     await async_set_slot_pin(hass, entry, 1, "4321")
@@ -199,11 +185,7 @@ async def test_a_lock_is_built_anew_only_once_its_old_instance_is_torn_down(
     gets an instance of its own, not the one torn down.
     """
     first = current_entry("Leaving", {1: "1234"})
-    first.add_to_hass(hass)
-    setup = hass.async_create_task(hass.config_entries.async_setup(first.entry_id))
-    await async_step_clock_until(hass, freezer, setup.done, 100, "first setup")
-    if not setup.result():
-        pytest.fail("setup: the first entry did not set up")
+    await _async_set_up_on_lock_1(hass, freezer, first, 1)
     old = mock_lock(first)
     teardown = old.hang("unload")
     unload = hass.async_create_task(hass.config_entries.async_unload(first.entry_id))
@@ -224,13 +206,28 @@ async def test_a_lock_is_built_anew_only_once_its_old_instance_is_torn_down(
         await async_step_clock_until(hass, freezer, setup.done, 100, "second setup")
         if not setup.result():
             pytest.fail("setup: the second entry did not set up")
-        in_sync = in_sync_entity_id(hass, second, 3)
-        await async_tick_until(
+        unique_id = build_slot_unique_id(
+            second.entry_id, 3, ATTR_IN_SYNC, LOCK_1_ENTITY_ID
+        )
+        ent_reg = er.async_get(hass)
+        # The slot's entity comes from the entry's first pass, which can still
+        # be running once setup returns.
+        await async_step_clock_until(
             hass,
             freezer,
-            lambda: hass.states.get(in_sync).state == STATE_ON,
-            max_ticks=5,
-            what="the second entry's slot in sync",
+            lambda: (
+                (
+                    in_sync := ent_reg.async_get_entity_id(
+                        BINARY_SENSOR_DOMAIN, DOMAIN, unique_id
+                    )
+                )
+                is not None
+                and (state := hass.states.get(in_sync)) is not None
+                and state.state == STATE_ON
+            ),
+            100,
+            "the second entry's slot in sync",
+            step=1.0,
         )
     set_up = [lock for lock in built if lock.service_calls["setup"]]
     await _async_unload_all(hass)
@@ -243,29 +240,35 @@ async def _async_set_up_on_lock_1(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
     entry: MockConfigEntry,
-    slot: int,
+    *slots: int,
 ) -> None:
     """
-    Set ``entry`` up and bring its slot on lock 1 into sync, well inside the wait.
+    Set ``entry`` up and bring its slots on lock 1 into sync, well inside the wait.
 
     The clock moves less than ``CLOSE_WAIT_SECONDS`` in all, so an entry that
-    waited out a close that never finished would not get there. The slot's
-    in-sync entity comes from the entry's first pass, which can still be
-    running once setup returns, so it is looked up as it appears.
+    waited out a close that never finished would not get there. The slots'
+    in-sync entities come from the entry's first pass, which can still be
+    running once setup returns, so they are looked up as they appear.
     """
     entry.add_to_hass(hass)
     setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
     ent_reg = er.async_get(hass)
-    unique_id = build_slot_unique_id(
-        entry.entry_id, slot, ATTR_IN_SYNC, LOCK_1_ENTITY_ID
-    )
+    unique_ids = [
+        build_slot_unique_id(entry.entry_id, slot, ATTR_IN_SYNC, LOCK_1_ENTITY_ID)
+        for slot in slots
+    ]
 
     def _in_sync() -> bool:
-        entity_id = ent_reg.async_get_entity_id(BINARY_SENSOR_DOMAIN, DOMAIN, unique_id)
-        return (
-            entity_id is not None
+        return all(
+            (
+                entity_id := ent_reg.async_get_entity_id(
+                    BINARY_SENSOR_DOMAIN, DOMAIN, unique_id
+                )
+            )
+            is not None
             and (state := hass.states.get(entity_id)) is not None
             and state.state == STATE_ON
+            for unique_id in unique_ids
         )
 
     await async_step_clock_until(
@@ -302,7 +305,20 @@ async def test_a_lock_whose_setup_failed_is_built_anew_for_the_next_entry(
         setup = hass.async_create_task(
             hass.config_entries.async_setup(failing.entry_id)
         )
-        await async_step_clock_until(hass, freezer, setup.done, 100, "failing setup")
+        # The lock is set up, and dropped, by the entry's first pass, which
+        # can still be running once setup returns.
+        await async_step_clock_until(
+            hass,
+            freezer,
+            lambda: (
+                setup.done()
+                and any(lock.service_calls["setup"] for lock in first_built)
+                and LOCK_1_ENTITY_ID not in failing.runtime_data.locks
+            ),
+            100,
+            "the failing lock set up and dropped",
+            step=0.1,
+        )
     dropped = [lock for lock in first_built if lock.service_calls["setup"]]
     if len(dropped) != 1 or LOCK_1_ENTITY_ID in failing.runtime_data.locks:
         pytest.fail("setup: the first entry did not drop the lock it set up")
