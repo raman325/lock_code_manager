@@ -117,7 +117,8 @@ def _clear_credential(index: int) -> Any:
 
 
 def _im(status: ImStatus) -> str:
-    return f"(0x{status:x})"
+    """Match a matter.js status error's code (MJS_SRE:76-85)."""
+    return rf"\(code {int(status)}[;)]"
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +219,10 @@ class TestUsers:
     async def test_adding_to_an_occupied_index_fails(
         self, fake_matter_lock: FakeMatterLock
     ) -> None:
-        """DLS:1964-1967: the cluster-specific Occupied, a Failure to the client."""
+        """DLS:1964-1967: a Failure carrying the cluster-specific Occupied."""
         fake_matter_lock.users[1] = LockUser(name="Mom")
 
-        with pytest.raises(UnknownError, match=_im(ImStatus.FAILURE)):
+        with pytest.raises(UnknownError, match=r"^Failure \(code 1; cluster code 3\)$"):
             await _command(fake_matter_lock, _set_user(1, "Dad"))
         assert fake_matter_lock.users[1].name == "Mom"
 
@@ -688,10 +689,10 @@ class TestFaults:
     async def test_fail_raises_what_the_server_raises_for_an_unreachable_node(
         self, fake_matter_lock: FakeMatterLock
     ) -> None:
-        """MS_ERR error code 4."""
+        """Error code 4, with the server's message (MJS_TYPES:118-119)."""
         fake_matter_lock.fail("GetUser")
 
-        with pytest.raises(NodeNotResolving):
+        with pytest.raises(NodeNotResolving, match=r"^Node 42 is not resolving$"):
             await _command(fake_matter_lock, DoorLock.Commands.GetUser(userIndex=1))
 
     async def test_refuse_answers_a_pin_in_band_and_a_user_by_status(
@@ -707,15 +708,6 @@ class TestFaults:
 
         assert response["status"] == DlStatus.kOccupied
         assert fake_matter_lock.users == {}
-
-    async def test_refuse_takes_any_interaction_model_status(
-        self, fake_matter_lock: FakeMatterLock
-    ) -> None:
-        """A status the fake has no name for still reaches the client as one."""
-        fake_matter_lock.refuse("ClearUser", status=0x87)
-
-        with pytest.raises(UnknownError, match=r"\(0x87\)"):
-            await _command(fake_matter_lock, DoorLock.Commands.ClearUser(userIndex=1))
 
     async def test_other_commands_still_get_the_mock_s_answer(
         self, fake_matter_lock: FakeMatterLock, matter_client: MagicMock
@@ -780,6 +772,32 @@ class TestFaults:
         await _command(fake_matter_lock, DoorLock.Commands.GetUser(userIndex=2))
 
         assert fault.hits == 1
+
+    async def test_an_identical_command_in_flight_reaches_the_lock_once(
+        self, hass: HomeAssistant, fake_matter_lock: FakeMatterLock
+    ) -> None:
+        """MJS_CMD:1303-1340: the second waits for the first's answer."""
+        fault = fake_matter_lock.hang("GetUser")
+        first, second = (
+            hass.async_create_task(
+                _command(fake_matter_lock, DoorLock.Commands.GetUser(userIndex=1))
+            )
+            for _ in range(2)
+        )
+        await fault.async_wait_held()
+        fault.clear()
+
+        assert await first == await second
+        assert len(fake_matter_lock.sent("GetUser")) == 1
+
+    async def test_an_index_matter_js_has_no_name_for_is_an_unknown_status(
+        self, fake_matter_lock: FakeMatterLock
+    ) -> None:
+        """MJS_SRE:50-56: no name, no code in the message."""
+        fake_matter_lock.refuse("ClearUser", status=0x87)
+
+        with pytest.raises(UnknownError, match=r"^Unknown status response$"):
+            await _command(fake_matter_lock, DoorLock.Commands.ClearUser(userIndex=1))
 
     async def test_a_fault_that_cannot_happen_is_refused(
         self, fake_matter_lock: FakeMatterLock

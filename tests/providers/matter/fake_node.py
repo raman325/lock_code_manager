@@ -19,13 +19,22 @@ cites the line it follows. References, read at:
   matter_server/common/errors.py.
 - Home Assistant 2026.9.4: ``HA_LH`` = homeassistant/components/matter/lock_helpers.py.
 
-How a device's Interaction Model status reaches Home Assistant is not in the
-client: the server reports it as error code 0, which the client raises as
-``UnknownError`` with the status in the message (``MS_ERR`` 0 maps every
-generic error to ``UnknownError``). The message form,
-``InteractionModelError: InvalidCommand (0x85)``, is what production raised
-(see ``test_set_user_update_tolerates_matter_sdk_error`` in
-``test_provider.py``).
+- matterjs-server ``b9e19f73`` (the server matter-python-client 1.4.0 is
+  published from): ``MJS_WS`` = packages/ws-controller/src/server/
+  WebSocketControllerHandler.ts, ``MJS_CMD`` = packages/ws-controller/src/
+  controller/ControllerCommandHandler.ts, ``MJS_TYPES`` = packages/
+  ws-controller/src/types/WebSocketMessageTypes.ts.
+- matter.js ``36927903``: ``MJS_SRE`` = packages/types/src/common/
+  StatusResponseError.ts.
+
+How a device's status reaches Home Assistant: the server answers a failed
+command with ``error_code`` (a ``ServerError``'s own code, else 0) and the
+error's message as ``details`` (MJS_WS:862-870), and the client raises the
+class registered for the code (``MS_ERR``: 0 is ``UnknownError``). A device's
+Interaction Model status is a matter.js ``StatusResponseError``, whose message
+is the status in words and its code, with the cluster code when there is one:
+``Invalid command (code 133)``, ``Failure (code 1; cluster code 3)``
+(MJS_SRE:62-85).
 """
 
 from __future__ import annotations
@@ -87,22 +96,35 @@ class ImStatus(IntEnum):
     INVALID_COMMAND = 0x85
     UNSUPPORTED_COMMAND = 0x81
     BUSY = 0x9C
+    UNSUPPORTED_CLUSTER = 0xC3
 
 
 DlStatus = DoorLock.Enums.DlStatus
 
 
-def im_error(status: int) -> UnknownError:
-    """Return what the client raises for a command the lock answered ``status``."""
-    name = _IM_NAMES.get(status, "Unknown")
-    return UnknownError(f"InteractionModelError: {name} (0x{status:x})")
+def im_error(status: int, cluster_code: int | None = None) -> UnknownError:
+    """
+    Return what the client raises for a command the lock answered ``status``.
+
+    A status matter.js has no name for is an ``UnknownStatusResponseError``,
+    whose message carries no code (MJS_SRE:50-56).
+    """
+    if (words := _IM_WORDS.get(status)) is None:
+        return UnknownError("Unknown status response")
+    code = f"code {status}"
+    if cluster_code is not None:
+        code += f"; cluster code {cluster_code}"
+    return UnknownError(f"{words} ({code})")
 
 
-_IM_NAMES = {
+# matter.js's ``Status`` names as its errors spell them: decamelized,
+# capitalized (MJS_SRE:72-74).
+_IM_WORDS = {
     ImStatus.FAILURE: "Failure",
-    ImStatus.INVALID_COMMAND: "InvalidCommand",
-    ImStatus.UNSUPPORTED_COMMAND: "UnsupportedCommand",
+    ImStatus.INVALID_COMMAND: "Invalid command",
+    ImStatus.UNSUPPORTED_COMMAND: "Unsupported command",
     ImStatus.BUSY: "Busy",
+    ImStatus.UNSUPPORTED_CLUSTER: "Unsupported cluster",
 }
 
 
@@ -187,7 +209,7 @@ class NodeFault:
         """Act out what happens before the lock answers."""
         if self.kind is FaultKind.FAIL:
             raise self.error or NodeNotResolving(
-                "Unable to establish CASE session with node"
+                f"Node {self.lock.node.node_id} is not resolving"
             )
         if self.kind is FaultKind.HANG:
             self.held += 1
@@ -294,6 +316,10 @@ class FakeMatterLock:
         self.faults: list[NodeFault] = []
         self.commands: list[Exchange] = []
         self._event_number = 0
+        self._in_flight: dict[tuple[str, str], asyncio.Future[Any]] = {}
+        # Events logged while a command is being answered, held for after it.
+        self._answering = 0
+        self._queued_events: list[MatterNodeEvent] = []
 
         # The client's own encoding and event dispatch run above the fake;
         # the autospec mock would otherwise swallow both.
@@ -488,7 +514,8 @@ class FakeMatterLock:
         Never answer: the command raises ``error``.
 
         The default is what the server raises for a node it cannot reach,
-        ``NodeNotResolving`` (``MS_ERR`` error code 4).
+        ``NodeNotResolving`` (error code 4, with the message MJS_TYPES:118-119
+        gives it).
         """
         return self._add_fault(FaultKind.FAIL, command, index, error=error, **kw)
 
@@ -549,9 +576,31 @@ class FakeMatterLock:
         if kwargs.get("endpoint_id") != self.endpoint_id:
             # The server sends the command to an endpoint with no Door Lock
             # cluster, which answers UnsupportedCluster.
-            raise UnknownError("InteractionModelError: UnsupportedCluster (0xc3)")
+            raise im_error(ImStatus.UNSUPPORTED_CLUSTER)
         name: str = kwargs["command_name"]
         payload: dict[str, Any] = kwargs["payload"]
+        # The server sends a command identical to one still in flight to the
+        # lock only once, and answers both with its result (MJS_CMD:1303-1340).
+        key = (name, repr(payload))
+        if (in_flight := self._in_flight.get(key)) is None:
+            in_flight = asyncio.ensure_future(self._async_answer(name, payload))
+            self._in_flight[key] = in_flight
+            in_flight.add_done_callback(lambda _: self._in_flight.pop(key, None))
+        try:
+            return await asyncio.shield(in_flight)
+        finally:
+            # What the command logged goes out after its answer.
+            asyncio.get_running_loop().call_soon(self._flush_events)
+
+    async def _async_answer(self, name: str, payload: dict[str, Any]) -> Any:
+        """Answer one Door Lock command, meeting any fault installed for it."""
+        self._answering += 1
+        try:
+            return await self._async_answer_unqueued(name, payload)
+        finally:
+            self._answering -= 1
+
+    async def _async_answer_unqueued(self, name: str, payload: dict[str, Any]) -> Any:
         handler: Callable[[dict[str, Any]], Any] | None = getattr(
             self, f"_cmd_{name}", None
         )
@@ -627,8 +676,8 @@ class FakeMatterLock:
 
         Checked first: the index is in range, a name fits ten characters, and
         the status is one a Set may write (DLS:448-483) -- else InvalidCommand.
-        Adding to an occupied index is the cluster-specific Occupied, which
-        reaches the client as a Failure (DLS:1964-1967). Modifying an empty
+        Adding to an occupied index is a Failure carrying the cluster-specific
+        Occupied (DLS:1964-1967). Modifying an empty
         index is InvalidCommand (DLS:2041-2045), as is renaming a record
         another fabric created (DLS:2047-2061); fields left null keep their
         values. Either change is logged as a ``LockUserChange`` (DLS:2015, 2087).
@@ -648,7 +697,7 @@ class FakeMatterLock:
         existing = self.users.get(index)
         if operation == DoorLock.Enums.DataOperationTypeEnum.kAdd:
             if existing is not None:
-                raise im_error(ImStatus.FAILURE)
+                raise im_error(ImStatus.FAILURE, DlStatus.kOccupied)
             self.users[index] = LockUser(
                 name=name or "",
                 unique_id=payload.get("userUniqueID"),
@@ -941,7 +990,8 @@ class FakeMatterLock:
         """
         self._event_number += 1
         # A separate message from the server, after the command's own answer:
-        # scheduled, so the caller has the response before any subscriber runs.
+        # held while a command is answered, and scheduled either way, so a
+        # caller has its response before any subscriber runs.
         node_event = dataclass_from_dict(
             MatterNodeEvent,
             {
@@ -956,15 +1006,22 @@ class FakeMatterLock:
                 "data": data,
             },
         )
-        asyncio.get_running_loop().call_soon(
-            partial(
-                MatterClient._signal_event,
+        self._queued_events.append(node_event)
+        if not self._answering:
+            asyncio.get_running_loop().call_soon(self._flush_events)
+
+    def _flush_events(self) -> None:
+        """Signal every queued event to the subscribers the client's filters match."""
+        if self._answering:
+            return
+        events, self._queued_events = self._queued_events, []
+        for node_event in events:
+            MatterClient._signal_event(
                 self.client,
                 EventType.NODE_EVENT,
                 data=node_event,
                 node_id=node_event.node_id,
             )
-        )
 
     # ------------------------------------------------------------------
     # Helpers
