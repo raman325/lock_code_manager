@@ -84,9 +84,10 @@ class Slot:
     fingerprint, or ``CLEARED``. ``release`` marks a slot no entry manages any
     more, being cleared on its way out.
 
-    Two counts hold a slot. ``tries`` counts syncs the lock answered that did
-    not end in sync, since the target last changed or last agreed; they never
-    expire, so no pattern of retries can go on for ever. ``fights`` counts
+    Two counts hold a slot. ``tries`` counts syncs that did not end in sync
+    while the lock was not backing off, since the target last changed or a
+    fresh read last agreed; they never expire, so no pattern of retries can
+    go on for ever. ``fights`` counts
     times the lock went from agreeing to disagreeing -- a keypad taking the
     code back (#776) -- and ages out of ``WINDOW``.
     """
@@ -105,6 +106,11 @@ class Slot:
             self.resume()
         self.want = want
         self.release = release
+
+    @property
+    def target(self) -> tuple[Want, bool]:
+        """Return what a sync aims at: the PIN or empty, and whether a release."""
+        return self.want, self.release
 
     def agrees(self, salt: bytes) -> bool:
         """Return whether what the lock said agrees with what is wanted."""
@@ -127,17 +133,21 @@ class Slot:
             return Status.UNKNOWN
         return Status.IN_SYNC if self.agrees(salt) else Status.OUT_OF_SYNC
 
-    def observe(self, reading: Reading, salt: bytes, now: float) -> None:
+    def observe(
+        self, reading: Reading, salt: bytes, now: float, *, fresh: bool = True
+    ) -> None:
         """
         Take what the lock said about the slot.
 
-        Agreeing starts the tries over. Going from agreeing to disagreeing is
-        a fight, and the write behind the agreement is no longer trusted.
+        A fresh read that agrees starts the tries over; a push may come from
+        a cache, so it never does. Going from agreeing to disagreeing is a
+        fight, and the write behind the agreement is no longer trusted.
         """
         agreed = self.seen is not None and self.agrees(salt)
         self.seen = reading
         if self.agrees(salt):
-            self.tries = 0
+            if fresh:
+                self.tries = 0
         elif agreed:
             self.wrote = None
             self.fought(now)

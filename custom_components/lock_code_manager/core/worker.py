@@ -133,8 +133,6 @@ class LockWorker:
         self._written: dict[int, int] = {}
         self._last_exchange: float | None = None
         self._answered = False
-        # Answers ever heard: whether a sync heard anything from the lock.
-        self._heard = 0
         self._no_answers = 0
         self._down_until: float | None = None
 
@@ -247,17 +245,17 @@ class LockWorker:
                 except TimeoutError:
                     self._task.cancel()
                     await asyncio.gather(self._task, return_exceptions=True)
-                    # The task never reached the end-of-queue marker.
-                    self._drain()
             if self._retry is not None:
                 self._retry.cancel()
                 await asyncio.gather(self._retry, return_exceptions=True)
         finally:
-            # Even if this caller was cancelled: nothing is left running, and
-            # no later stop() waits for ever.
+            # Even if this caller was cancelled: nothing is left running or
+            # queued (a cancelled task never reaches the end-of-queue marker),
+            # and no later stop() waits for ever.
             for task in (self._task, self._retry):
                 if task is not None:
                     task.cancel()
+            self._drain()
             self._stopped.set()
 
     def _drain(self) -> None:
@@ -295,7 +293,10 @@ class LockWorker:
                 _resolve(job.done, error=err)
             finally:
                 self._queue.task_done()
-            self.on_change()
+            try:
+                self.on_change()
+            except Exception:  # the integration's trouble must not stop the lock
+                _LOGGER.exception("Lock change callback failed")
         self._queue.task_done()
 
     async def _do(self, job: _Job) -> None:
@@ -327,20 +328,20 @@ class LockWorker:
         slot = self.slots.get(job.slot)
         if slot is None or self._written.get(job.slot, 0) > job.seq:
             return
-        slot.observe(job.reading, self.salt, self.clock())
+        slot.observe(job.reading, self.salt, self.clock(), fresh=False)
         self.request_sync((job.slot,))
 
     async def _sync(self, number: int) -> None:
         """
         Bring one slot in line: read it if never read, write it if it differs.
 
-        A sync the lock answered that did not end in sync is one try against
-        the slot, whatever went wrong; one the lock never answered is the
-        lock's, counted in its no-answers.
+        A sync that ends out of sync is one try against the slot, whatever
+        went wrong -- unless it ends with the lock backing off: then the lock
+        is the problem, and an outage holds no slot.
         """
         if (slot := self.slots.get(number)) is None:
             return
-        want, heard = slot.want, self._heard
+        target = slot.target
         try:
             if slot.status(self.salt) is Status.UNKNOWN:
                 await self._read((number,), follow=False)
@@ -348,12 +349,16 @@ class LockWorker:
                 await self._write(number, slot)
         finally:
             if (
-                self._heard > heard
-                and slot.want == want
+                self._down_until is None
+                and slot.target == target
                 and slot.status(self.salt) in (Status.UNKNOWN, Status.OUT_OF_SYNC)
             ):
                 slot.tried()
-        if slot.release and slot.status(self.salt) is Status.IN_SYNC:
+        if (
+            slot.release
+            and slot.status(self.salt) is Status.IN_SYNC
+            and self.slots.get(number) is slot
+        ):
             del self.slots[number]
 
     async def _write(self, number: int, slot: Slot) -> None:
@@ -363,17 +368,17 @@ class LockWorker:
         What was sent is what is recorded; if the slot changed hands or target
         while the write was out, nothing is recorded or read back -- the new
         target is synced on its own. A refusal holds at once. Anything else,
-        even a write that never left, is read back: the read-back says whether
-        the lock has the target, and whether the lock answered at all.
+        even a write that never left, is read back -- unless the lock has just
+        gone into backoff.
         """
-        pin = slot.want
+        pin, target = slot.want, slot.target
         slot.wrote = None
         # Reports taken in before the write are older than it.
         self._mark(number)
 
         def current() -> bool:
             # Still the slot in place, still aiming at what was sent.
-            return self.slots.get(number) is slot and slot.want == pin
+            return self.slots.get(number) is slot and slot.target == target
 
         try:
             await self._exchange(lambda: self.port.write(number, pin))
@@ -394,9 +399,8 @@ class LockWorker:
             if not current():
                 return
             slot.wrote_want(self.salt)
-        await self._read((number,), follow=False)
-        # The read-back is newer than any report taken in during the write.
-        self._mark(number)
+        if self._down_until is None:
+            await self._read((number,), follow=False)
 
     def _mark(self, number: int) -> None:
         """Drop every report on ``number`` taken in before now."""
@@ -406,9 +410,14 @@ class LockWorker:
     async def _read(
         self, numbers: Collection[int], *, follow: bool = True
     ) -> dict[int, Reading]:
-        """Read ``numbers``; unless ``follow`` is off, queue any slot that needs work."""
+        """
+        Read ``numbers``; unless ``follow`` is off, queue any slot that needs work.
+
+        A read is newer than every report taken in before it.
+        """
         readings = dict(await self._exchange(lambda: self.port.read(numbers)))
         for number in numbers:
+            self._mark(number)
             reading = readings.setdefault(number, Seen.SILENT)
             if (slot := self.slots.get(number)) is not None:
                 slot.observe(reading, self.salt, self.clock())
@@ -420,10 +429,10 @@ class LockWorker:
         """
         Queue another sync of ``number`` if it still needs one.
 
-        Every exchange in a sync either moves the slot on, counts a failure
-        against it, or counts a no-answer against the lock; so this ends in
-        sync, held, or backing off -- never in a loop. (A job queued while
-        backing off fails at once, and an answer queues every slot again.)
+        Every sync that does not end in sync is a try against the slot, or
+        ends with the lock backing off; so this ends in sync, held, or backing
+        off -- never in a loop. (A job queued while backing off fails at once,
+        and an answer queues every slot again.)
         """
         slot = self.slots.get(number)
         if slot is not None and slot.status(self.salt) in (
@@ -436,12 +445,11 @@ class LockWorker:
         """
         Run one exchange after the gap, within the budget.
 
-        Only no answer -- the budget running out, a provider's own timeout, a
-        ``NO_ANSWER``, or a transient failure that never left for the lock --
-        counts against the lock. Any other failure is the lock (or its
-        integration) answering, refusals included. Anything else a provider
-        raises is logged and treated as a transient failure, not a reason to
-        stop syncing other slots.
+        No answer -- the budget running out, a ``NO_ANSWER``, a transient
+        failure that never left for the lock, or anything a provider raises
+        that is not a ``LockError`` (a timeout, a dropped connection, a bug,
+        which is logged) -- counts against the lock. Any other ``LockError``
+        is the lock (or its integration) answering, refusals included.
         """
         if self._last_exchange is not None:
             wait = self._last_exchange + self.gap - self.clock()
@@ -463,8 +471,8 @@ class LockWorker:
             raise LockError(ErrorKind.NO_ANSWER, message="no answer in time") from err
         except Exception as err:
             _LOGGER.exception("Lock provider failed")
-            self._answer()
-            raise LockError(ErrorKind.TRANSIENT, message=str(err)) from err
+            self._no_answer()
+            raise LockError(ErrorKind.NO_ANSWER, message=str(err)) from err
         finally:
             self._last_exchange = self.clock()
         self._answer()
@@ -473,7 +481,6 @@ class LockWorker:
     def _answer(self) -> None:
         was_down = self._down_until is not None
         self._answered = True
-        self._heard += 1
         self._no_answers = 0
         self._down_until = None
         if was_down:
