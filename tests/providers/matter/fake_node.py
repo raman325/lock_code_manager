@@ -54,8 +54,13 @@ from chip.clusters import Objects as clusters
 from matter_server.client.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import MatterError, NodeNotResolving, UnknownError
-from matter_server.common.helpers.util import dataclass_from_dict
-from matter_server.common.models import APICommand, EventType, MatterNodeEvent
+from matter_server.common.helpers.util import dataclass_from_dict, dataclass_to_dict
+from matter_server.common.models import (
+    APICommand,
+    EventMessage,
+    EventType,
+    MatterNodeEvent,
+)
 import pytest
 
 from tests.common import async_run_until_quiet, track_fault, untrack_fault
@@ -333,6 +338,8 @@ class FakeMatterLock:
         # The client's own encoding and event dispatch run above the fake;
         # the autospec mock would otherwise swallow both.
         client._subscribers = {}
+        client._nodes = {node.node_id: node}
+        client._signal_event = partial(MatterClient._signal_event, client)
         client.logger = MagicMock()
         client.subscribe_events.side_effect = partial(
             MatterClient.subscribe_events, client
@@ -442,6 +449,30 @@ class FakeMatterLock:
             index,
             source=DoorLock.Enums.OperationSourceEnum.kKeypad,
         )
+
+    def set_available(self, available: bool) -> None:
+        """
+        Have the server report the node reachable or not, as a ``node_updated``.
+
+        The server sends the node's whole data again, which the client's own
+        ``_handle_event_message`` applies and signals as ``NODE_UPDATED``
+        (MS_CLIENT:877-893); Home Assistant's entities take their availability
+        from ``node.available``. Commands still reach the fake while it is
+        unavailable; install a ``fail`` fault for that.
+        """
+        data = dataclass_to_dict(self.node.node_data)
+        data["available"] = available
+        MatterClient._handle_event_message(
+            self.client, EventMessage(event=EventType.NODE_UPDATED, data=data)
+        )
+
+    def forget(self, user_index: int) -> None:
+        """
+        Remove a user and its credentials with nothing announced.
+
+        As another controller's change reaches no subscriber of this one.
+        """
+        self._clear_user(user_index, announce=False)
 
     def keypad_unlock(
         self, credential_index: int, *, user_index: int | None = None

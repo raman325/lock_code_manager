@@ -43,7 +43,7 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE as TEXT_SERVICE_SET_VALUE,
 )
-from homeassistant.config_entries import ConfigEntry, ConfigSubentryData
+from homeassistant.config_entries import SOURCE_USER, ConfigEntry, ConfigSubentryData
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
@@ -54,7 +54,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import slugify
@@ -68,6 +68,7 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOT,
     CONF_SLOTS,
+    CONF_USERS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     SUBENTRY_TYPE_USER,
@@ -2026,4 +2027,37 @@ async def async_configure_options(
     while result["type"] == FlowResultType.SHOW_PROGRESS:
         await hass.async_block_till_done()
         result = await hass.config_entries.options.async_configure(flow_id)
+    return result
+
+
+def lcm_issue_ids(hass: HomeAssistant, prefix: str = "") -> list[str]:
+    """Return the ids of Lock Code Manager's repairs, those starting with ``prefix``."""
+    return [
+        issue.issue_id
+        for issue in ir.async_get(hass).issues.values()
+        if issue.domain == DOMAIN and issue.issue_id.startswith(prefix)
+    ]
+
+
+async def async_add_users(
+    hass: HomeAssistant, entry: ConfigEntry, users: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """
+    Add users to an entry through the user subentry flow, as the user does.
+
+    The "several" step reads the locks for free numbers; the result is what
+    the user sees once any progress step is waited out (#1536).
+    """
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+    )
+    flow = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"next_step_id": "several"}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {CONF_USERS: users}
+    )
+    while result["type"] == FlowResultType.SHOW_PROGRESS:
+        await hass.async_block_till_done()
+        result = await hass.config_entries.subentries.async_configure(flow["flow_id"])
     return result

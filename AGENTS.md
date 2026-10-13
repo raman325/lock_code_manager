@@ -457,7 +457,8 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     at the first free index; clearing a user's only PIN clears the user.
   - Every remote write is logged as a `LockUserChange` naming Home Assistant's fabric, as the SDK
     logs it; `program(user, pin)` changes the lock as the keypad or another admin would (no
-    fabric), and `keypad_unlock(credential_index)` logs a `LockOperation`.
+    fabric), `keypad_unlock(credential_index)` logs a `LockOperation`, and `set_available(bool)`
+    reports the node unreachable or back as the server's `node_updated` (entities follow it).
   - Faults, named as the other fakes' and returning a `NodeFault` (`times`, `hits`, `held`,
     `async_wait_held`, context manager), act on a command and optionally one index: `ignore`
     (answered as done, nothing changed), `refuse` (`SetCredential` in band with a `DlStatus`,
