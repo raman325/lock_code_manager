@@ -497,7 +497,7 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
   is republished as last read and a key a new answer leaves out keeps its old value; `action`
   and `action_*` are never cached. Knobs: `set_user` (keypad change, no event), `report`
   (an attribute report: the cache republished), `report_after_write`, `operation_event`,
-  `programming_event`, `silent` (reads never answered), `expose_pin`, `pin_code_count`
+  `programming_event`, `silent` (reads never answered; writes land), `expose_pin`, `pin_code_count`
   (default the Yale lock extend's 250). Fixture `fake_z2m_bridge` (default topic); self-tests
   in `test_fake_bridge.py`.
 
