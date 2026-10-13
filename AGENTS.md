@@ -401,6 +401,9 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     (`clear`, `masked`, `withheld`), `supervision` (Sets are supervised only on a dump advertising
     Supervision CC; there it picks the reported outcome -- Success by default, Working, Fail,
     NoSupport, after which the driver resends unsupervised -- and it is refused elsewhere),
+    `driver_before_15_25_2` (the driver before zwave-js#8927: a supervised success caches
+    nothing and a supervised failure is not read back -- what the provider's post-write
+    reconcile read is for),
     `rejects_duplicates`/`duplicate_parameters` (refuse a code another slot holds and send
     Access Control notification 15 -- User Code CC cannot report it in-band), `codes` (what the
     lock holds when the dump caches asterisks). User Credential CC: `max_users`, `pin_slots`,
@@ -415,12 +418,16 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
   - Faults, named after `MockLCMLock`'s (ignore and refuse only on `set`/`clear`) and returning
     a `NodeFault` (`times`, `hits`, `held`, `async_wait_held`, context manager), act on radio
     exchanges -- `set`, `clear`, `get`
-    (any Get: fresh read, walk, verification read), `user`: `ignore` (acknowledged, not
+    (any Get: fresh read, walk, verification read, and the users-count Get as slot 0 --
+    `drop_reply("get", 0)` is a lock asleep through its interview, and since every User Code
+    walk asks the count first, it also empties every walk, as the driver does),
+    `user`: `ignore` (acknowledged, not
     applied; a supervised one reports Success anyway), `refuse` (not applied; supervised: Fail),
     `fail` (never acknowledged: `FailedZWaveCommand`, 204 by default), `hang`, `slow`,
     `drop_reply` (applied, but the report never arrives -- on a set, both the Supervision report
     and the verification read: the #1397 shape). The teardown hook releases them like
-    `LockFault`s. `exchanges`, `sets`, `clears` and `commands` record what happened.
+    `LockFault`s. `exchanges`, `sets`, `clears` and `commands` record what happened; each
+    exchange carries `at`, the monotonic time the lock saw it (for pacing, with `paced`).
   - `test_node_harness.py` self-tests each behavior against the driver, and end to end through
     a loaded entry.
 

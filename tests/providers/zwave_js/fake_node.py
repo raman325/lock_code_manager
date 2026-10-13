@@ -52,6 +52,7 @@ from contextlib import suppress
 import copy
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
+import time
 from typing import Any, Literal, Self
 from unittest.mock import MagicMock
 
@@ -383,6 +384,9 @@ class _Exchange:
     operation: NodeOperation
     slot: int
     code: str | None = None
+    # When the lock saw it, on the clock the provider paces its turns by.
+    # Looked up per call: the bare function, bound here, escapes freezegun.
+    at: float = field(default_factory=lambda: time.monotonic())  # noqa: PLW0108
 
 
 class FakeZWaveLock:
@@ -427,6 +431,13 @@ class FakeZWaveLock:
     ``codes`` is what the lock holds, by slot, when it differs from what the
     dump caches (a masking lock's dump caches asterisks).
 
+    ``driver_before_15_25_2``: the driver before zwave-js/zwave-js#8927
+    (5239ec3c6, released in 15.25.2), still common on add-on installs. On
+    User Code CC it took a supervised Set's outcome at its word: a success
+    persisted nothing, so the cache kept the slot's old values, and a failure
+    was answered Error_Unknown without reading the slot. What
+    ``_async_uc_reconcile_value_db`` in the provider exists for.
+
     Faults (``ignore``, ``refuse``, ``fail``, ``hang``, ``drop_reply``,
     ``slow``) act on radio exchanges; see ``NodeFault``.
     """
@@ -448,6 +459,7 @@ class FakeZWaveLock:
         max_credential_hash_length: int = 0,
         pin_lengths: tuple[int, int] = (4, 10),
         codes: dict[int, str] | None = None,
+        driver_before_15_25_2: bool = False,
     ) -> None:
         """Wrap ``node``, seed the driver cache from its dump, and install."""
         self.client = client
@@ -461,6 +473,7 @@ class FakeZWaveLock:
         elif self._supports(SUPERVISION_CC_ID):
             self.supervision = SupervisionStatus.SUCCESS
         self.rejects_duplicates = rejects_duplicates
+        self.driver_before_15_25_2 = driver_before_15_25_2
         self.duplicate_parameters = duplicate_parameters
         self.max_user_name_length = max_user_name_length
         self.max_credential_hash_length = max_credential_hash_length
@@ -1434,8 +1447,19 @@ class FakeZWaveLock:
         Users Number Get (UCC:502-518): the report persists the count (UCC:1675).
 
         Also what the provider's #1298 recovery calls through ``invoke_cc_api``.
+        It addresses no slot, so it meets a ``get`` fault as slot 0 (any fault
+        whose slot is None), and is recorded as a ``get`` of slot 0. A report
+        that times out answers nothing and caches nothing (DRV:7959-7976): a
+        lock asleep through its interview stays uncounted. Every User Code
+        walk asks it first and returns no users without it (AC:496-497,
+        AC:1860-1861), so a fault on it fails or empties every walk too.
         """
+        fault = await self._async_meet("get", 0)
+        self.exchanges.append(_Exchange("get", 0))
         self.statistics["commandsTX"] += 1
+        if fault is not None and fault.kind is FaultKind.DROP_REPLY:
+            self.statistics["timeoutResponse"] += 1
+            return None
         self.statistics["commandsRX"] += 1
         self._set(_UC, "supportedUsers", None, self.capacity)
         return self.capacity
@@ -1580,8 +1604,13 @@ class FakeZWaveLock:
         elif supervision in (SupervisionStatus.SUCCESS, SupervisionStatus.WORKING):
             succeeded = True
             # #persistCachedUserCode (AC:1683-1699): the two values, no metadata.
-            self._set(_UC, LOCK_USERCODE_STATUS_PROPERTY, user_id, status)
-            self._set(_UC, LOCK_USERCODE_PROPERTY, user_id, code)
+            # Before 15.25.2 nothing was persisted.
+            if not self.driver_before_15_25_2:
+                self._set(_UC, LOCK_USERCODE_STATUS_PROPERTY, user_id, status)
+                self._set(_UC, LOCK_USERCODE_PROPERTY, user_id, code)
+        elif self.driver_before_15_25_2:
+            # Before 15.25.2 a reported failure was not read back.
+            succeeded = False
         else:
             verified = await self._async_uc_get(user_id)
             succeeded = (
@@ -1621,6 +1650,9 @@ class FakeZWaveLock:
         supervision, lost = await self._async_uc_device_set("clear", user_id, None)
         if supervision in (SupervisionStatus.SUCCESS, SupervisionStatus.WORKING):
             succeeded = True
+        elif supervision is not None and self.driver_before_15_25_2:
+            # Before 15.25.2 a reported failure was not read back.
+            succeeded = False
         else:
             verified = await self._async_uc_get(user_id, dropped=lost)
             succeeded = verified is not None and verified[0] == UserIDStatus.AVAILABLE

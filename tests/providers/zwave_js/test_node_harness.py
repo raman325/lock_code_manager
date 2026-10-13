@@ -465,6 +465,50 @@ class TestSupervisedNode:
         assert err.value.translation_key == "credential_rejected_unknown"
         assert fake_zwave_lock.holds(3) == "4321"
 
+    async def test_before_15_25_2_a_success_persists_nothing(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """
+        Before zwave-js#8927 (15.25.2) a supervised success left the cache as it was.
+
+        The code is still announced; only a fresh read repairs the cache.
+        """
+        fake_zwave_lock.supervision = SupervisionStatus.SUCCESS
+        fake_zwave_lock.driver_before_15_25_2 = True
+        seen = record(lock_schlage_be469)
+
+        await lock_helpers.async_set_credential(
+            lock_schlage_be469, 2, PIN, "4321", credential_slot=2
+        )
+
+        assert fake_zwave_lock.holds(2) == "4321"
+        assert seen[-1] == ("credential modified", 2, "4321")
+        assert get_usercode(lock_schlage_be469, 2)["usercode"] == "1234"
+
+    async def test_before_15_25_2_a_failure_is_not_read_back(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """Before zwave-js#8927 (15.25.2) a supervised Fail was Error_Unknown, unread."""
+        fake_zwave_lock.supervision = SupervisionStatus.SUCCESS
+        fake_zwave_lock.driver_before_15_25_2 = True
+        fake_zwave_lock.refuse("set", 3)
+        fake_zwave_lock.refuse("clear", 2)
+
+        with pytest.raises(HomeAssistantError) as err:
+            await lock_helpers.async_set_credential(
+                lock_schlage_be469, 3, PIN, "4321", credential_slot=3
+            )
+        assert err.value.translation_key == "credential_rejected_unknown"
+        with pytest.raises(HomeAssistantError):
+            await lock_helpers.async_delete_credential(
+                lock_schlage_be469, 2, PIN, credential_slot=2
+            )
+
+        assert [(e.operation, e.slot) for e in fake_zwave_lock.exchanges] == [
+            ("set", 3),
+            ("clear", 2),
+        ]
+
 
 class TestSupervisionComesFromTheDump:
     """Whether Sets are supervised is the node's to say (DRV:8044-8051)."""
@@ -763,6 +807,21 @@ class TestCapabilities:
         caps = await lock_helpers.async_get_credential_capabilities(lock_schlage_be469)
         assert caps["supported_credential_types"]["pin_code"]["num_slots"] == 30
 
+    async def test_a_count_that_never_arrives_caches_nothing(
+        self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
+    ) -> None:
+        """The Users Number Get meets ``get`` faults as slot 0; lost, it answers nothing."""
+        fake_zwave_lock.drop_reply("get", 0)
+
+        count = await lock_schlage_be469.endpoints[0].async_invoke_cc_api(
+            CommandClass.USER_CODE, "getUsersCount"
+        )
+
+        assert count is None
+        caps = await lock_helpers.async_get_credential_capabilities(lock_schlage_be469)
+        assert caps["supported_credential_types"]["pin_code"]["num_slots"] == 0
+        assert fake_zwave_lock.statistics["timeoutResponse"] == 1
+
     async def test_a_reinterview_caches_the_count_and_every_slot(
         self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
     ) -> None:
@@ -1015,6 +1074,26 @@ class TestFaults:
         await async_advance_clock(hass, freezer, 6)
 
         assert (await task).data == "9999"
+
+    async def test_each_exchange_is_stamped_on_the_frozen_clock(
+        self,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        lock_schlage_be469: Node,
+    ) -> None:
+        """``at`` follows the monotonic clock the provider paces by."""
+        await lock_helpers.async_set_credential(
+            lock_schlage_be469, 3, PIN, "4321", credential_slot=3
+        )
+        freezer.tick(5)
+        await lock_helpers.async_set_credential(
+            lock_schlage_be469, 4, PIN, "5678", credential_slot=4
+        )
+
+        first, second = (
+            e.at for e in fake_zwave_lock.exchanges if e.operation == "set"
+        )
+        assert second - first == pytest.approx(5)
 
     async def test_times_limits_how_many_exchanges_a_fault_meets(
         self, fake_zwave_lock: FakeZWaveLock, lock_schlage_be469: Node
@@ -1336,7 +1415,7 @@ class TestFreshReads:
         assert codes[1] == SlotCredential.known("1111")
         assert get_usercode(lock_schlage_be469, 1)["usercode"] == "1111"
         gets = [e.slot for e in fake_zwave_lock.exchanges if e.operation == "get"]
-        assert gets == [*range(1, 31), *range(1, 31)]
+        assert gets == [*range(31), *range(31)]
 
     async def test_a_scoped_refresh_gets_only_its_slots(
         self, fake_zwave_lock: FakeZWaveLock, fake_e2e_lock
