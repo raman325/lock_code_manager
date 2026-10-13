@@ -13,7 +13,7 @@ import json
 import math
 import sys
 import time
-from typing import Any, Literal, Self
+from typing import Any, Literal, Protocol, Self
 from unittest.mock import patch
 import weakref
 
@@ -967,12 +967,35 @@ class FaultKind(StrEnum):
 # A read has nothing to ignore and nothing a lock refuses.
 _WRITE_ONLY_FAULTS = frozenset({FaultKind.IGNORE, FaultKind.REFUSE})
 
+
+class Clearable(Protocol):
+    """A fault the teardown hook can release: anything with ``clear``."""
+
+    def clear(self) -> None:
+        """Stop misbehaving, and let any call held go."""
+
+
 # Every fault installed and not yet cleared, spent ones included, so
 # ``release_all_faults`` can let go of a held call the test forgot to
 # release: teardown stops the sync managers, which wait on an in-flight
 # tick, and a frozen clock never ends that wait. A dict, so they are
 # released in the order installed.
-_INSTALLED_FAULTS: dict[LockFault, None] = {}
+_INSTALLED_FAULTS: dict[Clearable, None] = {}
+
+
+def track_fault(fault: Clearable) -> None:
+    """
+    Register a fault from another harness for release at teardown.
+
+    The Z-Wave JS node fake's faults hold calls the way ``hang`` and
+    ``drop_reply`` do here, so the same hook has to let them go.
+    """
+    _INSTALLED_FAULTS[fault] = None
+
+
+def untrack_fault(fault: Clearable) -> None:
+    """Forget a fault registered with ``track_fault``, once it is cleared."""
+    _INSTALLED_FAULTS.pop(fault, None)
 
 
 def release_all_faults() -> None:
@@ -1362,7 +1385,11 @@ class MockLCMLock(BaseLock):
         more, but may still be holding the last call it met. Released in the
         order installed.
         """
-        for fault in [fault for fault in _INSTALLED_FAULTS if fault.lock is self]:
+        for fault in [
+            fault
+            for fault in _INSTALLED_FAULTS
+            if isinstance(fault, LockFault) and fault.lock is self
+        ]:
             fault.clear()
 
     def _meet_fault(

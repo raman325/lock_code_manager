@@ -34,6 +34,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.common import LIFELONG_TASKS
+from tests.providers.zwave_js.fake_node import FakeZWaveLock
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -483,3 +484,77 @@ def mock_access_control(lock_schlage_be469: Node):
     ac.get_credential = AsyncMock(return_value=None)
     with patch.object(type(lock_schlage_be469), "access_control", ac):
         yield ac
+
+
+# ---------------------------------------------------------------------------
+# Stateful node fixtures -- the lock faked where Home Assistant's client meets
+# the server (see fake_node.py), so the python client, Home Assistant's
+# lock_helpers and the provider all run for real. New tests should prefer
+# these to ``mock_access_control``/``mock_lock_helpers``, which patch the
+# access-control API class-wide and change nothing when written to; those
+# stay for the existing method-level tests built on canned answers.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_zwave_lock_options() -> dict[str, Any]:
+    """Keyword arguments for ``FakeZWaveLock``; override to change the lock."""
+    return {}
+
+
+@pytest.fixture
+def fake_zwave_lock(
+    zwave_client: MagicMock,
+    lock_schlage_be469: Node,
+    fake_zwave_lock_options: dict[str, Any],
+) -> FakeZWaveLock:
+    """
+    Make the Z-Wave JS lock node a stateful fake behind the real client.
+
+    The node is whatever ``lock_schlage_be469_state`` dumps: the BE469 (User
+    Code CC v1) by default; override that fixture with
+    ``user_credential_lock_state`` or ``supervised_lock_state`` for the other
+    shapes. Request this before ``zwave_integration`` or anything that sets
+    an entry up, so the integration's own setup already talks to it.
+    """
+    return FakeZWaveLock(zwave_client, lock_schlage_be469, **fake_zwave_lock_options)
+
+
+@pytest.fixture
+async def fake_zwave_lock_entry(
+    hass: HomeAssistant,
+    fake_zwave_lock: FakeZWaveLock,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+) -> MockConfigEntry:
+    """
+    Set up a Lock Code Manager entry on the fake lock, slots 1 and 2.
+
+    ``lcm_config_entry``'s twin without the class-wide mocks: everything
+    below the provider is the real client talking to ``fake_zwave_lock``.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [lock_entity.entity_id],
+            CONF_SLOTS: ZWAVE_JS_LCM_CONFIG_SLOTS,
+        },
+        unique_id="test_zwave_js_fake_lock",
+    )
+    lcm_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield lcm_entry
+
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+@pytest.fixture
+def fake_e2e_lock(
+    hass: HomeAssistant,
+    fake_zwave_lock_entry: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+) -> ZWaveJSLock:
+    """Return the provider ``fake_zwave_lock_entry`` set up on the fake lock."""
+    return get_zwave_lock(hass, fake_zwave_lock_entry, lock_entity)

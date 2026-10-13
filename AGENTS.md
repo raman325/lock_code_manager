@@ -371,6 +371,58 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     registers. So the provider end-to-end harnesses can use these helpers too
 - `tests/test_harness.py`: tests for the helpers and knobs above
 - `tests/providers/helpers.py`: Shared test mixins for service-based providers
+- `tests/providers/zwave_js/fake_node.py`: `FakeZWaveLock`, a stateful Z-Wave JS lock node
+  faked where Home Assistant's client meets the server, so zwave-js-server-python, Home
+  Assistant's `lock_helpers` and the provider run for real above it. It answers the node's
+  `endpoint.access_control.*` commands (and User Code `getUsersCount`) the way node-zwave-js's
+  `AccessControl.ts` does, and raises the node events the server forwards, in the driver's
+  order. Every behavior cites the driver, server, client or Home Assistant line it follows
+  (the module docstring pins the versions read). It keeps the lock's memory (`holds`, `codes`,
+  `uc_slots`, `users`, `credentials`) apart from the driver's value cache (`cached`): cached
+  reads answer from the cache, and only an exchange changes it -- a write, a fresh read, a report.
+  - Fixtures (`tests/providers/zwave_js/conftest.py`): `fake_zwave_lock` (the node the
+    `lock_schlage_be469_state` dump describes; `fake_zwave_lock_options` passes keyword
+    arguments), `fake_zwave_lock_entry` (an entry on it, slots 1 and 2, without the class-wide
+    mocks), `fake_e2e_lock` (that entry's provider). Override `lock_schlage_be469_state` with
+    `user_credential_lock_state` (a User Credential CC node -- synthesized, as no such dump
+    exists in Home Assistant core or the Z-Wave JS repos) or `supervised_lock_state` (adds
+    Supervision CC). `mock_access_control`/`mock_lock_helpers` stay for the method-level tests
+    built on canned answers; prefer the fake for anything that writes and then reads.
+  - User Code CC: a report persists status then code, each raising a value event even when
+    unchanged; no unified credential event (the provider's report shim hears it). An
+    unsupervised write is read back (version 1 accepts an asterisk per digit) then announced
+    with `credential added`/`modified` carrying the code written; a supervised success persists
+    the code unread; a refused or unconfirmed write answers `Error_Unknown`. A clear reads back,
+    resets the slot's cached values, and announces only a code the cache held. A Get whose
+    report never arrives answers nothing, not an error. Out-of-range users and slots raise
+    `FailedZWaveCommand` 322 before any traffic.
+  - Lock knobs: `supported_users`/`interviewed` (capacity, and whether the interview cached it:
+    `reinterview()` or the provider's `getUsersCount` recovery caches it later), `code_display`
+    (`clear`, `masked`, `withheld`), `supervision` (Sets are supervised only on a dump advertising
+    Supervision CC; there it picks the reported outcome -- Success by default, Working, Fail,
+    NoSupport, after which the driver resends unsupervised -- and it is refused elsewhere),
+    `rejects_duplicates`/`duplicate_parameters` (refuse a code another slot holds and send
+    Access Control notification 15 -- User Code CC cannot report it in-band), `codes` (what the
+    lock holds when the dump caches asterisks). User Credential CC: `max_users`, `pin_slots`,
+    `max_user_name_length`, `max_credential_hash_length` (above 0: no data read back);
+    duplicates are rejected in-band, a Delete removes only a credential its user owns (yet is
+    reported deleted), and fresh reads follow the driver's cursor walk.
+  - The lock acting on its own: `program(slot, code)` (keypad change, reported),
+    `send_user_code_report(slot, status, code)` (any report, stale ones included), `report`,
+    `notify_access_control`, `keypad_unlock`, `mark_dead`/`mark_alive`, `emit_statistics`
+    (counters also move per exchange: `commandsTX`, `commandsRX`, `commandsDroppedTX`,
+    `timeoutResponse`).
+  - Faults, named after `MockLCMLock`'s (ignore and refuse only on `set`/`clear`) and returning
+    a `NodeFault` (`times`, `hits`, `held`, `async_wait_held`, context manager), act on radio
+    exchanges -- `set`, `clear`, `get`
+    (any Get: fresh read, walk, verification read), `user`: `ignore` (acknowledged, not
+    applied; a supervised one reports Success anyway), `refuse` (not applied; supervised: Fail),
+    `fail` (never acknowledged: `FailedZWaveCommand`, 204 by default), `hang`, `slow`,
+    `drop_reply` (applied, but the report never arrives -- on a set, both the Supervision report
+    and the verification read: the #1397 shape). The teardown hook releases them like
+    `LockFault`s. `exchanges`, `sets`, `clears` and `commands` record what happened.
+  - `test_node_harness.py` self-tests each behavior against the driver, and end to end through
+    a loaded entry.
 
 ### Test philosophy
 
@@ -397,7 +449,7 @@ tests/providers/
   virtual/
   zha/             # + helpers (Zigbee frames, quirk-style clusters)
   zigbee2mqtt/     # + test_payload, test_topic_resolution
-  zwave_js/        # + helpers, fixtures/, test_events
+  zwave_js/        # + helpers, fixtures/, fake_node, test_events, test_node_harness
   zwave_js_ui/     # + test_api, test_borrowed, test_payload, test_push,
                    #   test_topic_resolution
   helpers.py       # Shared test mixins (ServiceProviderConnectionTests, etc.)
