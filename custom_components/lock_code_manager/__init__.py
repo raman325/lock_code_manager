@@ -1028,34 +1028,40 @@ async def async_unload_lock(
     # lock at once cannot both find themselves its last holder. Then the
     # managers are stopped together, one grace for all of them, and each
     # handle left without holders is closed -- even if stopping them failed,
-    # since an entry acquiring the lock waits for that close.
+    # since an entry acquiring the lock waits for that close. A failure to
+    # stop them is the one reported; a close failing is reported after every
+    # other close has run. Cancellation is never held back.
     closing = {
         lock_entity_id: handle
         for lock_entity_id in lock_entity_ids
         if (handle := release(hass, config_entry, lock_entity_id)) is not None
     }
+    stop_error: Exception | None = None
     try:
         await _async_stop_slot_sync(runtime_data, lock_entity_ids)
-    finally:
-        failure: BaseException | None = None
-        for lock_entity_id, handle in closing.items():
-            # ``remove_permanently`` discards state that deliberately outlives
-            # an unload -- the per-lock setup-failed repair, the provider's
-            # stored codes. Only a lock leaving Lock Code Manager altogether
-            # should lose those, so an entry that still manages it downgrades
-            # this to a plain teardown even while that entry is unloaded.
-            try:
-                await handle.async_close(
-                    hass,
-                    remove_permanently
-                    and not another_enabled_entry_configures(
-                        hass, config_entry, lock_entity_id
-                    ),
-                )
-            except BaseException as err:  # re-raised once every handle is closed
-                failure = failure or err
-        if failure is not None:
-            raise failure
+    except Exception as err:  # re-raised once the locks are closed
+        stop_error = err
+    close_error: Exception | None = None
+    for lock_entity_id, handle in closing.items():
+        # ``remove_permanently`` discards state that deliberately outlives
+        # an unload -- the per-lock setup-failed repair, the provider's
+        # stored codes. Only a lock leaving Lock Code Manager altogether
+        # should lose those, so an entry that still manages it downgrades
+        # this to a plain teardown even while that entry is unloaded.
+        try:
+            await handle.async_close(
+                hass,
+                remove_permanently
+                and not another_enabled_entry_configures(
+                    hass, config_entry, lock_entity_id
+                ),
+            )
+        except Exception as err:  # re-raised after every close
+            close_error = close_error or err
+    if stop_error is not None:
+        raise stop_error
+    if close_error is not None:
+        raise close_error
 
 
 async def async_release_locks(

@@ -1,22 +1,28 @@
 """
-One handle per physical lock: who holds it, and when it is torn down.
+One handle per physical lock: when its instance is built, and when torn down.
 
 Several config entries can manage one lock, and they share one provider
 instance: one turn on the lock, one coordinator, one push subscription. The
 handle is that instance's owner. Entries ``acquire`` it and ``release`` it;
-the release that leaves it without holders closes it, and nothing else does.
+the release that leaves it held by no entry closes it, and nothing else does.
+
+An entry holds the instance while it sits in the entry's
+``runtime_data.locks`` (``entries_holding``), counted over the entries that
+still exist, in any state. That is the only record of who holds it, so an
+entry deleted while stuck in FAILED_UNLOAD stops counting the moment it is
+gone, and the next release can close the lock.
 
 The registry keeps a handle until its close has finished, not just until its
-last holder lets go. An instance still closing can have a write at the lock,
-inside the stop grace, and an entry acquiring the lock meanwhile must not
-build a second instance and talk over it. It waits for the close, then
+last holder lets go. An instance still closing can have work at the lock,
+and an entry acquiring the lock meanwhile must not build a second instance
+and talk over it: it waits for the close, up to ``CLOSE_WAIT_SECONDS``, then
 builds. A handle that is not closing is joined whatever state its holders
 are in: an entry stuck in FAILED_UNLOAD keeps its handle alive, and a new
 entry shares it rather than building beside it.
 
-``acquire`` and ``release`` change the holders and each entry's
-``runtime_data.locks`` together, with no await in between, so two entries
-letting go of one lock at once cannot both find themselves last.
+``acquire`` and ``release`` change the entry's ``runtime_data.locks`` and
+decide what that means with no await in between, so two entries letting go
+of one lock at once cannot both find themselves last.
 """
 
 from __future__ import annotations
@@ -30,7 +36,8 @@ from typing import TYPE_CHECKING
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 
-from ..const import DOMAIN
+from ..const import DOMAIN, STOP_GRACE_SECONDS
+from .queries import entries_holding
 
 if TYPE_CHECKING:
     from ..providers import BaseLock
@@ -39,15 +46,27 @@ _LOGGER = logging.getLogger(__name__)
 
 _REGISTRY_KEY = "lock_handles"
 
+# How long an entry acquiring a lock waits for its old instance's close. A
+# close is a provider's teardown and its coordinator's shutdown, neither of
+# which should take longer than the grace a stopping slot gets; one that does
+# is stuck, and waiting on it for good would hold the acquiring entry's own
+# update pass -- and so its unload -- with it.
+CLOSE_WAIT_SECONDS = STOP_GRACE_SECONDS
+
 
 @dataclass(eq=False)
 class LockHandle:
-    """The one provider instance for a physical lock, and the entries holding it."""
+    """The one provider instance for a physical lock, while it is registered."""
 
+    key: str
     lock: BaseLock
-    holders: set[str] = field(default_factory=set)
     closing: bool = False
     _closed: asyncio.Event = field(default_factory=asyncio.Event)
+
+    @property
+    def closed(self) -> bool:
+        """Return whether this handle's close has finished."""
+        return self._closed.is_set()
 
     async def async_wait_closed(self) -> None:
         """Wait until this handle's close has finished."""
@@ -81,8 +100,8 @@ class LockHandle:
     def _finish_close(self, hass: HomeAssistant) -> None:
         """Take the handle out of the registry and wake whoever waits on it."""
         registry = _registry(hass)
-        if registry.get(self.lock.lock.entity_id) is self:
-            del registry[self.lock.lock.entity_id]
+        if registry.get(self.key) is self:
+            del registry[self.key]
         self._closed.set()
 
 
@@ -107,11 +126,26 @@ async def async_acquire(
     """
     registry = _registry(hass)
     while (handle := registry.get(lock_entity_id)) is not None and handle.closing:
-        await handle.async_wait_closed()
+        if not handle.closed:
+            try:
+                async with asyncio.timeout(CLOSE_WAIT_SECONDS):
+                    await handle.async_wait_closed()
+                continue
+            except TimeoutError:
+                _LOGGER.warning(
+                    "%s (%s): The previous instance of lock %s has not finished "
+                    "closing after %ss; setting the lock up anew beside it",
+                    config_entry.entry_id,
+                    config_entry.title,
+                    lock_entity_id,
+                    CLOSE_WAIT_SECONDS,
+                )
+        # Closed, or given up on: either way no longer the lock's handle.
+        if registry.get(lock_entity_id) is handle:
+            del registry[lock_entity_id]
     created = handle is None
     if handle is None:
-        handle = registry[lock_entity_id] = LockHandle(build())
-    handle.holders.add(config_entry.entry_id)
+        handle = registry[lock_entity_id] = LockHandle(lock_entity_id, build())
     config_entry.runtime_data.locks[lock_entity_id] = handle.lock
     _LOGGER.debug(
         "%s (%s): %s lock instance %s",
@@ -130,10 +164,10 @@ def release(
     """
     Let go of the lock for ``config_entry``; return its handle if it must close.
 
-    Returns the handle only when this entry was its last holder. The handle
-    is then closing: no entry joins it again, and acquirers wait for the
-    caller to close or abandon it. An entry holding nothing for the lock,
-    or with no runtime data at all, lets go of nothing.
+    Returns the handle only when no other existing entry still holds its
+    instance. The handle is then closing: no entry joins it again, and
+    acquirers wait for the caller to close or abandon it. An entry holding
+    nothing for the lock, or with no runtime data at all, lets go of nothing.
     """
     if (runtime_data := getattr(config_entry, "runtime_data", None)) is None:
         return None
@@ -150,8 +184,7 @@ def release(
             lock,
         )
         return None
-    handle.holders.discard(config_entry.entry_id)
-    if handle.holders:
+    if any(entries_holding(hass, lock_entity_id, lock)):
         return None
     handle.closing = True
     return handle

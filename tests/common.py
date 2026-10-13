@@ -1445,8 +1445,10 @@ class MockLCMLock(BaseLock):
         """
         Carry a setup, an unload or a probe through the fault it meets, if any.
 
-        Neither touches the code table, so neither is recorded in
-        ``run_times``: the pacing between operations is not theirs.
+        None of them touches the code table, so none is recorded in
+        ``run_times``: the pacing between operations is not theirs. The fault
+        meets the call before the provider's own work, so an unload made to
+        fail is one that never got going: the base teardown is skipped too.
         """
         if (fault := self._meet_fault(operation, (), True)) is not None:
             await fault.async_before(operation, None)
