@@ -66,6 +66,8 @@ class FakeLock:
     writes_never_sent: bool = False
     transient: int = 0
     hang: asyncio.Event | None = None
+    # Raise something that is not a LockError on writes.
+    broken: bool = False
     writes: list[tuple[int, str | None]] = field(default_factory=list)
     during_write: list = field(default_factory=list)
 
@@ -91,6 +93,8 @@ class FakeLock:
             act()
         if self.hang is not None:
             await self.hang.wait()
+        if self.broken:
+            raise RuntimeError("the provider broke")
         if self.writes_unanswered:
             raise LockError(ErrorKind.NO_ANSWER)
         if self.transient:
@@ -405,7 +409,7 @@ async def test_a_write_that_never_reached_the_lock_counts_nothing(rig_factory) -
 async def test_a_write_that_hangs_is_cut_off_and_retried(rig_factory) -> None:
     """A wedged write frees the lock within its budget (#1523), and is retried."""
     hang = asyncio.Event()
-    rig = rig_factory(FakeLock(hang=hang), budget=0.05)
+    rig = rig_factory(FakeLock(hang=hang), budget=0.05, gap=0.0)
     await _started(rig, {1: "1234"})
     assert rig.status(1) == (Status.OUT_OF_SYNC, None)
 
@@ -455,3 +459,100 @@ async def test_stopping_cuts_off_a_job_past_its_grace(rig_factory) -> None:
     assert rig.lock.writes == [(1, "1234")]
 
     await asyncio.wait_for(rig.worker.stop(grace=0.05), timeout=5)
+
+
+# Review round 1 -----------------------------------------------------------------
+
+
+async def test_what_was_sent_is_what_is_recorded(rig_factory) -> None:
+    """A target changed while its write was out is written next; never assumed."""
+    lock = FakeLock(masked=True)
+    rig = rig_factory(lock)
+    lock.during_write.append(
+        lambda: rig.worker.want(1, "5555") if len(lock.writes) == 1 else None
+    )
+    await _started(rig, {1: "1234"})
+
+    assert lock.writes == [(1, "1234"), (1, "5555")]
+    assert lock.codes == {1: "5555"}
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_report_queued_before_a_write_is_dropped(rig_factory) -> None:
+    """A stale report for a slot the pass then rewrites counts nothing."""
+    lock = FakeLock({1: "0000", 2: "0000"})
+    rig = rig_factory(lock)
+    lock.during_write.append(
+        lambda: rig.worker.push(2, Holds("0000")) if lock.writes[-1][0] == 1 else None
+    )
+    await _started(rig, {1: "1111", 2: "2222"})
+
+    assert rig.worker.slots[2].failures == []
+    assert lock.writes == [(1, "1111"), (2, "2222")]
+    assert rig.status(2) == (Status.IN_SYNC, None)
+
+
+async def test_a_broken_provider_fails_its_slot_not_the_pass(rig_factory) -> None:
+    """Any error a provider raises counts against that slot; others still sync."""
+    lock = FakeLock(broken=True)
+    rig = await _started(rig_factory(lock), {1: "1234", 2: "5678"})
+
+    assert len(rig.worker.slots[1].failures) == 1
+    assert len(rig.worker.slots[2].failures) == 1
+    assert lock.writes == [(1, "1234"), (2, "5678")]
+
+
+async def test_an_unanswered_write_to_an_unanswering_lock_charges_nothing(
+    rig_factory,
+) -> None:
+    """A lock that has gone is the lock's problem, not the slot's."""
+    lock = FakeLock()
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    lock.writes_unanswered = True
+    lock.reads_unanswered = True
+    rig.worker.want(1, "4321")
+    await rig.settle()
+
+    assert lock.writes[-1] == (1, "4321")
+    assert rig.worker.slots[1].failures == []
+
+
+async def test_stopping_answers_waiting_reads_and_refuses_new_ones(rig_factory) -> None:
+    """Nobody is left waiting on a stopped worker."""
+    hang = asyncio.Event()
+    lock = FakeLock(hang=hang)
+    rig = rig_factory(lock)
+    rig.worker.want(1, "1234")
+    rig.worker.start()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    waiting = asyncio.ensure_future(rig.worker.read([1]))
+    await asyncio.sleep(0)
+
+    await rig.worker.stop(grace=0.05)
+    with pytest.raises(LockError):
+        await waiting
+    with pytest.raises(LockError):
+        await rig.worker.read([1])
+
+
+async def test_a_caller_that_gave_up_is_not_an_error(rig_factory, caplog) -> None:
+    """A read whose caller stopped waiting is answered quietly."""
+    rig = await _started(rig_factory(FakeLock()), {1: "1234"})
+    task = asyncio.ensure_future(rig.worker.read([1]))
+    await asyncio.sleep(0)
+    task.cancel()
+    await rig.settle()
+
+    assert "failed" not in caplog.text
+
+
+async def test_every_job_has_a_time_limit(rig_factory) -> None:
+    """A slot's sync that hangs is cut off, and the next job runs (#1523)."""
+    hang = asyncio.Event()
+    lock = FakeLock(hang=hang)
+    rig = rig_factory(lock, budget=0.05, gap=0.0)
+    await _started(rig, {1: "1234"})
+
+    lock.hang = None
+    assert await rig.worker.read([1]) == {1: Seen.EMPTY}
