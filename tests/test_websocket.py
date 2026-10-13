@@ -7,6 +7,7 @@ import logging
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -115,10 +116,13 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_EVENT_ENTITY,
+    async_tick_until,
     current_entry,
+    in_sync_entity_id,
     slot_entity_id,
     unnumbered_user_subentry,
     user_subentries,
+    when_mock_lock_built,
 )
 from .conftest import async_initial_tick, async_trigger_sync_tick
 
@@ -3795,4 +3799,53 @@ async def test_a_card_subscribed_before_its_slot_s_entities_exist_gets_them(
     assert latest[CONF_ENTITIES][CONF_PIN] == slot_entity_id(
         hass, TEXT_DOMAIN, entry, 1, CONF_PIN
     )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_lock_that_withholds_codes_tells_the_card_the_pin_length(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    Regression for PR #1282, the backend half: the card is told a PIN's length.
+
+    Matter and masking Z-Wave locks never report the digits, and the card drew
+    a fixed three dots for every such slot. Masked, the slot it is sent says
+    it is in sync and how long the configured PIN is;
+    ts/lock-codes-card.dom.test.ts renders that slot.
+    """
+    entry = current_entry("Withheld Codes", {1: "123456"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(lambda lock: lock.write_only.add(1)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    in_sync = in_sync_entity_id(hass, entry, 1, LOCK_1_ENTITY_ID)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=20,
+        what="slot 1 in sync",
+    )
+
+    # Opened only now: the frozen clock must not move while it is open.
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            "reveal": False,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    event = (await ws_client.receive_json())["event"]
+
+    [slot] = [s for s in event[CONF_SLOTS] if s[ATTR_SLOT] == 1]
+    assert slot[ATTR_CODE] is None
+    assert slot["in_sync"] is True
+    assert slot["code_length"] == 6
+    assert slot["configured_code_length"] == 6
     assert await hass.config_entries.async_unload(entry.entry_id)

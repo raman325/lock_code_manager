@@ -31,6 +31,15 @@ jobs:
           sed -i "/VERSION = /c\VERSION = \"${VERSION}\"" "${WORKSPACE}/custom_components/lock_code_manager/const.py"
           sed -i "/version/c\  \"version\": \"${VERSION}\"" "${WORKSPACE}/custom_components/lock_code_manager/manifest.json"
         # yamllint enable rule:line-length
+      # A sed pattern that stops matching edits nothing and exits 0, so the
+      # asset would ship with 0.0.0 (#763, #1290). Fail the release instead.
+      - name: Check the stamped version
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+          INTEGRATION: ${{ github.workspace }}/custom_components/lock_code_manager
+        run: |
+          grep -qF "\"version\": \"${VERSION}\"" "${INTEGRATION}/manifest.json"
+          grep -qF "VERSION = \"${VERSION}\"" "${INTEGRATION}/const.py"
       # Pack the lock_code_manager dir as a zip and upload to the release
       - name: ZIP Lock Code Manager Dir
         run: |
@@ -44,3 +53,14 @@ jobs:
           asset_name: lock_code_manager.zip
           tag: ${{ github.event.release.tag_name }}
           overwrite: true
+      # What HACS installs is the asset, so check the one the release now
+      # holds, not the local zip (#35: an asset went out unstamped).
+      - name: Check the released asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+        run: |
+          gh release download "${VERSION}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern lock_code_manager.zip --dir "${RUNNER_TEMP}/asset"
+          unzip -p "${RUNNER_TEMP}/asset/lock_code_manager.zip" manifest.json \
+            | grep -qF "\"version\": \"${VERSION}\""

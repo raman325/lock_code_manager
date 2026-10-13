@@ -192,26 +192,39 @@ def assert_no_deprecation_reports() -> Generator[None]:
     Home Assistant deduplicates these by call site for the life of the
     process, so the first test to reach a reintroduced call is the one that
     fails; later tests over the same line stay silent.
+
+    A deprecated constant or alias is reported on the logger of the module
+    that defines it, not the frame helper's (#531's ``Config`` alias, PR
+    #592's lock state constants), so the whole ``homeassistant`` logger tree
+    is watched, for either report naming this integration.
     """
     reports: list[str] = []
 
     class _Collect(logging.Handler):
-        """Keep every frame report, so the filtering below is ours to choose."""
+        """Keep every report that names this integration."""
 
         def emit(self, record: logging.LogRecord) -> None:
-            reports.append(record.getMessage())
+            message = record.getMessage()
+            # Frame reports quote the integration they blame; deprecated
+            # constants and aliases say they were used "from" it. The mock
+            # integrations these tests register are not ours to fix.
+            if (
+                record.name == "homeassistant.helpers.frame"
+                and f"'{DOMAIN}'" in message
+            ) or (
+                message.startswith("The deprecated ") and f" from {DOMAIN}" in message
+            ):
+                reports.append(message)
 
-    logger = logging.getLogger("homeassistant.helpers.frame")
+    logger = logging.getLogger("homeassistant")
     handler = _Collect()
     logger.addHandler(handler)
     try:
         yield
     finally:
         logger.removeHandler(handler)
-    # Reports name the integration they blame, and the mock integrations these
-    # tests register are not ours to fix.
-    if ours := [report for report in reports if f"'{DOMAIN}'" in report]:
-        pytest.fail("\n".join(ours))
+    if reports:
+        pytest.fail("\n".join(reports))
 
 
 def pytest_configure(config: pytest.Config) -> None:
