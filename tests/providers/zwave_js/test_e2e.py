@@ -18,6 +18,9 @@ from zwave_js_server.const.command_class.lock import (
     LOCK_USERCODE_PROPERTY,
     CodeSlotStatus,
 )
+from zwave_js_server.const.command_class.notification import (
+    AccessControlNotificationEvent,
+)
 from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
@@ -37,12 +40,13 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
     SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
@@ -59,10 +63,12 @@ from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
     pin_address,
 )
+from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.common import (
     async_advance_sync_ticks,
+    async_switch_slot,
     async_tick_until,
     code_entity_id,
     in_sync_entity_id,
@@ -1247,3 +1253,222 @@ class TestMaskingLock:
         ]
 
         await hass.config_entries.async_unload(second_entry.entry_id)
+
+
+class TestDuplicateRefusedByUserCodeLock:
+    """
+    A User Code lock that holds 5555 at slot 5 and does not show its codes.
+
+    Lock Code Manager cannot see 5555 to refuse it first, so the lock does:
+    it keeps the slot's old code and sends Access Control notification 15,
+    the only word User Code CC has for a duplicate.
+    """
+
+    @pytest.fixture(params=["masked", "withheld"])
+    def code_display(self, request: pytest.FixtureRequest) -> str:
+        """How the lock shows a code it holds."""
+        return request.param
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any], code_display: str
+    ) -> dict[str, Any]:
+        """The node's value database as the lock filled it at inclusion."""
+        for value in lock_schlage_be469_state["values"]:
+            if (
+                value["commandClass"] == CommandClass.USER_CODE
+                and value["property"] == LOCK_USERCODE_PROPERTY
+                and value.get("value")
+            ):
+                value["value"] = (
+                    "*" * len(value["value"]) if code_display == "masked" else ""
+                )
+        return lock_schlage_be469_state
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self, code_display: str) -> dict[str, Any]:
+        """The lock holds the entry's PINs, and 5555 at slot 5."""
+        return {
+            "code_display": code_display,
+            "codes": {1: "9999", 2: "1234", 5: "5555"},
+        }
+
+    async def _async_settle(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> int:
+        """Settle both slots in sync; return how many writes that took."""
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+        return len(fake_zwave_lock.sets)
+
+    @pytest.mark.parametrize(
+        "parameters", [None, {"userId": 0}, {"userId": 2}], ids=["none", "0", "2"]
+    )
+    async def test_a_refused_pin_disables_the_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        parameters: dict[str, Any] | None,
+    ) -> None:
+        """
+        Regression for #1651: the refusal disables the slot, as an in-band duplicate does.
+
+        The driver's User Code write has no duplicate result: a masking lock's
+        read-back of the old code passes as the new one, and a withholding
+        lock's comes back unconfirmed. Unheard, the notification left the slot
+        in sync with a PIN the lock never took.
+        """
+        fake_zwave_lock.duplicate_parameters = parameters
+        written = await self._async_settle(
+            hass, freezer, fake_zwave_lock, fake_zwave_lock_entry, lock_entity
+        )
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "5555")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert (
+            hass.states.get(
+                slot_entity_id(
+                    hass, SWITCH_DOMAIN, fake_zwave_lock_entry, 2, CONF_ENABLED
+                )
+            ).state
+            == STATE_OFF
+        )
+        issue = ir.async_get(hass).async_get_issue(
+            DOMAIN, f"slot_disabled_{fake_zwave_lock_entry.entry_id}_2"
+        )
+        assert issue is not None
+        assert "duplicate" in issue.translation_placeholders["reason"]
+        assert fake_zwave_lock.sets[written:] == [(2, "5555")]
+        # Disabled, the slot wants no code, and its old one is cleared.
+        assert fake_zwave_lock.holds(2) is None
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "",
+        )
+        # A refusal is not a use of the slot's code.
+        assert used == []
+
+    async def test_a_unique_pin_after_a_refusal_is_taken(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """The user's way out: a PIN no other slot holds, and the slot enabled again."""
+        written = await self._async_settle(
+            hass, freezer, fake_zwave_lock, fake_zwave_lock_entry, lock_entity
+        )
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "5555")
+        await async_advance_sync_ticks(hass, freezer, 3)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_switch_slot(hass, fake_zwave_lock_entry, 2, SERVICE_TURN_ON)
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+        assert fake_zwave_lock.sets[written:] == [(2, "5555"), (2, "4321")]
+        assert fake_zwave_lock.holds(2) == "4321"
+
+    async def test_a_refused_pin_is_not_what_the_slot_shows(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_e2e_lock: ZWaveJSLock,
+    ) -> None:
+        """
+        The refused PIN does not stay on the slot while it is being disabled.
+
+        A masking lock's write is announced with the code written, as if
+        the lock took it; the slot shows what the lock reports holding.
+        """
+        with pytest.raises(DuplicateCodeError):
+            await fake_e2e_lock.async_set_usercode(2, "5555")
+
+        assert fake_e2e_lock.coordinator.credentials_by_slot()[2] == (
+            SlotCredential.unreadable()
+        )
+        assert fake_zwave_lock.holds(2) == "1234"
+
+    async def test_a_pin_no_other_slot_holds_is_taken(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A write the lock accepts is not taken for a refusal."""
+        written = await self._async_settle(
+            hass, freezer, fake_zwave_lock, fake_zwave_lock_entry, lock_entity
+        )
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+        assert fake_zwave_lock.sets[written:] == [(2, "4321")]
+        assert fake_zwave_lock.holds(2) == "4321"
+
+    @pytest.mark.parametrize("parameters", [None, {"userId": 2}], ids=["none", "2"])
+    async def test_a_refusal_with_no_write_in_flight_disables_nothing(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        parameters: dict[str, Any] | None,
+    ) -> None:
+        """A refusal Lock Code Manager did not ask for is not pinned on a slot."""
+        written = await self._async_settle(
+            hass, freezer, fake_zwave_lock, fake_zwave_lock_entry, lock_entity
+        )
+
+        fake_zwave_lock.notify_access_control(
+            AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE,
+            parameters,
+        )
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+        assert fake_zwave_lock.sets[written:] == [(2, "4321")]
+
+    async def test_a_refusal_naming_another_slot_is_not_the_writes(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_e2e_lock: ZWaveJSLock,
+    ) -> None:
+        """
+        A refusal naming a slot other than the one written is not pinned on it.
+
+        Writes to a lock run one at a time, but a slot named outright is not
+        the written one: disabling it would guess.
+        """
+        fake_zwave_lock.duplicate_parameters = {"userId": 5}
+
+        result = await fake_e2e_lock.async_set_usercode(2, "5555")
+
+        assert result in (WriteResult.CONFIRMED, WriteResult.OPTIMISTIC)

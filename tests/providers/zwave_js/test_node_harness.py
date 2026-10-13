@@ -1258,6 +1258,34 @@ class TestUserCredentialThroughTheProvider:
             await lock.async_set_usercode(2, "5555")
         assert fake_zwave_lock.holds(2) == "1234"
 
+    async def test_a_duplicate_notification_does_not_overrule_an_accepted_write(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A User Credential lock answers a duplicate in-band, so a notification overrules nothing.
+
+        Only User Code CC needs Access Control notification 15 to learn of a
+        duplicate (#1651); one arriving while a write this lock accepts is in
+        flight leaves the write accepted.
+        """
+        await _async_in_sync(hass, freezer, fake_zwave_lock_entry, lock_entity, 2)
+        lock = get_zwave_lock(hass, fake_zwave_lock_entry, lock_entity)
+
+        with fake_zwave_lock.hang("set", 2) as fault:
+            write = hass.async_create_task(lock.async_set_usercode(2, "4321"))
+            await fault.async_wait_held()
+            fake_zwave_lock.notify_access_control(
+                AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+            )
+
+        assert await write is WriteResult.CONFIRMED
+        assert fake_zwave_lock.holds(2) == "4321"
+
     async def test_a_new_user_whose_pin_is_refused_is_rolled_back(
         self,
         hass: HomeAssistant,
