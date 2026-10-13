@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import json
+import logging
 from typing import Any
 from unittest.mock import DEFAULT
 
@@ -361,10 +362,13 @@ class TestAddingThroughTheUserInterface:
 
 @asynccontextmanager
 async def _bridge_entry(
-    hass: HomeAssistant, freezer: FrozenDateTimeFactory, lock_entity_id: str
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    lock_entity_id: str,
+    pins: dict[int, str] | None = None,
 ) -> AsyncIterator[MockConfigEntry]:
     """
-    Set up an entry on the bridge's lock, slots 1 and 2 at 1234 and 5678.
+    Set up an entry on the bridge's lock, slots 1 and 2 at 1234 and 5678 by default.
 
     Setup reads the lock, and a read the bridge leaves unanswered waits out
     its timeout on the frozen clock, so the clock is stepped until it is done.
@@ -373,7 +377,9 @@ async def _bridge_entry(
     reported.
     """
     entry = current_entry(
-        "test_z2m_bridge", {1: "1234", 2: "5678"}, locks=(lock_entity_id,)
+        "test_z2m_bridge",
+        {1: "1234", 2: "5678"} if pins is None else pins,
+        locks=(lock_entity_id,),
     )
     entry.add_to_hass(hass)
     setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
@@ -531,6 +537,44 @@ class TestBridge:
                 )
                 assert status != SyncState.SUSPENDED
             assert hass.states.get(lock_id).state != STATE_UNAVAILABLE
+
+    async def test_no_pin_reaches_a_log_record(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        Regression for #917 (PRs #923, #1097), through a provider end to end.
+
+        Sync reads and writes these PINs over MQTT; none of Lock Code
+        Manager's own records may carry them. Eight digits, so that no id or
+        timestamp holds them by chance.
+        """
+        caplog.set_level(logging.DEBUG, logger="custom_components.lock_code_manager")
+        pins = {1: "73915286", 2: "60482917"}
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id, pins) as entry:
+            await async_tick_until(
+                hass,
+                freezer,
+                lambda: all(
+                    _in_sync(hass, entry, slot, lock_id) == STATE_ON for slot in (1, 2)
+                ),
+                max_ticks=20,
+                what="both slots in sync",
+            )
+            if fake_z2m_bridge.users[1] != (ENABLED, pins[1]):
+                pytest.fail("setup: the PIN never reached the lock")
+
+        assert [
+            record.getMessage()
+            for record in caplog.records
+            if record.name.startswith("custom_components.lock_code_manager")
+            and any(pin in record.getMessage() for pin in pins.values())
+        ] == []
 
 
 class TestBridgeEvents:
