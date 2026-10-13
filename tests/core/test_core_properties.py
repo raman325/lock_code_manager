@@ -44,7 +44,7 @@ READINGS = st.one_of(
 DESIRED = st.one_of(st.just(WANT_EMPTY), PINS.map(WantPin))
 TIMES = st.floats(min_value=0, max_value=1_000, allow_nan=False)
 # What happened to a write: still out, failed, or returned.
-ENDINGS = st.sampled_from(["out", "failed", "returned"])
+ENDINGS = st.sampled_from(["out", "failed", "returned", "abandoned"])
 
 
 def _state() -> AddressState:
@@ -52,13 +52,23 @@ def _state() -> AddressState:
 
 
 def _write(state: AddressState, target, start: float, ending: str, gap: float):
-    """Start a write and end it the given way; return the ticket."""
-    ticket = state.start_write(target, start)
+    """
+    Start a write and end it the given way.
+
+    "out" leaves it in flight: the block is entered and not left, as a write
+    the lock is still answering would be.
+    """
+    block = state.writing(target, start)
+    write = block.__enter__()
     if ending == "failed":
-        ticket.failed()
+        block.__exit__(None, None, None)
     elif ending == "returned":
-        ticket.returned(Strength.APPLIED, start + gap)
-    return ticket
+        write.returned(Strength.APPLIED, start + gap)
+        block.__exit__(None, None, None)
+    elif ending == "abandoned":
+        write.abandoned()
+        block.__exit__(None, None, None)
+    return write
 
 
 def _verdict(state: AddressState, desired, tripped: bool):
@@ -93,7 +103,8 @@ def test_silence_never_changes_a_verdict(
     before=st.one_of(st.none(), READINGS),
     after=st.one_of(st.none(), READINGS),
     target=DESIRED,
-    ending=ENDINGS,
+    # An abandoned write never happened, so nothing is superseded by it.
+    ending=st.sampled_from(["out", "failed", "returned"]),
     write_at=TIMES,
     gap=st.floats(min_value=0.001, max_value=100, allow_nan=False),
     desired=DESIRED,
@@ -173,7 +184,6 @@ def test_a_write_that_failed_never_leaves_a_belief(writes) -> None:
         if ending == "failed":
             for desired in (target, WANT_EMPTY, WantPin("1234")):
                 assert state.view(desired).last_write is Written.FAILED
-            assert not state.take_charge()
 
 
 @given(reading=READINGS, first=TIMES, gap=st.floats(min_value=0, max_value=100))

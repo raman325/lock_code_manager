@@ -147,3 +147,20 @@ def test_charges_arriving_out_of_order_are_windowed_by_when_they_happened() -> N
         for at in order:
             breaker.charge(at)
         assert not breaker.tripped, order
+
+
+def test_a_write_is_charged_once_until_the_breaker_is_reset() -> None:
+    """
+    Judged again and again, one failed write counts once (review round 4, finding 7).
+
+    A reset -- a new target -- lets the same write count again.
+    """
+    breaker = SlotBreaker(window=300.0, limit=3)
+    write = object()
+
+    assert breaker.charge(1.0, write)
+    assert not breaker.charge(2.0, write)
+    assert breaker.charge(3.0, object())
+    assert not breaker.tripped
+    breaker.reset()
+    assert breaker.charge(4.0, write)

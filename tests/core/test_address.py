@@ -34,7 +34,7 @@ def _state() -> AddressState:
 def test_a_write_that_returned_is_believed() -> None:
     """Returned means believed: the PIN written is what the view compares against."""
     state = _state()
-    with state.start_write(WANT, 1.0) as write:
+    with state.writing(WANT, 1.0) as write:
         assert state.view(WANT).last_write is Written.IN_FLIGHT
         assert write.returned(Strength.APPLIED, 2.0)
 
@@ -46,9 +46,9 @@ def test_a_write_that_returned_is_believed() -> None:
 def test_a_write_that_raised_leaves_no_belief() -> None:
     """Raised means failed (decision 3), and the earlier belief is gone too."""
     state = _state()
-    with state.start_write(WANT, 1.0) as write:
+    with state.writing(WANT, 1.0) as write:
         write.returned(Strength.APPLIED, 2.0)
-    with pytest.raises(ValueError), state.start_write(WANT_EMPTY, 3.0):
+    with pytest.raises(ValueError), state.writing(WANT_EMPTY, 3.0):
         raise ValueError("the lock refused")
 
     assert state.view(WANT).last_write is Written.FAILED
@@ -58,8 +58,50 @@ def test_a_write_that_raised_leaves_no_belief() -> None:
 def test_a_write_left_without_an_ending_fails() -> None:
     """Cancelled or forgotten, a write never sits in flight for good."""
     state = _state()
-    with state.start_write(WANT, 1.0):
+    with state.writing(WANT, 1.0):
         pass
+
+    assert state.view(WANT).last_write is Written.FAILED
+
+
+def test_a_write_that_never_reached_the_lock_leaves_the_address_as_it_was() -> None:
+    """Abandoned (nothing sent): the earlier write and its evidence still stand."""
+    state = _state()
+    with state.writing(WANT, 1.0) as write:
+        write.returned(Strength.APPLIED, 2.0)
+    state.observe(Holds("1234"), 3.0)
+    with state.writing(WantPin("4321"), 4.0) as write:
+        assert write.abandoned()
+
+    assert state.view(WANT).last_write is Written.TARGET
+    assert state.view(WANT).seen == Observation(Holds("1234"), 3.0)
+
+
+def test_abandoning_an_older_write_leaves_the_newer_one_current() -> None:
+    """Only the newest write can put the address back: an older one changes nothing."""
+    state = _state()
+    with state.writing(WANT, 1.0) as older:
+        with state.writing(WANT_EMPTY, 2.0) as newer:
+            assert not older.abandoned()
+            assert state.view(WANT_EMPTY).last_write is Written.IN_FLIGHT
+            newer.returned(Strength.SENT, 3.0)
+    assert state.view(WANT_EMPTY).last_write is Written.TARGET
+
+
+def test_a_settling_that_fails_changes_nothing() -> None:
+    """
+    Review round 4, finding 1: a return that cannot be recorded leaves the write out.
+
+    It then ends as failed when its block exits, and never shows the
+    previous write's belief as current.
+    """
+    state = _state()
+    with state.writing(WANT, 1.0) as write:
+        write.returned(Strength.APPLIED, 2.0)
+    with state.writing(WantPin("\ud800"), 3.0) as write:
+        with pytest.raises(UnicodeEncodeError):
+            write.returned(Strength.APPLIED, 4.0)
+        assert state.view(WANT).last_write is Written.IN_FLIGHT
 
     assert state.view(WANT).last_write is Written.FAILED
 
@@ -67,40 +109,25 @@ def test_a_write_left_without_an_ending_fails() -> None:
 def test_only_the_newest_write_settles_the_address() -> None:
     """A write ending after a newer one started records nothing (review round 3)."""
     state = _state()
-    stale = state.start_write(WANT, 1.0)
-    current = state.start_write(WANT_EMPTY, 5.0)
-
-    assert not stale.returned(Strength.APPLIED, 6.0)
-    assert state.view(WANT).last_write is Written.IN_FLIGHT
-    assert current.returned(Strength.SENT, 7.0)
-    assert state.view(WANT_EMPTY).last_write is Written.TARGET
+    with state.writing(WANT, 1.0) as stale:
+        with state.writing(WANT_EMPTY, 5.0) as current:
+            assert not stale.returned(Strength.APPLIED, 6.0)
+            assert state.view(WANT).last_write is Written.IN_FLIGHT
+            assert current.returned(Strength.SENT, 7.0)
+        assert state.view(WANT_EMPTY).last_write is Written.TARGET
 
 
 def test_a_write_ending_twice_is_a_bug() -> None:
-    """Each write ends once: returned or failed."""
+    """Each write ends once: returned, failed or abandoned."""
     state = _state()
-    write = state.start_write(WANT, 1.0)
-    write.returned(Strength.APPLIED, 2.0)
-
-    with pytest.raises(RuntimeError):
-        write.returned(Strength.APPLIED, 3.0)
-    with pytest.raises(RuntimeError):
-        write.failed()
-
-
-def test_a_returned_write_is_charged_once() -> None:
-    """However often the address is judged, one write is one charge."""
-    state = _state()
-    assert not state.take_charge()
-    with state.start_write(WANT, 1.0) as write:
-        assert not state.take_charge()
+    with state.writing(WANT, 1.0) as write:
         write.returned(Strength.APPLIED, 2.0)
-
-    assert state.take_charge()
-    assert not state.take_charge()
-    with state.start_write(WANT, 3.0) as write:
-        write.returned(Strength.APPLIED, 3.0)
-    assert state.take_charge()
+        with pytest.raises(RuntimeError):
+            write.returned(Strength.APPLIED, 3.0)
+        with pytest.raises(RuntimeError):
+            write.failed()
+        with pytest.raises(RuntimeError):
+            write.abandoned()
 
 
 # Readings -------------------------------------------------------------------
@@ -110,9 +137,9 @@ def test_a_reading_from_before_a_write_returned_is_superseded() -> None:
     """Until a write returns, the lock may still report the value it replaced."""
     state = _state()
     state.observe(EMPTY, 0.0)
-    write = state.start_write(WANT, 10.0)
-    state.observe(EMPTY, 11.0)
-    write.returned(Strength.APPLIED, 12.0)
+    with state.writing(WANT, 10.0) as write:
+        state.observe(EMPTY, 11.0)
+        write.returned(Strength.APPLIED, 12.0)
 
     assert state.view(WANT).seen is None
     state.observe(Holds("1234"), 13.0)
@@ -122,7 +149,7 @@ def test_a_reading_from_before_a_write_returned_is_superseded() -> None:
 def test_a_failed_write_is_measured_from_its_start() -> None:
     """With no return to wait for, anything said after the start counts."""
     state = _state()
-    with state.start_write(WANT, 10.0):
+    with state.writing(WANT, 10.0):
         pass
     state.observe(EMPTY, 11.0)
 
@@ -132,10 +159,10 @@ def test_a_failed_write_is_measured_from_its_start() -> None:
 def test_a_stale_write_returning_does_not_move_the_cutoff() -> None:
     """Review round 3, finding 1: evidence after the current write survives."""
     state = _state()
-    stale = state.start_write(WANT, 1.0)
-    current = state.start_write(WANT, 2.0)
-    stale.returned(Strength.APPLIED, 6.0)
-    current.returned(Strength.APPLIED, 4.0)
+    with state.writing(WANT, 1.0) as stale:
+        with state.writing(WANT, 2.0) as current:
+            stale.returned(Strength.APPLIED, 6.0)
+            current.returned(Strength.APPLIED, 4.0)
     state.observe(Holds("9999"), 5.0)
 
     assert state.view(WANT).seen == Observation(Holds("9999"), 5.0)
@@ -192,24 +219,23 @@ def test_never_read_until_a_read_completes_silence_included() -> None:
 def test_a_reading_from_before_a_write_arriving_late_is_not_a_read() -> None:
     """Whether a read completed is fixed when a write starts."""
     state = _state()
-    state.start_write(WANT, 10.0)
-    state.observe(EMPTY, 5.0)
-
-    assert not state.ever_read
-    state.observe(NOTHING, 11.0)
-    assert state.ever_read
+    with state.writing(WANT, 10.0):
+        state.observe(EMPTY, 5.0)
+        assert not state.ever_read
+        state.observe(NOTHING, 11.0)
+        assert state.ever_read
 
 
 def test_a_read_completed_never_goes_back() -> None:
     """Review round 3, finding 2: a write returning cannot undo a read."""
     state = _state()
-    write = state.start_write(WANT, 1.0)
-    state.observe(NOTHING, 1.5)
-    assert state.ever_read
-    write.returned(Strength.APPLIED, 2.0)
+    with state.writing(WANT, 1.0) as write:
+        state.observe(NOTHING, 1.5)
+        assert state.ever_read
+        write.returned(Strength.APPLIED, 2.0)
     assert state.ever_read
 
     later = _state()
     later.observe(HOLDS_MASKED, 0.5)
-    later.start_write(WANT, 1.0)
-    assert later.ever_read
+    with later.writing(WANT, 1.0):
+        assert later.ever_read

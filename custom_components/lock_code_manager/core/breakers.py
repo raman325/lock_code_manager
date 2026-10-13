@@ -20,6 +20,11 @@ class SlotBreaker:
     or resumed (credential-model decision 13). Agreement never resets it:
     otherwise a keypad fighting a code back could never trip it (#776). Before
     it trips, old charges age out of the window.
+
+    Each write is charged at most once until the breaker is reset: the caller
+    passes the write the charge is for, so judging an address again and
+    again never counts one failed write twice, and a reset (a new target)
+    lets the same write count again.
     """
 
     def __init__(self, window: float = 300.0, limit: int = 3) -> None:
@@ -28,21 +33,31 @@ class SlotBreaker:
         self._limit = limit
         self._charges: list[float] = []
         self._tripped = False
+        # The writes charged since the last reset, held so their identity
+        # cannot be reused; few, since the breaker trips after ``limit``.
+        self._charged: list[object] = []
 
-    def charge(self, at: float) -> None:
+    def charge(self, at: float, write: object | None = None) -> bool:
         """
         Count a failure of the current target that happened at ``at``.
 
-        Charges may arrive out of order (a late result handled after a later
-        one): the window is measured back from the latest charge.
+        ``write`` is the write that failed; one already charged since the
+        last reset counts no more, and False is returned. Charges may arrive
+        out of order (a late result handled after a later one): the window is
+        measured back from the latest charge.
         """
         if self._tripped:
-            return
+            return False
+        if write is not None:
+            if any(charged is write for charged in self._charged):
+                return False
+            self._charged.append(write)
         insort(self._charges, at)
         latest = self._charges[-1]
         self._charges = [t for t in self._charges if t > latest - self._window]
         if len(self._charges) >= self._limit:
             self._tripped = True
+        return True
 
     @property
     def tripped(self) -> bool:
@@ -52,6 +67,7 @@ class SlotBreaker:
     def reset(self) -> None:
         """Forget every charge: the target changed, or the slot was re-enabled."""
         self._charges.clear()
+        self._charged.clear()
         self._tripped = False
 
 

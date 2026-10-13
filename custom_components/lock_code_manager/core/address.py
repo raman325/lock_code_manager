@@ -4,13 +4,15 @@ Everything known about one address on one lock, kept by one owner.
 What the lock said and what Lock Code Manager wrote are two halves of one
 story, so one object keeps both, and orders them against each other:
 
-- A write is started with ``start_write`` and ends exactly once, through its
-  ticket: returned, or failed. Only the newest ticket settles anything. A
-  ticket left without an ending -- an exception, a cancellation -- ends as
-  failed, so a write can never sit in flight for good.
+- A write exists only inside ``with state.writing(target, at) as write:``,
+  and ends exactly once: returned, failed, or abandoned (never sent). Only
+  the newest write settles anything. Leaving the block without an ending --
+  an exception, a cancellation -- ends it as failed, so a write can never
+  sit in flight for good.
 - Raised means failed, returned means believed (credential-model decision
   3): a returned write records what was written, by salted fingerprint, and
-  a failed one records nothing.
+  a failed one records nothing. An abandoned write never reached the lock,
+  so the address is left exactly as it was before it.
 - A reading stamped before the current write returned is superseded: until
   then the lock may still report the value the write replaced. A write that
   failed is measured from its start.
@@ -20,13 +22,18 @@ story, so one object keeps both, and orders them against each other:
 - Whether a read has completed counts silence too, and is measured against
   the current write's start, so a reading from before the write that
   arrives late changes nothing, and it never goes back to False.
+
+Each fact is kept once: whether a write is out, when it started and how it
+ended live on the write itself, and the state only says which write is
+current.
 """
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
-from types import TracebackType
 
 from .values import (
     Address,
@@ -67,67 +74,84 @@ class AddressView:
 
 
 @dataclass(frozen=True, slots=True)
-class _Wrote:
-    fingerprint: str
+class Belief:
+    """What a returned write put on the lock: a fingerprint, or nothing."""
+
+    # The salted fingerprint of the PIN written, or None for a clear.
+    fingerprint: str | None
     strength: Strength
     at: float
 
 
-@dataclass(frozen=True, slots=True)
-class _Cleared:
-    strength: Strength
-    at: float
-
-
-class _Outcome(StrEnum):
-    IN_FLIGHT = "in_flight"
+class _Ending(StrEnum):
     RETURNED = "returned"
     FAILED = "failed"
+    ABANDONED = "abandoned"
 
 
-class WriteTicket:
-    """One write to one address: ended once, by its return or its failure."""
+@dataclass(slots=True)
+class _Before:
+    """The address as it was when a write started, for an abandoned write."""
 
-    def __init__(self, state: AddressState, target: Desired, started: float) -> None:
-        """Start a write of ``target`` at ``started``; see ``AddressState``."""
+    write: Write | None
+    read_before_write: bool
+
+
+class Write:
+    """
+    One write to one address: ended once, by its return, failure or abandonment.
+
+    Obtained only from ``AddressState.writing``.
+    """
+
+    def __init__(
+        self, state: AddressState, target: Desired, started: float, before: _Before
+    ) -> None:
+        """Start a write of ``target`` at ``started``."""
         self._state = state
         self.target = target
         self.started = started
-        self._ended = False
-
-    def returned(self, strength: Strength, at: float) -> bool:
-        """End the write as returned at ``at``; return whether it settled the address."""
-        self._end()
-        return self._state._settle(self, _Outcome.RETURNED, strength, at)
-
-    def failed(self) -> bool:
-        """End the write as failed; return whether it settled the address."""
-        self._end()
-        return self._state._settle(self, _Outcome.FAILED, None, None)
+        self._before = before
+        self._ending: _Ending | None = None
+        self._belief: Belief | None = None
+        self._returned_at: float | None = None
 
     @property
-    def ended(self) -> bool:
-        """Return whether the write has ended."""
-        return self._ended
+    def out(self) -> bool:
+        """Return whether the write has not ended yet."""
+        return self._ending is None
 
-    def __enter__(self) -> WriteTicket:
-        """Return the ticket, for ``with state.start_write(...) as ticket``."""
-        return self
+    def returned(self, strength: Strength, at: float) -> bool:
+        """
+        End the write as returned at ``at``; return whether it settled the address.
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        """End a write left without an ending as failed; never swallow anything."""
-        if not self._ended:
-            self.failed()
+        The belief is built before anything changes, so a failure building
+        it leaves the write out, to end as failed when its block exits.
+        """
+        belief = self._state._belief_for(self.target, strength, at)
+        self._end(_Ending.RETURNED)
+        self._belief = belief
+        self._returned_at = at
+        return self._state._is_current(self)
 
-    def _end(self) -> None:
-        if self._ended:
+    def failed(self) -> bool:
+        """End the write as having raised; return whether it was current."""
+        self._end(_Ending.FAILED)
+        return self._state._is_current(self)
+
+    def abandoned(self) -> bool:
+        """
+        End a write that never reached the lock; return whether it was current.
+
+        Nothing was sent, so the address goes back to how it was before.
+        """
+        self._end(_Ending.ABANDONED)
+        return self._state._abandon(self)
+
+    def _end(self, ending: _Ending) -> None:
+        if self._ending is not None:
             raise RuntimeError("a write ended twice")
-        self._ended = True
+        self._ending = ending
 
 
 class AddressState:
@@ -139,13 +163,8 @@ class AddressState:
         self._salt = salt
         self._latest: Observation | None = None
         self._informative: Observation | None = None
-        self._ticket: WriteTicket | None = None
-        self._outcome: _Outcome | None = None
-        self._belief: _Wrote | _Cleared | None = None
-        self._write_started: float | None = None
+        self._write: Write | None = None
         self._read_before_write = False
-        self._cutoff: float | None = None
-        self._charged = False
 
     def observe(self, reading: Reading, at: float) -> bool:
         """
@@ -167,91 +186,89 @@ class AddressState:
             changed = True
         return changed
 
-    def start_write(self, target: Desired, at: float) -> WriteTicket:
+    @contextmanager
+    def writing(self, target: Desired, at: float) -> Generator[Write]:
         """
         Start a write of ``target`` at ``at``, superseding any write still out.
 
-        What was believed before no longer counts: until this write returns
-        the view says it is out, and if it fails, that it failed. Only its
-        return records a belief again.
+        The write is ended by the caller inside the block; if it is not, it
+        ends as failed when the block exits, however it exits.
         """
+        before = _Before(self._write, self._read_before_write)
         self._read_before_write = self.ever_read
-        ticket = WriteTicket(self, target, at)
-        self._ticket = ticket
-        self._outcome = _Outcome.IN_FLIGHT
-        self._write_started = at
-        self._cutoff = at
-        self._charged = False
-        return ticket
+        write = Write(self, target, at, before)
+        self._write = write
+        try:
+            yield write
+        finally:
+            if write.out:
+                write.failed()
+
+    @property
+    def last_write(self) -> Write | None:
+        """Return the current write: the newest one started and not abandoned."""
+        return self._write
+
+    @property
+    def latest(self) -> Observation | None:
+        """Return the last thing the lock said about the address, if anything."""
+        return self._latest
 
     @property
     def ever_read(self) -> bool:
         """Return whether a read of the address has completed, silence included."""
         if self._latest is None:
             return False
-        if self._write_started is None:
+        if self._write is None:
             return True
-        return self._read_before_write or self._latest.at >= self._write_started
+        return self._read_before_write or self._latest.at >= self._write.started
 
     def view(self, desired: Desired) -> AddressView:
         """Return what the judge weighs, relative to ``desired``."""
         return AddressView(self._written(desired), self._seen(), self.ever_read)
 
-    def take_charge(self) -> bool:
-        """
-        Return True once per returned write: charge the breaker for it.
-
-        For a write the judge found contradicted; asked again for the same
-        write, it returns False, however often the address is judged.
-        """
-        if self._charged or self._outcome is not _Outcome.RETURNED:
-            return False
-        self._charged = True
-        return True
-
     def _written(self, desired: Desired) -> Written:
-        if self._outcome is None:
+        write = self._write
+        if write is None:
             return Written.NOTHING
-        if self._outcome is _Outcome.IN_FLIGHT:
+        if write.out:
             return Written.IN_FLIGHT
-        if self._outcome is _Outcome.FAILED:
+        if write._ending is _Ending.FAILED:
             return Written.FAILED
-        belief = self._belief
+        belief = write._belief
+        assert belief is not None
         if isinstance(desired, WantPin):
-            target = isinstance(belief, _Wrote) and belief.fingerprint == fingerprint(
-                desired.pin, self._salt
-            )
+            target = belief.fingerprint == fingerprint(desired.pin, self._salt)
         else:
-            target = isinstance(belief, _Cleared)
+            target = belief.fingerprint is None
         return Written.TARGET if target else Written.OTHER
 
     def _seen(self) -> Observation | None:
         informative = self._informative
         if informative is None:
             return None
-        if self._cutoff is not None and informative.at < self._cutoff:
-            return None
+        write = self._write
+        if write is not None:
+            cutoff = write.started
+            if write._returned_at is not None:
+                cutoff = max(cutoff, write._returned_at)
+            if informative.at < cutoff:
+                return None
         return informative
 
-    def _settle(
-        self,
-        ticket: WriteTicket,
-        outcome: _Outcome,
-        strength: Strength | None,
-        at: float | None,
-    ) -> bool:
-        """Settle the address from ``ticket``'s ending, if it is the current write."""
-        if ticket is not self._ticket:
+    def _belief_for(self, target: Desired, strength: Strength, at: float) -> Belief:
+        if isinstance(target, WantEmpty):
+            return Belief(None, strength, at)
+        assert isinstance(target, WantPin)
+        return Belief(fingerprint(target.pin, self._salt), strength, at)
+
+    def _is_current(self, write: Write) -> bool:
+        return write is self._write
+
+    def _abandon(self, write: Write) -> bool:
+        """Put the address back as it was before ``write``, if it is current."""
+        if write is not self._write:
             return False
-        self._outcome = outcome
-        if outcome is _Outcome.RETURNED:
-            assert strength is not None and at is not None
-            target = ticket.target
-            if isinstance(target, WantEmpty):
-                self._belief = _Cleared(strength, at)
-            else:
-                assert isinstance(target, WantPin)
-                self._belief = _Wrote(fingerprint(target.pin, self._salt), strength, at)
-            assert self._cutoff is not None
-            self._cutoff = max(self._cutoff, at)
+        self._write = write._before.write
+        self._read_before_write = write._before.read_before_write
         return True

@@ -190,7 +190,7 @@ def test_a_read_that_completed_lets_the_judge_decide_even_if_it_said_nothing() -
 
 def _contradicted_clear(state: AddressState, start: float) -> None:
     """Clear the address, and have the lock still show a code after."""
-    with state.start_write(WANT_EMPTY, start) as write:
+    with state.writing(WANT_EMPTY, start) as write:
         write.returned(Strength.SENT, start + 1)
     state.observe(HOLDS_MASKED, start + 2)
 
@@ -200,7 +200,8 @@ def test_a_release_clear_the_lock_ignores_ends_in_a_repair() -> None:
     A code being cleared on its way out is retried once, then reported.
 
     The caller gives a release clear a breaker of two (design-review decision
-    6) and charges each write once however often it is judged, so the second
+    6), and the breaker counts each write once however often it is judged
+    and charged, so the second
     contradicted clear suspends it with the repair that warns the code may
     still open the door.
     """
@@ -215,8 +216,8 @@ def test_a_release_clear_the_lock_ignores_ends_in_a_repair() -> None:
                 tripped=breaker.tripped,
                 release=True,
             )
-            if verdict.charge and state.take_charge():
-                breaker.charge(10.0 * attempt + 2)
+            if verdict.charge:
+                breaker.charge(10.0 * attempt + 2, state.last_write)
 
     assert judge(
         WANT_EMPTY, state.view(WANT_EMPTY), tripped=breaker.tripped, release=True

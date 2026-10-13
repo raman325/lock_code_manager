@@ -16,8 +16,8 @@ The rules are the credential-model decisions, in order:
    sync, and written again (decision 2). A code disabled on the lock always
    contradicts (decision 5), and so does a code still there after a clear
    (decision 12). If the last write was the target, that write failed: the
-   verdict says to charge, and the caller charges once per write
-   (``AddressState.take_charge``).
+   verdict says to charge, and the caller charges the breaker for that
+   write (``SlotBreaker.charge(at, write)``), which counts it once.
 5. The last write was the target: in sync. On a lock that never says which
    code it holds that is trust, not evidence (decision 1).
 6. The lock shows the target: in sync.
@@ -65,8 +65,8 @@ class Verdict:
     status: Status
     # What to write now, or None to leave the address alone.
     write: Desired | None = None
-    # The last write of the target is contradicted: charge the breaker for it
-    # if ``AddressState.take_charge`` agrees it has not been charged yet.
+    # The last write of the target is contradicted: charge the breaker for it,
+    # passing the write, so it is counted once (``SlotBreaker.charge``).
     charge: bool = False
     # The repair a suspension raises.
     repair: Repair | None = None
