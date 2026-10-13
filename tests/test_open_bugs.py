@@ -53,6 +53,7 @@ from custom_components.lock_code_manager.providers._base import (
 
 from .common import (
     BASE_CONFIG,
+    CONFIG_ENTRY_VERSION,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     TWO_SLOTS_ON_LOCK_1,
@@ -586,36 +587,69 @@ async def test_refreshing_a_lock_nothing_manages_says_so(
         )
 
 
-# What reaches the lock itself, as the fake records it.
-_LOCK_IO = (
-    "get_usercodes",
-    "set_usercode",
-    "clear_usercode",
-    "noop_set_usercode",
-    "noop_clear_usercode",
-)
-
-
-def _lock_io(locks: list[MockLCMLock], lock_entity_id: str) -> int:
-    """Count the reads and writes ``locks`` sent to ``lock_entity_id``."""
-    return sum(
-        len(built.service_calls[operation])
-        for built in locks
-        if built.lock.entity_id == lock_entity_id
-        for operation in _LOCK_IO
-    )
+def _lock_io(lock: MockLCMLock) -> int:
+    """Count the operations that reached ``lock``: everything but its lifecycle."""
+    return sum(call not in ("setup", "unload") for call in lock.call_order)
 
 
 async def _async_hold_a_write(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory
-) -> tuple[MockConfigEntry, LockFault]:
+) -> tuple[MockConfigEntry, MockLCMLock, LockFault]:
     """Set up an entry on lock 1 with a PIN change on its way, held at the lock."""
-    entry = await _async_setup_two_slots(hass, freezer)
-    held = mock_lock(entry).hang("set", 1)
+    try:
+        entry = await _async_setup_two_slots(hass, freezer)
+        lock = mock_lock(entry)
+    except AssertionError as err:
+        pytest.fail(f"setup: the first entry did not come up in sync: {err}")
+    held = lock.hang("set", 1)
     await async_set_slot_pin(hass, entry, 1, "4321")
     await async_advance_clock(hass, freezer, MIN_OPERATION_DELAY, settle=False)
     await held.async_wait_held()
-    return entry, held
+    return entry, lock, held
+
+
+async def _async_reach_lock_1_while_held(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    lock: MockLCMLock,
+    held: LockFault,
+    entry: MockConfigEntry,
+) -> int:
+    """
+    Set up ``entry`` beside the held write; return what reached lock 1 meanwhile.
+
+    Counts the held lock's own operations from now on, and every lock 1 a
+    provider builds along the way, so neither joining the lock nor building
+    a new one hides a call. Setup may finish or wait its turn; once the
+    count is taken the write is let go and setup must succeed.
+    """
+    before = _lock_io(lock)
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(lambda built: built) as built:
+        setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
+        for _ in range(5):
+            await async_advance_clock(hass, freezer, 2, settle=False)
+        if not held.held:
+            pytest.fail("setup: the write is no longer held")
+        reached = (_lock_io(lock) - before) + sum(
+            _lock_io(other)
+            for other in built
+            if other.lock.entity_id == LOCK_1_ENTITY_ID
+        )
+        held.clear()
+        await async_step_clock_until(hass, freezer, setup.done, 100, "the setup")
+    if not setup.result():
+        pytest.fail(f"setup: {entry.title} did not set up")
+    return reached
+
+
+async def _async_unload_all(hass: HomeAssistant) -> None:
+    """Unload every entry, failing the test on one that will not unload."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.state is ConfigEntryState.LOADED and not (
+            await hass.config_entries.async_unload(entry.entry_id)
+        ):
+            pytest.fail(f"teardown: {entry.title} did not unload")
 
 
 @pytest.mark.xfail(
@@ -641,29 +675,19 @@ async def test_an_entry_set_up_beside_one_unloading_waits_for_its_write(
     exists to prevent (#139). The design review's handle decision (R2, Q1)
     has it join the lock already there.
     """
-    first, held = await _async_hold_a_write(hass, freezer)
+    first, lock, held = await _async_hold_a_write(hass, freezer)
     unload = hass.async_create_task(hass.config_entries.async_unload(first.entry_id))
     await async_run_until_quiet()
     if first.state is not ConfigEntryState.UNLOAD_IN_PROGRESS:
         pytest.fail(f"setup: the first entry is {first.state}, not unloading")
 
-    second = current_entry("Beside the unload", {3: "3333"})
-    second.add_to_hass(hass)
-    with when_mock_lock_built(lambda built: built) as built:
-        setup = hass.async_create_task(hass.config_entries.async_setup(second.entry_id))
-        # Well inside the first entry's stop grace. Setup may finish or may
-        # wait its turn; either way, nothing else may reach the lock yet.
-        for _ in range(5):
-            await async_advance_clock(hass, freezer, 2, settle=False)
-        if not held.held:
-            pytest.fail("setup: the first entry's write is no longer held")
-        beside = _lock_io(built, LOCK_1_ENTITY_ID)
-
-        held.clear()
-        await async_step_clock_until(hass, freezer, setup.done, 100, "second setup")
+    # Well inside the first entry's stop grace.
+    reached = await _async_reach_lock_1_while_held(
+        hass, freezer, lock, held, current_entry("Beside the unload", {3: "3333"})
+    )
     await async_step_clock_until(hass, freezer, unload.done, 100, "first unload")
-    assert await hass.config_entries.async_unload(second.entry_id)
-    assert beside == 0
+    await _async_unload_all(hass)
+    assert reached == 0
 
 
 @pytest.mark.xfail(
@@ -687,28 +711,11 @@ async def test_the_unmanaged_code_sweep_waits_for_a_write_in_flight(
     read skips the turn the entry already holding the lock is using, so it
     reaches the lock while that entry's write is still in flight.
     """
-    _entry_on_lock_1, held = await _async_hold_a_write(hass, freezer)
+    _first, lock, held = await _async_hold_a_write(hass, freezer)
     migrating = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Legacy")
-    migrating.add_to_hass(hass)
-    with when_mock_lock_built(lambda built: built) as built:
-        setup = hass.async_create_task(
-            hass.config_entries.async_setup(migrating.entry_id)
-        )
-        # The sweep may finish or may wait its turn; either way it may not
-        # reach the lock while the write is there.
-        for _ in range(5):
-            await async_advance_clock(hass, freezer, 2, settle=False)
-        if not held.held:
-            pytest.fail("setup: the write is no longer held")
-        swept = _lock_io(
-            [lock for lock in built if not lock.service_calls["setup"]],
-            LOCK_1_ENTITY_ID,
-        )
 
-        held.clear()
-        await async_step_clock_until(hass, freezer, setup.done, 100, "migrating setup")
-    if migrating.version != 5:
-        pytest.fail(f"setup: the entry migrated to {migrating.version}, not 5")
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        await hass.config_entries.async_unload(entry.entry_id)
-    assert swept == 0
+    reached = await _async_reach_lock_1_while_held(hass, freezer, lock, held, migrating)
+    if migrating.version != CONFIG_ENTRY_VERSION:
+        pytest.fail(f"setup: the entry migrated to {migrating.version} only")
+    await _async_unload_all(hass)
+    assert reached == 0
