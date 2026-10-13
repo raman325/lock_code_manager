@@ -36,9 +36,10 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from functools import partial
+import inspect
 import time
 from typing import Any, Literal, Self
-from unittest.mock import MagicMock
+from unittest.mock import DEFAULT, MagicMock
 
 from chip.clusters import Objects as clusters
 from matter_server.client.client import MatterClient
@@ -91,9 +92,10 @@ class ImStatus(IntEnum):
 DlStatus = DoorLock.Enums.DlStatus
 
 
-def im_error(status: ImStatus) -> UnknownError:
+def im_error(status: int) -> UnknownError:
     """Return what the client raises for a command the lock answered ``status``."""
-    return UnknownError(f"InteractionModelError: {_IM_NAMES[status]} (0x{status:x})")
+    name = _IM_NAMES.get(status, "Unknown")
+    return UnknownError(f"InteractionModelError: {name} (0x{status:x})")
 
 
 _IM_NAMES = {
@@ -357,9 +359,12 @@ class FakeMatterLock:
         Change a user and its PIN as another admin or the keypad does, and announce it.
 
         A change not made over Matter is logged as a ``LockUserChange`` with no
-        fabric or source node, and the record carries no fabric indices
-        (DLS:563-571: they are reported only for ``kMatterIM`` changes). A PIN
-        of None removes the user and every credential it holds.
+        fabric or source node, and what it writes carries no fabric index
+        (DLS:563-571: they are reported only for ``kMatterIM`` changes); a
+        record Home Assistant created keeps its creator. The PIN moves to this
+        user from any other holding it, and is logged as an add or a modify of
+        the credential, by whether it existed. A PIN of None removes the user
+        and every credential it holds.
         """
         index = user_index if credential_index is None else credential_index
         if pin is None:
@@ -374,21 +379,30 @@ class FakeMatterLock:
                 source=DoorLock.Enums.OperationSourceEnum.kKeypad,
             )
             return
-        added = user_index not in self.users
+        existed = (_PIN, index) in self.credentials
+        for other_index, other in self.users.items():
+            if other_index != user_index and (_PIN, index) in other.credentials:
+                other.credentials.remove((_PIN, index))
         user = self.users.setdefault(
             user_index, LockUser(name=name, created_by=None, modified_by=None)
         )
+        if name:
+            user.name = name
         user.status = status
+        user.modified_by = None
         if (_PIN, index) not in user.credentials:
             user.credentials.append((_PIN, index))
+        previous = self.credentials.get((_PIN, index))
         self.credentials[(_PIN, index)] = LockCredential(
-            pin.encode(), created_by=None, modified_by=None
+            pin.encode(),
+            created_by=previous.created_by if previous else None,
+            modified_by=None,
         )
         self._log_user_change(
             DoorLock.Enums.LockDataTypeEnum.kPin,
-            DoorLock.Enums.DataOperationTypeEnum.kAdd
-            if added
-            else DoorLock.Enums.DataOperationTypeEnum.kModify,
+            DoorLock.Enums.DataOperationTypeEnum.kModify
+            if existed
+            else DoorLock.Enums.DataOperationTypeEnum.kAdd,
             user_index,
             index,
             source=DoorLock.Enums.OperationSourceEnum.kKeypad,
@@ -528,8 +542,10 @@ class FakeMatterLock:
             or kwargs.get("cluster_id") != _DL
         ):
             if self._previous is None:
-                return None
-            return await self._previous(command, *args, **kwargs)
+                # The mock answers with its return_value, as before the fake.
+                return DEFAULT
+            result = self._previous(command, *args, **kwargs)
+            return await result if inspect.isawaitable(result) else result
         if kwargs.get("endpoint_id") != self.endpoint_id:
             # The server sends the command to an endpoint with no Door Lock
             # cluster, which answers UnsupportedCluster.
@@ -551,7 +567,7 @@ class FakeMatterLock:
                     None,
                     self._next_free_credential(_cred_index(payload)),
                 )
-            raise im_error(ImStatus(fault.status or ImStatus.FAILURE))
+            raise im_error(fault.status or ImStatus.FAILURE)
         if fault is not None and fault.kind is FaultKind.IGNORE:
             if name == "SetCredential":
                 return _set_credential_response(
@@ -690,7 +706,12 @@ class FakeMatterLock:
         self._clear_user(index, announce=True)
 
     def _clear_user(self, index: int, *, announce: bool) -> None:
-        """Remove a user and every credential it holds (DLS:2105-2151)."""
+        """
+        Remove a user and every credential it holds (DLS:2105-2151).
+
+        The SDK does not check that the index was occupied, so clearing an
+        empty one is announced like any other.
+        """
         user = self.users.pop(index, None)
         for credential in user.credentials if user else ():
             self.credentials.pop(credential, None)
@@ -706,7 +727,7 @@ class FakeMatterLock:
 
     async def _cmd_SetCredential(self, payload: dict[str, Any]) -> dict[str, Any]:  # noqa: N802
         """
-        Answer SetCredential (DLS:664-856), answered in band with a ``DlStatus``.
+        Answer SetCredential (DLS:664-856) in band, with a ``DlStatus``.
 
         In order: the type must be supported (DLS:678-685); the index in
         range, else InvalidField (DLS:692-700); the data within the PIN
@@ -725,7 +746,7 @@ class FakeMatterLock:
         data = _as_bytes(payload["credentialData"])
         user_index = payload.get("userIndex")
         next_free = self._next_free_credential(index)
-        if kind != _PIN:
+        if not self._supports_type(kind):
             raise im_error(ImStatus.UNSUPPORTED_COMMAND)
         if not 1 <= index <= self.pin_slots:
             return _set_credential_response(DlStatus.kInvalidField, None, next_free)
@@ -820,7 +841,7 @@ class FakeMatterLock:
         """
         kind = payload["credential"]["credentialType"]
         index = payload["credential"]["credentialIndex"]
-        if kind != _PIN:
+        if not self._supports_type(kind):
             raise im_error(ImStatus.UNSUPPORTED_COMMAND)
         credential = self.credentials.get((kind, index))
         return {
@@ -843,18 +864,23 @@ class FakeMatterLock:
         """
         Answer ClearCredential (DLS:993-1044, 2986-3140).
 
-        An empty index clears nothing and succeeds (DLS:3005-3021). Clearing a
+        An unsupported type or an index out of range is InvalidCommand
+        (DLS:1023-1030, 2996-3002); clearing every credential (null, or
+        ``CLEAR_ALL``) is not modeled. An empty index clears nothing and
+        succeeds (DLS:3005-3021). Clearing a
         user's only credential clears the user, and is logged as the user's
         removal (DLS:3043-3053); otherwise the credential leaves the user, and
         is logged as itself (DLS:3135).
         """
         credential = payload.get("credential")
-        if credential is None:
+        if credential is None or credential["credentialIndex"] == CLEAR_ALL:
             raise NotImplementedError(
                 "the fake lock does not model clearing every credential"
             )
         kind = credential["credentialType"]
         index = credential["credentialIndex"]
+        if not self._supports_type(kind) or not 1 <= index <= self.pin_slots:
+            raise im_error(ImStatus.INVALID_COMMAND)
         if (kind, index) not in self.credentials:
             return
         owner = self.owner(index)
@@ -914,6 +940,8 @@ class FakeMatterLock:
         its own filters match (MS_CLIENT:960-979).
         """
         self._event_number += 1
+        # A separate message from the server, after the command's own answer:
+        # scheduled, so the caller has the response before any subscriber runs.
         node_event = dataclass_from_dict(
             MatterNodeEvent,
             {
@@ -928,16 +956,25 @@ class FakeMatterLock:
                 "data": data,
             },
         )
-        MatterClient._signal_event(
-            self.client,
-            EventType.NODE_EVENT,
-            data=node_event,
-            node_id=node_event.node_id,
+        asyncio.get_running_loop().call_soon(
+            partial(
+                MatterClient._signal_event,
+                self.client,
+                EventType.NODE_EVENT,
+                data=node_event,
+                node_id=node_event.node_id,
+            )
         )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _supports_type(self, kind: int) -> bool:
+        """Return whether the lock takes credentials of ``kind`` (DLS:2728-2750)."""
+        return kind == _PIN and bool(
+            self.feature_map & DoorLock.Bitmaps.Feature.kPinCredential
+        )
 
     def _require_users(self) -> None:
         """Refuse a user command, UnsupportedCommand, on a lock without the USR feature."""

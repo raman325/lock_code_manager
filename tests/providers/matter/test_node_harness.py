@@ -32,6 +32,7 @@ from custom_components.lock_code_manager.const import BUS_EVENT_CREDENTIAL_USED
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
+    async_run_until_quiet,
     code_entity_id,
     in_sync_entity_id,
 )
@@ -60,8 +61,13 @@ async def _command(lock: FakeMatterLock, command: Any) -> Any:
     )
 
 
-def _record_events(lock: FakeMatterLock) -> list[tuple[int, dict[str, Any]]]:
-    """Subscribe to the node's events as the provider does; return what arrives."""
+async def _record_events(lock: FakeMatterLock) -> list[tuple[int, dict[str, Any]]]:
+    """
+    Subscribe to the node's events as the provider does; return what arrives.
+
+    Events from what the test did before are delivered first, unrecorded.
+    """
+    await async_run_until_quiet()
     seen: list[tuple[int, dict[str, Any]]] = []
 
     def _on_event(_event: EventType, node_event: Any) -> None:
@@ -183,11 +189,12 @@ class TestUsers:
         self, fake_matter_lock: FakeMatterLock
     ) -> None:
         """DLS:1948-2019: the record, this fabric's, and a remote LockUserChange."""
-        seen = _record_events(fake_matter_lock)
+        seen = await _record_events(fake_matter_lock)
 
         result = await lock_helpers.set_lock_user(
             fake_matter_lock.client, fake_matter_lock.node, user_name="Mom"
         )
+        await async_run_until_quiet()
 
         assert result == {"user_index": 1}
         assert fake_matter_lock.users[1].name == "Mom"
@@ -272,11 +279,12 @@ class TestUsers:
     ) -> None:
         """DLS:2105-2151: the user, its credentials, and a remote event."""
         await _command(fake_matter_lock, _set_credential(3, "333333", None))
-        seen = _record_events(fake_matter_lock)
+        seen = await _record_events(fake_matter_lock)
 
         await lock_helpers.clear_lock_user(
             fake_matter_lock.client, fake_matter_lock.node, 1
         )
+        await async_run_until_quiet()
 
         assert fake_matter_lock.users == {}
         assert fake_matter_lock.codes == {}
@@ -290,11 +298,12 @@ class TestUsers:
         """DLS:637-660: ClearUser 0xFFFE empties the lock and logs one change."""
         fake_matter_lock.program(1, "111111")
         fake_matter_lock.program(2, "222222")
-        seen = _record_events(fake_matter_lock)
+        seen = await _record_events(fake_matter_lock)
 
         await _command(
             fake_matter_lock, DoorLock.Commands.ClearUser(userIndex=CLEAR_ALL)
         )
+        await async_run_until_quiet()
 
         assert fake_matter_lock.users == {}
         assert [data["userIndex"] for _, data in seen] == [CLEAR_ALL]
@@ -488,7 +497,7 @@ class TestCredentials:
     ) -> None:
         """DLS:3043-3053: logged as the user's removal."""
         await _command(fake_matter_lock, _set_credential(2, "222222", None))
-        seen = _record_events(fake_matter_lock)
+        seen = await _record_events(fake_matter_lock)
 
         await lock_helpers.clear_lock_credential(
             fake_matter_lock.client,
@@ -496,6 +505,7 @@ class TestCredentials:
             credential_type="pin",
             credential_index=2,
         )
+        await async_run_until_quiet()
 
         assert fake_matter_lock.users == {}
         assert [(data["lockDataType"], data["userIndex"]) for _, data in seen] == [
@@ -509,20 +519,45 @@ class TestCredentials:
         await _command(fake_matter_lock, _set_user(1, "Mom"))
         await _command(fake_matter_lock, _set_credential(1, "111111", 1))
         await _command(fake_matter_lock, _set_credential(2, "222222", 1))
-        seen = _record_events(fake_matter_lock)
+        seen = await _record_events(fake_matter_lock)
 
         await _command(fake_matter_lock, _clear_credential(2))
+        await async_run_until_quiet()
 
         assert fake_matter_lock.users[1].credentials == [(PIN, 1)]
         assert [(data["lockDataType"], data["dataIndex"]) for _, data in seen] == [
             (DoorLock.Enums.LockDataTypeEnum.kPin, 2)
         ]
 
+    @pytest.mark.parametrize("index", [0, 11], ids=["zero", "past_the_lock"])
+    async def test_clearing_an_index_out_of_range_is_invalid(
+        self, fake_matter_lock: FakeMatterLock, index: int
+    ) -> None:
+        """DLS:2996-3002."""
+        with pytest.raises(UnknownError, match=_im(ImStatus.INVALID_COMMAND)):
+            await _command(fake_matter_lock, _clear_credential(index))
+
+    async def test_clearing_every_credential_is_not_modeled(
+        self, fake_matter_lock: FakeMatterLock
+    ) -> None:
+        """No silent success for the clear-all form (DLS:1032-1036)."""
+        with pytest.raises(NotImplementedError):
+            await _command(fake_matter_lock, _clear_credential(CLEAR_ALL))
+
+    async def test_a_lock_without_pin_credentials_refuses_them(
+        self, fake_matter_lock: FakeMatterLock
+    ) -> None:
+        """DLS:678-685: the type must be supported; user management is not asked."""
+        fake_matter_lock.feature_map = DoorLock.Bitmaps.Feature.kUser
+
+        with pytest.raises(UnknownError, match=_im(ImStatus.UNSUPPORTED_COMMAND)):
+            await _command(fake_matter_lock, _set_credential(1, "111111", None))
+
     async def test_clearing_an_empty_index_succeeds(
         self, fake_matter_lock: FakeMatterLock
     ) -> None:
         """DLS:3005-3021: nothing to clear is not an error, and nothing is logged."""
-        seen = _record_events(fake_matter_lock)
+        seen = await _record_events(fake_matter_lock)
 
         await _command(fake_matter_lock, _clear_credential(3))
 
@@ -541,9 +576,10 @@ class TestLocalChanges:
         self, fake_matter_lock: FakeMatterLock
     ) -> None:
         """A local change names no fabric or node, and the record no fabric indices."""
-        seen = _record_events(fake_matter_lock)
+        seen = await _record_events(fake_matter_lock)
 
         fake_matter_lock.program(3, "333333", name="Mom")
+        await async_run_until_quiet()
 
         assert fake_matter_lock.users[3].created_by is None
         [(_, data)] = seen
@@ -560,9 +596,10 @@ class TestLocalChanges:
     ) -> None:
         """LockOperation: unlocked from the keypad, by the user holding the PIN."""
         fake_matter_lock.program(4, "444444", credential_index=6)
-        seen = _record_events(fake_matter_lock)
+        seen = await _record_events(fake_matter_lock)
 
         fake_matter_lock.keypad_unlock(6)
+        await async_run_until_quiet()
 
         assert seen == [
             (
@@ -578,6 +615,49 @@ class TestLocalChanges:
             )
         ]
 
+    async def test_a_pin_moved_at_the_keypad_leaves_its_old_user(
+        self, fake_matter_lock: FakeMatterLock
+    ) -> None:
+        """One credential, one holder: the move is a modify of an existing PIN."""
+        fake_matter_lock.program(1, "111111")
+        await async_run_until_quiet()
+        seen = await _record_events(fake_matter_lock)
+
+        fake_matter_lock.program(2, "222222", credential_index=1)
+        await async_run_until_quiet()
+
+        assert fake_matter_lock.users[1].credentials == []
+        assert fake_matter_lock.owner(1) == 2
+        [(_, data)] = seen
+        assert data["dataOperationType"] == MODIFY
+
+    async def test_a_keypad_change_to_home_assistant_s_user_keeps_its_creator(
+        self, fake_matter_lock: FakeMatterLock
+    ) -> None:
+        """The record stays Home Assistant's; only the last modifier changes."""
+        await _command(fake_matter_lock, _set_user(1, "Mom"))
+
+        fake_matter_lock.program(1, "111111", name="Mum")
+
+        user = fake_matter_lock.users[1]
+        assert (user.name, user.created_by, user.modified_by) == (
+            "Mum",
+            HA_FABRIC,
+            None,
+        )
+
+    async def test_the_response_arrives_before_the_event(
+        self, fake_matter_lock: FakeMatterLock
+    ) -> None:
+        """The event is a separate message from the server, after the answer."""
+        seen = await _record_events(fake_matter_lock)
+
+        await _command(fake_matter_lock, _set_user(1, "Mom"))
+        assert seen == []
+
+        await async_run_until_quiet()
+        assert len(seen) == 1
+
     async def test_events_reach_only_subscribers_of_the_node(
         self, fake_matter_lock: FakeMatterLock, matter_client: MagicMock
     ) -> None:
@@ -588,9 +668,10 @@ class TestLocalChanges:
             event_filter=EventType.NODE_EVENT,
             node_filter=fake_matter_lock.node.node_id + 1,
         )
-        mine = _record_events(fake_matter_lock)
+        mine = await _record_events(fake_matter_lock)
 
         fake_matter_lock.program(1, "111111")
+        await async_run_until_quiet()
 
         assert other == []
         assert len(mine) == 1
@@ -626,6 +707,23 @@ class TestFaults:
 
         assert response["status"] == DlStatus.kOccupied
         assert fake_matter_lock.users == {}
+
+    async def test_refuse_takes_any_interaction_model_status(
+        self, fake_matter_lock: FakeMatterLock
+    ) -> None:
+        """A status the fake has no name for still reaches the client as one."""
+        fake_matter_lock.refuse("ClearUser", status=0x87)
+
+        with pytest.raises(UnknownError, match=r"\(0x87\)"):
+            await _command(fake_matter_lock, DoorLock.Commands.ClearUser(userIndex=1))
+
+    async def test_other_commands_still_get_the_mock_s_answer(
+        self, fake_matter_lock: FakeMatterLock, matter_client: MagicMock
+    ) -> None:
+        """Anything not this node's Door Lock passes through to the mock as before."""
+        matter_client.send_command.return_value = {"answered": True}
+
+        assert await matter_client.send_command("server_info") == {"answered": True}
 
     async def test_ignore_answers_success_and_changes_nothing(
         self, fake_matter_lock: FakeMatterLock

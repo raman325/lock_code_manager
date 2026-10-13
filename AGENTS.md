@@ -486,7 +486,8 @@ Each provider package has a `conftest.py`, a `test_provider.py`, and a
 ```text
 tests/providers/
   akuvox/          # conftest, test_provider, test_e2e
-  matter/          # + helpers, fixtures/, test_sdk_exception_translation
+  matter/          # + helpers, fixtures/, fake_node, test_node_harness,
+                   #   test_sdk_exception_translation
   schlage/
   virtual/
   zha/             # + helpers (Zigbee frames, quirk-style clusters)
