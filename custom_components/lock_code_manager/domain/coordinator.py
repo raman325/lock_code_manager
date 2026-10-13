@@ -115,7 +115,7 @@ class LockUsercodeUpdateCoordinator(
             update_interval=update_interval,
             # Belongs to the lock, which several entries can share, not to any
             # one of them: Lock Code Manager shuts it down once the last entry
-            # holding the lock lets go (``async_unload_lock``). The "Disable
+            # holding the lock lets go (its handle, ``domain/lock_handle.py``). The "Disable
             # polling" system option, which Home Assistant reads from a
             # coordinator's own entry, is read from every entry holding the
             # lock instead (``_schedule_refresh``).

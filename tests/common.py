@@ -936,16 +936,17 @@ SLOT_2_IN_SYNC_ENTITY = "binary_sensor.mock_title_test2_test_1_in_sync"
 
 
 # ``setup`` is the provider's own setup, which the entry runs when it builds
-# the lock and again whenever the lock's integration comes back. ``probe`` is
+# the lock and again whenever the lock's integration comes back; ``unload`` is
+# its teardown, when the lock's last holder lets go. ``probe`` is
 # the device availability check every operation runs first: device
 # input/output on a provider like Schlage, whose check is a cloud round trip.
-LockOperation = Literal["set", "clear", "get", "setup", "probe"]
+LockOperation = Literal["set", "clear", "get", "setup", "unload", "probe"]
 # What a fault naming no operation matches: the calls that reach the lock's
-# code table. Setup and the probe are faulted only by name, so a test failing
+# code table. Setup, unload and the probe are faulted only by name, so a test failing
 # every operation keeps the lifecycle it did not ask about.
 _TABLE_OPERATIONS = frozenset({"set", "clear", "get"})
 # Operations that touch no slot, so a fault naming one cannot name a slot.
-_SLOTLESS_OPERATIONS = frozenset({"setup", "probe"})
+_SLOTLESS_OPERATIONS = frozenset({"setup", "unload", "probe"})
 
 
 class FaultKind(StrEnum):
@@ -1438,9 +1439,11 @@ class MockLCMLock(BaseLock):
             fault.at_the_lock(operation, slot)
         return fault
 
-    async def _async_through_fault(self, operation: Literal["setup", "probe"]) -> None:
+    async def _async_through_fault(
+        self, operation: Literal["setup", "unload", "probe"]
+    ) -> None:
         """
-        Carry a setup or a probe through the fault it meets, if any.
+        Carry a setup, an unload or a probe through the fault it meets, if any.
 
         Neither touches the code table, so neither is recorded in
         ``run_times``: the pacing between operations is not theirs.
@@ -1518,6 +1521,7 @@ class MockLCMLock(BaseLock):
     async def async_unload(self, remove_permanently: bool) -> None:
         """Record the teardown so tests can assert on remove_permanently."""
         self._record("unload", (remove_permanently,))
+        await self._async_through_fault("unload")
         await super().async_unload(remove_permanently)
 
     async def async_hard_refresh_codes(

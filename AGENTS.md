@@ -78,9 +78,11 @@ entities.
   questions in `domain/queries.py` (`entries_configuring`, `slots_configured_on`, `configured_owner`,
   `syncing_owner`, `another_enabled_entry_configures`). Each counts a different set of entries;
   ask the one you mean rather than filtering `async_entries` by hand. Live lock-instance ownership
-  is a separate question and filters by load state on purpose: `_find_shared_lock_instance` and
-  `_lock_instance_held_by_another_entry` in `__init__.py`, and `iter_loaded_lcm_entries` /
-  `get_managed_locks` for the locks loaded entries hold
+  is a separate question: one `LockHandle` per physical lock (`domain/lock_handle.py`) holds the
+  instance and the entries holding it. `async_acquire` joins the registered handle in any holder
+  state, or waits out one still closing and builds anew; `release` returns the handle only to its
+  last holder, which closes it. `iter_loaded_lcm_entries` / `get_managed_locks` give the locks
+  loaded entries hold
 
 **Coordinator** (`coordinator.py`)
 

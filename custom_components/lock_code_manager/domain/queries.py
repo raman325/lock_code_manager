@@ -37,10 +37,9 @@ asking:
 Who holds a live lock instance is a different question, about runtime
 objects rather than configuration:
 
-- ``entries_holding``: every entry holding one lock instance, in any state.
-  Release (``_lock_instance_held_by_another_entry`` in ``__init__``), and
-  whether the lock's coordinator honours "Disable polling". Acquisition asks
-  a narrower question (``_find_shared_lock_instance`` in ``__init__``).
+- ``entries_holding``: every entry holding one lock instance, in any state;
+  whether the lock's coordinator honours "Disable polling". Acquiring and
+  releasing an instance belong to its handle (``domain/lock_handle.py``).
 """
 
 from __future__ import annotations
@@ -244,9 +243,8 @@ def another_enabled_entry_configures(
 
     Counts entries that are neither disabled nor ignored, in any load state.
     The per-lock repair issues outlive unloads and reloads, so an entry that
-    is merely between loads still needs its issue kept. Anything that tears
-    down live objects asks ``_lock_instance_held_by_another_entry`` in
-    ``__init__`` instead.
+    is merely between loads still needs its issue kept. Tearing down live
+    objects is the lock's handle's business instead (``domain/lock_handle.py``).
     """
     return any(
         entry.entry_id != config_entry.entry_id
@@ -263,8 +261,8 @@ def entries_holding(
     An entry holds an instance while it sits in the entry's
     ``runtime_data.locks``: put there when the entry builds or shares it,
     taken out when the entry lets go. Asked by identity, not configuration:
-    an entry can list a lock it does not hold, and an entry setting up while
-    another unloads can hold a second instance for the same lock.
+    an entry can list a lock it does not hold. The lock's handle puts the
+    instance there and takes it out (``domain/lock_handle.py``).
     """
     return (
         entry
