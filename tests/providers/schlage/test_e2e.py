@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryDisabler
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
@@ -17,11 +21,17 @@ from custom_components.lock_code_manager.domain.credentials import (
     pin_address,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.providers._util import (
+    make_tagged_name,
+    parse_tag,
+)
 from custom_components.lock_code_manager.providers.schlage import (
     SCHLAGE_DOMAIN,
     SchlageLock,
 )
+from tests.common import user_subentries
 from tests.providers.helpers import register_mock_service
+from tests.providers.schlage.conftest import SCHLAGE_LCM_CONFIG_SLOTS
 
 
 class TestFullSetupLifecycle:
@@ -254,3 +264,58 @@ class TestGetUsers:
 
         assert codes[1] is SlotCredential.unreadable()
         assert codes[2] is SlotCredential.empty()
+
+
+class TestOpenBugs:
+    """Open Schlage bugs, each pinned by a strict xfail."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "open: the tag pass hands an unmanaged code to any slot an entry "
+            "lists, a disabled entry's included"
+        ),
+    )
+    async def test_a_homeowners_code_is_not_tagged_into_a_disabled_entrys_slot(
+        self,
+        hass: HomeAssistant,
+        schlage_lock_entity: er.RegistryEntry,
+        schlage_mock_services: dict[str, AsyncMock],
+    ) -> None:
+        """Slot 3 belongs to a disabled entry's user, so it is not free to adopt a code."""
+        entity_id = schlage_lock_entity.entity_id
+        schlage_mock_services["get_codes"].return_value = {
+            entity_id: {
+                "a": {"name": make_tagged_name(1, "slot1"), "code": "1234"},
+                "b": {"name": make_tagged_name(2, "slot2"), "code": "5678"},
+                "c": {"name": "Mom", "code": "9999"},
+            }
+        }
+        MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [entity_id]},
+            subentries_data=user_subentries(
+                {3: {CONF_NAME: "slot3", CONF_PIN: "5555", CONF_ENABLED: True}}
+            ),
+            unique_id="test_schlage_disabled",
+            disabled_by=ConfigEntryDisabler.USER,
+        ).add_to_hass(hass)
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [entity_id], CONF_SLOTS: SCHLAGE_LCM_CONFIG_SLOTS},
+            unique_id="test_schlage_e2e",
+        )
+        entry.add_to_hass(hass)
+
+        with patch.object(
+            SchlageLock, "async_is_integration_connected", return_value=True
+        ):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+            tagged = [
+                parse_tag(call.args[0].data["name"])[0]
+                for call in schlage_mock_services["add_code"].await_args_list
+            ]
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert 3 not in tagged

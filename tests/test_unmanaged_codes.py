@@ -309,3 +309,29 @@ async def test_a_failed_clear_quotes_the_lock_link_health(
         result["description_placeholders"]["link_health"]
         == "\n\n39 read requests went unanswered"
     )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="open: a refused clear is reported with the set's wording, cannot set code",
+)
+async def test_a_refused_clear_is_reported_as_a_clear(
+    hass: HomeAssistant, stranded
+) -> None:
+    """The repair's error says the lock would not clear the code, not set it."""
+    lock = stranded.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.refuse("clear", STRANDED_SLOT)
+    flow = await async_create_fix_flow(
+        hass,
+        unmanaged_issue_id(LOCK_1_ENTITY_ID, STRANDED_SLOT),
+        {"lock_entity_id": LOCK_1_ENTITY_ID, "slot": STRANDED_SLOT},
+    )
+    flow.hass = hass
+
+    result = await flow.async_step_clear()
+
+    lock.clear_faults()
+    assert result["reason"] == "unmanaged_code_clear_failed"
+    error = result["description_placeholders"]["error"]
+    assert "set code" not in error
+    assert "clear" in error

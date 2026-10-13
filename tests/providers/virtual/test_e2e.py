@@ -31,7 +31,11 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import Event, HomeAssistant
-from homeassistant.helpers import entity_registry as er, issue_registry as ir
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -506,3 +510,96 @@ class TestASlotHeldByAnEntryThatSyncsNothing:
         assert (
             "PIN duplicates managed slot 3" in issue.translation_placeholders["reason"]
         )
+
+
+class TestOpenBugs:
+    """Open virtual-lock bugs, each pinned by a strict xfail."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "open: when one entry drops a lock, only enabled entries count as "
+            "still listing it, so a disabled entry's stored codes are deleted"
+        ),
+    )
+    async def test_a_disabled_entrys_lock_keeps_its_codes_when_another_drops_it(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+        virtual_provider_entry,
+    ) -> None:
+        """The codes the virtual lock holds survive for the disabled entry that lists it."""
+        _entry_on_slot_3(hass, "disabled")
+        lock = get_virtual_lock(hass, lcm_config_entry)
+        await lock.async_internal_set_usercode(3, "5555")
+        replacement = er.async_get(hass).async_get_or_create(
+            "lock",
+            "virtual",
+            "test_virtual_replacement",
+            config_entry=virtual_provider_entry,
+        )
+        hass.states.async_set(replacement.entity_id, "locked")
+
+        lcm_config_entry.async_start_reauth(
+            hass, context={"lock_entity_id": VIRTUAL_LOCK_ENTITY_ID}
+        )
+        await hass.async_block_till_done()
+        [flow] = lcm_config_entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+        result = await async_configure_flow(
+            hass, flow["flow_id"], {CONF_LOCKS: [replacement.entity_id]}
+        )
+        assert result["reason"] == "locks_updated"
+        await hass.async_block_till_done()
+
+        stored = await Store(
+            hass, 1, f"{lock.domain}_{DOMAIN}_{VIRTUAL_LOCK_ENTITY_ID}"
+        ).async_load()
+        assert stored is not None
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "open: a lock with no state yet is named by its entity name alone, "
+            "dropping the device name Home Assistant puts in front of it"
+        ),
+    )
+    async def test_a_lock_named_after_its_device_is_called_by_its_full_name(
+        self,
+        hass: HomeAssistant,
+        virtual_provider_entry,
+    ) -> None:
+        """A lock Home Assistant shows as "Front Door Lock" is not called just "Lock"."""
+        device = dr.async_get(hass).async_get_or_create(
+            config_entry_id=virtual_provider_entry.entry_id,
+            identifiers={("virtual", "front_door")},
+            name="Front Door",
+        )
+        lock_entity = er.async_get(hass).async_get_or_create(
+            "lock",
+            "virtual",
+            "front_door_lock",
+            config_entry=virtual_provider_entry,
+            device_id=device.id,
+            has_entity_name=True,
+            original_name="Lock",
+        )
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {1: {CONF_NAME: "slot1", CONF_PIN: "1234", CONF_ENABLED: True}}
+            ),
+            unique_id="test_virtual_named",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        names = [
+            state.name
+            for state in hass.states.async_all("binary_sensor")
+            if state.entity_id.endswith("_in_sync")
+        ]
+        await hass.config_entries.async_unload(entry.entry_id)
+        assert names
+        assert all("Front Door Lock" in name for name in names), names

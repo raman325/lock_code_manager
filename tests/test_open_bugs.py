@@ -9,17 +9,37 @@ the marker is removed.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import itertools
+import re
+from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.const import STATE_ON
+from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    SERVICE_TURN_OFF,
+    STATE_ON,
+)
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import issue_registry as ir, translation
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_SLOTS,
+    CONF_USERS,
+    DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+    SERVICE_HARD_REFRESH_USERCODES,
+    SUBENTRY_TYPE_USER,
+)
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.providers._base import (
@@ -29,14 +49,32 @@ from custom_components.lock_code_manager.providers._base import (
 
 from .common import (
     LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
     TWO_SLOTS_ON_LOCK_1,
     async_advance_clock,
     async_advance_sync_ticks,
+    async_run_until_quiet,
     async_set_slot_pin,
+    async_step_clock_until,
+    async_switch_slot,
     async_tick_until,
     in_sync_entity_id,
     mock_lock,
+    short_stop_grace,
+    when_mock_lock_built,
 )
+
+
+@pytest.fixture
+def short_grace() -> Iterator[None]:
+    """
+    Shorten the stop grace for the whole test, teardown included.
+
+    Adding users reloads the entry, and each unload waits out the grace on
+    the real clock. Requested first, this is torn down last.
+    """
+    with short_stop_grace():
+        yield
 
 
 def _lcm_issues(hass: HomeAssistant) -> list[str]:
@@ -57,9 +95,11 @@ async def _async_setup_two_slots(
     )
     entry.add_to_hass(hass)
     setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
-    # Paced, setup waits out the delay between its reads on the frozen clock.
-    await async_advance_clock(hass, freezer, 10, settle=False)
-    assert setup.done()
+    # Paced, setup waits out the delay between its reads on the frozen clock;
+    # the first setup in a run also imports the platforms on threads.
+    await async_step_clock_until(
+        hass, freezer, setup.done, 100, "setup", step=MIN_OPERATION_DELAY / 2
+    )
     assert setup.result()
     in_syncs = [in_sync_entity_id(hass, entry, slot) for slot in (1, 2)]
     await async_tick_until(
@@ -207,3 +247,332 @@ async def test_writes_failing_as_disconnected_are_reported(
     assert _lcm_issues(hass)
     lock.clear_faults()
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "open: a clear the lock acknowledges but ignores is sent again every "
+        "tick, never charged and never reported"
+    ),
+)
+async def test_a_clear_the_lock_keeps_ignoring_is_reported(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+) -> None:
+    """A slot turned off whose clear never sticks is suspended with a repair."""
+    entry = await _async_setup_two_slots(hass, freezer)
+    lock = mock_lock(entry)
+    lock.ignore("clear", 1)
+
+    await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
+    await async_advance_sync_ticks(hass, freezer, 30)
+
+    clears = [call for call in lock.service_calls["clear_usercode"] if call[0] == 1]
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
+    )
+    lock.clear_faults()
+    await hass.config_entries.async_unload(entry.entry_id)
+    assert len(clears) <= MAX_SYNC_ATTEMPTS + 1
+    assert issue is not None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "open: strikes against a PIN survive the slot being turned off, so the "
+        "slot can suspend for a rejected code before its clear is sent"
+    ),
+)
+async def test_a_slot_turned_off_after_failed_writes_is_cleared(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+) -> None:
+    """Turning a failing slot off sends its clear, rather than suspending it for the set."""
+    entry = await _async_setup_two_slots(hass, freezer)
+    lock = mock_lock(entry)
+    lock.fail("set", 1)
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_advance_sync_ticks(hass, freezer, MAX_SYNC_ATTEMPTS)
+
+    await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
+    await async_advance_sync_ticks(hass, freezer, 4)
+
+    lock.clear_faults()
+    assert 1 not in lock.codes
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
+        )
+        is None
+    )
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "open: two entries already managing one slot (from before #1626) fight "
+        "over it and nothing reports the overlap"
+    ),
+)
+async def test_an_existing_slot_overlap_is_reported_not_fought_over(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+) -> None:
+    """Two entries on lock 1's slot 1 with different PINs raise a repair, or stop writing."""
+    entries = []
+    for unique_id, pin in (("first", "1111"), ("second", "2222")):
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [LOCK_1_ENTITY_ID],
+                CONF_SLOTS: {
+                    1: {CONF_NAME: unique_id, CONF_PIN: pin, CONF_ENABLED: True}
+                },
+            },
+            unique_id=unique_id,
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        entries.append(entry)
+
+    await async_advance_sync_ticks(hass, freezer, 20)
+
+    lock = mock_lock(entries[0])
+    writes = [call for call in lock.service_calls["set_usercode"] if call[0] == 1]
+    # The mock lock's own code at slot 2 raises an unmanaged-code repair;
+    # that one is not about the overlap.
+    issues = [i for i in _lcm_issues(hass) if not i.startswith("unmanaged_code")]
+    for entry in entries:
+        await hass.config_entries.async_unload(entry.entry_id)
+    assert issues or len(writes) <= 2
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "open (#1536 residual): adding users through the user subentry flow "
+        "waits on the lock read with no progress step"
+    ),
+)
+async def test_adding_users_shows_progress_while_the_lock_is_read(
+    short_grace: None,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """The dialog reports a slow read instead of freezing until the lock answers."""
+    entry = lock_code_manager_config_entry
+    flow = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+    )
+    flow = await hass.config_entries.subentries.async_configure(
+        flow["flow_id"], {"next_step_id": "several"}
+    )
+    held = [mock_lock(entry).hang("get")]
+
+    # Only the locks built for the read hang; the reload after the users
+    # are added builds new ones, which must answer.
+    with when_mock_lock_built(lambda lock: held.append(lock.hang("get"))):
+        submitting = hass.async_create_task(
+            hass.config_entries.subentries.async_configure(
+                flow["flow_id"],
+                {CONF_USERS: {"user3": {CONF_ENABLED: True, CONF_PIN: "3333"}}},
+            )
+        )
+        await async_run_until_quiet()
+    answered = submitting.done()
+    for fault in held:
+        fault.clear()
+    result = await submitting
+
+    assert answered
+    assert result["type"] == "progress"
+
+
+def _entry(
+    hass: HomeAssistant, unique_id: str, lock: str, slots: dict[int, str]
+) -> MockConfigEntry:
+    """Add an entry on ``lock`` with one user per slot, named and PINned as given."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [lock],
+            CONF_SLOTS: {
+                slot: {CONF_NAME: name, CONF_PIN: f"{slot}" * 4, CONF_ENABLED: True}
+                for slot, name in slots.items()
+            },
+        },
+        unique_id=unique_id,
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def _async_reauth(
+    hass: HomeAssistant, entry: MockConfigEntry, lock: str, locks: list[str]
+) -> dict[str, Any]:
+    """Start a reauth of ``entry`` naming ``lock`` as missing, and submit ``locks``."""
+    entry.async_start_reauth(hass, context={"lock_entity_id": lock})
+    await hass.async_block_till_done()
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    return await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: locks}
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "open: reauth checks every lock it is given for overlaps, so an "
+        "overlap the entry already carries blocks every reauth"
+    ),
+)
+async def test_reauth_completes_with_an_overlap_the_entry_already_has(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Resubmitting the entry's own lock is not refused over an overlap that predates it."""
+    entry = _entry(hass, "first", LOCK_1_ENTITY_ID, {1: "test1", 2: "test2"})
+    _entry(hass, "second", LOCK_1_ENTITY_ID, {1: "other"})
+
+    result = await _async_reauth(hass, entry, LOCK_1_ENTITY_ID, [LOCK_1_ENTITY_ID])
+
+    assert result.get("errors") in (None, {})
+    assert result.get("reason") == "locks_updated"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="open: reauth accepts the very lock it was opened for being gone",
+)
+async def test_reauth_refuses_the_lock_that_is_gone(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Submitting the seeded list, gone lock and all, is an error naming that lock."""
+    gone = "lock.front_door"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID, gone],
+            CONF_SLOTS: {1: {CONF_NAME: "test1", CONF_PIN: "1111", CONF_ENABLED: True}},
+        },
+        unique_id="gone",
+    )
+    entry.add_to_hass(hass)
+
+    result = await _async_reauth(hass, entry, gone, [LOCK_1_ENTITY_ID, gone])
+
+    assert result["type"] == "form"
+    assert result["errors"]
+    assert gone in str(result["description_placeholders"])
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "open: an error's own {lock} placeholder overwrites the reauth "
+        "description's, so the form names the wrong lock as missing"
+    ),
+)
+async def test_reauth_keeps_naming_the_missing_lock_after_an_error(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """After an overlap error on another lock, the description still names the missing one."""
+    entry = _entry(hass, "first", LOCK_1_ENTITY_ID, {1: "test1", 2: "test2"})
+    _entry(hass, "second", LOCK_2_ENTITY_ID, {1: "other"})
+
+    result = await _async_reauth(hass, entry, LOCK_1_ENTITY_ID, [LOCK_2_ENTITY_ID])
+
+    assert result["errors"] == {"base": "slots_already_configured"}
+    assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="open: an overlap error lists slot numbers, which the user never sees",
+)
+async def test_an_overlap_error_names_the_users_in_the_way(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The error says which users collide, by name, so the user can act on it."""
+    entry = _entry(hass, "first", LOCK_1_ENTITY_ID, {1: "test1", 2: "test2"})
+    _entry(hass, "second", LOCK_2_ENTITY_ID, {1: "Grandma"})
+
+    result = await _async_reauth(hass, entry, LOCK_1_ENTITY_ID, [LOCK_2_ENTITY_ID])
+    translations = await translation.async_get_translations(
+        hass, "en", "config", {DOMAIN}
+    )
+    template = translations[
+        f"component.{DOMAIN}.config.error.{result['errors']['base']}"
+    ]
+    rendered = re.sub(
+        r"\{(\w+)\}",
+        lambda match: str(result["description_placeholders"].get(match[1], "")),
+        template,
+    )
+
+    assert "Grandma" in rendered
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "open: adding a lock in the options flow never reads it, so codes "
+        "already on it are overwritten"
+    ),
+)
+async def test_adding_a_lock_keeps_the_codes_already_on_it(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+) -> None:
+    """A code someone set at lock 2's keypad survives the lock joining the entry."""
+    entry = _entry(hass, "first", LOCK_1_ENTITY_ID, {1: "test1", 2: "test2"})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+    await hass.async_block_till_done()
+    await async_advance_sync_ticks(hass, freezer, 5)
+
+    lock_2 = entry.runtime_data.locks.get(LOCK_2_ENTITY_ID)
+    codes = dict(lock_2.codes) if lock_2 is not None else None
+    await hass.config_entries.async_unload(entry.entry_id)
+    # Either the flow refused the lock, or the codes on it were left alone.
+    assert result.get("errors") or codes == {1: "1234", 2: "5678"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="open: refreshing a lock no loaded entry manages succeeds silently",
+)
+async def test_refreshing_a_lock_nothing_manages_says_so(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+) -> None:
+    """
+    The action tells the user nothing was refreshed, instead of succeeding.
+
+    ``tests/test_services.py`` pins today's silence; a fix rewrites both.
+    """
+    entry = await _async_setup_two_slots(hass, freezer)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_HARD_REFRESH_USERCODES,
+            {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+            blocking=True,
+        )
