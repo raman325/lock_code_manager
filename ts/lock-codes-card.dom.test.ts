@@ -127,20 +127,27 @@ describe('lock-codes card, rendered', () => {
         expect(root.querySelector('.write-error')).toBeNull();
     });
 
-    it('pairs a lone active slot with an empty neighbour, not full width (PR #811)', async () => {
-        const root = await show([
-            managed,
-            { code: 'empty', managed: false, slot: 2 },
-            { code: 'empty', managed: false, slot: 3 },
-            { code: 'empty', managed: false, slot: 4 }
-        ]);
+    it.each([
+        ['an odd slot borrows the next empty one', 1, [2], '3 – 5'],
+        ['an even slot borrows the previous empty one', 4, [3], '1 – 2']
+    ])(
+        'pairs a lone active slot, not full width: %s (PR #811)',
+        async (_label, active, borrowed, rest) => {
+            const slots: LockCoordinatorSlotData[] = [1, 2, 3, 4, 5].map((slot) =>
+                slot === active ? { ...managed, slot } : { code: 'empty', managed: false, slot }
+            );
+            const root = await show(slots);
 
-        const chips = [...root.querySelectorAll('.slots-grid > .slot-chip')];
-        expect(chips[0].classList.contains('full-width')).toBe(false);
-        expect(chips[1].classList.contains('empty')).toBe(true);
-        expect(chips[1].textContent).toContain('Slot 2');
-        expect(root.querySelector('.empty-summary-range')?.textContent).toContain('3');
-    });
+            const chips = [...root.querySelectorAll('.slots-grid > .slot-chip')];
+            expect(chips.some((chip) => chip.classList.contains('full-width'))).toBe(false);
+            expect(
+                chips
+                    .filter((chip) => chip.classList.contains('empty'))
+                    .map((chip) => chip.textContent?.replace(/\s+/g, ' ').trim())
+            ).toEqual(borrowed.map((slot) => `Slot ${slot} Empty`));
+            expect(root.querySelector('.empty-summary-range')?.textContent?.trim()).toBe(rest);
+        }
+    );
 
     it.each([
         [

@@ -58,10 +58,15 @@ describe('no replaced Home Assistant elements in source', () => {
     for (const file of sourceFiles) {
         it(`${file} uses no replaced element`, () => {
             const content = fs.readFileSync(path.join(tsDir, file), 'utf-8');
-            const used = [...content.matchAll(/<([a-z]+(?:-[a-z]+)+)[\s>/]/g)]
+            // As a tag, and by name in a string (whenDefined, get, createElement).
+            const used = [
+                ...content.matchAll(/<([a-z]+(?:-[a-z]+)+)[\s>/]/g),
+                ...content.matchAll(/['"`]([a-z]+(?:-[a-z]+)+)['"`]/g)
+            ]
                 .map((match) => match[1])
                 .filter((element) => REPLACED.has(element))
-                .map((element) => `${element} (use ${REPLACED.get(element)})`);
+                .map((element) => `${element} (use ${REPLACED.get(element)})`)
+                .filter((entry, index, all) => all.indexOf(entry) === index);
             expect(used).toEqual([]);
         });
     }

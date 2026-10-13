@@ -22,18 +22,18 @@ describe('slot card, rendered', () => {
     let push: (data: SlotCardData) => void;
 
     beforeAll(async () => {
-        if (!customElements.get('lcm-slot')) {
+        if (!customElements.get('lcm-user')) {
             await import('./slot-card');
         }
     });
 
     beforeEach(async () => {
-        card = document.createElement('lcm-slot') as SlotCard;
+        card = document.createElement('lcm-user') as SlotCard;
         card.setConfig({
             code_display: 'masked_with_reveal',
             config_entry_id: 'test-entry',
-            slot: 1,
-            type: 'custom:lcm-slot'
+            name: 'Mom',
+            type: 'custom:lcm-user'
         });
         card.hass = createMockHassWithConnection({
             onSubscribe: (callback) => {
