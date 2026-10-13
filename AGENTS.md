@@ -474,8 +474,8 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
 - `tests/providers/schlage/fake_service.py`: `FakeSchlageCloud`, the Schlage cloud's access codes
   behind `schlage.get_codes`/`add_code`/`delete_code`, answered as Home Assistant core's Schlage
   lock entity does (name or code already there refused with core's own message, a missing name
-  deleted as a success). `read_lag` makes refreshes answer the codes from before the last write,
-  as the cloud did in #1083; `time_out(service)` raises the raw `requests` `ReadTimeout` core
+  deleted as a success). For `read_lag` seconds after a write, refreshes answer the codes from
+  before it, as the cloud did in #1083; `time_out(service)` raises the raw `requests` `ReadTimeout` core
   lets through. Fixture `fake_schlage_cloud` (async: it caches core's Schlage exception
   translations, so errors read as they do in production).
 - `tests/providers/akuvox/fake_service.py`: `FakeAkuvoxDevice`, an Akuvox device's users behind
@@ -483,6 +483,9 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
   as that integration does (PIN 4-8 digits, unknown or cloud-provisioned users refused, every
   `pylocal-akuvox` `User` field listed; local users marked as A08S/E18C firmware marks them).
   `ignore(service)` acknowledges a write without applying it. Fixture `fake_akuvox_device`.
+  Both knobs take `times` and return a `ServiceFault` (`tests/providers/service_fault.py`:
+  `times`, `hits`, `clear()`, context manager), shaped like the other fakes' faults. Neither
+  fixture can be combined with the canned `*_mock_services` one: both answer the same services.
   Both fakes have self-tests in `test_fake_service.py`.
 
 ### Test philosophy
@@ -504,10 +507,10 @@ Each provider package has a `conftest.py`, a `test_provider.py`, and a
 
 ```text
 tests/providers/
-  akuvox/          # conftest, test_provider, test_e2e
+  akuvox/          # + fake_service, test_fake_service
   matter/          # + helpers, fixtures/, fake_node, test_node_harness,
                    #   test_sdk_exception_translation
-  schlage/
+  schlage/         # + fake_service, test_fake_service
   virtual/
   zha/             # + helpers (Zigbee frames, quirk-style clusters)
   zigbee2mqtt/     # + test_payload, test_topic_resolution
@@ -515,6 +518,7 @@ tests/providers/
   zwave_js_ui/     # + test_api, test_borrowed, test_payload, test_push,
                    #   test_topic_resolution
   helpers.py       # Shared test mixins (ServiceProviderConnectionTests, etc.)
+  service_fault.py # ServiceFault, the service fakes' fault
   test_base.py, test_dispatch.py, test_seam.py, test_util.py
 ```
 

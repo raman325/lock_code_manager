@@ -265,7 +265,9 @@ def e2e_akuvox_lock(
 
 @pytest.fixture
 def fake_akuvox_device(
-    hass: HomeAssistant, akuvox_lock_entity: er.RegistryEntry
+    hass: HomeAssistant,
+    akuvox_lock_entity: er.RegistryEntry,
+    request: pytest.FixtureRequest,
 ) -> FakeAkuvoxDevice:
     """
     Answer the Akuvox user services from a stateful device (``fake_service.py``).
@@ -273,6 +275,10 @@ def fake_akuvox_device(
     Request it before an entry is set up; it replaces ``akuvox_mock_services``,
     which answers with canned values and changes nothing when written to.
     """
+    if "akuvox_mock_services" in request.fixturenames:
+        pytest.fail(
+            "fake_akuvox_device and akuvox_mock_services answer the same services"
+        )
     device = FakeAkuvoxDevice(hass, akuvox_lock_entity.entity_id)
     device.install()
     return device

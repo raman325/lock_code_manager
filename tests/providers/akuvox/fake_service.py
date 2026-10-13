@@ -44,6 +44,8 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.lock_code_manager.providers.akuvox import AKUVOX_DOMAIN
 
+from ..service_fault import ServiceFault, first_fault
+
 # ``User``'s fields, in the order the library declares them (PU:19-32).
 _USER_FIELDS = (
     "name",
@@ -70,7 +72,7 @@ class FakeAkuvoxDevice:
     relay_number: int = 1
     users: list[dict[str, Any]] = field(default_factory=list)
     calls: list[tuple[str, dict]] = field(default_factory=list)
-    _ignored: set[str] = field(default_factory=set)
+    faults: list[ServiceFault] = field(default_factory=list)
     _next_id: int = 1
 
     def install(self) -> None:
@@ -112,9 +114,11 @@ class FakeAkuvoxDevice:
         """Return the PIN of the user named ``name``, if the device has one."""
         return next((u["private_pin"] for u in self.users if u["name"] == name), None)
 
-    def ignore(self, service: str) -> None:
-        """Acknowledge ``service`` calls without applying them."""
-        self._ignored.add(service)
+    def ignore(self, service: str, *, times: int | None = None) -> ServiceFault:
+        """Acknowledge ``service`` calls without applying them (``times`` more)."""
+        fault = ServiceFault(self.faults, service, times)
+        self.faults.append(fault)
+        return fault
 
     def count(self, service: str) -> int:
         """Return how many times ``service`` was called."""
@@ -139,7 +143,7 @@ class FakeAkuvoxDevice:
         data = dict(call.data)
         self.calls.append(("add_user", data))
         _validate_pin(data.get("private_pin"))
-        if "add_user" in self._ignored:
+        if first_fault(self.faults, "add_user") is not None:
             return
         self.add(
             data["name"],
@@ -158,7 +162,7 @@ class FakeAkuvoxDevice:
         self.calls.append(("modify_user", data))
         user = self._find(data["id"], "modify_user")
         _validate_pin(data.get("private_pin"))
-        if "modify_user" in self._ignored:
+        if first_fault(self.faults, "modify_user") is not None:
             return
         for key in (
             "name",
@@ -175,7 +179,7 @@ class FakeAkuvoxDevice:
         data = dict(call.data)
         self.calls.append(("delete_user", data))
         user = self._find(data["id"], "delete_user")
-        if "delete_user" in self._ignored:
+        if first_fault(self.faults, "delete_user") is not None:
             return
         self.users.remove(user)
 

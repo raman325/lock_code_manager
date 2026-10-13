@@ -121,3 +121,20 @@ async def test_ignore_acknowledges_and_changes_nothing(
     await _call(hass, akuvox_lock_entity.entity_id, "delete_user", id=user)
 
     assert fake_akuvox_device.pin_of("Mom") == "1111"
+
+
+async def test_an_ignore_for_one_call_lets_the_next_through(
+    hass: HomeAssistant,
+    fake_akuvox_device: FakeAkuvoxDevice,
+    akuvox_lock_entity: er.RegistryEntry,
+) -> None:
+    """``times`` spends the fault; ``hits`` counts the calls it met."""
+    user = fake_akuvox_device.add("Mom", "1111")
+    fault = fake_akuvox_device.ignore("delete_user", times=1)
+
+    await _call(hass, akuvox_lock_entity.entity_id, "delete_user", id=user)
+    assert fake_akuvox_device.pin_of("Mom") == "1111"
+    await _call(hass, akuvox_lock_entity.entity_id, "delete_user", id=user)
+
+    assert fake_akuvox_device.pin_of("Mom") is None
+    assert fault.hits == 1

@@ -234,7 +234,9 @@ def e2e_schlage_lock(
 
 @pytest.fixture
 async def fake_schlage_cloud(
-    hass: HomeAssistant, schlage_lock_entity: er.RegistryEntry
+    hass: HomeAssistant,
+    schlage_lock_entity: er.RegistryEntry,
+    request: pytest.FixtureRequest,
 ) -> FakeSchlageCloud:
     """
     Answer the Schlage code services from a stateful cloud (``fake_service.py``).
@@ -242,6 +244,10 @@ async def fake_schlage_cloud(
     Request it before an entry is set up; it replaces ``schlage_mock_services``,
     which answers with canned values and changes nothing when written to.
     """
+    if "schlage_mock_services" in request.fixturenames:
+        pytest.fail(
+            "fake_schlage_cloud and schlage_mock_services answer the same services"
+        )
     cloud = FakeSchlageCloud(hass, schlage_lock_entity.entity_id)
     await cloud.async_install()
     return cloud

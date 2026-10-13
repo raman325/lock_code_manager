@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from requests.exceptions import ReadTimeout
 
@@ -88,20 +89,29 @@ async def test_deleting_a_name_not_there_succeeds(
 
 async def test_read_lag_answers_the_codes_from_before_a_write(
     hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
     fake_schlage_cloud: FakeSchlageCloud,
     schlage_lock_entity: er.RegistryEntry,
 ) -> None:
-    """The cloud reads back what it held before a write, ``read_lag`` times (#1083)."""
-    fake_schlage_cloud.read_lag = 2
+    """For ``read_lag`` seconds the cloud reads back what it held before (#1083)."""
+    fake_schlage_cloud.read_lag = 30
     entity_id = schlage_lock_entity.entity_id
+
+    async def _count() -> int:
+        return len((await _call(hass, "get_codes", entity_id=entity_id))[entity_id])
+
     await _call(hass, "add_code", entity_id=entity_id, name="Mom", code="1111")
+    reads = [await _count()]
+    freezer.tick(20)
+    # A second write inside the lag keeps reads on the table before the first.
+    await _call(hass, "add_code", entity_id=entity_id, name="Dad", code="2222")
+    reads.append(await _count())
+    freezer.tick(29)
+    reads.append(await _count())
+    freezer.tick(2)
+    reads.append(await _count())
 
-    reads = [
-        len((await _call(hass, "get_codes", entity_id=entity_id))[entity_id])
-        for _ in range(3)
-    ]
-
-    assert reads == [0, 0, 1]
+    assert reads == [0, 0, 0, 2]
 
 
 async def test_a_timeout_is_the_raw_requests_error(

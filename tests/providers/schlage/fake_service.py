@@ -16,18 +16,26 @@ homeassistant/components/schlage/lock.py at core ``519029a0ac0``):
 - ``delete_code`` refreshes and deletes the code whose name matches; a name
   not there is a success (SL:136-163).
 
-The cloud itself is the part the fake models beyond core: ``read_lag``
-makes a refresh answer what the cloud held before the last writes, as the
-reporter of #1083 saw (codes added, then read back missing). A transport
+The cloud itself is the part the fake models beyond core: for
+``read_lag`` seconds after a write, a refresh answers what the cloud held
+before it, as the reporter of #1083 saw (codes added, then read back
+missing). The lag is time, not a count of reads, as a cloud catching up
+is: the reads the coordinator makes right after a write would use up a
+count before any sync tick looked. A transport
 failure is the raw ``requests`` timeout core does not catch: only
 ``SchlageError`` is translated (SL:107-115), so a ``ReadTimeout`` (an
 ``OSError``) reaches the caller as is.
+
+A delete that finds its code only in a lagging read succeeds without a
+change. Core deletes that stale ``AccessCode`` through the cloud
+(SL:136-163); what the cloud answers for a code already gone is not
+documented by pyschlage, so the fake takes the quiet answer.
 """
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field
+import time
 import uuid
 
 from requests.exceptions import ReadTimeout
@@ -43,13 +51,7 @@ from homeassistant.helpers import translation
 
 from custom_components.lock_code_manager.providers.schlage import SCHLAGE_DOMAIN
 
-
-@dataclass
-class _Timeout:
-    """A service that times out ``times`` more times (None: always)."""
-
-    service: str
-    times: int | None
+from ..service_fault import ServiceFault, first_fault
 
 
 @dataclass
@@ -61,10 +63,14 @@ class FakeSchlageCloud:
     # code_id -> (name, code), as pyschlage's ``AccessCode`` carries them.
     codes: dict[str, tuple[str, str]] = field(default_factory=dict)
     # How many refreshes after a write still answer the table from before it.
-    read_lag: int = 0
+    # Seconds after a write during which refreshes answer the table from
+    # before it.
+    read_lag: float = 0.0
     calls: list[tuple[str, dict]] = field(default_factory=list)
-    _stale: list[tuple[dict[str, tuple[str, str]], int]] = field(default_factory=list)
-    _timeouts: list[_Timeout] = field(default_factory=list)
+    faults: list[ServiceFault] = field(default_factory=list)
+    # The table a lagging read answers, and the monotonic time it stops.
+    _stale: dict[str, tuple[str, str]] | None = None
+    _stale_until: float = 0.0
 
     async def async_install(self) -> None:
         """
@@ -100,9 +106,16 @@ class FakeSchlageCloud:
         self.codes[code_id] = (name, code)
         return code_id
 
-    def time_out(self, service: str, *, times: int | None = 1) -> None:
+    def time_out(self, service: str, *, times: int | None = 1) -> ServiceFault:
         """Make ``service`` raise the cloud's raw ``ReadTimeout`` (``times`` more)."""
-        self._timeouts.append(_Timeout(service, times))
+        fault = ServiceFault(self.faults, service, times)
+        self.faults.append(fault)
+        return fault
+
+    @property
+    def lagging(self) -> bool:
+        """Return whether reads still answer a table from before a write."""
+        return self._stale is not None and time.monotonic() < self._stale_until
 
     def count(self, service: str) -> int:
         """Return how many times ``service`` was called."""
@@ -112,26 +125,28 @@ class FakeSchlageCloud:
 
     def _enter(self, service: str, call: ServiceCall) -> None:
         self.calls.append((service, dict(call.data)))
-        for timeout in self._timeouts:
-            if timeout.service == service and timeout.times != 0:
-                if timeout.times is not None:
-                    timeout.times -= 1
-                raise ReadTimeout("Read timed out. (read timeout=60)")
+        if first_fault(self.faults, service) is not None:
+            raise ReadTimeout("Read timed out. (read timeout=60)")
 
     def _refresh(self) -> dict[str, tuple[str, str]]:
         """Answer the codes as the cloud returns them right now (SL:106-115)."""
-        while self._stale and self._stale[0][1] <= 0:
-            self._stale.pop(0)
-        if self._stale:
-            snapshot, left = self._stale[0]
-            self._stale[0] = (snapshot, left - 1)
-            return copy.deepcopy(snapshot)
-        return copy.deepcopy(self.codes)
+        if self.lagging:
+            return dict(self._stale)
+        self._stale = None
+        return dict(self.codes)
 
     def _wrote(self, before: dict[str, tuple[str, str]]) -> None:
-        """Remember what the cloud held before a write, for ``read_lag`` reads."""
-        if self.read_lag:
-            self._stale = [(before, self.read_lag)]
+        """
+        Start or extend a lag after a write, for ``read_lag`` seconds.
+
+        A write while reads still lag keeps the table they answer, from
+        before the first write: the cloud has caught up with neither.
+        """
+        if not self.read_lag:
+            return
+        if not self.lagging:
+            self._stale = before
+        self._stale_until = time.monotonic() + self.read_lag
 
     async def _async_get_codes(self, call: ServiceCall) -> ServiceResponse:
         self._enter("get_codes", call)
@@ -159,7 +174,7 @@ class FakeSchlageCloud:
                 translation_domain=SCHLAGE_DOMAIN,
                 translation_key="schlage_code_exists",
             )
-        before = copy.deepcopy(self.codes)
+        before = dict(self.codes)
         self.codes[uuid.uuid4().hex] = (name, code)
         self._wrote(before)
 
@@ -176,7 +191,7 @@ class FakeSchlageCloud:
         )
         if target is None or target not in self.codes:
             return
-        before = copy.deepcopy(self.codes)
+        before = dict(self.codes)
         del self.codes[target]
         self._wrote(before)
 
