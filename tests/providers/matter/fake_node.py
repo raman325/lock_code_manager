@@ -70,9 +70,18 @@ _ENABLED = DoorLock.Enums.UserStatusEnum.kOccupiedEnabled
 # apart, and only the creating fabric may modify a record (DLS:2047-2061, 793-800).
 HA_FABRIC = 1
 OTHER_FABRIC = 2
-# The node id the SDK reports as the source of a remote change (DLS:3364-3380);
-# any non-zero id stands for the controller.
+# The node id the SDK reports as the source of a remote change (DLS:3364-3380):
+# the server's controller, which matterjs-server always gives this id
+# (packages/ws-controller/src/controller/ControllerNode.ts:78). Home
+# Assistant's fabric index is 1 when it commissioned the lock first.
 _HA_NODE_ID = 112233
+# Door Lock event priorities (matter.js packages/model/src/standard/elements/
+# door-lock-cluster.element.ts:181, 216): LockOperation is critical,
+# LockUserChange info -- the Interaction Model's 2 and 1.
+_EVENT_PRIORITY = {
+    DoorLock.Events.LockOperation.event_id: 2,
+    DoorLock.Events.LockUserChange.event_id: 1,
+}
 
 # appclusters, 5.2.4.34 (DLS:455): DOOR_LOCK_MAX_USER_NAME_SIZE, the SDK's
 # default; a vendor can build with another.
@@ -1000,9 +1009,12 @@ class FakeMatterLock:
                 "cluster_id": _DL,
                 "event_id": event.event_id,
                 "event_number": self._event_number,
-                "priority": 1,
-                "timestamp": 0,
-                "timestamp_type": 0,
+                "priority": _EVENT_PRIORITY[event.event_id],
+                # A lock that keeps time stamps the event in epoch
+                # milliseconds, which the server forwards as type 1
+                # (MJS_WS:413-426).
+                "timestamp": int(time.time() * 1000),
+                "timestamp_type": 1,
                 "data": data,
             },
         )
