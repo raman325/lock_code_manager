@@ -488,6 +488,19 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
   fixture can be combined with the canned `*_mock_services` one: both answer the same services.
   Both fakes have self-tests in `test_fake_service.py`.
 
+- `tests/providers/zigbee2mqtt/fake_bridge.py`: `FakeZ2MBridge`, Zigbee2MQTT and the lock behind
+  it, on the Home Assistant MQTT client mock: the provider's `/set` and `/get` publishes reach it,
+  and what Zigbee2MQTT publishes back is fired on the device topic (zigbee2mqtt `344b6e03` and
+  zigbee-herdsman-converters `3cdf1b86`, cited by line). Writes change the lock's PIN table and
+  publish nothing; reads are answered only in `users` (`lock_pin_code_response`, `pin_code` only
+  with `expose_pin`); every publish is the whole cached state, merged deeply, so a users entry
+  is republished as last read and a key a new answer leaves out keeps its old value; `action`
+  and `action_*` are never cached. Knobs: `set_user` (keypad change, no event), `report`
+  (an attribute report: the cache republished), `report_after_write`, `operation_event`,
+  `programming_event`, `silent` (reads never answered), `expose_pin`, `pin_code_count`
+  (default the Yale lock extend's 250). Fixture `fake_z2m_bridge` (default topic); self-tests
+  in `test_fake_bridge.py`.
+
 ### Test philosophy
 
 **Mock at the boundary, not the code under test.** Let as much end-to-end code run as possible.
@@ -513,7 +526,7 @@ tests/providers/
   schlage/         # + fake_service, test_fake_service
   virtual/
   zha/             # + helpers (Zigbee frames, quirk-style clusters)
-  zigbee2mqtt/     # + test_payload, test_topic_resolution
+  zigbee2mqtt/     # + fake_bridge, test_fake_bridge, test_payload, test_topic_resolution
   zwave_js/        # + helpers, fixtures/, fake_node, test_events, test_node_harness
   zwave_js_ui/     # + test_api, test_borrowed, test_payload, test_push,
                    #   test_topic_resolution
