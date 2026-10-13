@@ -16,6 +16,7 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_mqtt_message,
 )
 
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import (
@@ -25,14 +26,17 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
+    ATTR_IN_SYNC,
     CONF_LOCKS,
     CONF_NUM_USERS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
+from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
@@ -377,15 +381,38 @@ async def _bridge_entry(
     the frozen clock is cancelled, and the test's own failure is the one
     reported.
     """
-    entry = current_entry(
-        "test_z2m_bridge",
-        {1: "1234", 2: "5678"} if pins is None else pins,
-        locks=(lock_entity_id,),
-    )
+    pins = {1: "1234", 2: "5678"} if pins is None else pins
+    entry = current_entry("test_z2m_bridge", pins, locks=(lock_entity_id,))
     entry.add_to_hass(hass)
     setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
+    ent_reg = er.async_get(hass)
+    # The slots' entities come from the entry's first pass, a task of its
+    # own that can still be running once setup has returned.
+    slot_entities = [
+        (platform, build_slot_unique_id(entry.entry_id, slot, key, lock))
+        for slot in pins
+        for platform, key, lock in (
+            (EVENT_DOMAIN, EVENT_CREDENTIAL_USED, None),
+            (BINARY_SENSOR_DOMAIN, ATTR_IN_SYNC, lock_entity_id),
+        )
+    ]
     await async_step_clock_until(
-        hass, freezer, setup.done, max_steps=100, what="entry setup", step=1.0
+        hass,
+        freezer,
+        # A setup that failed makes no entities; the assertion below reports it.
+        lambda: (
+            setup.done()
+            and (
+                not setup.result()
+                or all(
+                    ent_reg.async_get_entity_id(platform, DOMAIN, unique_id)
+                    for platform, unique_id in slot_entities
+                )
+            )
+        ),
+        max_steps=100,
+        what="entry setup and its slots' entities",
+        step=1.0,
     )
     assert setup.result()
     failed = True
