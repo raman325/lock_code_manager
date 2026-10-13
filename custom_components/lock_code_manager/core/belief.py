@@ -9,6 +9,10 @@ and raises.
 
 PINs are kept only as salted fingerprints, so a belief can be persisted, and
 logged, without the PIN.
+
+Beliefs are kept for addresses some entry manages, and for an address being
+cleared on its way out (a release clear) until that clear is settled: it is
+judged like any other write.
 """
 
 from __future__ import annotations
@@ -39,15 +43,24 @@ class BeliefRecord:
 
     def record_pin(
         self, address: Address, pin: str, strength: Strength, at: float
-    ) -> None:
-        """Record that a write of ``pin`` to ``address`` returned at ``at``."""
-        self._require_invalidated(address)
-        self._beliefs[address] = Wrote(fingerprint(pin, self._salt), strength, at)
+    ) -> bool:
+        """
+        Record that a write of ``pin`` to ``address`` returned at ``at``.
 
-    def record_cleared(self, address: Address, strength: Strength, at: float) -> None:
-        """Record that a clear of ``address`` returned at ``at``."""
-        self._require_invalidated(address)
+        Returns False, recording nothing, when the address was forgotten while
+        the write was out: it is no longer anyone's.
+        """
+        if not self._may_record(address):
+            return False
+        self._beliefs[address] = Wrote(fingerprint(pin, self._salt), strength, at)
+        return True
+
+    def record_cleared(self, address: Address, strength: Strength, at: float) -> bool:
+        """Record that a clear of ``address`` returned at ``at``; see ``record_pin``."""
+        if not self._may_record(address):
+            return False
         self._beliefs[address] = Cleared(strength, at)
+        return True
 
     def get(self, address: Address) -> Belief | None:
         """Return the belief about ``address``, or None if nothing was ever written."""
@@ -64,6 +77,17 @@ class BeliefRecord:
         """Drop the belief about ``address``: for permanent events only."""
         self._beliefs.pop(address, None)
 
-    def _require_invalidated(self, address: Address) -> None:
-        if not isinstance(self._beliefs.get(address), Unknown):
+    def _may_record(self, address: Address) -> bool:
+        """
+        Return whether a returning write may be recorded.
+
+        Only over the ``Unknown`` its start left. Nothing there means the
+        address was forgotten meanwhile; a settled belief there means the
+        write was never started, which is a bug.
+        """
+        belief = self._beliefs.get(address)
+        if belief is None:
+            return False
+        if not isinstance(belief, Unknown):
             raise ValueError(f"{address!r}: recorded a write that was never started")
+        return True

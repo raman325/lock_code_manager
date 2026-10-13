@@ -7,7 +7,7 @@ the time as an argument.
 
 from __future__ import annotations
 
-from collections import deque
+from bisect import insort
 from enum import StrEnum
 
 
@@ -26,16 +26,21 @@ class SlotBreaker:
         """Start untripped."""
         self._window = window
         self._limit = limit
-        self._charges: deque[float] = deque()
+        self._charges: list[float] = []
         self._tripped = False
 
-    def charge(self, now: float) -> None:
-        """Count a failure of the current target at ``now``."""
+    def charge(self, at: float) -> None:
+        """
+        Count a failure of the current target that happened at ``at``.
+
+        Charges may arrive out of order (a late result handled after a later
+        one): the window is measured back from the latest charge.
+        """
         if self._tripped:
             return
-        self._charges.append(now)
-        while self._charges and self._charges[0] <= now - self._window:
-            self._charges.popleft()
+        insort(self._charges, at)
+        latest = self._charges[-1]
+        self._charges = [t for t in self._charges if t > latest - self._window]
         if len(self._charges) >= self._limit:
             self._tripped = True
 
@@ -78,9 +83,11 @@ class LinkState:
     Each kind of operation keeps its own run of consecutive disconnects, and
     an answer of any kind ends only that kind's run. A lock that answers
     every read while every write disconnects is down for writes (#1644): a
-    read succeeding says nothing about whether writes get through. The lock is
-    down while any kind's run is ``trip_after`` or longer, and is retried on
-    a backoff that doubles from ``backoff_min`` to ``backoff_max``.
+    read succeeding says nothing about whether writes get through. A probe or
+    a read answering ends both of their runs, since either shows the lock can
+    be read; only a write getting through ends the write run. Each kind whose
+    run is ``trip_after`` or longer is down, and is retried on its own
+    backoff, doubling from ``backoff_min`` to ``backoff_max``.
 
     The offline alert is for a lock that was reached and then lost: one that
     has not answered since startup is still coming up (#1257).
@@ -99,7 +106,7 @@ class LinkState:
         self._backoff_max = backoff_max
         self._alert_after = alert_after
         self._runs: dict[Operation, int] = dict.fromkeys(Operation, 0)
-        self._last_failure: float | None = None
+        self._last_failure: dict[Operation, float] = {}
         self._reached = False
 
     def outcome(self, operation: Operation, kind: OutcomeKind, now: float) -> None:
@@ -108,10 +115,18 @@ class LinkState:
             return
         if kind is OutcomeKind.DISCONNECTED:
             self._runs[operation] += 1
-            self._last_failure = now
+            self._last_failure[operation] = now
             return
         self._reached = True
-        self._runs[operation] = 0
+        # A lock that answers a probe or a read can be read; only a write
+        # getting through shows that writes do.
+        ended = (
+            (Operation.WRITE,)
+            if operation is Operation.WRITE
+            else (Operation.READ, Operation.PROBE)
+        )
+        for done in ended:
+            self._runs[done] = 0
 
     @property
     def reached(self) -> bool:
@@ -130,13 +145,15 @@ class LinkState:
         """Return whether no kind of operation is down."""
         return not self.down_for
 
-    def next_attempt_in(self, now: float) -> float:
-        """Return how long to wait before trying a down lock again (0 if up)."""
-        if self.reachable or self._last_failure is None:
+    def next_attempt_in(self, operation: Operation, now: float) -> float:
+        """Return how long to wait before trying ``operation`` again (0 if not down)."""
+        run = self._runs[operation]
+        if run < self._trip_after:
             return 0.0
-        over = max(self._runs.values()) - self._trip_after
-        delay = min(self._backoff_min * 2**over, self._backoff_max)
-        return max(0.0, self._last_failure + delay - now)
+        delay = min(
+            self._backoff_min * 2 ** (run - self._trip_after), self._backoff_max
+        )
+        return max(0.0, self._last_failure[operation] + delay - now)
 
     @property
     def offline_alert(self) -> bool:

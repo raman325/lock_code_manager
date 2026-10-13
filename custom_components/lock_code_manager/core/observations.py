@@ -32,17 +32,25 @@ class ObservationLog:
         """
         Record that the lock said ``reading`` about ``address`` at ``at``.
 
-        Returns whether anything changed. An observation older than the one
-        already held for the address changes nothing: it arrived late.
+        Returns whether anything changed. A reading older than the last
+        informative one arrived late and changes nothing; silence older than
+        the last observation of any kind is dropped the same way.
         """
-        latest = self._latest.get(address)
-        if latest is not None and at < latest.at:
-            return False
         observation = Observation(reading, at)
-        self._latest[address] = observation
+        latest = self._latest.get(address)
+        changed = False
+        if latest is None or at >= latest.at:
+            self._latest[address] = observation
+            changed = True
         if reading.informative:
-            self._informative[address] = observation
-        return True
+            # Ordered only against what the lock said, never against silence:
+            # a real reading newer than the last real one counts, however
+            # much silence arrived meanwhile.
+            informative = self._informative.get(address)
+            if informative is None or at >= informative.at:
+                self._informative[address] = observation
+                changed = True
+        return changed
 
     def mark_write(self, address: Address, at: float) -> None:
         """Record that a write to ``address`` started at ``at``."""

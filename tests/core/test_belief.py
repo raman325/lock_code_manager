@@ -37,14 +37,22 @@ def test_a_write_that_raised_leaves_no_belief() -> None:
     assert not beliefs.holds(SLOT, WantPin("1234"))
 
 
-def test_recording_a_write_never_started_is_a_bug() -> None:
-    """A write is recorded only after it was invalidated."""
+def test_recording_over_a_settled_write_is_a_bug() -> None:
+    """A write is recorded only over the Unknown its start left."""
     beliefs = BeliefRecord(b"salt")
+    beliefs.invalidate(SLOT, at=1.0)
+    assert beliefs.record_cleared(SLOT, Strength.SENT, at=2.0)
+    assert beliefs.get(SLOT) == Cleared(Strength.SENT, 2.0)
 
     with pytest.raises(ValueError):
-        beliefs.record_cleared(SLOT, Strength.SENT, at=1.0)
-    beliefs.invalidate(SLOT, at=1.0)
-    beliefs.record_cleared(SLOT, Strength.SENT, at=2.0)
-    assert beliefs.get(SLOT) == Cleared(Strength.SENT, 2.0)
-    with pytest.raises(ValueError):
         beliefs.record_cleared(SLOT, Strength.SENT, at=3.0)
+
+
+def test_a_write_returning_after_its_address_was_forgotten_records_nothing() -> None:
+    """A slot removed while its write was out is no longer anyone's to believe."""
+    beliefs = BeliefRecord(b"salt")
+    beliefs.invalidate(SLOT, at=1.0)
+    beliefs.forget(SLOT)
+
+    assert not beliefs.record_pin(SLOT, "1234", Strength.APPLIED, at=2.0)
+    assert beliefs.get(SLOT) is None

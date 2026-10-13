@@ -1,12 +1,16 @@
 """
 Properties of the core's pure pieces (credential-model spec, "Testing").
 
-1. Appending silence never changes a verdict.
+1. Silence never changes a verdict, once a read has completed (before that,
+   the first completed read is what lets the judge decide at all).
 2. An observation from before the last write never changes a verdict.
 3. A disabled code is never in sync.
 6. Three charges inside the window trip a breaker, and only a reset untrips it.
 7. A write that raised never leaves a belief.
 8. A fresh observation of the same value moves its time on.
+
+Property 4 (allocation) and 5 (observed data holds only what a device said)
+belong to the lock loop and provider port, not to these pure pieces.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from hypothesis import given, strategies as st
 from custom_components.lock_code_manager.core.belief import BeliefRecord
 from custom_components.lock_code_manager.core.breakers import SlotBreaker
 from custom_components.lock_code_manager.core.judge import (
+    LastWrite,
     Status,
     Written,
     judge,
@@ -45,11 +50,13 @@ READINGS = st.one_of(
     PINS.map(Holds),
 )
 DESIRED = st.one_of(st.just(WANT_EMPTY), PINS.map(WantPin))
-WRITTEN = st.sampled_from(list(Written))
+WRITTEN = st.builds(LastWrite, st.sampled_from(list(Written)), st.just(2.0)).map(
+    lambda w: LastWrite(Written.NOTHING) if w.kind is Written.NOTHING else w
+)
 TIMES = st.floats(min_value=0, max_value=1_000, allow_nan=False)
 
 
-def _verdict(log: ObservationLog, desired, last_write: Written, tripped: bool):
+def _verdict(log: ObservationLog, desired, last_write: LastWrite, tripped: bool):
     return judge(
         desired,
         last_write,
@@ -71,10 +78,10 @@ def test_silence_never_changes_a_verdict(
 ) -> None:
     """Property 1, once the lock has said anything about the address."""
     log = ObservationLog()
-    for reading, at in sorted(history, key=lambda item: item[1]):
+    # In arrival order, not time order: late arrivals included.
+    for reading, at in history:
         log.observe(SLOT, reading, at)
-    if not log.ever_read(SLOT):
-        return
+    log.observe(SLOT, NOTHING, -1.0)  # a read has completed
     before = _verdict(log, desired, last_write, tripped)
     log.observe(SLOT, NOTHING, silence_at)
     assert _verdict(log, desired, last_write, tripped) == before
@@ -82,13 +89,14 @@ def test_silence_never_changes_a_verdict(
 
 @given(
     reading=READINGS,
+    after=st.one_of(st.none(), READINGS),
     write_at=TIMES,
     gap=st.floats(min_value=0.001, max_value=100, allow_nan=False),
     desired=DESIRED,
     last_write=WRITTEN,
 )
 def test_an_observation_from_before_the_write_changes_nothing(
-    reading, write_at, gap, desired, last_write
+    reading, after, write_at, gap, desired, last_write
 ) -> None:
     """Property 2: a reading older than the last write is superseded."""
     with_it = ObservationLog()
@@ -96,6 +104,9 @@ def test_an_observation_from_before_the_write_changes_nothing(
     for log in (with_it, without):
         log.observe(SLOT, NOTHING, write_at - gap - 1)
         log.mark_write(SLOT, write_at)
+        if after is not None:
+            log.observe(SLOT, after, write_at + gap)
+    # Arriving after everything else, but said before the write.
     with_it.observe(SLOT, reading, write_at - gap)
 
     assert _verdict(with_it, desired, last_write, False) == _verdict(
@@ -151,7 +162,7 @@ def test_a_write_that_raised_never_leaves_a_belief(writes) -> None:
             beliefs.record_pin(SLOT, pin, Strength.APPLIED, float(at) + 0.5)
         else:
             assert isinstance(beliefs.get(SLOT), Unknown)
-            assert written(beliefs, SLOT, WantPin(pin)) is Written.UNSETTLED
+            assert written(beliefs, SLOT, WantPin(pin)).kind is Written.UNSETTLED
 
 
 @given(reading=READINGS, first=TIMES, gap=st.floats(min_value=0, max_value=100))

@@ -7,14 +7,19 @@ supplies everything, including whether the address's breaker has tripped.
 
 The rules are the credential-model decisions:
 
-- Nothing is set or cleared before the lock has been read: until then the
-  verdict is unknown, unless the last write was already the target.
+- Nothing is set or cleared before a read of the lock has completed: until
+  then the verdict is unknown, unless the last write was already the target.
+  A read that completed counts even if the lock said nothing informative
+  (spec section 1): a lock that never says what it holds must still be
+  written.
 - In sync means the target was written and nothing the lock said since
   contradicts it. On a lock that never says which code it holds, that is
   trust, not evidence (decision 1).
 - A reading that disagrees with the target contradicts it at once: out of
   sync, and written again (decision 2). If the target was what Lock Code
-  Manager last wrote, that write failed, and the breaker is charged once.
+  Manager last wrote, that write failed: the verdict names it
+  (``charge_for``, the time it returned), so the caller charges the breaker
+  once for it however often the address is judged.
 - A code that is on the lock but disabled always contradicts (decision 5).
 - A code still there after a clear contradicts the clear: the lock is
   believed, and the clear sent again (decision 12).
@@ -42,6 +47,7 @@ from .values import (
     Unknown,
     WantEmpty,
     WantPin,
+    Wrote,
 )
 
 
@@ -59,7 +65,7 @@ class Status(StrEnum):
 
 
 class Written(StrEnum):
-    """How the last write to an address relates to its target."""
+    """How the last write to an address relates to its target (``LastWrite.kind``)."""
 
     # Nothing written since startup (or since the belief was forgotten).
     NOTHING = "nothing"
@@ -72,28 +78,44 @@ class Written(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class LastWrite:
+    """How the last write to an address relates to its target, and when."""
+
+    kind: Written
+    # When the write returned (or, unsettled, started); None if nothing written.
+    at: float | None = None
+
+
+NOTHING_WRITTEN = LastWrite(Written.NOTHING)
+
+
+@dataclass(frozen=True, slots=True)
 class Verdict:
     """An address's status, what to write next, and what to charge."""
 
     status: Status
     # What to write now, or None to leave the address alone.
     write: Desired | None = None
-    # Whether a write of the target has been contradicted: charge the breaker.
-    charge: bool = False
+    # A write of the target that has been contradicted, by when it returned:
+    # charge the breaker for it, once.
+    charge_for: float | None = None
     # The repair a suspension raises.
     repair: Repair | None = None
 
 
-def written(beliefs: BeliefRecord, address: Address, desired: Desired) -> Written:
+def written(beliefs: BeliefRecord, address: Address, desired: Desired) -> LastWrite:
     """Return how the last write to ``address`` relates to ``desired``."""
     belief = beliefs.get(address)
     if belief is None:
-        return Written.NOTHING
+        return NOTHING_WRITTEN
     if isinstance(belief, Unknown):
-        return Written.UNSETTLED
+        return LastWrite(Written.UNSETTLED, belief.at)
+    assert isinstance(belief, Wrote | Cleared)
     if isinstance(desired, WantPin):
-        return Written.TARGET if beliefs.holds(address, desired) else Written.OTHER
-    return Written.TARGET if isinstance(belief, Cleared) else Written.OTHER
+        target = beliefs.holds(address, desired)
+    else:
+        target = isinstance(belief, Cleared)
+    return LastWrite(Written.TARGET if target else Written.OTHER, belief.at)
 
 
 def contradicts(desired: Desired, observation: Observation) -> bool:
@@ -120,7 +142,7 @@ def confirms(desired: Desired, observation: Observation) -> bool:
 
 def judge(
     desired: Desired | None,
-    last_write: Written,
+    last_write: LastWrite,
     seen: Observation | None,
     *,
     ever_read: bool,
@@ -131,8 +153,9 @@ def judge(
     Return the verdict on one address.
 
     ``seen`` is the latest informative observation since the last write
-    (``ObservationLog.informative_since_write``). ``ever_read`` is whether the
-    lock has said anything at all about the address. ``release`` marks an
+    (``ObservationLog.informative_since_write``). ``ever_read`` is whether a
+    read of the address has completed, silence included
+    (``ObservationLog.ever_read``). ``release`` marks an
     address no entry manages any more, whose code is being cleared on the way
     out (design-review decision 6): its suspension asks the user to check the
     code is gone.
@@ -144,9 +167,11 @@ def judge(
         return Verdict(Status.SUSPENDED, repair=repair)
     if seen is not None and contradicts(desired, seen):
         return Verdict(
-            Status.OUT_OF_SYNC, write=desired, charge=last_write is Written.TARGET
+            Status.OUT_OF_SYNC,
+            write=desired,
+            charge_for=last_write.at if last_write.kind is Written.TARGET else None,
         )
-    if last_write is Written.TARGET:
+    if last_write.kind is Written.TARGET:
         return Verdict(Status.IN_SYNC)
     if seen is not None and confirms(desired, seen):
         return Verdict(Status.IN_SYNC)

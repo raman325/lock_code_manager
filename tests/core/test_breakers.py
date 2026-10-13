@@ -69,7 +69,7 @@ def test_backoff_doubles_up_to_its_ceiling() -> None:
     delays = []
     for at in range(6):
         link.outcome(Operation.READ, OutcomeKind.DISCONNECTED, float(at))
-        delays.append(link.next_attempt_in(float(at)))
+        delays.append(link.next_attempt_in(Operation.READ, float(at)))
 
     assert delays == [0.0, 0.0, 60.0, 120.0, 200.0, 200.0]
 
@@ -85,3 +85,34 @@ def test_only_a_lock_reached_once_is_reported_offline() -> None:
 
     assert not never.offline_alert
     assert once.offline_alert
+
+
+def test_a_probe_answering_brings_reads_back_but_not_writes() -> None:
+    """A probe shows the lock can be read; only a write shows writes get through."""
+    link = LinkState(trip_after=3)
+    for at in range(3):
+        link.outcome(Operation.READ, OutcomeKind.DISCONNECTED, float(at))
+        link.outcome(Operation.WRITE, OutcomeKind.DISCONNECTED, float(at))
+    link.outcome(Operation.PROBE, OutcomeKind.OK, 10.0)
+
+    assert link.down_for == {Operation.WRITE}
+
+
+def test_each_kind_backs_off_from_its_own_failures() -> None:
+    """A stray read failure does not push a down write's retry back."""
+    link = LinkState(trip_after=3, backoff_min=60.0)
+    for at in range(3):
+        link.outcome(Operation.WRITE, OutcomeKind.DISCONNECTED, float(at))
+    link.outcome(Operation.READ, OutcomeKind.DISCONNECTED, 50.0)
+
+    assert link.next_attempt_in(Operation.WRITE, 50.0) == 12.0
+    assert link.next_attempt_in(Operation.READ, 50.0) == 0.0
+
+
+def test_charges_arriving_out_of_order_are_windowed_by_when_they_happened() -> None:
+    """A late charge outside the window does not count toward a trip."""
+    for order in ((400.0, 50.0, 420.0), (100.0, 350.0, 40.0)):
+        breaker = SlotBreaker(window=300.0, limit=3)
+        for at in order:
+            breaker.charge(at)
+        assert not breaker.tripped, order

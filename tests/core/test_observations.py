@@ -62,3 +62,14 @@ def test_never_read_is_not_a_reading() -> None:
     log.observe(SLOT, NOTHING, at=1.0)
     assert log.ever_read(SLOT)
     assert log.informative_since_write(SLOT) is None
+
+
+def test_silence_does_not_shut_out_a_later_real_reading() -> None:
+    """A reading newer than the last real one counts, whatever silence came between."""
+    log = ObservationLog()
+    log.observe(SLOT, Holds("1234"), at=1.0)
+    log.observe(SLOT, NOTHING, at=5.0)
+
+    assert log.observe(SLOT, EMPTY, at=3.0)
+    assert log.informative_since_write(SLOT) == Observation(EMPTY, 3.0)
+    assert log.latest(SLOT) == Observation(NOTHING, 5.0)
