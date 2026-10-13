@@ -2082,7 +2082,7 @@ class TestSupervisedWrites:
     @pytest.mark.xfail(
         strict=True,
         reason=(
-            "open: the provider pushes the PIN it wrote over what its own "
+            "#1654: the provider pushes the PIN it wrote over what its own "
             "post-write read found, so a supervised Success the lock did not "
             "apply shows in sync"
         ),
