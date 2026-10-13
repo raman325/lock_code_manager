@@ -85,9 +85,9 @@ class Slot:
     more, being cleared on its way out.
 
     Two counts hold a slot. ``tries`` counts syncs that did not end in sync
-    while the lock was not backing off, since the target last changed or a
-    fresh read last agreed; they never expire, so no pattern of retries can
-    go on for ever. ``fights`` counts
+    while the lock was there, since the target last changed or a fresh read
+    last agreed; they never expire, so no pattern of retries can go on for
+    ever. ``fights`` counts
     times the lock went from agreeing to disagreeing -- a keypad taking the
     code back (#776) -- and ages out of ``WINDOW``.
     """
@@ -161,7 +161,7 @@ class Slot:
         return CLEARED if self.want is None else fingerprint(self.want, salt)
 
     def tried(self) -> None:
-        """Count a sync the lock answered that did not end in sync."""
+        """Count a sync that did not end in sync, with the lock there."""
         self.tries += 1
         if self.tries >= self._limit():
             self.hold = self._give_up()

@@ -568,12 +568,7 @@ async def test_a_broken_provider_fails_its_slot_not_the_pass(rig_factory) -> Non
 
 
 async def test_an_outage_holds_no_slot(rig_factory) -> None:
-    """
-    A lock that has gone is the lock's problem, not the slots'.
-
-    Before the lock backs off, one sync may count a try; after that nothing
-    is tried, however many probes go unanswered.
-    """
+    """A lock that has gone is the lock's problem: no slot is charged."""
     slots = range(1, 6)
     lock = FakeLock()
     rig = await _started(rig_factory(lock), dict.fromkeys(slots, "1234"))
@@ -587,7 +582,7 @@ async def test_an_outage_holds_no_slot(rig_factory) -> None:
 
     assert not rig.worker.reachable
     assert all(rig.status(n)[0] is Status.OUT_OF_SYNC for n in slots)
-    assert sum(rig.worker.slots[n].tries for n in slots) <= 1
+    assert all(rig.worker.slots[n].tries == 0 for n in slots)
 
 
 async def test_stopping_answers_waiting_reads_and_refuses_new_ones(rig_factory) -> None:
@@ -1272,3 +1267,179 @@ async def test_a_report_from_before_a_read_is_dropped(rig_factory) -> None:
 
     assert lock.writes == []
     assert rig.worker.slots[1].fights == []
+
+
+@pytest.mark.parametrize(
+    ("added", "release"),
+    [({9: None}, True), ({5: "5555"}, False), ({5: "5555", 6: "6666"}, False)],
+    ids=["release", "new slot", "two new slots"],
+)
+async def test_an_outage_charges_no_slot_never_read(
+    rig_factory, added, release
+) -> None:
+    """Slots added during an outage, never read, are not charged either."""
+    lock = FakeLock({1: "1111"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    lock.writes_unanswered = True
+    lock.reads_unanswered = True
+    for n, pin in added.items():
+        rig.worker.want(n, pin, release=release)
+    for _ in range(30):
+        await rig.settle()
+        await asyncio.sleep(0)
+
+    assert rig.worker.offline
+    assert all(rig.worker.slots[n].tries == 0 for n in added)
+    assert all(rig.status(n)[1] is None for n in added)
+
+
+@pytest.mark.parametrize("ignored", [{7}, {7, 8}], ids=["one", "several"])
+async def test_slots_the_lock_ignores_are_held_without_polling(
+    rig_factory, ignored
+) -> None:
+    """
+    However many slots the lock ignores, each is held, with nothing but the
+    worker's own exchanges -- not every provider polls.
+    """
+    lock = FakeLock(ignored=ignored)
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    for n in ignored:
+        rig.worker.want(n, str(n) * 4)
+    await rig.settle()
+
+    assert all(rig.status(n) == (Status.SUSPENDED, Repair.CANT_SET) for n in ignored)
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert rig.worker.reachable
+
+
+async def test_a_lock_that_ignores_its_only_slot_goes_offline(rig_factory) -> None:
+    """With no other slot to ask, the lock is gone: the offline repair says so."""
+    lock = FakeLock({1: "1111"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    lock.ignored = {1}
+    rig.worker.want(1, "2222")
+    for _ in range(30):
+        await rig.settle()
+        await asyncio.sleep(0)
+
+    assert rig.worker.offline
+    assert rig.status(1) == (Status.OUT_OF_SYNC, None)
+
+
+async def test_a_provider_bug_on_one_slot_holds_only_that_slot(rig_factory) -> None:
+    """A bug that raises for one slot does not take the whole lock down."""
+    lock = FakeLock({1: "1111"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    original = lock.read
+
+    async def _buggy(slots):
+        if 7 in slots:
+            raise KeyError(7)
+        return await original(slots)
+
+    lock.read = _buggy  # type: ignore[method-assign]
+    rig.worker.want(7, "7777")
+    await rig.settle()
+    rig.worker.want(1, "2222")
+    await rig.settle()
+
+    assert rig.status(7) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert rig.worker.reachable
+
+
+async def test_a_report_taken_in_during_a_read_is_kept(rig_factory) -> None:
+    """A keypad change pushed while a read is out may be newer than the read."""
+    lock = FakeLock({1: "1234"})
+    rig = await _started(rig_factory(lock), {1: "1234"})
+
+    def _keypad() -> None:
+        # After the lock answered, before the read is back.
+        lock.after_read.clear()
+        lock.codes[1] = "9999"
+        rig.worker.push(1, Holds("9999"))
+
+    lock.after_read.append(_keypad)
+    await rig.worker.read([1])
+    await rig.settle()
+
+    assert lock.writes == [(1, "1234")]
+    assert lock.codes == {1: "1234"}
+
+
+async def test_a_witness_the_lock_stops_answering_for_is_not_asked_again(
+    rig_factory,
+) -> None:
+    """
+    A slot that answered once, then is ignored, stops being a witness;
+    another one is asked, and the ignored slot is still held.
+    """
+    lock = FakeLock({1: "1111", 2: "2222"})
+    rig = await _started(rig_factory(lock), {1: "1111", 2: "2222"})
+    lock.ignored = {1, 7}
+    rig.worker.want(7, "7777")
+    for _ in range(60):
+        if rig.status(7)[0] is Status.SUSPENDED:
+            break
+        await rig.settle()
+        await asyncio.sleep(0)
+
+    assert rig.status(7) == (Status.SUSPENDED, Repair.CANT_SET)
+
+
+async def test_no_witness_is_asked_once_the_lock_backs_off(rig_factory) -> None:
+    """A sync that tips the lock into backoff spends nothing more on it."""
+    lock = FakeLock({1: "0000", 2: "2222"})
+    rig = await _started(rig_factory(lock), {1: "0000", 2: "2222"})
+    lock.writes_unanswered = True
+    lock.reads_unanswered = True
+    for _ in range(BACKOFF_AFTER - 1):
+        with pytest.raises(LockError):
+            await rig.worker.read([2])
+    reads = 0
+    original = lock.read
+
+    async def _count(slots):
+        nonlocal reads
+        reads += 1
+        return await original(slots)
+
+    lock.read = _count  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert not rig.worker.reachable
+    assert reads == 0
+
+
+async def test_a_provider_bug_in_a_probe_does_not_keep_the_lock_down(
+    rig_factory,
+) -> None:
+    """A probe that hits a provider bug got an answer: the lock is back."""
+    lock = FakeLock({1: "1111"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    original = lock.read
+
+    async def _buggy(slots):
+        if 7 in slots:
+            raise KeyError(7)
+        return await original(slots)
+
+    lock.read = _buggy  # type: ignore[method-assign]
+    rig.worker.want(7, "7777")
+    await rig.settle()
+    assert rig.status(7)[0] is Status.SUSPENDED
+
+    lock.unreachable = True
+    for _ in range(BACKOFF_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+    assert not rig.worker.reachable
+    lock.unreachable = False
+    for _ in range(20):
+        if rig.worker.reachable:
+            break
+        await rig.settle()
+        await asyncio.sleep(0)
+
+    assert rig.worker.reachable
