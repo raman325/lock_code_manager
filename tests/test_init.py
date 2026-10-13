@@ -3404,15 +3404,22 @@ def _entry_on_the_second_lock(
 
 
 async def _set_up(hass: HomeAssistant, *entries: MockConfigEntry) -> MockLCMLock:
-    """Set up ``entries`` in order and return the second lock, which they share."""
-    for entry in entries:
-        entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-    lock = entries[0].runtime_data.locks[LOCK_2_ENTITY_ID]
-    assert all(entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock for entry in entries)
+    """
+    Set up ``entries`` in order and return the second lock, which they share.
+
+    Shared means set up once: every entry after the first, here or in an
+    earlier call, joins the lock instead of setting up its own.
+    """
+    with when_mock_lock_built(lambda lock: lock) as built:
+        for entry in entries:
+            entry.add_to_hass(hass)
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+    assert len([lock for lock in built if lock.service_calls["setup"]]) <= 1
+    lock = mock_lock(entries[0], LOCK_2_ENTITY_ID)
     assert not lock.supports_push
-    assert lock.coordinator is not None and lock.coordinator.last_update_success
+    # Read at setup, whatever the entries' polling option.
+    assert lock.service_calls["get_usercodes"]
     return lock
 
 
@@ -3525,9 +3532,10 @@ async def test_re_enabling_polling_on_one_holder_resumes_the_poll(
     assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 0
 
     hass.config_entries.async_update_entry(toggled, pref_disable_polling=False)
-    assert await hass.config_entries.async_reload(toggled.entry_id)
-    await hass.async_block_till_done()
-    assert toggled.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
+    with when_mock_lock_built(lambda lock: lock) as rebuilt:
+        assert await hass.config_entries.async_reload(toggled.entry_id)
+        await hass.async_block_till_done()
+    assert not [lock for lock in rebuilt if lock.service_calls["setup"]]
 
     assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 3
 
