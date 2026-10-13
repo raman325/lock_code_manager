@@ -40,6 +40,7 @@ from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_NAME,
+    CONF_CONDITION,
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
@@ -2321,3 +2322,69 @@ class TestOpenBugs:
         # Three strikes, with headroom; today it is one write per tick.
         assert len([s for s in fake_zwave_lock.sets if s[0] == 2]) <= 5
         assert _suspension(hass, fake_zwave_lock_entry, lock_entity, 2) is not None
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "open: the stale-Available guard asks whether a PIN is configured, "
+            "not whether the slot is active, so a slot whose condition is off "
+            "keeps the code it dropped and never comes back in sync"
+        ),
+    )
+    async def test_a_slot_whose_condition_is_off_is_cleared_once(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A stale Available after the clear does not bring the code back.
+
+        Today the slot shows the dropped code and stays out of sync. With the
+        mock lock's canned reads the catalog's probe saw the clear reissued
+        on most ticks instead; either way it is the same guard.
+
+        The slot has a PIN and is enabled, but its condition is off, so it
+        wants nothing on the lock. The lock reports Available paired with
+        the code it just dropped, as some locks do after a write (#863).
+        """
+        hass.states.async_set("input_boolean.access", STATE_OFF)
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            unique_id="test_zwave_js_condition",
+            subentries_data=user_subentries(
+                {
+                    2: {
+                        CONF_NAME: "slot2",
+                        CONF_PIN: "1234",
+                        CONF_ENABLED: True,
+                        CONF_CONDITION: "input_boolean.access",
+                    }
+                }
+            ),
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: fake_zwave_lock.holds(2) is None,
+            max_ticks=5,
+            what="slot 2 cleared",
+        )
+        cleared = len(fake_zwave_lock.clears)
+
+        for _ in range(4):
+            fake_zwave_lock.send_user_code_report(2, CodeSlotStatus.AVAILABLE, "1234")
+            await async_advance_sync_ticks(hass, freezer)
+        await async_advance_sync_ticks(hass, freezer, 6)
+
+        clears = fake_zwave_lock.clears[cleared:]
+        states = _slot_states(hass, entry, lock_entity, 2)
+        await hass.config_entries.async_unload(entry.entry_id)
+        assert len(clears) <= 1
+        assert states == (STATE_ON, "")

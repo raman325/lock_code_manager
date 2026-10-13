@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator
 from datetime import timedelta
+from functools import partial
 import json
 from typing import Any
 from unittest.mock import patch
@@ -1177,3 +1178,126 @@ class TestLateDiscoveryData:
 
         await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
+
+
+class DroppingUserCodeTable(UserCodeTable):
+    """
+    A node that drops sets to some slots and will not answer reads of others.
+
+    A dropped set is acknowledged like any other and changes nothing; a
+    refused read fails the api call.
+    """
+
+    def __init__(
+        self,
+        *,
+        drops: frozenset[int] = frozenset(),
+        unreadable: frozenset[int] = frozenset(),
+    ) -> None:
+        """Drop sets to ``drops``, refuse reads of ``unreadable``."""
+        super().__init__()
+        self.drops = drops
+        self.unreadable = unreadable
+
+    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Drop or refuse the named slots; answer everything else as the table would."""
+        _target, method, method_args = request["args"]
+        if method == "set" and method_args[0] in self.drops:
+            return {"success": True, "message": "", "result": None}
+        if method == "get" and method_args[0] in self.unreadable:
+            return {"success": False, "message": "Timeout", "result": None}
+        return super().__call__(api_base, request)
+
+
+class TestApiOnlyOpenBugs:
+    """Open bugs on a lock reached only through the api (no node topic), each a strict xfail."""
+
+    @pytest.fixture
+    async def api_only_entry(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_mock,
+        mqtt_teardown,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: UserCodeTable,
+    ) -> AsyncGenerator[MockConfigEntry]:
+        """
+        Set up LCM over a lock on a MANUAL gateway's custom topic, slots 1 and 2.
+
+        ``freezer`` is requested to freeze the clock before the entry is set
+        up, as the tick helpers need.
+        """
+        zui_api_responder.set_handler("sendCommand", user_code_table)
+        lock_entity = await async_discover_zui_lock(
+            hass, state_topic="attic/front_door/state"
+        )
+        config = {
+            CONF_LOCKS: [lock_entity.entity_id],
+            CONF_SLOTS: {
+                slot_num: {
+                    CONF_NAME: f"slot{slot_num}",
+                    CONF_PIN: pin,
+                    CONF_ENABLED: True,
+                }
+                for slot_num, pin in E2E_SLOT_PINS.items()
+            },
+        }
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=config,
+            unique_id="test_zui_manual_open_bugs",
+            subentries_data=user_subentries(config[CONF_SLOTS]),
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        yield entry
+
+        if entry.state is ConfigEntryState.LOADED:
+            await hass.config_entries.async_unload(entry.entry_id)
+            await hass.async_block_till_done()
+
+    @staticmethod
+    def _in_sync(hass: HomeAssistant, entry: MockConfigEntry, slot_num: int) -> str:
+        """Return a slot's in-sync state on the entry's one lock."""
+        [lock_entity_id] = entry.data[CONF_LOCKS]
+        return hass.states.get(
+            in_sync_entity_id(hass, entry, slot_num, lock_entity_id)
+        ).state
+
+    @pytest.fixture
+    def user_code_table(self, request: pytest.FixtureRequest) -> UserCodeTable:
+        """A fresh table from the factory each test names by parameter."""
+        return request.param()
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "open: a write the lock dropped reads in sync when the read that "
+            "would confirm it is refused while other slots answer"
+        ),
+    )
+    @pytest.mark.parametrize(
+        "user_code_table",
+        [
+            partial(
+                DroppingUserCodeTable, drops=frozenset({1}), unreadable=frozenset({1})
+            )
+        ],
+        indirect=True,
+        ids=["drops_slot_1"],
+    )
+    async def test_a_dropped_write_does_not_read_in_sync(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        api_only_entry: MockConfigEntry,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """Slot 1's write never landed and can't be read back, so it is not in sync."""
+        await async_advance_sync_ticks(hass, freezer, 15)
+
+        assert 1 not in user_code_table.codes
+        assert self._in_sync(hass, api_only_entry, 1) != STATE_ON
