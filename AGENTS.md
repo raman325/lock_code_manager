@@ -471,6 +471,36 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     `commands` records every command answered.
   - `test_node_harness.py` self-tests each behavior, and end to end through a loaded entry.
 
+- `tests/providers/schlage/fake_service.py`: `FakeSchlageCloud`, the Schlage cloud's access codes
+  behind `schlage.get_codes`/`add_code`/`delete_code`, answered as Home Assistant core's Schlage
+  lock entity does (name or code already there refused with core's own message, a missing name
+  deleted as a success). For `read_lag` seconds after a write, refreshes answer the codes from
+  before it, as the cloud did in #1083; `time_out(service)` raises the raw `requests` `ReadTimeout` core
+  lets through. Fixture `fake_schlage_cloud` (async: it caches core's Schlage exception
+  translations, so errors read as they do in production).
+- `tests/providers/akuvox/fake_service.py`: `FakeAkuvoxDevice`, an Akuvox device's users behind
+  the `local_akuvox` integration's `list_users`/`add_user`/`modify_user`/`delete_user`, answered
+  as that integration does (PIN 4-8 digits, unknown or cloud-provisioned users refused, every
+  `pylocal-akuvox` `User` field listed; local users marked as A08S/E18C firmware marks them).
+  `ignore(service)` acknowledges a write without applying it. Fixture `fake_akuvox_device`.
+  Both knobs take `times` and return a `ServiceFault` (`tests/providers/service_fault.py`:
+  `times`, `hits`, `clear()`, context manager), shaped like the other fakes' faults. Neither
+  fixture can be combined with the canned `*_mock_services` one: both answer the same services.
+  Both fakes have self-tests in `test_fake_service.py`.
+
+- `tests/providers/zigbee2mqtt/fake_bridge.py`: `FakeZ2MBridge`, Zigbee2MQTT and the lock behind
+  it, on the Home Assistant MQTT client mock: the provider's `/set` and `/get` publishes reach it,
+  and what Zigbee2MQTT publishes back is fired on the device topic (zigbee2mqtt `344b6e03` and
+  zigbee-herdsman-converters `3cdf1b86`, cited by line). Writes change the lock's PIN table and
+  publish nothing; reads are answered only in `users` (`lock_pin_code_response`, `pin_code` only
+  with `expose_pin`); every publish is the whole cached state, merged deeply, so a users entry
+  is republished as last read and a key a new answer leaves out keeps its old value; `action`
+  and `action_*` are never cached. Knobs: `set_user` (keypad change, no event), `report`
+  (an attribute report: the cache republished), `report_after_write`, `operation_event`,
+  `programming_event`, `silent` (reads never answered; writes land), `expose_pin`, `pin_code_count`
+  (default the Yale lock extend's 250). Fixture `fake_z2m_bridge` (default topic); self-tests
+  in `test_fake_bridge.py`.
+
 ### Test philosophy
 
 **Mock at the boundary, not the code under test.** Let as much end-to-end code run as possible.
@@ -490,17 +520,18 @@ Each provider package has a `conftest.py`, a `test_provider.py`, and a
 
 ```text
 tests/providers/
-  akuvox/          # conftest, test_provider, test_e2e
+  akuvox/          # + fake_service, test_fake_service
   matter/          # + helpers, fixtures/, fake_node, test_node_harness,
                    #   test_sdk_exception_translation
-  schlage/
+  schlage/         # + fake_service, test_fake_service
   virtual/
   zha/             # + helpers (Zigbee frames, quirk-style clusters)
-  zigbee2mqtt/     # + test_payload, test_topic_resolution
+  zigbee2mqtt/     # + fake_bridge, test_fake_bridge, test_payload, test_topic_resolution
   zwave_js/        # + helpers, fixtures/, fake_node, test_events, test_node_harness
   zwave_js_ui/     # + test_api, test_borrowed, test_payload, test_push,
                    #   test_topic_resolution
   helpers.py       # Shared test mixins (ServiceProviderConnectionTests, etc.)
+  service_fault.py # ServiceFault, the service fakes' fault
   test_base.py, test_dispatch.py, test_seam.py, test_util.py
 ```
 

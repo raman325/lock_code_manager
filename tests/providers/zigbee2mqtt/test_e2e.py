@@ -2,30 +2,65 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import json
 from typing import Any
 from unittest.mock import DEFAULT
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_mqtt_message,
+)
 
+from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.config_entries import SOURCE_USER
-from homeassistant.const import CONF_NAME
+from homeassistant.const import (
+    CONF_NAME,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CODE_SLOT,
     CONF_LOCKS,
     CONF_NUM_USERS,
     DOMAIN,
+    EVENT_CREDENTIAL_USED,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
-from tests.common import async_configure_flow
+from tests.common import (
+    async_advance_clock,
+    async_advance_sync_ticks,
+    async_configure_flow,
+    async_run_until_quiet,
+    async_step_clock_until,
+    async_tick_until,
+    current_entry,
+    in_sync_entity_id,
+    lcm_issue_ids,
+    slot_entity_id,
+    sync_status,
+    unfinished_tasks,
+)
 
-from .conftest import Z2M_FULL_TOPIC, Z2M_GET_TOPIC, Z2M_SET_TOPIC, get_z2m_lock
+from .conftest import (
+    Z2M_FULL_TOPIC,
+    Z2M_GET_TOPIC,
+    Z2M_SET_TOPIC,
+    Z2M_TOPIC_NAME,
+    async_discover_z2m_lock,
+    get_z2m_lock,
+)
+from .fake_bridge import ENABLED, FakeZ2MBridge
 
 # Full LCM setup briefly holds the coordinator's debounced refresh lock while
 # the initial sync runs. Concurrent async_request_refresh calls during that
@@ -322,3 +357,242 @@ class TestAddingThroughTheUserInterface:
 
         assert result["step_id"] == "code_slot"
         assert result["description_placeholders"]["user_num"] == 1
+
+
+@asynccontextmanager
+async def _bridge_entry(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, lock_entity_id: str
+) -> AsyncIterator[MockConfigEntry]:
+    """
+    Set up an entry on the bridge's lock, slots 1 and 2 at 1234 and 5678.
+
+    Setup reads the lock, and a read the bridge leaves unanswered waits out
+    its timeout on the frozen clock, so the clock is stepped until it is done.
+    Unloaded after: stepped too, once whatever a failed test left waiting on
+    the frozen clock is cancelled, and the test's own failure is the one
+    reported.
+    """
+    entry = current_entry(
+        "test_z2m_bridge", {1: "1234", 2: "5678"}, locks=(lock_entity_id,)
+    )
+    entry.add_to_hass(hass)
+    setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
+    await async_step_clock_until(
+        hass, freezer, setup.done, max_steps=100, what="entry setup", step=1.0
+    )
+    assert setup.result()
+    failed = True
+    try:
+        yield entry
+        failed = False
+    finally:
+        if failed:
+            for task in unfinished_tasks(hass):
+                task.cancel()
+            await async_run_until_quiet()
+        unload = hass.async_create_task(
+            hass.config_entries.async_unload(entry.entry_id)
+        )
+        try:
+            await async_step_clock_until(
+                hass, freezer, unload.done, max_steps=100, what="entry unload", step=1.0
+            )
+        except pytest.fail.Exception:
+            if not failed:
+                raise
+        if not failed:
+            assert unload.result()
+
+
+def _in_sync(
+    hass: HomeAssistant, entry: MockConfigEntry, slot_num: int, lock_entity_id: str
+) -> str:
+    """Return the state of one slot's in-sync entity."""
+    return hass.states.get(
+        in_sync_entity_id(hass, entry, slot_num, lock_entity_id)
+    ).state
+
+
+class TestBridge:
+    """Sync against a stateful Zigbee2MQTT bridge, judged by entities and topics."""
+
+    async def test_reads_answered_through_users_settle_with_one_write_each(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        #1335: a lock that answers reads in ``users`` is written once and settles.
+
+        Zigbee2MQTT answers a ``/get`` only through the ``users`` object, and
+        republishes its whole cache on every report, the users entries as
+        last read included. Before the fix every read timed out, and the
+        stale ``available`` republished after each write unwound it, so the
+        slots were read and reprogrammed forever.
+        """
+        bridge = fake_z2m_bridge
+        bridge.report_after_write = True
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await async_tick_until(
+                hass,
+                freezer,
+                lambda: all(
+                    _in_sync(hass, entry, slot, lock_id) == STATE_ON for slot in (1, 2)
+                ),
+                max_ticks=20,
+                what="both slots in sync",
+            )
+            gets = bridge.count("get")
+            for _ in range(10):
+                bridge.report()
+                await async_advance_sync_ticks(hass, freezer)
+
+            assert [len(bridge.sets_for(slot)) for slot in (1, 2)] == [1, 1]
+            assert bridge.count("get") == gets
+            assert bridge.users[1] == (ENABLED, "1234")
+            assert bridge.users[2] == (ENABLED, "5678")
+            assert all(
+                _in_sync(hass, entry, slot, lock_id) == STATE_ON for slot in (1, 2)
+            )
+
+    async def test_a_custom_base_topic_carries_every_command(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_mock,
+        mqtt_teardown,
+    ) -> None:
+        """
+        PR #1423: a multi-level base topic gets the reads and writes, nothing else.
+
+        The device topic comes from the lock's discovery data, so a bridge on
+        ``home/z2m`` is addressed there and never on the default
+        ``zigbee2mqtt`` prefix.
+        """
+        lock = await async_discover_z2m_lock(hass, base_topic="home/z2m")
+        bridge = FakeZ2MBridge(hass, mqtt_mock, f"home/z2m/{Z2M_TOPIC_NAME}")
+        bridge.install()
+        try:
+            async with _bridge_entry(hass, freezer, lock.entity_id) as entry:
+                await async_tick_until(
+                    hass,
+                    freezer,
+                    lambda: all(
+                        _in_sync(hass, entry, slot, lock.entity_id) == STATE_ON
+                        for slot in (1, 2)
+                    ),
+                    max_ticks=20,
+                    what="both slots in sync",
+                )
+                assert bridge.users[1] == (ENABLED, "1234")
+                assert bridge.users[2] == (ENABLED, "5678")
+                # The bridge records only what reached home/z2m's device topic.
+                assert bridge.count("get") > 0
+                assert [len(bridge.sets_for(slot)) for slot in (1, 2)] == [1, 1]
+                assert not [
+                    call.args[0]
+                    for call in mqtt_mock.async_publish.call_args_list
+                    if call.args[0].startswith("zigbee2mqtt/")
+                ]
+        finally:
+            bridge.uninstall()
+
+    async def test_a_bridge_that_never_answers_a_read_still_gets_its_writes(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        PR #1471: a bridge whose reads go unanswered is not an unreachable lock.
+
+        Every read times out, but the writes still go out and land, and
+        nothing is suspended or reported offline: silence on reads says
+        nothing about whether writes land.
+        """
+        bridge = fake_z2m_bridge
+        bridge.silent = True
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await async_advance_clock(hass, freezer, 120)
+            await async_advance_sync_ticks(hass, freezer, 30)
+
+            assert bridge.count("get") > 0
+            assert bridge.users[1] == (ENABLED, "1234")
+            assert bridge.users[2] == (ENABLED, "5678")
+            assert lcm_issue_ids(hass) == []
+            for slot in (1, 2):
+                status = sync_status(
+                    hass, in_sync_entity_id(hass, entry, slot, lock_id)
+                )
+                assert status != SyncState.SUSPENDED
+            assert hass.states.get(lock_id).state != STATE_UNAVAILABLE
+
+
+class TestBridgeEvents:
+    """Lock events from the bridge, judged by the slot event entities."""
+
+    async def test_a_keypad_unlock_names_its_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """An operation event from the keypad reaches that slot's event entity."""
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            event_1 = slot_entity_id(
+                hass, EVENT_DOMAIN, entry, 1, EVENT_CREDENTIAL_USED
+            )
+
+            fake_z2m_bridge.operation_event("unlock", 1)
+            await hass.async_block_till_done()
+
+            state = hass.states.get(event_1)
+            assert state.state != STATE_UNKNOWN
+            assert state.attributes[ATTR_CODE_SLOT] == 1
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param({"action": ["unlock"], "action_user": 1}, id="list_action"),
+            pytest.param({"action": {"unlock": 1}, "action_user": 1}, id="dict_action"),
+            pytest.param({"action": "unlock", "action_user": True}, id="bool_user"),
+        ],
+    )
+    async def test_a_malformed_event_names_no_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+        payload: dict[str, Any],
+    ) -> None:
+        """
+        PR #1076: an unhashable ``action`` or a boolean user fires nothing.
+
+        No Zigbee2MQTT converter sends these (``action`` is a string,
+        ``action_user`` the ZCL user id); the guards are against a
+        malformed payload, so the payload is fired as is. Before the fix
+        the first two raised in the MQTT callback and the third named slot
+        1. A real keypad unlock afterwards still lands, so the subscription
+        survived.
+        """
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            event_1 = slot_entity_id(
+                hass, EVENT_DOMAIN, entry, 1, EVENT_CREDENTIAL_USED
+            )
+
+            _fire_device_payload(hass, payload)
+            await hass.async_block_till_done()
+            assert hass.states.get(event_1).state == STATE_UNKNOWN
+
+            fake_z2m_bridge.operation_event("unlock", 1)
+            await hass.async_block_till_done()
+            assert hass.states.get(event_1).state != STATE_UNKNOWN

@@ -14,6 +14,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
+    CONF_ENABLED,
+    CONF_NAME,
     CONF_PIN,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
@@ -31,6 +33,8 @@ from homeassistant.helpers.update_coordinator import REQUEST_REFRESH_DEFAULT_COO
 
 from custom_components.lock_code_manager.const import (
     BACKOFF_FAILURE_THRESHOLD,
+    CONF_LOCKS,
+    CONF_SLOTS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     PENDING_WRITE_TTL,
@@ -2778,3 +2782,40 @@ class TestLockBusy:
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._coordinator._lock_breaker.failure_count == lock_failures
         assert manager._slot_breaker.failure_count == slot_failures
+
+
+async def test_a_user_turned_off_with_no_pin_settles_in_sync(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry,
+) -> None:
+    """
+    Regression for PR #1085 (#1083): a disabled user with no PIN leaves "waiting".
+
+    A user saved with no PIN has a PIN entity in ``unknown``; with the user
+    turned off, the slot stayed in its loading state waiting for it, and the
+    in-sync sensor never left unknown.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {1: {CONF_NAME: "test1", CONF_ENABLED: False}},
+        },
+        unique_id="pr1085",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    in_sync = in_sync_entity_id(hass, entry, 1)
+
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=5,
+        what="slot 1 in sync",
+    )
+
+    assert 1 not in mock_lock(entry).codes
+    await hass.config_entries.async_unload(entry.entry_id)

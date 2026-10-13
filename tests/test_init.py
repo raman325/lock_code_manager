@@ -5689,3 +5689,43 @@ async def test_removing_a_slot_stops_its_managers(
     assert 2 not in entry.runtime_data.slot_coordinators
     assert coordinator.sync_managers == []
     assert not any(manager._started for manager in managers)
+
+
+async def test_a_blip_during_the_deferred_setup_retry_is_retried_again(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry: MockConfigEntry,
+) -> None:
+    """
+    Regression for PR #1471: one blip on the deferred retry does not strand writes.
+
+    A lock not connected at setup is set up later, from the connection
+    check. That retry's flag was cleared before it ran, so a disconnect on
+    the way through spent the only retry, and no code reached the lock
+    until the integration was reloaded by hand.
+    """
+    entry = current_entry("Deferred Blip", {1: "4321"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(lambda lock: lock.set_connected(False)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    lock = mock_lock(entry)
+    blip = lock.fail("setup", error=LockDisconnected, times=1)
+    lock.set_connected(True)
+
+    # Two connection checks: the first retry meets the blip, the second runs.
+    check = lock.connection_check_interval.total_seconds()
+    await async_advance_clock(hass, freezer, 2 * check + 5)
+    if blip.hits != 1:
+        pytest.fail("setup: the deferred retry never met the blip")
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=20,
+        what="slot 1 in sync",
+    )
+
+    assert lock.codes[1] == "4321"
+    assert await hass.config_entries.async_unload(entry.entry_id)

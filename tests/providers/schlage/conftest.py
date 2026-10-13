@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.providers.schlage import (
 from tests.providers.helpers import register_mock_service
 
 from ...common import user_subentries
+from .fake_service import FakeSchlageCloud
 
 LOCK_ENTITY_ID = "lock.schlage_test_schlage_lock"
 
@@ -229,3 +230,24 @@ def e2e_schlage_lock(
 ) -> SchlageLock:
     """Extract the SchlageLock from the LCM config entry."""
     return get_schlage_lock(hass, lcm_config_entry, schlage_lock_entity)
+
+
+@pytest.fixture
+async def fake_schlage_cloud(
+    hass: HomeAssistant,
+    schlage_lock_entity: er.RegistryEntry,
+    request: pytest.FixtureRequest,
+) -> FakeSchlageCloud:
+    """
+    Answer the Schlage code services from a stateful cloud (``fake_service.py``).
+
+    Request it before an entry is set up; it replaces ``schlage_mock_services``,
+    which answers with canned values and changes nothing when written to.
+    """
+    if "schlage_mock_services" in request.fixturenames:
+        pytest.fail(
+            "fake_schlage_cloud and schlage_mock_services answer the same services"
+        )
+    cloud = FakeSchlageCloud(hass, schlage_lock_entity.entity_id)
+    await cloud.async_install()
+    return cloud

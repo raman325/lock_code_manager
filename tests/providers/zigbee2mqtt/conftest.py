@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import (
 )
 
 from ...common import user_subentries
+from .fake_bridge import FakeZ2MBridge
 
 Z2M_TOPIC_NAME = "TestLockZ2M"
 Z2M_FULL_TOPIC = f"zigbee2mqtt/{Z2M_TOPIC_NAME}"
@@ -169,6 +170,17 @@ def auto_get_responder(hass: HomeAssistant, mqtt_mock):
     mqtt_mock.async_publish.side_effect = _respond
     yield
     mqtt_mock.async_publish.side_effect = None
+
+
+@pytest.fixture
+def fake_z2m_bridge(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> Iterator[FakeZ2MBridge]:
+    """Answer the lock's MQTT topics from a stateful Zigbee2MQTT bridge (default topic)."""
+    bridge = FakeZ2MBridge(hass, mqtt_mock, Z2M_FULL_TOPIC)
+    bridge.install()
+    yield bridge
+    bridge.uninstall()
 
 
 @pytest.fixture
