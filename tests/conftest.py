@@ -15,23 +15,16 @@ from probatio import to_field_list
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
-    MockModule,
-    MockPlatform,
     async_fire_time_changed,
     mock_config_flow,
-    mock_integration,
     mock_platform,
 )
 
-from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
-from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
-from homeassistant.config_entries import ConfigEntry, ConfigFlow
-from homeassistant.const import Platform
+from homeassistant.config_entries import ConfigFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowHandler
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
@@ -44,9 +37,10 @@ from custom_components.lock_code_manager.providers._base import BaseLock
 
 from .common import (
     BASE_CONFIG,
-    MockCalendarEntity,
+    LiveMockCalendars,
     MockLCMLock,
-    MockLockEntity,
+    async_setup_mock_lock_entry,
+    count_executor_work,
     forget_all_faults,
     release_all_faults,
     sync_manager_of,
@@ -95,6 +89,13 @@ def pytest_runtest_teardown(
         return (yield)
     finally:
         forget_all_faults()
+
+
+@pytest.fixture(autouse=True)
+def counted_executor_work() -> Generator[None]:
+    """Count executor work, so the clock helpers never step past a thread."""
+    with count_executor_work():
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -284,72 +285,7 @@ async def setup_lovelace_ui_fixture(hass: HomeAssistant, config: dict[str, Any])
 @pytest.fixture(name="mock_lock_config_entry")
 async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
     """Set up lock entities using an entity platform."""
-
-    async def async_setup_entry_init(
-        hass: HomeAssistant, config_entry: ConfigEntry
-    ) -> bool:
-        """Set up test config entry."""
-        await hass.config_entries.async_forward_entry_setups(
-            config_entry, [Platform.CALENDAR, Platform.LOCK]
-        )
-        return True
-
-    async def async_unload_entry_init(
-        hass: HomeAssistant, config_entry: ConfigEntry
-    ) -> bool:
-        """Unload test config entry."""
-        for platform in (Platform.CALENDAR, Platform.LOCK):
-            await hass.config_entries.async_forward_entry_unload(config_entry, platform)
-        return True
-
-    mock_platform(hass, f"{TEST_DOMAIN}.config_flow")
-    mock_integration(
-        hass,
-        MockModule(
-            TEST_DOMAIN,
-            async_setup_entry=async_setup_entry_init,
-            async_unload_entry=async_unload_entry_init,
-        ),
-    )
-
-    config_entry = MockConfigEntry(domain=TEST_DOMAIN)
-
-    async def async_setup_entry_lock_platform(
-        hass: HomeAssistant,
-        config_entry: ConfigEntry,
-        async_add_entities: AddEntitiesCallback,
-    ) -> None:
-        """Set up test lock platform via config entry."""
-        async_add_entities([MockLockEntity("test_1"), MockLockEntity("test_2")])
-
-    mock_platform(
-        hass,
-        f"{TEST_DOMAIN}.{LOCK_DOMAIN}",
-        MockPlatform(async_setup_entry=async_setup_entry_lock_platform),
-    )
-
-    calendars = hass.data["lock_code_manager_calendars"] = [
-        MockCalendarEntity("test_1"),
-        MockCalendarEntity("test_2"),
-    ]
-
-    async def async_setup_entry_calendar_platform(
-        hass: HomeAssistant,
-        config_entry: ConfigEntry,
-        async_add_entities: AddEntitiesCallback,
-    ) -> None:
-        """Set up test calendar platform via config entry."""
-        async_add_entities(calendars)
-
-    mock_platform(
-        hass,
-        f"{TEST_DOMAIN}.{CALENDAR_DOMAIN}",
-        MockPlatform(async_setup_entry=async_setup_entry_calendar_platform),
-    )
-
-    config_entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
+    config_entry = await async_setup_mock_lock_entry(hass)
 
     yield config_entry
 
@@ -374,9 +310,9 @@ async def lock_code_manager_config_entry_fixture(hass: HomeAssistant):
 @pytest.fixture(name="mock_calendars")
 def mock_calendars_fixture(
     hass: HomeAssistant, mock_lock_config_entry
-) -> list[MockCalendarEntity]:
-    """Return the mock calendar entities created by mock_lock_config_entry."""
-    return hass.data["lock_code_manager_calendars"]
+) -> LiveMockCalendars:
+    """Return the mock lock integration's calendars, the current ones on each use."""
+    return LiveMockCalendars(hass)
 
 
 def get_in_sync_entity_obj(hass: HomeAssistant, entity_id: str):

@@ -12,10 +12,13 @@ import asyncio
 from collections import Counter
 from collections.abc import Callable, Generator
 from datetime import datetime
+import logging
+import threading
 import time
 from typing import Any
 from unittest.mock import PropertyMock, patch
 
+import freezegun.api
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -25,14 +28,20 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE as TEXT_SERVICE_SET_VALUE,
 )
-from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+)
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 from custom_components import lock_code_manager
 from custom_components.lock_code_manager.const import (
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
@@ -56,10 +65,13 @@ from .common import (
     LIFELONG_TASKS,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    MOCK_CALENDARS_KEY,
     NO_PIN_CAPABILITIES,
     PIN_CAPABILITIES,
     SLOT_1_PIN_ENTITY,
+    ExecutorWorkStuck,
     FaultKind,
+    LiveMockCalendars,
     MockLCMLock,
     MockLCMPushLock,
     _async_step_timers_to,
@@ -67,6 +79,7 @@ from .common import (
     async_advance_across_deadline,
     async_advance_clock,
     async_advance_sync_ticks,
+    async_fire_mock_lock_use,
     async_run_until_quiet,
     async_settle_background,
     async_step_clock_until,
@@ -96,6 +109,64 @@ async def test_step_clock_until_fails_and_cancels_instead_of_hanging(
         )
 
     assert sleeper.cancelled()
+
+
+async def test_settling_waits_out_executor_work_without_spending_steps(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """
+    Work on an executor thread is waited out in real time, not in clock steps.
+
+    The thread takes far longer than two steps of the loop, and the clock
+    does not move while it works.
+    """
+
+    async def _waits_on_a_thread() -> None:
+        await hass.async_add_executor_job(time.sleep, 0.3)
+
+    waiter = hass.async_create_task(_waits_on_a_thread())
+    before = time.monotonic()
+
+    await async_step_clock_until(
+        hass, freezer, waiter.done, max_steps=2, what="the thread"
+    )
+
+    assert waiter.done()
+    assert time.monotonic() == before
+
+
+async def test_a_wait_on_the_clock_still_fails_in_steps_and_fast(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """With no executor work in flight, a wait the clock never reaches fails fast."""
+    sleeper = hass.async_create_task(asyncio.sleep(3600))
+    started = freezegun.api.real_monotonic()
+
+    with pytest.raises(pytest.fail.Exception, match="after 50 clock steps"):
+        await async_step_clock_until(
+            hass, freezer, sleeper.done, max_steps=50, what="the sleeper"
+        )
+
+    assert freezegun.api.real_monotonic() - started < 1
+
+
+async def test_a_stuck_thread_fails_as_stuck_executor_work(
+    freezer: FrozenDateTimeFactory, hass: HomeAssistant
+) -> None:
+    """Executor work past its cap fails as that, not as the code under test hanging."""
+    release = threading.Event()
+    stuck = hass.async_add_executor_job(release.wait)
+    try:
+        with (
+            patch("tests.common.EXECUTOR_WORK_CAP_SECONDS", 0.2),
+            pytest.raises(ExecutorWorkStuck, match="still running after"),
+        ):
+            await async_step_clock_until(
+                hass, freezer, stuck.done, max_steps=50, what="the stuck thread"
+            )
+    finally:
+        release.set()
+        await stuck
 
 
 async def test_run_until_quiet_fails_on_a_loop_that_never_rests(
@@ -1297,6 +1368,118 @@ async def test_push_subscriptions_are_counted(
 
     await hass.config_entries.async_unload(entry.entry_id)
     assert [lock.unsubscribe_calls for lock in locks] == [1, 1]
+
+
+async def test_a_subscribe_error_set_as_the_lock_is_built_is_raised_uncounted(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A build act can set ``subscribe_error``, and every subscription then raises it.
+
+    It survives the push lock's own initializer, and a subscription it stops
+    is not counted; cleared, subscribing counts again.
+    """
+    error = LockDisconnected("subscription refused")
+
+    def _refuse_subscriptions(lock: MockLCMPushLock) -> MockLCMPushLock:
+        lock.subscribe_error = error
+        return lock
+
+    entry = current_entry("Refuses Subscriptions", {1: "1234"})
+    entry.add_to_hass(hass)
+    with (
+        patch.dict(
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+            {"test": MockLCMPushLock},
+        ),
+        when_mock_lock_built(_refuse_subscriptions) as built,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    [lock] = built
+    assert lock.subscribe_error is error
+    assert lock.subscribe_calls == 0
+    with pytest.raises(LockDisconnected):
+        lock.setup_push_subscription()
+    assert lock.subscribe_calls == 0
+
+    lock.subscribe_error = None
+    lock.setup_push_subscription()
+    assert lock.subscribe_calls == 1
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_push_subscription_hears_its_lock_until_it_unsubscribes(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A use the lock integration reports reaches a subscribed push mock, once.
+
+    Subscribing twice still listens once, and unsubscribing stops it.
+    """
+    uses: list[Event] = []
+    hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, uses.append)
+    entry = current_entry("Hears Uses", {1: "1234"})
+    entry.add_to_hass(hass)
+    with patch.dict(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMPushLock},
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    lock = _push_lock(entry, LOCK_1_ENTITY_ID)
+    lock.setup_push_subscription()
+
+    async_fire_mock_lock_use(hass, LOCK_2_ENTITY_ID, 1)
+    async_fire_mock_lock_use(hass, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert [event.data["config_entry_id"] for event in uses] == [entry.entry_id]
+
+    lock.teardown_push_subscription()
+    async_fire_mock_lock_use(hass, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert len(uses) == 1
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_the_mock_lock_entry_reloads_with_its_calendars(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    mock_calendars: LiveMockCalendars,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Reloading the mock lock integration brings its calendars back, events kept.
+
+    The fixture follows the reload: an event made through it afterwards is on
+    the calendar Home Assistant has now.
+    """
+    start = dt_util.utcnow()
+    before_reload = mock_calendars[0]
+    before_reload.create_event(
+        dtstart=start, dtend=start + TICK_INTERVAL, summary="kept"
+    )
+    caplog.clear()
+
+    assert await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert [
+        record for record in caplog.records if record.levelno >= logging.ERROR
+    ] == []
+    live = hass.data[MOCK_CALENDARS_KEY]
+    assert mock_calendars[0] is live[0] is not before_reload
+    for calendar in mock_calendars:
+        state = hass.states.get(calendar.entity_id)
+        assert state is not None
+        assert state.state != STATE_UNAVAILABLE
+
+    mock_calendars[1].create_event(
+        dtstart=start, dtend=start + TICK_INTERVAL, summary="after"
+    )
+    assert [event.summary for event in live[0]._events] == ["kept"]
+    assert [event.summary for event in live[1]._events] == ["after"]
+    assert hass.states.get(live[1].entity_id).attributes["message"] == "after"
 
 
 async def test_a_lock_reports_no_capabilities_unless_given_some(lock) -> None:

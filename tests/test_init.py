@@ -100,6 +100,7 @@ from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import (
     LockBusy,
     LockDisconnected,
+    ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.domain.queries import get_entry_config
@@ -1220,6 +1221,86 @@ async def test_a_reload_beside_an_unloaded_sibling_leaves_one_push_subscription(
     assert await hass.config_entries.async_unload(entry_a.entry_id)
     await hass.async_block_till_done()
     assert [lock.subscribe_calls - lock.unsubscribe_calls for lock in built] == [0, 0]
+
+
+def _cannot_subscribe(lock: MockLCMPushLock) -> MockLCMPushLock:
+    """Make a push lock's subscription unimplemented, and return the lock."""
+    lock.subscribe_error = ProviderNotImplementedError(lock, "setup_push_subscription")
+    return lock
+
+
+def _require(condition: bool, what: str) -> None:
+    """
+    Fail with ``Failed`` unless ``condition``: a broken setup, not the defect.
+
+    For tests that expect an ``AssertionError``, so one whose setup went
+    wrong cannot pass as the failure it was expecting.
+    """
+    if not condition:
+        pytest.fail(what)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="latent state-listener leak; see catalog",
+)
+async def test_a_lock_dropped_after_its_listener_started_never_sets_up_again(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A lock dropped after its state listener started never runs its setup again.
+
+    A push lock whose subscription is not implemented fails its setup after
+    the listener on its integration's config entry is registered. The entry
+    drops the lock and stops its coordinator, but nothing removes that
+    listener, so every reload of the lock's integration runs the dropped
+    instance's provider setup again, after the entry has unloaded too. For a
+    provider whose setup registers a listener of its own, that is a ghost
+    listener and every event twice. The shared-lock property machine exempts
+    such an instance from its own check for this, and only that instance.
+
+    Only the last assertion is the defect; everything before it is the setup
+    reaching the state the defect needs, and fails as ``Failed`` if it does
+    not, so a broken setup is never mistaken for the expected failure.
+    """
+    entry = current_entry("Cannot Subscribe", {1: "1234"})
+    entry.add_to_hass(hass)
+    with (
+        patch.dict(
+            "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+            {LOCK_DEVICE_DOMAIN: MockLCMPushLock},
+        ),
+        when_mock_lock_built(_cannot_subscribe) as built,
+    ):
+        _require(await hass.config_entries.async_setup(entry.entry_id), "entry set up")
+        await hass.async_block_till_done()
+    _require(len(built) == 1, f"one lock built, not {len(built)}")
+    [dropped] = built
+    _require(entry.state is ConfigEntryState.LOADED, "entry loaded")
+    _require(
+        er.async_get(hass).async_get_entity_id(
+            BINARY_SENSOR_DOMAIN,
+            DOMAIN,
+            build_slot_unique_id(entry.entry_id, 1, ATTR_IN_SYNC, LOCK_1_ENTITY_ID),
+        )
+        is None,
+        "the lock dropped from the entry",
+    )
+    _require(
+        dropped.service_calls["setup"] == [(entry.entry_id,)], "one provider setup"
+    )
+    _require(await hass.config_entries.async_unload(entry.entry_id), "entry unloaded")
+    await hass.async_block_till_done()
+
+    _require(
+        await hass.config_entries.async_reload(mock_lock_config_entry.entry_id),
+        "lock integration reloaded",
+    )
+    await hass.async_block_till_done()
+
+    assert dropped.service_calls["setup"] == [(entry.entry_id,)]
 
 
 @pytest.mark.parametrize("config", [{}])

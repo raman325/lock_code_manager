@@ -345,6 +345,25 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     any distance, for deadlines and the stop grace; `async_trip_slot_breaker` reaches
     a breaker through real failures. Prefer these to `async_trigger_sync_tick` (drives sync
     internals) and `async_advance_time` (fires timers but moves neither clock) in new tests
+  - `MockLCMPushLock.subscribe_error`, when set, is raised by every push subscription
+    attempt instead of subscribing. The push lock's own attributes are set before
+    `when_mock_lock_built` acts run, so an act can set it
+  - A `MockLCMPushLock` subscription is a real listener: `async_fire_mock_lock_use`
+    reports a code use the way the lock's integration would, and reaches every
+    subscription still registered -- one an instance failed to remove included
+  - `async_setup_mock_lock_entry(hass)` sets up the mock lock integration (the two lock
+    entities and calendars) that the `mock_lock_config_entry` fixture provides, for a
+    test that builds its own Home Assistant per example. Each setup builds fresh
+    entities, so the entry can be reloaded; calendars keep their events, and
+    `hass.data[MOCK_CALENDARS_KEY]` holds the current ones. The `mock_calendars`
+    fixture looks them up on every use, so it follows a reload
+  - The clock helpers never spend a step while executor threads have work in flight:
+    the autouse `counted_executor_work` fixture counts what each loop hands
+    `run_in_executor` until the result is back on the loop, and
+    `async_step_clock_until` waits that out in real time instead, so a step budget
+    counts only waits on the clock, whatever the machine's speed. Work running past
+    `EXECUTOR_WORK_CAP_SECONDS` (60) fails as `ExecutorWorkStuck`, not as the code
+    under test hanging
   - `@pytest.mark.paced` keeps the providers' real delay between lock operations; such a
     test settles with `settle=False`, since settling only steps a fraction of a second
   - Settling skips the tasks registered in `LIFELONG_TASKS`: ones an integration under test
@@ -453,6 +472,24 @@ Two complementary layers exist alongside the example-based suites:
   the deep profile locally with `HYPOTHESIS_PROFILE=ci pytest tests/properties/`.
   `test_credential_machine.py` is a stateful machine driving the real
   BaseLock write orchestration against `MockLCMLock`.
+  `test_shared_lock_machine.py` is a stateful machine over entries sharing
+  locks, driven only through Home Assistant (config entries, the options
+  flow, startup, the locks' own integration) and checked through entity
+  state and the mock locks' records. Each example builds its own Home
+  Assistant on its own loop and frozen clock (Hypothesis keeps the real
+  one). It caps examples at 20 steps and reports one bug; most failures
+  shrink in seconds, the slowest seen took about a minute.
+  Every step is bounded in its own loop by steps of the frozen clock, and
+  fails as `ExampleHung`, the same on every replay, so a hang shrinks like
+  any other failure, in seconds. Teardown is bounded, drains the loop, and
+  always takes the example's Home Assistant off the harness's running list,
+  so the session goes on. A synchronous spin that never yields is bounded by
+  nothing in the machine: only the test's pytest timeout catches it, and
+  Hypothesis then reports it unshrunk. That timeout is raised to 420
+  seconds, past Hypothesis's own cutoff for a slow shrink, as a last-resort
+  backstop only: the suite's 60 seconds could cut a shrink short, and a
+  timeout firing inside an example is taken by Hypothesis for that example's
+  failure and reported as flaky.
 - **TypeScript (Bombadil)** — `ts/pbt/` contains a browser harness that mounts
   the built cards with a scripted mock `hass` plus a chaos panel, and a
   Bombadil spec (`ts/pbt/spec.ts`) with temporal-logic properties (no PIN leaks

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Collection, Iterator
+from collections.abc import Awaitable, Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -15,17 +15,27 @@ import sys
 import time
 from typing import Any, Literal, Protocol, Self
 from unittest.mock import patch
+import weakref
 
+import freezegun.api
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    MockModule,
+    MockPlatform,
     async_fire_mqtt_message,
+    mock_integration,
+    mock_platform,
 )
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
-from homeassistant.components.calendar import CalendarEntity, CalendarEvent
-from homeassistant.components.lock import LockEntity
+from homeassistant.components.calendar import (
+    DOMAIN as CALENDAR_DOMAIN,
+    CalendarEntity,
+    CalendarEvent,
+)
+from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN, LockEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
@@ -40,11 +50,13 @@ from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
+    Platform,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.config_flow import LockCodeManagerFlowHandler
@@ -283,28 +295,114 @@ def unfinished_tasks(hass: HomeAssistant) -> list[asyncio.Task[Any]]:
     ]
 
 
+# Executor work each event loop has handed a thread and not yet had back.
+# Counted per loop, and only once the result is back on the loop -- not when
+# the thread finishes, which comes a moment before the loop hears of it -- so
+# a loop that is quiet with nothing counted is waiting on the clock or on
+# nothing, never on a thread. ``count_executor_work`` does the counting.
+_EXECUTOR_WORK: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, int] = (
+    weakref.WeakKeyDictionary()
+)
+# How long, in real seconds, executor work may run while a test waits on it.
+# Generous: it only has to separate a slow machine from a stuck thread.
+EXECUTOR_WORK_CAP_SECONDS = 60.0
+# How long the loop's thread sleeps between looks at executor work, so the
+# threads get the processor.
+_EXECUTOR_POLL_SECONDS = 0.001
+
+
+class ExecutorWorkStuck(Exception):
+    """Executor work still running after ``EXECUTOR_WORK_CAP_SECONDS``."""
+
+
+@contextmanager
+def count_executor_work() -> Iterator[None]:
+    """
+    Count the work every event loop hands its executors, while inside.
+
+    Wraps ``run_in_executor``, the one way in for Home Assistant's executor
+    jobs, its imports and its setup alike, so the clock helpers can tell a
+    loop waiting on a thread from one waiting on the clock.
+    """
+    original = asyncio.BaseEventLoop.run_in_executor
+
+    def _finished(loop: asyncio.AbstractEventLoop) -> None:
+        _EXECUTOR_WORK[loop] -= 1
+
+    def run_in_executor(
+        self: asyncio.BaseEventLoop, executor: Any, func: Any, *args: Any
+    ) -> asyncio.Future[Any]:
+        future = original(self, executor, func, *args)
+        _EXECUTOR_WORK[self] = _EXECUTOR_WORK.get(self, 0) + 1
+        future.add_done_callback(lambda _future: _finished(self))
+        return future
+
+    with patch.object(asyncio.BaseEventLoop, "run_in_executor", run_in_executor):
+        yield
+
+
+def executor_work_in_flight() -> bool:
+    """Return whether the running loop is waiting on executor work."""
+    return _EXECUTOR_WORK.get(asyncio.get_running_loop(), 0) > 0
+
+
+async def async_wait_out_executor_work(what: str) -> None:
+    """
+    Wait, in real time and without moving the clock, for executor work to come back.
+
+    Real threads do not run faster for the frozen clock being stepped, so
+    stepping it while they work spends steps on nothing: a budget of them
+    runs out on a slow machine while an import is still under way. Raises
+    ``ExecutorWorkStuck`` once it has waited ``EXECUTOR_WORK_CAP_SECONDS``.
+    A stuck thread is not the code under test hanging, so it is not
+    reported as that.
+    """
+    started = freezegun.api.real_monotonic()
+    while executor_work_in_flight():
+        if freezegun.api.real_monotonic() - started >= EXECUTOR_WORK_CAP_SECONDS:
+            raise ExecutorWorkStuck(
+                f"executor work still running after "
+                f"{EXECUTOR_WORK_CAP_SECONDS:.0f}s, waiting for {what}"
+            )
+        time.sleep(_EXECUTOR_POLL_SECONDS)
+        await async_run_until_quiet()
+
+
 async def async_step_clock_until(
-    hass: HomeAssistant,
+    hass: HomeAssistant | None,
     freezer: FrozenDateTimeFactory,
     done: Callable[[], bool],
     max_steps: int,
     what: str,
+    *,
+    step: float = CLOCK_STEP,
 ) -> None:
     """
     Step the frozen clock until ``done``, failing after ``max_steps``.
 
+    A step is taken only while no executor work is in flight; that is waited
+    out in real time instead (``async_wait_out_executor_work``). So the
+    budget counts only waits on the clock, and what a test sees does not
+    depend on how fast the machine's threads are.
+
     A failure cancels every unfinished task first. Left waiting on the frozen
     clock, they would hang teardown instead of letting the test fail.
     """
-    for _ in range(max_steps):
+    steps = 0
+    while not done():
+        await async_wait_out_executor_work(what)
         if done():
             return
-        freezer.tick(CLOCK_STEP)
+        if steps == max_steps:
+            break
+        steps += 1
+        freezer.tick(step)
         await async_run_until_quiet()
-    if done():
+    else:
         return
-    for task in unfinished_tasks(hass):
-        task.cancel()
+    if hass is not None:
+        for task in unfinished_tasks(hass):
+            task.cancel()
     await async_run_until_quiet()
     pytest.fail(f"{what} still waiting after {max_steps} clock steps")
 
@@ -1503,7 +1601,18 @@ class MockLCMLock(BaseLock):
 
 @dataclass(repr=False, eq=False)
 class MockLCMPushLock(MockLCMLock):
-    """Mock lock that supports push-based updates."""
+    """
+    Mock lock that supports push-based updates.
+
+    ``subscribe_error``, when set, is raised by every subscription attempt
+    instead of subscribing, which is not counted then. It is set before
+    ``when_mock_lock_built`` acts on the lock, so an act can set it.
+
+    A subscription is real: it listens for ``async_fire_mock_lock_use``, the
+    lock integration reporting a code use, and records the use as a provider
+    does. So an instance that never unsubscribed goes on hearing its lock,
+    exactly as a leaked subscription to a real lock would.
+    """
 
     async def async_set_usercode(
         self, code_slot: int, usercode: str, *args: Any, **kwargs: Any
@@ -1516,13 +1625,17 @@ class MockLCMPushLock(MockLCMLock):
 
     def __init__(self, *args, **kwargs):
         """Initialize mock push lock."""
-        super().__init__(*args, **kwargs)
+        # Before the base initializer, which runs the build acts: what an act
+        # sets here must not be overwritten once it returns.
         self._supports_push = True
         # Counted rather than flagged: a provider's setup must be idempotent
         # and runs again on every reconnect, so the number of times something
         # subscribed is what a double subscription shows up as.
         self.subscribe_calls = 0
         self.unsubscribe_calls = 0
+        self.subscribe_error: Exception | None = None
+        self._stop_hearing_uses: Callable[[], None] | None = None
+        super().__init__(*args, **kwargs)
 
     @property
     def supports_push(self) -> bool:
@@ -1530,12 +1643,43 @@ class MockLCMPushLock(MockLCMLock):
         return self._supports_push
 
     def setup_push_subscription(self) -> None:
-        """Subscribe to push-based value updates."""
+        """Subscribe to push-based value updates, or raise ``subscribe_error``."""
+        if self.subscribe_error is not None:
+            raise self.subscribe_error
         self.subscribe_calls += 1
+        # Idempotent, as a provider's subscription must be.
+        if self._stop_hearing_uses is None:
+            self._stop_hearing_uses = self.hass.bus.async_listen(
+                EVENT_MOCK_LOCK_USE, self._async_on_lock_use
+            )
 
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from push-based value updates."""
         self.unsubscribe_calls += 1
+        if self._stop_hearing_uses is not None:
+            self._stop_hearing_uses()
+            self._stop_hearing_uses = None
+
+    @callback
+    def _async_on_lock_use(self, event: Event) -> None:
+        """Record a code use the lock integration reported on this lock."""
+        if event.data[ATTR_ENTITY_ID] == self.lock.entity_id:
+            self.async_fire_code_slot_event(event.data[CONF_SLOT], to_locked=False)
+
+
+# What the mock lock integration fires when a code is used on one of its locks;
+# a push mock's subscription is what hears it.
+EVENT_MOCK_LOCK_USE = f"{LOCK_DEVICE_DOMAIN}_lock_use"
+
+
+@callback
+def async_fire_mock_lock_use(
+    hass: HomeAssistant, lock_entity_id: str, code_slot: int
+) -> None:
+    """Report a use of the code in ``code_slot`` on a lock, as its integration does."""
+    hass.bus.async_fire(
+        EVENT_MOCK_LOCK_USE, {ATTR_ENTITY_ID: lock_entity_id, CONF_SLOT: code_slot}
+    )
 
 
 class MockLockEntity(LockEntity):
@@ -1568,7 +1712,8 @@ class MockCalendarEntity(CalendarEntity):
     def __init__(self, name: str, events: list[CalendarEvent] | None = None) -> None:
         """Initialize entity."""
         self._attr_name = name.capitalize()
-        self._events = events or []
+        # The list given, empty or not, so a calendar rebuilt over it shares it.
+        self._events = [] if events is None else events
 
         self._attr_unique_id = slugify(name)
 
@@ -1618,6 +1763,126 @@ class MockCalendarEntity(CalendarEntity):
                 continue
             events.append(event)
         return events
+
+
+# Where ``async_setup_mock_lock_entry`` keeps the calendars it added last.
+MOCK_CALENDARS_KEY = "lock_code_manager_calendars"
+
+
+class LiveMockCalendars(Sequence[MockCalendarEntity]):
+    """
+    The mock lock integration's calendars as added now, looked up on every use.
+
+    Reloading the integration replaces its calendar entities, so holding on to
+    the list from before would act on entities Home Assistant has removed.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Read the calendars from ``hass``."""
+        self._hass = hass
+
+    def _current(self) -> list[MockCalendarEntity]:
+        return self._hass.data[MOCK_CALENDARS_KEY]
+
+    def __getitem__(self, index: Any) -> Any:
+        """Return the calendar, or the slice of calendars, added now at ``index``."""
+        return self._current()[index]
+
+    def __len__(self) -> int:
+        """Return how many calendars are added now."""
+        return len(self._current())
+
+
+async def async_setup_mock_lock_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """
+    Set up the mock lock integration and return its config entry.
+
+    Gives ``hass`` the two lock entities (``LOCK_1_ENTITY_ID`` and
+    ``LOCK_2_ENTITY_ID``) and two calendars, the latter also stored under
+    ``hass.data["lock_code_manager_calendars"]``. Each setup of the entry
+    builds its entities afresh, as a real integration does, so the entry can
+    be reloaded; the calendars keep their events across it, and
+    ``hass.data`` holds the ones currently added. A coroutine rather than
+    only a fixture, so a test that builds its own Home Assistant per example
+    -- a Hypothesis state machine -- sets up the same locks the suite does.
+    The caller registers a config flow for ``LOCK_DEVICE_DOMAIN`` first
+    (``mock_config_flow``), without which the entry does not set up.
+    """
+
+    async def async_setup_entry_init(
+        hass: HomeAssistant, config_entry: ConfigEntry
+    ) -> bool:
+        """Set up test config entry."""
+        await hass.config_entries.async_forward_entry_setups(
+            config_entry, [Platform.CALENDAR, Platform.LOCK]
+        )
+        return True
+
+    async def async_unload_entry_init(
+        hass: HomeAssistant, config_entry: ConfigEntry
+    ) -> bool:
+        """Unload test config entry."""
+        for platform in (Platform.CALENDAR, Platform.LOCK):
+            await hass.config_entries.async_forward_entry_unload(config_entry, platform)
+        return True
+
+    mock_platform(hass, f"{LOCK_DEVICE_DOMAIN}.config_flow")
+    mock_integration(
+        hass,
+        MockModule(
+            LOCK_DEVICE_DOMAIN,
+            async_setup_entry=async_setup_entry_init,
+            async_unload_entry=async_unload_entry_init,
+        ),
+    )
+
+    config_entry = MockConfigEntry(domain=LOCK_DEVICE_DOMAIN)
+
+    async def async_setup_entry_lock_platform(
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        async_add_entities: AddEntitiesCallback,
+    ) -> None:
+        """Set up test lock platform via config entry."""
+        async_add_entities([MockLockEntity("test_1"), MockLockEntity("test_2")])
+
+    mock_platform(
+        hass,
+        f"{LOCK_DEVICE_DOMAIN}.{LOCK_DOMAIN}",
+        MockPlatform(async_setup_entry=async_setup_entry_lock_platform),
+    )
+
+    async def async_setup_entry_calendar_platform(
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        async_add_entities: AddEntitiesCallback,
+    ) -> None:
+        """Set up test calendar platform via config entry."""
+        # An entity object is added once in its life, so a reload needs new
+        # ones; what the old ones held carries over.
+        previous = hass.data.get(MOCK_CALENDARS_KEY, [])
+        calendars = hass.data[MOCK_CALENDARS_KEY] = [
+            MockCalendarEntity(
+                name,
+                events=next(
+                    (old._events for old in previous if old.unique_id == slugify(name)),
+                    None,
+                ),
+            )
+            for name in ("test_1", "test_2")
+        ]
+        async_add_entities(calendars)
+
+    mock_platform(
+        hass,
+        f"{LOCK_DEVICE_DOMAIN}.{CALENDAR_DOMAIN}",
+        MockPlatform(async_setup_entry=async_setup_entry_calendar_platform),
+    )
+
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    return config_entry
 
 
 def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
