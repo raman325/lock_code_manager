@@ -21,14 +21,14 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
-from homeassistant.config_entries import ConfigFlow
+from homeassistant.config_entries import ConfigEntriesFlowManager, ConfigFlow
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowHandler
+from homeassistant.data_entry_flow import FlowManager, FlowResult
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.json import json_bytes
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
-from custom_components.lock_code_manager import config_flow, repairs
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.domain.models import SyncState
 from custom_components.lock_code_manager.domain.sync import SlotSyncManager
@@ -114,61 +114,65 @@ def auto_setup_mock_lock():
         yield
 
 
-def _flow_classes() -> list[type[FlowHandler]]:
+def _assert_reaches_the_frontend(result: FlowResult) -> None:
     """
-    Every flow this integration defines.
+    Fail unless ``result`` goes out over HTTP the way the flow views send it.
 
-    Discovered rather than listed so a flow added later is covered the day
-    it is written -- an unguarded flow is exactly the gap this checks for.
+    The views prepare a result (``_prepare_result_json``: a create entry
+    without its ``data``, ``context`` and the entry it made, a schema as a
+    field list) and encode it with ``json_bytes``. Done here with the same
+    public calls, so errors and description placeholders that do not encode
+    fail too, not only the schema.
     """
-    return [
-        obj
-        for module in (config_flow, repairs)
-        for obj in vars(module).values()
-        if isinstance(obj, type)
-        and issubclass(obj, FlowHandler)
-        and obj.__module__ == module.__name__
-    ]
+    data = {
+        key: value
+        for key, value in result.items()
+        if key not in ("data", "context", "result")
+    }
+    if "data_schema" in data:
+        schema = data["data_schema"]
+        data["data_schema"] = (
+            []
+            if schema is None
+            else to_field_list(schema, custom_serializer=cv.custom_serializer)
+        )
+    json_bytes(data)
 
 
 @pytest.fixture(autouse=True)
-def assert_flow_forms_serialize() -> Generator[None]:
+def assert_flow_results_serialize() -> Generator[None]:
     """
-    Convert every form a flow shows the way the HTTP layer will.
+    Send every flow result through the conversion the HTTP layer makes.
 
     A flow driven through ``async_configure`` gets the schema object back
     untouched, so a validator the frontend has no representation for reaches
-    a real browser as an unknown error and never a failing test. Converting
-    here makes every test that shows a form the test that catches it.
+    a real browser as an unknown error and never a failing test (#1495).
+    ``to_field_list`` with ``cv.custom_serializer`` is the exact call the
+    views make, so what passes here is what renders; anything else would
+    let a form pass the test and fail the browser.
 
-    ``to_field_list`` with ``cv.custom_serializer`` is the exact call
-    ``_BaseFlowManagerView._prepare_result_json`` makes, so what passes here
-    is what renders. Converting with anything else -- a serializer the
-    frontend does not use -- would let a form pass the test and fail the
-    browser, which is issue #1495 with the suite still green.
+    Checked at the flow managers' ``async_init`` and ``async_configure``,
+    where the views get their results, rather than on the handlers: an
+    ``AbortFlow`` raised in a step becomes a result without passing through
+    any handler method, and so does every other result the manager builds.
     """
 
-    def checked(cls: type[FlowHandler]) -> Any:
-        """
-        Wrap one class's own ``async_show_form``.
+    def checked(cls: type[FlowManager], method: str) -> Any:
+        """Wrap one manager class's own ``method``."""
+        original = vars(cls)[method]
 
-        Resolved per class rather than once: these classes inherit different
-        implementations, and each uses a zero-argument ``super()`` bound to
-        the class that defines it.
-        """
-        original = cls.async_show_form
-
-        def _converted(self, **kwargs: Any):
-            result = original(self, **kwargs)
-            if schema := result.get("data_schema"):
-                to_field_list(schema, custom_serializer=cv.custom_serializer)
+        async def _converted(self, *args: Any, **kwargs: Any) -> FlowResult:
+            result = await original(self, *args, **kwargs)
+            _assert_reaches_the_frontend(result)
             return result
 
-        return patch.object(cls, "async_show_form", _converted)
+        return patch.object(cls, method, _converted)
 
     with ExitStack() as stack:
-        for cls in _flow_classes():
-            stack.enter_context(checked(cls))
+        for cls in (FlowManager, ConfigEntriesFlowManager):
+            for method in ("async_init", "async_configure"):
+                if method in vars(cls):
+                    stack.enter_context(checked(cls, method))
         yield
 
 
