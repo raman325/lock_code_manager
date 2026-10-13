@@ -198,6 +198,33 @@ def fast_zui_timeouts() -> Generator[None]:
         yield
 
 
+# What zwave-js-ui puts in an api reply (zwave-js-ui ``d10a1c5d``):
+# ``ZwaveClient.callApi`` (api/lib/ZwaveClient.ts:6621-6665) answers
+# ``success``, ``message`` and, on success, ``result``, plus the call's
+# ``args``; ``Gateway._onApiRequest`` (api/lib/Gateway.ts:2292-2316) adds the
+# request as ``origin`` and publishes it as JSON, which drops an undefined
+# ``result`` -- a Get whose report never arrived resolves with nothing.
+ZUI_SUCCESS_MESSAGE = "Success zwave api call"
+# callApi's own message when the driver is not ready (ZwaveClient.ts:6643).
+ZUI_NOT_CONNECTED_MESSAGE = "Z-Wave client not connected"
+# A thrown error's message is passed on as is. The driver's for a frame the
+# node never acknowledged (node-zwave-js StateMachineShared.ts:101-112, with
+# ZWaveError's code suffix).
+ZUI_NO_ACK_MESSAGE = "Failed to send the command (Status NoAck) (ZW0204)"
+
+
+def zui_reply(request: dict[str, Any], answer: dict[str, Any]) -> dict[str, Any]:
+    """Complete a handler's answer into the envelope zwave-js-ui publishes."""
+    reply = dict(answer)
+    if reply.get("success") and not reply.get("message"):
+        reply["message"] = ZUI_SUCCESS_MESSAGE
+    if reply.get("result") is None:
+        reply.pop("result", None)
+    reply["args"] = request.get("args", [])
+    reply["origin"] = request
+    return reply
+
+
 class ZWaveJSUIApiResponder:
     """
     Answer zwave-js-ui api requests the way the gateway would.
@@ -209,10 +236,11 @@ class ZWaveJSUIApiResponder:
     handler goes unanswered, the same as an api the gateway does not
     implement.
 
-    The response is published on the request topic minus ``/set`` with the
-    request payload echoed verbatim under ``origin`` -- the correlation
-    channel the client matches its nonce on. Faking that echo would make the
-    client's own correlation untestable, so it is always the real request.
+    The response is published on the request topic minus ``/set`` in the
+    gateway's envelope (``zui_reply``): the request payload echoed verbatim
+    under ``origin`` -- the correlation channel the client matches its nonce
+    on, so always the real request -- its ``args``, and the success message
+    the gateway sends when the handler gives none.
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -233,7 +261,12 @@ class ZWaveJSUIApiResponder:
         self.handlers[api_name] = handler
 
     def set_result(
-        self, api_name: str, result: Any, *, success: bool = True, message: str = ""
+        self,
+        api_name: str,
+        result: Any,
+        *,
+        success: bool = True,
+        message: str = ZUI_SUCCESS_MESSAGE,
     ) -> None:
         """Answer ``api_name`` with one fixed response regardless of the request."""
         self.set_handler(
@@ -263,7 +296,7 @@ class ZWaveJSUIApiResponder:
             return DEFAULT
         if (response := handler(api_base, body)) is not None:
             async_fire_mqtt_message(
-                self.hass, response_topic, json.dumps({**response, "origin": body})
+                self.hass, response_topic, json.dumps(zui_reply(body, response))
             )
         return DEFAULT
 

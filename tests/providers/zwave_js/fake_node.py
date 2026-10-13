@@ -1161,7 +1161,7 @@ class FakeZWaveLock:
             raise zwave_error(
                 ZWaveErrorCode.ARGUMENT_INVALID,
                 f"Credential slot {slot} is out of range for credential type "
-                f"{UserCredentialType(kind).name}",
+                f"{_driver_type_name(kind)}",
             )
 
     def _assert_valid_uc_type(self, kind: int) -> None:
@@ -1169,7 +1169,7 @@ class FakeZWaveLock:
         if kind != _PIN:
             raise zwave_error(
                 ZWaveErrorCode.ARGUMENT_INVALID,
-                f"Credential type {UserCredentialType(kind).name} is not "
+                f"Credential type {_driver_type_name(kind)} is not "
                 "supported by this node",
             )
 
@@ -2116,6 +2116,36 @@ class FakeZWaveLock:
             self._u3c_purge(key + 1, (next_type << 16) | next_slot)
             query = (next_type, next_slot)
         return credentials
+
+
+# The driver's own names for credential types, which its messages use
+# (getEnumMemberName, shared/src/utils.ts:56-58, over cc/src/lib/_Types.ts:
+# 1654-1669); the python
+# client's enum spells them differently.
+_DRIVER_CREDENTIAL_TYPE_NAMES = {
+    0x00: "None",
+    0x01: "PINCode",
+    0x02: "Password",
+    0x03: "RFIDCode",
+    0x04: "BLE",
+    0x05: "NFC",
+    0x06: "UWB",
+    0x07: "EyeBiometric",
+    0x08: "FaceBiometric",
+    0x09: "FingerBiometric",
+    0x0A: "HandBiometric",
+    0x0B: "UnspecifiedBiometric",
+    0x0C: "DESFire",
+}
+
+
+def _driver_type_name(kind: int) -> str:
+    """Return a credential type as the driver names it in a message."""
+    # num2hex (shared/src/strings.ts:18-27) pads to an even number of digits.
+    digits = f"{kind:x}"
+    return _DRIVER_CREDENTIAL_TYPE_NAMES.get(
+        kind, f"unknown (0x{'0' * (len(digits) % 2)}{digits})"
+    )
 
 
 _ACCESS_CONTROL_EVENT_LABELS: dict[int, str] = {
