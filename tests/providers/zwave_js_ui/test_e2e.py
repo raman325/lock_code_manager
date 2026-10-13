@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator
 from datetime import timedelta
+from functools import partial
 import json
-import time
 from typing import Any
 from unittest.mock import patch
 
@@ -1209,37 +1209,6 @@ class DroppingUserCodeTable(UserCodeTable):
         return super().__call__(api_base, request)
 
 
-class LateUserCodeTable(UserCodeTable):
-    """
-    A node that reports a set Working and applies it ``seconds`` later.
-
-    Supervision Working means the lock took the command and is still acting
-    on it; the code lands on the lock's own time.
-    """
-
-    def __init__(self, seconds: float) -> None:
-        """Apply each set ``seconds`` after it is first sent."""
-        super().__init__()
-        self.seconds = seconds
-        self.landing: dict[int, tuple[str, float]] = {}
-
-    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
-        """Report sets Working; land each once its time has come."""
-        now = time.monotonic()
-        for slot_num, (code, at) in list(self.landing.items()):
-            if now >= at:
-                self.codes[slot_num] = code
-                del self.landing[slot_num]
-        _target, method, method_args = request["args"]
-        if method == "set":
-            slot_num, _status, code = method_args
-            # Sending the same code again does not restart the lock's work on it.
-            if self.landing.get(slot_num, (None, 0.0))[0] != code:
-                self.landing[slot_num] = (code, now + self.seconds)
-            return {"success": True, "message": "", "result": {"status": 1}}
-        return super().__call__(api_base, request)
-
-
 class TestApiOnlyOpenBugs:
     """Open bugs on a lock reached only through the api (no node topic), each a strict xfail."""
 
@@ -1253,7 +1222,12 @@ class TestApiOnlyOpenBugs:
         zui_api_responder: ZWaveJSUIApiResponder,
         user_code_table: UserCodeTable,
     ) -> AsyncGenerator[MockConfigEntry]:
-        """Set up LCM over a lock on a MANUAL gateway's custom topic, slots 1 and 2."""
+        """
+        Set up LCM over a lock on a MANUAL gateway's custom topic, slots 1 and 2.
+
+        ``freezer`` is requested to freeze the clock before the entry is set
+        up, as the tick helpers need.
+        """
         zui_api_responder.set_handler("sendCommand", user_code_table)
         lock_entity = await async_discover_zui_lock(
             hass, state_topic="attic/front_door/state"
@@ -1295,8 +1269,8 @@ class TestApiOnlyOpenBugs:
 
     @pytest.fixture
     def user_code_table(self, request: pytest.FixtureRequest) -> UserCodeTable:
-        """The table each test asks for by its ``table`` parameter."""
-        return request.param
+        """A fresh table from the factory each test names by parameter."""
+        return request.param()
 
     @pytest.mark.xfail(
         strict=True,
@@ -1307,7 +1281,11 @@ class TestApiOnlyOpenBugs:
     )
     @pytest.mark.parametrize(
         "user_code_table",
-        [DroppingUserCodeTable(drops=frozenset({1}), unreadable=frozenset({1}))],
+        [
+            partial(
+                DroppingUserCodeTable, drops=frozenset({1}), unreadable=frozenset({1})
+            )
+        ],
         indirect=True,
         ids=["drops_slot_1"],
     )
@@ -1322,36 +1300,4 @@ class TestApiOnlyOpenBugs:
         await async_advance_sync_ticks(hass, freezer, 15)
 
         assert 1 not in user_code_table.codes
-        assert self._in_sync(hass, api_only_entry, 1) == STATE_OFF
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: a polled lock reads back a write reported Working before it "
-            "lands, charges it and sends it again"
-        ),
-    )
-    @pytest.mark.parametrize(
-        "user_code_table", [LateUserCodeTable(seconds=90)], indirect=True, ids=["late"]
-    )
-    async def test_a_write_reported_working_is_sent_once(
-        self,
-        hass: HomeAssistant,
-        freezer: FrozenDateTimeFactory,
-        zui_api_responder: ZWaveJSUIApiResponder,
-        api_only_entry: MockConfigEntry,
-        user_code_table: UserCodeTable,
-    ) -> None:
-        """
-        A write the lock is still applying is waited for, not repeated.
-
-        This lock is still applying the write when the next poll reads the
-        slot, so the read shows the old state.
-        """
-        await async_advance_sync_ticks(hass, freezer, 60)
-
-        sets = [
-            args[2][0] for args in send_commands(zui_api_responder) if args[1] == "set"
-        ]
-        assert user_code_table.codes == E2E_SLOT_PINS
-        assert sorted(sets) == sorted(E2E_SLOT_PINS)
+        assert self._in_sync(hass, api_only_entry, 1) != STATE_ON

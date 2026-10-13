@@ -53,6 +53,8 @@ from .common import (
     TWO_SLOTS_ON_LOCK_1,
     async_advance_clock,
     async_advance_sync_ticks,
+    async_configure_flow,
+    async_configure_options,
     async_run_until_quiet,
     async_set_slot_pin,
     async_step_clock_until,
@@ -302,14 +304,13 @@ async def test_a_slot_turned_off_after_failed_writes_is_cleared(
     await async_advance_sync_ticks(hass, freezer, 4)
 
     lock.clear_faults()
-    assert 1 not in lock.codes
-    assert (
-        ir.async_get(hass).async_get_issue(
-            DOMAIN, f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
-        )
-        is None
+    codes = dict(lock.codes)
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
     )
     await hass.config_entries.async_unload(entry.entry_id)
+    assert 1 not in codes
+    assert issue is None
 
 
 @pytest.mark.xfail(
@@ -375,11 +376,11 @@ async def test_adding_users_shows_progress_while_the_lock_is_read(
     flow = await hass.config_entries.subentries.async_configure(
         flow["flow_id"], {"next_step_id": "several"}
     )
-    held = [mock_lock(entry).hang("get")]
+    held = mock_lock(entry).hang("get")
 
     # Only the locks built for the read hang; the reload after the users
     # are added builds new ones, which must answer.
-    with when_mock_lock_built(lambda lock: held.append(lock.hang("get"))):
+    with when_mock_lock_built(lambda lock: lock.hang("get")) as built:
         submitting = hass.async_create_task(
             hass.config_entries.subentries.async_configure(
                 flow["flow_id"],
@@ -388,7 +389,7 @@ async def test_adding_users_shows_progress_while_the_lock_is_read(
         )
         await async_run_until_quiet()
     answered = submitting.done()
-    for fault in held:
+    for fault in (held, *built):
         fault.clear()
     result = await submitting
 
@@ -422,9 +423,7 @@ async def _async_reauth(
     entry.async_start_reauth(hass, context={"lock_entity_id": lock})
     await hass.async_block_till_done()
     [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-    return await hass.config_entries.flow.async_configure(
-        flow["flow_id"], {CONF_LOCKS: locks}
-    )
+    return await async_configure_flow(hass, flow["flow_id"], {CONF_LOCKS: locks})
 
 
 @pytest.mark.xfail(
@@ -437,11 +436,15 @@ async def _async_reauth(
 async def test_reauth_completes_with_an_overlap_the_entry_already_has(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
-    """Resubmitting the entry's own lock is not refused over an overlap that predates it."""
+    """Dropping the gone lock is not refused over an overlap the kept lock already had."""
+    gone = "lock.front_door"
     entry = _entry(hass, "first", LOCK_1_ENTITY_ID, {1: "test1", 2: "test2"})
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_LOCKS: [LOCK_1_ENTITY_ID, gone]}
+    )
     _entry(hass, "second", LOCK_1_ENTITY_ID, {1: "other"})
 
-    result = await _async_reauth(hass, entry, LOCK_1_ENTITY_ID, [LOCK_1_ENTITY_ID])
+    result = await _async_reauth(hass, entry, gone, [LOCK_1_ENTITY_ID])
 
     assert result.get("errors") in (None, {})
     assert result.get("reason") == "locks_updated"
@@ -470,7 +473,12 @@ async def test_reauth_refuses_the_lock_that_is_gone(
 
     assert result["type"] == "form"
     assert result["errors"]
-    assert gone in str(result["description_placeholders"])
+    # The description already names it; the error has to as well.
+    assert any(
+        gone in str(value)
+        for key, value in result["description_placeholders"].items()
+        if key != "lock"
+    )
 
 
 @pytest.mark.xfail(
@@ -538,8 +546,8 @@ async def test_adding_a_lock_keeps_the_codes_already_on_it(
     await hass.async_block_till_done()
 
     flow = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    result = await async_configure_options(
+        hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
     )
     await hass.async_block_till_done()
     await async_advance_sync_ticks(hass, freezer, 5)

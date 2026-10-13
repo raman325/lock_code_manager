@@ -29,6 +29,7 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir, translation
 
 from custom_components.lock_code_manager.const import (
@@ -1073,6 +1074,12 @@ class TestOpenBugs:
             flow["flow_id"],
             {CONF_USERS: {"user3": {CONF_ENABLED: True, CONF_PIN: "3333"}}},
         )
+        # Adding users may read the lock behind a progress step (#1536).
+        while result["type"] == FlowResultType.SHOW_PROGRESS:
+            await hass.async_block_till_done()
+            result = await hass.config_entries.subentries.async_configure(
+                flow["flow_id"]
+            )
 
         assert result.get("reason") == "users_added", result.get("errors")
         assert {
