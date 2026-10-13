@@ -64,14 +64,6 @@ class Status(StrEnum):
     SUSPENDED = "suspended"
 
 
-class Step(Enum):
-    """What syncing a slot does next."""
-
-    NOTHING = "nothing"
-    READ = "read"
-    WRITE = "write"
-
-
 CLEARED = "cleared"
 WINDOW = 300.0
 LIMIT = 3
@@ -120,14 +112,6 @@ class Slot:
             return seen.pin == self.want
         # A lock that will not show the code, or says nothing: trust the write.
         return seen in (Seen.MASKED, Seen.SILENT) and written
-
-    def step(self, salt: bytes) -> Step:
-        """Return what syncing this slot does next."""
-        if self.hold is not None:
-            return Step.NOTHING
-        if self.seen is None:
-            return Step.READ
-        return Step.NOTHING if self.agrees(salt) else Step.WRITE
 
     def status(self, salt: bytes) -> Status:
         """Return the slot's sync status."""
