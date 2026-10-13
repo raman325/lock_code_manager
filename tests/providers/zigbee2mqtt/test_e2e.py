@@ -18,10 +18,9 @@ from pytest_homeassistant_custom_component.common import (
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import (
-    CONF_ENABLED,
     CONF_NAME,
-    CONF_PIN,
     STATE_ON,
+    STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
 from homeassistant.core import HomeAssistant
@@ -30,12 +29,11 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
     CONF_LOCKS,
     CONF_NUM_USERS,
-    CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
 from custom_components.lock_code_manager.domain.credentials import pin_address
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -43,12 +41,15 @@ from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
     async_configure_flow,
+    async_run_until_quiet,
     async_step_clock_until,
     async_tick_until,
+    current_entry,
     in_sync_entity_id,
     lcm_issue_ids,
     slot_entity_id,
-    user_subentries,
+    sync_status,
+    unfinished_tasks,
 )
 
 from .conftest import (
@@ -360,44 +361,47 @@ class TestAddingThroughTheUserInterface:
 
 @asynccontextmanager
 async def _bridge_entry(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    lock_entity_id: str,
-    slots: dict[int, dict[str, Any]] | None = None,
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, lock_entity_id: str
 ) -> AsyncIterator[MockConfigEntry]:
     """
-    Set up an entry on the bridge's lock, slots 1 and 2 by default; unload after.
+    Set up an entry on the bridge's lock, slots 1 and 2 at 1234 and 5678.
 
     Setup reads the lock, and a read the bridge leaves unanswered waits out
     its timeout on the frozen clock, so the clock is stepped until it is done.
+    Unloaded after: stepped too, once whatever a failed test left waiting on
+    the frozen clock is cancelled, and the test's own failure is the one
+    reported.
     """
-    slots = slots or {
-        1: {CONF_NAME: "slot1", CONF_PIN: "1234", CONF_ENABLED: True},
-        2: {CONF_NAME: "slot2", CONF_PIN: "5678", CONF_ENABLED: True},
-    }
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_LOCKS: [lock_entity_id], CONF_SLOTS: slots},
-        unique_id="test_z2m_bridge",
-        subentries_data=user_subentries(slots),
+    entry = current_entry(
+        "test_z2m_bridge", {1: "1234", 2: "5678"}, locks=(lock_entity_id,)
     )
     entry.add_to_hass(hass)
     setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
     await async_step_clock_until(
-        hass, freezer, setup.done, max_steps=200, what="entry setup", step=0.5
+        hass, freezer, setup.done, max_steps=100, what="entry setup", step=1.0
     )
     assert setup.result()
+    failed = True
     try:
         yield entry
+        failed = False
     finally:
-        # Reads still waiting on the frozen clock would hold an unload that
-        # only blocked till done, so it is stepped through too.
+        if failed:
+            for task in unfinished_tasks(hass):
+                task.cancel()
+            await async_run_until_quiet()
         unload = hass.async_create_task(
             hass.config_entries.async_unload(entry.entry_id)
         )
-        await async_step_clock_until(
-            hass, freezer, unload.done, max_steps=200, what="entry unload", step=0.5
-        )
+        try:
+            await async_step_clock_until(
+                hass, freezer, unload.done, max_steps=100, what="entry unload", step=1.0
+            )
+        except pytest.fail.Exception:
+            if not failed:
+                raise
+        if not failed:
+            assert unload.result()
 
 
 def _in_sync(
@@ -485,6 +489,9 @@ class TestBridge:
                 )
                 assert bridge.users[1] == (ENABLED, "1234")
                 assert bridge.users[2] == (ENABLED, "5678")
+                # The bridge records only what reached home/z2m's device topic.
+                assert bridge.count("get") > 0
+                assert [len(bridge.sets_for(slot)) for slot in (1, 2)] == [1, 1]
                 assert not [
                     call.args[0]
                     for call in mqtt_mock.async_publish.call_args_list
@@ -503,21 +510,27 @@ class TestBridge:
         """
         PR #1471: a bridge whose reads go unanswered is not an unreachable lock.
 
-        Every read times out, but the writes still go out, and nothing is
-        suspended or reported offline: silence on reads says nothing about
-        whether writes land.
+        Every read times out, but the writes still go out and land, and
+        nothing is suspended or reported offline: silence on reads says
+        nothing about whether writes land.
         """
         bridge = fake_z2m_bridge
         bridge.silent = True
         lock_id = mqtt_lock_discovered.entity_id
-        async with _bridge_entry(hass, freezer, lock_id):
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
             await async_advance_clock(hass, freezer, 120)
             await async_advance_sync_ticks(hass, freezer, 30)
 
             assert bridge.count("get") > 0
-            assert bridge.sets_for(1)
-            assert bridge.sets_for(2)
+            assert bridge.users[1] == (ENABLED, "1234")
+            assert bridge.users[2] == (ENABLED, "5678")
             assert lcm_issue_ids(hass) == []
+            for slot in (1, 2):
+                status = sync_status(
+                    hass, in_sync_entity_id(hass, entry, slot, lock_id)
+                )
+                assert status != SyncState.SUSPENDED
+            assert hass.states.get(lock_id).state != STATE_UNAVAILABLE
 
 
 class TestBridgeEvents:

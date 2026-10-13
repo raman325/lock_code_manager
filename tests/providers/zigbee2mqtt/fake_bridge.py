@@ -75,10 +75,13 @@ class FakeZ2MBridge:
     device_topic: str
     pin_code_count: int = 250
     expose_pin: bool = True
-    # A bridge that forwards nothing to the lock: reads are never answered.
+    # Reads never answered (a bridge or lock that cannot read codes back);
+    # writes still land.
     silent: bool = False
     # The lock reports an attribute after each write, so Zigbee2MQTT
     # republishes its cache, users entries as last read included (#1335).
+    # The report goes out once the write's publish has returned, as a real
+    # one arrives: after the provider's own view of the write.
     report_after_write: bool = False
     # user id -> (userstatus, pincodevalue): the lock's own table.
     users: dict[int, tuple[int, str | None]] = field(default_factory=dict)
@@ -108,25 +111,11 @@ class FakeZ2MBridge:
 
     def operation_event(self, action: str, user: Any, source: int = 0) -> None:
         """Send an operation event (``FZ:263-293``), keypad by default."""
-        self._publish_entity_state(
-            {
-                "action": action,
-                "action_user": user,
-                "action_source": source,
-                "action_source_name": _SOURCE_NAMES.get(source),
-            }
-        )
+        self._publish_event(action, user, source)
 
     def programming_event(self, action: str, user: int, source: int = 0) -> None:
         """Send a programming event (``FZ:294-314``), keypad by default."""
-        self._publish_entity_state(
-            {
-                "action": action,
-                "action_user": user,
-                "action_source": source,
-                "action_source_name": _SOURCE_NAMES.get(source),
-            }
-        )
+        self._publish_event(action, user, source)
 
     def count(self, suffix: str) -> int:
         """Return how many requests went to ``<device topic>/<suffix>``."""
@@ -154,7 +143,7 @@ class FakeZ2MBridge:
             return DEFAULT
         self.requests.append((suffix, body))
         request = body.get("pin_code") if isinstance(body, dict) else None
-        if self.silent or not isinstance(request, dict):
+        if not isinstance(request, dict) or (self.silent and suffix == "get"):
             return DEFAULT
         user = request.get("user")
         if not isinstance(user, int) or not 0 <= user < self.pin_code_count:
@@ -176,7 +165,7 @@ class FakeZ2MBridge:
             enabled = request.get("user_enabled", True)
             self.users[user] = (ENABLED if enabled else DISABLED, str(code))
         if self.report_after_write:
-            self.report()
+            self.hass.loop.call_soon(self.report)
 
     def _answer_get_pin_code(self, user: int) -> None:
         """Answer ``getPinCode`` through ``lock_pin_code_response`` (``FZ:380-400``)."""
@@ -187,6 +176,17 @@ class FakeZ2MBridge:
         if self.expose_pin and code:
             entry["pin_code"] = code
         self._publish_entity_state({"users": {str(user): entry}})
+
+    def _publish_event(self, action: str, user: Any, source: int) -> None:
+        """Publish an event's ``action`` fields, as both event converters build them."""
+        self._publish_entity_state(
+            {
+                "action": action,
+                "action_user": user,
+                "action_source": source,
+                "action_source_name": _SOURCE_NAMES.get(source),
+            }
+        )
 
     def _publish_entity_state(self, update: dict[str, Any]) -> None:
         """Merge into the cache and publish the whole of it (``Z2M`` controller.ts:382-391)."""

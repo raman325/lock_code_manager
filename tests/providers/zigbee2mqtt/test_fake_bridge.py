@@ -135,7 +135,7 @@ async def test_a_new_answer_merges_into_the_old_entry(
 async def test_a_report_republishes_users_as_last_read(
     hass: HomeAssistant, fake_z2m_bridge: FakeZ2MBridge
 ) -> None:
-    """#1335: the cache restates a users entry the lock has since changed."""
+    """#1335: the cache restates a users entry the lock has since changed, after the write."""
     await _exchange(hass, Z2M_GET_TOPIC, {"pin_code": {"user": 3}})
     fake_z2m_bridge.report_after_write = True
 
@@ -163,13 +163,17 @@ async def test_actions_ride_along_and_are_never_cached(
     assert "action" not in received[1]
 
 
-async def test_a_silent_bridge_answers_nothing(
+async def test_a_silent_bridge_answers_no_read_and_still_writes(
     hass: HomeAssistant, fake_z2m_bridge: FakeZ2MBridge
 ) -> None:
-    """A bridge that forwards nothing: the read is recorded, never answered."""
+    """``silent``: the read is recorded and never answered; a write lands."""
     fake_z2m_bridge.silent = True
 
     received = await _exchange(hass, Z2M_GET_TOPIC, {"pin_code": {"user": 3}})
+    received += await _exchange(
+        hass, Z2M_SET_TOPIC, {"pin_code": {"user": 3, "pin_code": "1234"}}
+    )
 
     assert received == []
     assert fake_z2m_bridge.count("get") == 1
+    assert fake_z2m_bridge.users[3] == (ENABLED, "1234")
