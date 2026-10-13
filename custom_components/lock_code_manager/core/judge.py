@@ -1,33 +1,29 @@
 """
 One address's verdict, and whether to write it: a pure function.
 
-The judge weighs what is wanted against what Lock Code Manager last wrote and
-what the lock has said since. It does no I/O and keeps no state; the caller
-supplies everything, including whether the address's breaker has tripped.
+The judge weighs what is wanted against one ``AddressView`` -- how the last
+write relates to it, the latest informative reading since that write, and
+whether a read has completed -- and whether the address's breaker has
+tripped. It does no I/O and keeps no state.
 
-The rules are the credential-model decisions:
+The rules are the credential-model decisions, in order:
 
-- Nothing is set or cleared before a read of the lock has completed: until
-  then the verdict is unknown, unless the last write was already the target.
-  A read that completed counts even if the lock said nothing informative
-  (spec section 1): a lock that never says what it holds must still be
-  written.
-- In sync means the target was written and nothing the lock said since
-  contradicts it. On a lock that never says which code it holds, that is
-  trust, not evidence (decision 1).
-- A reading that disagrees with the target contradicts it at once: out of
-  sync, and written again (decision 2). If the target was what Lock Code
-  Manager last wrote, that write failed: the verdict names it
-  (``charge_for``, its write id), so the caller charges the breaker once for
-  it however often the address is judged.
-- A code that is on the lock but disabled always contradicts (decision 5).
-- A code still there after a clear contradicts the clear: the lock is
-  believed, and the clear sent again (decision 12).
-- Silence never contradicts and never confirms: the caller passes only the
-  latest informative observation since the last write.
-- A tripped breaker suspends the address until its target changes. A clear
-  that would not take may leave a working code on the door, and says so.
-- While a write to the address is out, nothing more is written to it.
+1. Not ours: left alone.
+2. A tripped breaker suspends the address until its target changes. A clear
+   that would not take may leave a working code on the door, and says so.
+3. While a write to the address is out, nothing more is written to it.
+4. A reading that disagrees with the target contradicts it at once: out of
+   sync, and written again (decision 2). A code disabled on the lock always
+   contradicts (decision 5), and so does a code still there after a clear
+   (decision 12). If the last write was the target, that write failed: the
+   verdict says to charge, and the caller charges once per write
+   (``AddressState.take_charge``).
+5. The last write was the target: in sync. On a lock that never says which
+   code it holds that is trust, not evidence (decision 1).
+6. The lock shows the target: in sync.
+7. No read has completed: unknown, and nothing is written.
+8. Otherwise out of sync, and written: a failed write retried, or a target
+   that changed.
 """
 
 from __future__ import annotations
@@ -35,21 +31,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .belief import BeliefRecord
+from .address import AddressView, Written
 from .refusals import Repair
 from .values import (
-    Address,
-    Cleared,
     Desired,
     Disabled,
     Empty,
     Holds,
     HoldsMasked,
     Observation,
-    Unknown,
     WantEmpty,
     WantPin,
-    Wrote,
 )
 
 
@@ -58,39 +50,12 @@ class Status(StrEnum):
 
     # Not Lock Code Manager's to manage.
     NOT_OURS = "not_ours"
-    # Not read yet, and no write of the target to trust.
+    # No read has completed, and no write of the target to trust.
     UNKNOWN = "unknown"
     IN_SYNC = "in_sync"
     OUT_OF_SYNC = "out_of_sync"
     # Left alone until its target changes.
     SUSPENDED = "suspended"
-
-
-class Written(StrEnum):
-    """How the last write to an address relates to its target (``LastWrite.kind``)."""
-
-    # Nothing written since startup (or since the belief was forgotten).
-    NOTHING = "nothing"
-    # The last write was the target, and it returned.
-    TARGET = "target"
-    # The last write was something else, and it returned.
-    OTHER = "other"
-    # The last write has not ended yet.
-    IN_FLIGHT = "in_flight"
-    # The last write raised.
-    FAILED = "failed"
-
-
-@dataclass(frozen=True, slots=True)
-class LastWrite:
-    """How the last write to an address relates to its target, and when."""
-
-    kind: Written
-    # The write's id; None if nothing has been written.
-    write_id: int | None = None
-
-
-NOTHING_WRITTEN = LastWrite(Written.NOTHING)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,27 +65,11 @@ class Verdict:
     status: Status
     # What to write now, or None to leave the address alone.
     write: Desired | None = None
-    # A write of the target that has been contradicted, by its id: charge the
-    # breaker for it, once.
-    charge_for: int | None = None
+    # The last write of the target is contradicted: charge the breaker for it
+    # if ``AddressState.take_charge`` agrees it has not been charged yet.
+    charge: bool = False
     # The repair a suspension raises.
     repair: Repair | None = None
-
-
-def written(beliefs: BeliefRecord, address: Address, desired: Desired) -> LastWrite:
-    """Return how the last write to ``address`` relates to ``desired``."""
-    belief = beliefs.get(address)
-    if belief is None:
-        return NOTHING_WRITTEN
-    if isinstance(belief, Unknown):
-        kind = Written.FAILED if belief.failed else Written.IN_FLIGHT
-        return LastWrite(kind, belief.write_id)
-    assert isinstance(belief, Wrote | Cleared)
-    if isinstance(desired, WantPin):
-        target = beliefs.holds(address, desired)
-    else:
-        target = isinstance(belief, Cleared)
-    return LastWrite(Written.TARGET if target else Written.OTHER, belief.write_id)
 
 
 def contradicts(desired: Desired, observation: Observation) -> bool:
@@ -147,23 +96,17 @@ def confirms(desired: Desired, observation: Observation) -> bool:
 
 def judge(
     desired: Desired | None,
-    last_write: LastWrite,
-    seen: Observation | None,
+    view: AddressView,
     *,
-    ever_read: bool,
     tripped: bool,
     release: bool = False,
 ) -> Verdict:
     """
     Return the verdict on one address.
 
-    ``seen`` is the latest informative observation since the last write
-    (``ObservationLog.informative_since_write``). ``ever_read`` is whether a
-    read of the address has completed, silence included
-    (``ObservationLog.ever_read``). ``release`` marks an
-    address no entry manages any more, whose code is being cleared on the way
-    out (design-review decision 6): its suspension asks the user to check the
-    code is gone.
+    ``view`` comes from ``AddressState.view(desired)``. ``release`` marks an
+    address no entry manages any more, whose code is being cleared on its way
+    out (design-review decision 6).
     """
     if desired is None:
         return Verdict(Status.NOT_OURS)
@@ -171,20 +114,19 @@ def judge(
         clearing = release or isinstance(desired, WantEmpty)
         repair = Repair.CODE_MAY_REMAIN if clearing else Repair.SLOT_SUSPENDED
         return Verdict(Status.SUSPENDED, repair=repair)
-    if last_write.kind is Written.IN_FLIGHT:
+    if view.last_write is Written.IN_FLIGHT:
         return Verdict(Status.OUT_OF_SYNC)
+    seen = view.seen
     if seen is not None and contradicts(desired, seen):
         return Verdict(
             Status.OUT_OF_SYNC,
             write=desired,
-            charge_for=(
-                last_write.write_id if last_write.kind is Written.TARGET else None
-            ),
+            charge=view.last_write is Written.TARGET,
         )
-    if last_write.kind is Written.TARGET:
+    if view.last_write is Written.TARGET:
         return Verdict(Status.IN_SYNC)
     if seen is not None and confirms(desired, seen):
         return Verdict(Status.IN_SYNC)
-    if not ever_read:
+    if not view.ever_read:
         return Verdict(Status.UNKNOWN)
     return Verdict(Status.OUT_OF_SYNC, write=desired)

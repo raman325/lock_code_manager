@@ -1,8 +1,8 @@
 """
 The values the core reasons with.
 
-Addresses, what a lock said, what is wanted, and what Lock Code Manager last
-wrote. A PIN never appears in a ``repr``: these values end up in logs, and a PIN in a
+Addresses, what a lock said, what is wanted, and how sure a returned write
+is. A PIN never appears in a ``repr``: these values end up in logs, and a PIN in a
 log is a PIN on disk (#917).
 """
 
@@ -142,47 +142,3 @@ class Strength(StrEnum):
 def fingerprint(pin: str, salt: bytes) -> str:
     """Return a salted fingerprint of ``pin``, safe to keep and to persist."""
     return hashlib.blake2b(pin.encode(), key=salt, digest_size=16).hexdigest()
-
-
-# What Lock Code Manager last wrote to an address. Each write has an id, given
-# when it starts: the address is Unknown until that write returns or fails,
-# and only that write may settle it. A write that raised leaves no belief.
-
-
-class Belief:
-    """Base for what Lock Code Manager last wrote to an address."""
-
-    __slots__ = ()
-
-
-@dataclass(frozen=True, slots=True)
-class Unknown(Belief):
-    """
-    Write ``write_id`` started at ``at``; ``failed`` once it raised.
-
-    While not failed, the write is still out: nothing else should be written
-    to the address until it ends.
-    """
-
-    write_id: int
-    at: float
-    failed: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class Wrote(Belief):
-    """Write ``write_id`` of a PIN with this fingerprint returned at ``at``."""
-
-    write_id: int
-    fingerprint: str
-    strength: Strength
-    at: float
-
-
-@dataclass(frozen=True, slots=True)
-class Cleared(Belief):
-    """Write ``write_id``, a clear, returned at ``at``."""
-
-    write_id: int
-    strength: Strength
-    at: float

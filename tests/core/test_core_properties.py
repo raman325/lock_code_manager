@@ -3,11 +3,11 @@ Properties of the core's pure pieces (credential-model spec, "Testing").
 
 1. Silence never changes a verdict, once a read has completed (before that,
    the first completed read is what lets the judge decide at all).
-2. An observation from before the last write never changes a verdict.
+2. A reading said before the current write started never changes a verdict.
 3. A disabled code is never in sync.
 6. Three charges inside the window trip a breaker, and only a reset untrips it.
-7. A write that raised never leaves a belief.
-8. A fresh observation of the same value moves its time on.
+7. A write that failed never leaves a belief.
+8. A fresh reading of the same value moves its time on.
 
 Property 4 (allocation) and 5 (observed data holds only what a device said)
 belong to the lock loop and provider port, not to these pure pieces.
@@ -17,16 +17,9 @@ from __future__ import annotations
 
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.core.belief import BeliefRecord
+from custom_components.lock_code_manager.core.address import AddressState, Written
 from custom_components.lock_code_manager.core.breakers import SlotBreaker
-from custom_components.lock_code_manager.core.judge import (
-    LastWrite,
-    Status,
-    Written,
-    judge,
-    written,
-)
-from custom_components.lock_code_manager.core.observations import ObservationLog
+from custom_components.lock_code_manager.core.judge import Status, judge
 from custom_components.lock_code_manager.core.values import (
     DISABLED,
     EMPTY,
@@ -34,13 +27,12 @@ from custom_components.lock_code_manager.core.values import (
     NOTHING,
     WANT_EMPTY,
     Holds,
+    Observation,
     Strength,
-    Unknown,
     WantPin,
     pin_at,
 )
 
-SLOT = pin_at(1)
 PINS = st.sampled_from(["1234", "5678", "0000"])
 READINGS = st.one_of(
     st.just(EMPTY),
@@ -50,93 +42,98 @@ READINGS = st.one_of(
     PINS.map(Holds),
 )
 DESIRED = st.one_of(st.just(WANT_EMPTY), PINS.map(WantPin))
-WRITTEN = st.sampled_from(list(Written)).map(
-    lambda kind: LastWrite(kind, None if kind is Written.NOTHING else 1)
-)
 TIMES = st.floats(min_value=0, max_value=1_000, allow_nan=False)
+# What happened to a write: still out, failed, or returned.
+ENDINGS = st.sampled_from(["out", "failed", "returned"])
 
 
-def _verdict(log: ObservationLog, desired, last_write: LastWrite, tripped: bool):
-    return judge(
-        desired,
-        last_write,
-        log.informative_since_write(SLOT),
-        ever_read=log.ever_read(SLOT),
-        tripped=tripped,
-    )
+def _state() -> AddressState:
+    return AddressState(pin_at(1), b"salt")
+
+
+def _write(state: AddressState, target, start: float, ending: str, gap: float):
+    """Start a write and end it the given way; return the ticket."""
+    ticket = state.start_write(target, start)
+    if ending == "failed":
+        ticket.failed()
+    elif ending == "returned":
+        ticket.returned(Strength.APPLIED, start + gap)
+    return ticket
+
+
+def _verdict(state: AddressState, desired, tripped: bool):
+    return judge(desired, state.view(desired), tripped=tripped)
 
 
 @given(
     history=st.lists(st.tuples(READINGS, TIMES), max_size=6),
+    write=st.one_of(st.none(), st.tuples(DESIRED, TIMES, ENDINGS)),
     desired=DESIRED,
-    last_write=WRITTEN,
     tripped=st.booleans(),
     silence_at=TIMES,
 )
 def test_silence_never_changes_a_verdict(
-    history, desired, last_write, tripped, silence_at
+    history, write, desired, tripped, silence_at
 ) -> None:
-    """Property 1, once the lock has said anything about the address."""
-    log = ObservationLog()
-    # In arrival order, not time order: late arrivals included.
+    """Property 1, in arrival order (late arrivals included), with or without a write."""
+    state = _state()
+    state.observe(NOTHING, -1.0)  # a read has completed
+    if write is not None:
+        target, start, ending = write
+        _write(state, target, start, ending, 1.0)
     for reading, at in history:
-        log.observe(SLOT, reading, at)
-    log.observe(SLOT, NOTHING, -1.0)  # a read has completed
-    before = _verdict(log, desired, last_write, tripped)
-    log.observe(SLOT, NOTHING, silence_at)
-    assert _verdict(log, desired, last_write, tripped) == before
+        state.observe(reading, at)
+    before = _verdict(state, desired, tripped)
+    state.observe(NOTHING, silence_at)
+    assert _verdict(state, desired, tripped) == before
 
 
 @given(
     reading=READINGS,
     before=st.one_of(st.none(), READINGS),
     after=st.one_of(st.none(), READINGS),
-    returned=st.booleans(),
+    target=DESIRED,
+    ending=ENDINGS,
     write_at=TIMES,
     gap=st.floats(min_value=0.001, max_value=100, allow_nan=False),
     desired=DESIRED,
-    last_write=WRITTEN,
 )
-def test_an_observation_from_before_the_write_changes_nothing(
-    reading, before, after, returned, write_at, gap, desired, last_write
+def test_a_reading_from_before_the_write_changes_nothing(
+    reading, before, after, target, ending, write_at, gap, desired
 ) -> None:
     """
-    Property 2: a reading said before the last write started is superseded.
+    Property 2: a reading said before the current write started is superseded.
 
     Whether or not a read had completed before the write, with or without a
-    reading after it, and whether the write returned or raised.
+    reading after it, and whether the write is out, failed or returned.
     """
-    with_it = ObservationLog()
-    without = ObservationLog()
-    for log in (with_it, without):
+    with_it, without = _state(), _state()
+    for state in (with_it, without):
         if before is not None:
-            log.observe(SLOT, before, write_at - 2 * gap)
-        log.mark_write(SLOT, write_at)
-        if returned:
-            log.mark_returned(SLOT, write_at + gap)
+            state.observe(before, write_at - 2 * gap)
+        _write(state, target, write_at, ending, gap)
         if after is not None:
-            log.observe(SLOT, after, write_at + 2 * gap)
+            state.observe(after, write_at + 2 * gap)
     # Arriving after everything else, but said before the write started.
-    with_it.observe(SLOT, reading, write_at - gap)
+    with_it.observe(reading, write_at - gap)
 
-    assert _verdict(with_it, desired, last_write, False) == _verdict(
-        without, desired, last_write, False
-    )
+    assert _verdict(with_it, desired, False) == _verdict(without, desired, False)
 
 
-@given(desired=DESIRED, last_write=WRITTEN, ever_read=st.booleans())
-def test_a_disabled_code_is_never_in_sync(desired, last_write, ever_read) -> None:
-    """Property 3."""
-    log = ObservationLog()
-    log.observe(SLOT, DISABLED, 1.0)
-    verdict = judge(
-        desired,
-        last_write,
-        log.informative_since_write(SLOT),
-        ever_read=ever_read,
-        tripped=False,
-    )
-    assert verdict.status is not Status.IN_SYNC
+@given(
+    target=DESIRED,
+    ending=ENDINGS,
+    desired=DESIRED,
+    read_first=st.booleans(),
+)
+def test_a_disabled_code_is_never_in_sync(target, ending, desired, read_first) -> None:
+    """Property 3, whatever was written and however it ended."""
+    state = _state()
+    if read_first:
+        state.observe(NOTHING, 0.0)
+    _write(state, target, 1.0, ending, 1.0)
+    state.observe(DISABLED, 5.0)
+    assert _verdict(state, desired, False).status is not Status.IN_SYNC
 
 
 @given(
@@ -167,26 +164,23 @@ def test_a_breaker_trips_on_three_inside_the_window_and_stays_tripped(
     assert not breaker.tripped
 
 
-@given(
-    writes=st.lists(st.tuples(PINS, st.booleans()), min_size=1, max_size=8),
-)
-def test_a_write_that_raised_never_leaves_a_belief(writes) -> None:
-    """Property 7: each write is invalidated first and recorded only if it returned."""
-    beliefs = BeliefRecord(b"salt")
-    for at, (pin, returned) in enumerate(writes):
-        write = beliefs.invalidate(SLOT, float(at))
-        if returned:
-            beliefs.record_pin(SLOT, write, pin, Strength.APPLIED, float(at) + 0.5)
-        else:
-            beliefs.record_failed(SLOT, write)
-            assert isinstance(beliefs.get(SLOT), Unknown)
-            assert written(beliefs, SLOT, WantPin(pin)).kind is Written.FAILED
+@given(writes=st.lists(st.tuples(DESIRED, ENDINGS), min_size=1, max_size=8))
+def test_a_write_that_failed_never_leaves_a_belief(writes) -> None:
+    """Property 7: after a failed write, nothing is believed, whatever came before."""
+    state = _state()
+    for at, (target, ending) in enumerate(writes):
+        _write(state, target, float(at), ending, 0.5)
+        if ending == "failed":
+            for desired in (target, WANT_EMPTY, WantPin("1234")):
+                assert state.view(desired).last_write is Written.FAILED
+            assert not state.take_charge()
 
 
 @given(reading=READINGS, first=TIMES, gap=st.floats(min_value=0, max_value=100))
 def test_the_same_value_read_again_is_news(reading, first, gap) -> None:
     """Property 8."""
-    log = ObservationLog()
-    log.observe(SLOT, reading, first)
-    assert log.observe(SLOT, reading, first + gap)
-    assert log.latest(SLOT).at == first + gap
+    state = _state()
+    state.observe(reading, first)
+    assert state.observe(reading, first + gap)
+    if reading.informative:
+        assert state.view(WANT_EMPTY).seen == Observation(reading, first + gap)

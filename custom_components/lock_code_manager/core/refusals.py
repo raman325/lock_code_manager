@@ -23,7 +23,9 @@ class ErrorKind(StrEnum):
     SLOT_REFUSED = "slot_refused"
     # The lock answered with a failure that may not repeat.
     TRANSIENT = "transient"
-    # The lock could not be reached, or did not answer in time.
+    # No answer from the lock: a disconnect, a timeout, or a cloud service
+    # error where the service answered and the lock did not. A service
+    # relaying the lock's own refusal is classified by that refusal.
     UNREACHABLE = "unreachable"
     # The lock already holds what was asked (clearing an empty slot).
     ALREADY_SO = "already_so"

@@ -70,7 +70,8 @@ class OutcomeKind(StrEnum):
     OK = "ok"
     # The lock answered, with a failure: it is there, whatever it said.
     FAILED = "failed"
-    # Nothing came back: no connection, or no answer in time.
+    # The lock did not answer: no connection, no answer in time, or a service
+    # in front of it answering in its place.
     DISCONNECTED = "disconnected"
     # Lock Code Manager's own queue for the turn ran out; nothing was sent.
     TURN_TIMEOUT = "turn_timeout"
