@@ -11,7 +11,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from hypothesis import settings as hypothesis_settings
-from probatio import to_field_list
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -24,7 +23,8 @@ from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.config_entries import ConfigFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowHandler
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.data_entry_flow import _BaseFlowManagerView
+from homeassistant.helpers.json import json_bytes
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
@@ -146,29 +146,34 @@ def assert_flow_forms_serialize() -> Generator[None]:
     is what renders. Converting with anything else -- a serializer the
     frontend does not use -- would let a form pass the test and fail the
     browser, which is issue #1495 with the suite still green.
+
+    The whole result goes out as JSON, not just the schema: the view
+    prepares it (``_prepare_result_json``) and encodes it (``json_bytes``),
+    so errors and description placeholders that do not encode fail there
+    too, for forms, menus and aborts alike.
     """
 
-    def checked(cls: type[FlowHandler]) -> Any:
+    def checked(cls: type[FlowHandler], method: str) -> Any:
         """
-        Wrap one class's own ``async_show_form``.
+        Wrap one class's own ``method``.
 
         Resolved per class rather than once: these classes inherit different
         implementations, and each uses a zero-argument ``super()`` bound to
         the class that defines it.
         """
-        original = cls.async_show_form
+        original = getattr(cls, method)
 
-        def _converted(self, **kwargs: Any):
-            result = original(self, **kwargs)
-            if schema := result.get("data_schema"):
-                to_field_list(schema, custom_serializer=cv.custom_serializer)
+        def _converted(self, *args: Any, **kwargs: Any):
+            result = original(self, *args, **kwargs)
+            json_bytes(_BaseFlowManagerView._prepare_result_json(None, result))  # type: ignore[arg-type]
             return result
 
-        return patch.object(cls, "async_show_form", _converted)
+        return patch.object(cls, method, _converted)
 
     with ExitStack() as stack:
         for cls in _flow_classes():
-            stack.enter_context(checked(cls))
+            for method in ("async_show_form", "async_show_menu", "async_abort"):
+                stack.enter_context(checked(cls, method))
         yield
 
 
