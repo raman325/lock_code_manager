@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
+from datetime import timedelta
+import itertools
+import re
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -65,8 +69,11 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.util import per_lock_issue_id
+from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.common import (
+    async_advance_clock,
     async_advance_sync_ticks,
     async_switch_slot,
     async_tick_until,
@@ -80,7 +87,11 @@ from tests.providers.zwave_js.conftest import (
     ZWAVE_JS_LCM_CONFIG_SLOTS,
     get_zwave_lock,
 )
-from tests.providers.zwave_js.fake_node import FakeZWaveLock
+from tests.providers.zwave_js.fake_node import (
+    FakeZWaveLock,
+    supervised_lock_state,
+    user_credential_lock_state,
+)
 from tests.providers.zwave_js.helpers import (
     make_uc_value_event,
 )
@@ -1472,3 +1483,734 @@ class TestDuplicateRefusedByUserCodeLock:
         result = await fake_e2e_lock.async_set_usercode(2, "5555")
 
         assert result in (WriteResult.CONFIRMED, WriteResult.OPTIMISTIC)
+
+
+async def _async_setup_entry_on_slots(
+    hass: HomeAssistant,
+    lock_entity: er.RegistryEntry,
+    pins: dict[int, str],
+    unique_id: str = "test_zwave_js_slots",
+) -> MockConfigEntry:
+    """Set up an entry on the Z-Wave JS lock, one user per slot with these PINs."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [lock_entity.entity_id]},
+        unique_id=unique_id,
+        subentries_data=user_subentries(
+            {
+                slot: {CONF_NAME: f"slot{slot}", CONF_PIN: pin, CONF_ENABLED: True}
+                for slot, pin in pins.items()
+            }
+        ),
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+def _all_in_sync(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    slots: Iterable[int],
+) -> bool:
+    """Return whether every slot reports in sync on the lock."""
+    return all(
+        _slot_states(hass, entry, lock_entity, slot)[0] == STATE_ON for slot in slots
+    )
+
+
+def _suspension(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    slot: int,
+) -> ir.IssueEntry | None:
+    """Return the repair suspending a slot's sync on the lock, if any."""
+    return ir.async_get(hass).async_get_issue(
+        DOMAIN, f"slot_suspended_{entry.entry_id}_{lock_entity.entity_id}_{slot}"
+    )
+
+
+def _setup_failure(
+    hass: HomeAssistant, lock_entity: er.RegistryEntry
+) -> ir.IssueEntry | None:
+    """Return the repair saying the lock could not be set up, if any."""
+    return ir.async_get(hass).async_get_issue(
+        DOMAIN, per_lock_issue_id("lock_setup_failed", lock_entity.entity_id)
+    )
+
+
+def _reads(fake_zwave_lock: FakeZWaveLock) -> int:
+    """Return how many Gets reached the lock, however they were asked for."""
+    return sum(e.operation == "get" for e in fake_zwave_lock.exchanges)
+
+
+NEW_PINS = {slot: str(slot) * 4 for slot in range(3, 8)}
+
+
+class TestPacing:
+    """Regression for #139: a burst of writes is paced, and none reach a dead node."""
+
+    @pytest.mark.paced
+    async def test_writes_at_startup_are_spaced(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Every slot out of sync at once is written one at a time, spaced apart.
+
+        Writes back to back at startup dropped Kwikset locks off the mesh.
+        """
+        setup = hass.async_create_task(
+            _async_setup_entry_on_slots(hass, lock_entity, NEW_PINS)
+        )
+        # Setup itself waits out the delay between its reads.
+        await async_advance_clock(hass, freezer, 5 * MIN_OPERATION_DELAY, settle=False)
+        assert setup.done()
+        entry = setup.result()
+
+        # Each write waits out the delay after the operation before it.
+        await async_advance_clock(
+            hass, freezer, 4 * len(NEW_PINS) * MIN_OPERATION_DELAY, settle=False
+        )
+
+        assert _all_in_sync(hass, entry, lock_entity, NEW_PINS)
+
+        assert fake_zwave_lock.codes.items() >= NEW_PINS.items()
+        times = [e.at for e in fake_zwave_lock.exchanges if e.operation == "set"]
+        assert len(times) == len(NEW_PINS)
+        assert min(b - a for a, b in itertools.pairwise(times)) >= MIN_OPERATION_DELAY
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_nothing_is_sent_to_a_dead_node(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A PIN changed while the node is dead waits for it to come back."""
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        fake_zwave_lock.mark_dead()
+        await hass.async_block_till_done()
+        before = len(fake_zwave_lock.exchanges)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert fake_zwave_lock.exchanges[before:] == []
+        assert fake_zwave_lock.holds(2) == "1234"
+
+        # Polls back off while the node is dead, so the next one may be
+        # two minutes away.
+        fake_zwave_lock.mark_alive()
+        await _async_settle_in_sync(
+            hass, freezer, fake_zwave_lock_entry, lock_entity, 2, max_ticks=80
+        )
+        assert fake_zwave_lock.sets[-1:] == [(2, "4321")]
+
+
+class TestInterviewedAsleep:
+    """
+    A lock whose interview finished while it slept: the driver never cached its slot count.
+
+    The driver then offers zero PIN slots (#1251 on 4.0.x, #1298, PR #1344).
+    """
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self) -> dict[str, Any]:
+        """The interview cached neither the users count nor the slots."""
+        return {"interviewed": False}
+
+    async def test_the_count_is_asked_of_the_lock_and_the_slots_sync(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for #1251 and PR #1344: zero slots is asked again, not believed.
+
+        Taken at its word, every slot was disabled ("must be between 1 and 0")
+        and a re-included lock was refused outright.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+
+        assert _setup_failure(hass, lock_entity) is None
+        assert any(
+            message["command"] == "endpoint.invoke_cc_api"
+            and message["methodName"] == "getUsersCount"
+            for message in fake_zwave_lock.commands
+        )
+        for slot, config in ZWAVE_JS_LCM_CONFIG_SLOTS.items():
+            assert fake_zwave_lock.holds(slot) == config[CONF_PIN]
+
+    async def test_a_lock_that_does_not_answer_says_how_to_fix_it(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for #1298: the repair names the remedy, then clears once it is done.
+
+        The lock does not answer the count either. The setup failure said
+        the lock "does not advertise PIN credential support", which sent
+        users looking at the wrong thing.
+        """
+        asleep = fake_zwave_lock.drop_reply("get", 0)
+        entry = await _async_setup_entry_on_slots(
+            hass, lock_entity, {2: "4321"}, unique_id="test_zwave_js_asleep"
+        )
+
+        issue = _setup_failure(hass, lock_entity)
+        assert issue is not None
+        assert "Re-interview the lock" in issue.translation_placeholders["error"]
+        assert fake_zwave_lock.sets == []
+
+        # The user wakes the lock, re-interviews it, and reloads.
+        asleep.clear()
+        fake_zwave_lock.reinterview()
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2, max_ticks=10)
+
+        assert _setup_failure(hass, lock_entity) is None
+        assert fake_zwave_lock.holds(2) == "4321"
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestUnconfirmableWrite:
+    """
+    A lock that takes a PIN and will not show it back, on User Code CC version 2.
+
+    The driver's read-back cannot confirm the write, so it answers
+    Error_Unknown though the code landed.
+    """
+
+    @pytest.fixture(params=["masked", "withheld"])
+    def code_display(self, request: pytest.FixtureRequest) -> str:
+        """How the lock shows a code it holds."""
+        return request.param
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_v2_state: dict[str, Any], code_display: str
+    ) -> dict[str, Any]:
+        """The version 2 node, its cache filled as the lock shows codes."""
+        for value in lock_schlage_be469_v2_state["values"]:
+            if (
+                value["commandClass"] == CommandClass.USER_CODE
+                and value["property"] == LOCK_USERCODE_PROPERTY
+                and value.get("value")
+            ):
+                value["value"] = (
+                    "*" * len(value["value"]) if code_display == "masked" else ""
+                )
+        return lock_schlage_be469_v2_state
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self, code_display: str) -> dict[str, Any]:
+        """The lock holds the entry's PINs."""
+        return {
+            "code_display": code_display,
+            "codes": {
+                slot: config[CONF_PIN]
+                for slot, config in ZWAVE_JS_LCM_CONFIG_SLOTS.items()
+            },
+        }
+
+    async def test_a_new_pin_is_written_once_and_kept(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regressions for #1251 (masked write, PR #1258) and PR #1408 (withheld code).
+
+        Taken as a rejection, the accepted PIN disabled the slot; read as an
+        empty slot, a withheld code was written and verified forever.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        written = len(fake_zwave_lock.sets)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        for _ in range(10):
+            await async_advance_sync_ticks(hass, freezer)
+            fake_zwave_lock.report(2)
+
+        assert fake_zwave_lock.sets[written:] == [(2, "4321")]
+        assert fake_zwave_lock.holds(2) == "4321"
+        assert (
+            hass.states.get(
+                slot_entity_id(
+                    hass, SWITCH_DOMAIN, fake_zwave_lock_entry, 2, CONF_ENABLED
+                )
+            ).state
+            == STATE_ON
+        )
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+
+
+class TestUnmanagedMaskedSlot:
+    """A masking lock holding a code on a slot no entry manages."""
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self) -> dict[str, Any]:
+        """The entry's PINs, and 5555 at slot 5, all shown as asterisks."""
+        return {
+            "code_display": "masked",
+            "codes": {1: "9999", 2: "1234", 5: "5555"},
+        }
+
+    async def test_the_entry_loads_and_syncs(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for PR #760: a masked code on an unmanaged slot breaks nothing.
+
+        Reading it raised ``RuntimeError: StopIteration``, and no slot loaded.
+        """
+        fake_zwave_lock.report(5)
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+
+        assert fake_zwave_lock_entry.state is ConfigEntryState.LOADED
+        assert fake_zwave_lock.holds(5) == "5555"
+        assert 5 not in dict(fake_zwave_lock.sets)
+        assert 5 not in fake_zwave_lock.clears
+
+
+class TestRefreshes:
+    """What Lock Code Manager reads from a Z-Wave lock, and when."""
+
+    async def test_the_lock_is_not_walked_on_a_timer(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for #1278: no hourly walk of every slot, or reads of them one by one.
+
+        A walk is one exchange per slot: on a 250-slot lock on S0, about 39
+        minutes of radio traffic every hour.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        reads = _reads(fake_zwave_lock)
+
+        await async_advance_clock(
+            hass, freezer, timedelta(hours=2, minutes=5).total_seconds()
+        )
+
+        assert _reads(fake_zwave_lock) == reads
+
+    async def test_an_unconfirmed_pin_is_confirmed_by_reading_its_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for #1549: the confirmation read asks only about the slot written.
+
+        On a lossy link a walk of the whole lock never completed, so the
+        written PIN never confirmed and the slot was suspended after three.
+        Here every walk fails: it starts with the users count, which the lock
+        never answers.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        written = len(fake_zwave_lock.sets)
+        # The set lands, but the lock's replies to it are lost.
+        fake_zwave_lock.drop_reply("set", 2, times=1)
+        fake_zwave_lock.fail("get", 0)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert fake_zwave_lock.sets[written:] == [(2, "4321")]
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+        assert _suspension(hass, fake_zwave_lock_entry, lock_entity, 2) is None
+
+
+class TestSlotBeyondTheLock:
+    """
+    Regression for #1398: a slot the lock does not have is not retried forever.
+
+    Taken as a transient failure, the refusal fed the lock's breaker, and the
+    only word the user had was "Update failed 3 consecutive times".
+    """
+
+    def _attempts(self, fake_zwave_lock: FakeZWaveLock, slot: int) -> int:
+        """Return how many writes of ``slot`` reached the driver."""
+        return sum(
+            message["command"] == "endpoint.access_control.set_credential"
+            and message["credentialSlot"] == slot
+            for message in fake_zwave_lock.commands
+        )
+
+    async def test_a_slot_past_the_lock_s_count_is_suspended_unwritten(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A lock that says it has one slot is never asked to fill slot 2."""
+        fake_zwave_lock.capacity = 1
+        fake_zwave_lock.reinterview()
+        entry = await _async_setup_entry_on_slots(hass, lock_entity, {2: "4321"})
+
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        issue = _suspension(hass, entry, lock_entity, 2)
+        assert issue is not None
+        assert "out of range" in issue.translation_placeholders["reason"]
+        assert self._attempts(fake_zwave_lock, 2) == 0
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_slot_the_driver_refuses_is_suspended_after_one_try(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A lock re-interviewed with fewer slots refuses the write, and it is not retried.
+
+        Lock Code Manager still holds the count it read at setup, so the
+        driver is the one to refuse it, as Argument_Invalid (322) before any
+        radio traffic.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        fake_zwave_lock.capacity = 1
+        fake_zwave_lock.reinterview()
+        before = self._attempts(fake_zwave_lock, 2)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        issue = _suspension(hass, fake_zwave_lock_entry, lock_entity, 2)
+        assert issue is not None
+        assert "ZW0322" in issue.translation_placeholders["reason"]
+        assert self._attempts(fake_zwave_lock, 2) - before == 1
+
+
+class TestLossyLink:
+    """A lock whose replies are lost, so writes cannot be confirmed."""
+
+    async def test_the_suspension_says_how_the_link_is_doing(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for #1397: the repair counts the reads that went unanswered.
+
+        The code landed every time; only the replies were lost. "The lock may
+        be rejecting the code" sent the user after the wrong cause.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        fake_zwave_lock.drop_reply(None, 2)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: (
+                _suspension(hass, fake_zwave_lock_entry, lock_entity, 2) is not None
+            ),
+            max_ticks=60,
+            what="slot 2 suspended",
+        )
+
+        reason = _suspension(
+            hass, fake_zwave_lock_entry, lock_entity, 2
+        ).translation_placeholders["reason"]
+        counted = re.search(r"(\d+) read requests went unanswered", reason)
+        assert counted is not None
+        assert 0 < int(counted[1]) <= fake_zwave_lock.statistics["timeoutResponse"]
+        assert fake_zwave_lock.holds(2) == "4321"
+
+
+class TestReadBack:
+    """Writes the driver reads back, or is told about, on a User Code lock."""
+
+    async def test_a_pin_confirmed_by_its_read_back_is_written_once(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for PR #873: a version 1 lock without Supervision is not rewritten.
+
+        The cache after the write was stale, so sync wrote the slot again on
+        every tick.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        written = len(fake_zwave_lock.sets)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        # Only the driver's read-back tells the cache; the lock sends nothing.
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert fake_zwave_lock.sets[written:] == [(2, "4321")]
+        assert fake_zwave_lock.cached(
+            CommandClass.USER_CODE, LOCK_USERCODE_PROPERTY, 2
+        ) == ("4321")
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+
+
+class TestSupervisedWrites:
+    """
+    A lock whose Sets are supervised, so the driver takes their outcome at its word.
+
+    Before 15.25.2 the driver cached nothing a supervised Set wrote, and
+    did not read the slot after a failure.
+    """
+
+    @pytest.fixture(params=[False, True], ids=["driver_15_25_2", "older_driver"])
+    def fake_zwave_lock_options(self, request: pytest.FixtureRequest) -> dict[str, Any]:
+        """Which driver the lock sits behind."""
+        return {"driver_before_15_25_2": request.param}
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The BE469 dump, advertising Supervision CC."""
+        return supervised_lock_state(lock_schlage_be469_state)
+
+    async def test_a_write_the_lock_refused_is_put_right(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for PR #1334: a supervised write that failed is written again.
+
+        An older driver does not read the slot after a failure, so its cache
+        stays wrong, and the write must not be left at that.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        written = len(fake_zwave_lock.sets)
+        fake_zwave_lock.refuse("set", 2, times=1)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert fake_zwave_lock.holds(2) == "4321"
+        assert fake_zwave_lock.sets[written:] == [(2, "4321"), (2, "4321")]
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "open: the provider pushes the PIN it wrote over what its own "
+            "post-write read found, so a supervised Success the lock did not "
+            "apply shows in sync"
+        ),
+    )
+    async def test_a_write_the_lock_reported_but_never_applied_is_put_right(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A supervised Success the lock did not apply is caught by the read after it.
+
+        Persisted unread, the driver's cache claims the new PIN while the lock
+        still holds the old one. The read after the write (PR #1334) sees the
+        old code, but the provider then announces the PIN it wrote over it,
+        and nothing reads the slot again.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        written = len(fake_zwave_lock.sets)
+        fake_zwave_lock.ignore("set", 2, times=1)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert fake_zwave_lock.holds(2) == "4321"
+        assert fake_zwave_lock.sets[written:] == [(2, "4321"), (2, "4321")]
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+
+    async def test_a_reload_after_a_write_rewrites_nothing(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for PR #1334: the cache a restart reads holds what was written.
+
+        An older driver cached nothing of a supervised write, so after a
+        restart the slot read as its old code and was written again.
+        """
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        written = len(fake_zwave_lock.sets)
+
+        assert await hass.config_entries.async_reload(fake_zwave_lock_entry.entry_id)
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert fake_zwave_lock.sets[written:] == []
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+
+
+class TestDuplicateRefusedByUserCredentialLock:
+    """A User Credential lock holding 5555 at slot 5, which refuses duplicates in band."""
+
+    @pytest.fixture(params=[0, 32], ids=["shows_codes", "hashes_codes"])
+    def hash_length(self, request: pytest.FixtureRequest) -> int:
+        """Whether the lock sends credential data back (0) or hashes it."""
+        return request.param
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self, hash_length: int) -> dict[str, Any]:
+        """The lock's hashing, as its capabilities report it."""
+        return {"max_credential_hash_length": hash_length}
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    async def test_a_refused_pin_disables_the_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        hash_length: int,
+    ) -> None:
+        """
+        Regression for #848: a duplicate is not retried forever.
+
+        The slot is disabled and the repair names the duplicate. A lock that
+        shows its codes is not asked: the duplicate is seen first. One that
+        hashes them refuses the write.
+        """
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        fake_zwave_lock.program(5, "5555")
+        await hass.async_block_till_done()
+        written = len(fake_zwave_lock.sets)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "5555")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert (
+            hass.states.get(
+                slot_entity_id(
+                    hass, SWITCH_DOMAIN, fake_zwave_lock_entry, 2, CONF_ENABLED
+                )
+            ).state
+            == STATE_OFF
+        )
+        issue = ir.async_get(hass).async_get_issue(
+            DOMAIN, f"slot_disabled_{fake_zwave_lock_entry.entry_id}_2"
+        )
+        assert issue is not None
+        assert "duplicate" in issue.translation_placeholders["reason"]
+        assert fake_zwave_lock.sets[written:] == ([(2, "5555")] if hash_length else [])
+        assert fake_zwave_lock.holds(2) is None
