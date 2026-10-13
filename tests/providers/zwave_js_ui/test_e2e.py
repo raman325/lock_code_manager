@@ -49,6 +49,7 @@ from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 from tests.common import (
+    async_advance_clock,
     async_advance_sync_ticks,
     async_configure_flow,
     async_tick_until,
@@ -1302,3 +1303,136 @@ class TestApiOnlyOpenBugs:
 
         assert 1 not in user_code_table.codes
         assert self._in_sync(hass, api_only_entry, 1) != STATE_ON
+
+
+# zwave-js UserIDStatus.Disabled.
+STATUS_DISABLED = 2
+
+
+class DisabledUserCodeTable(UserCodeTable):
+    """
+    A node holding some users Disabled: their digits kept, the lock refusing them.
+
+    A Get answers such a slot with status Disabled and its code (User Code
+    Report, CC:99); a set with status Enabled re-enables it.
+    """
+
+    def __init__(self, disabled: dict[int, str]) -> None:
+        """Hold ``disabled`` (slot -> code) Disabled."""
+        super().__init__(disabled)
+        self.disabled = set(disabled)
+
+    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Answer a Disabled slot's Get; re-enable it on a set."""
+        _target, method, method_args = request["args"]
+        if method == "get" and method_args[0] in self.disabled:
+            return {
+                "success": True,
+                "result": {
+                    "userIdStatus": STATUS_DISABLED,
+                    "userCode": self.codes[method_args[0]],
+                },
+            }
+        if method == "set" and method_args[1] == STATUS_ENABLED:
+            self.disabled.discard(method_args[0])
+        return super().__call__(api_base, request)
+
+
+class TestStatusGatedPush:
+    """A pushed code counts only while its slot's status says it is enabled."""
+
+    @pytest.fixture
+    def user_code_table(self) -> UserCodeTable:
+        """Slot 1 holds its configured PIN, Disabled."""
+        return DisabledUserCodeTable({1: E2E_SLOT_PINS[1]})
+
+    async def test_a_disabled_slot_s_retained_code_does_not_confirm_it(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock_discovered: er.RegistryEntry,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: DisabledUserCodeTable,
+    ) -> None:
+        """
+        Regression for PR #1471: a Disabled slot's retained code confirms nothing.
+
+        The lock holds slot 1's PIN but has the user Disabled. The gateway's
+        retained values replay the slot's status, then its code; taken as the
+        PIN, the code put the slot in sync, and the user was never enabled
+        again.
+        """
+        fire_zui_node_value(hass, "99/0/userIdStatus/1", STATUS_DISABLED)
+        fire_zui_node_value(hass, "99/0/userCode/1", E2E_SLOT_PINS[1])
+        await hass.async_block_till_done()
+
+        in_sync = in_sync_entity_id(
+            hass, lcm_config_entry, 1, zui_lock_discovered.entity_id
+        )
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: 1 not in user_code_table.disabled,
+            max_ticks=20,
+            what="slot 1 enabled again",
+        )
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: hass.states.get(in_sync).state == STATE_ON,
+            max_ticks=20,
+            what="slot 1 in sync",
+        )
+
+
+class TestLatePush:
+    """A lock whose discovery data lands after setup turns out to push."""
+
+    async def test_a_lock_that_turns_out_to_push_is_not_polled(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        zui_lock_discovered: er.RegistryEntry,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: UserCodeTable,
+    ) -> None:
+        """
+        Regression for PR #1471: polling stops once a late lock is found to push.
+
+        Built before its discovery data arrived, the lock kept the cadence of
+        a lock with no push, and was read over the api every five minutes for
+        the rest of the run.
+        """
+        module = "custom_components.lock_code_manager.providers.zwave_js_ui"
+        zui_api_responder.set_handler("sendCommand", user_code_table)
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [zui_lock_discovered.entity_id],
+                CONF_SLOTS: {1: {CONF_NAME: "slot1", CONF_PIN: "1234"}},
+            },
+            unique_id="test_zui_late_push",
+        )
+        entry.add_to_hass(hass)
+        with patch(f"{module}.resolve_discovery_payload", return_value=None):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+        try:
+            # The connection check finds the discovery data and sets the lock up.
+            await async_advance_clock(hass, freezer, 60)
+            if user_code_table.codes.get(1) != "1234":
+                await async_advance_sync_ticks(hass, freezer, 10)
+            if user_code_table.codes.get(1) != "1234":
+                pytest.fail("setup: the late lock was never written to")
+            reads = sum(call[1] == "get" for call in send_commands(zui_api_responder))
+
+            await async_advance_clock(hass, freezer, 12 * 60)
+
+            assert (
+                sum(call[1] == "get" for call in send_commands(zui_api_responder))
+                == reads
+            )
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+            await hass.async_block_till_done()

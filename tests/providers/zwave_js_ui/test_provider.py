@@ -30,6 +30,8 @@ from .conftest import (
     ZUI_NO_ACK_MESSAGE,
     ZUI_NODE_ID,
     ZWaveJSUIApiResponder,
+    async_discover_zui_lock,
+    build_zui_lock,
 )
 
 MODULE = "custom_components.lock_code_manager.providers.zwave_js_ui"
@@ -589,3 +591,25 @@ async def test_hard_refresh_reads_the_same_codes_as_a_poll(
         polled = await lock.async_get_usercodes()
 
     assert refreshed == polled == {5: SlotCredential.known("9876")}
+
+
+async def test_a_multi_level_prefix_is_named_in_the_read_s_failure(
+    hass: HomeAssistant, mqtt_mock, mqtt_teardown
+) -> None:
+    """
+    Regression for PR #1471: a prefix with a slash fails a read with its own diagnosis.
+
+    ``home/zwave/nodeID_20/...`` cannot be told apart from a NAMED gateway's
+    location segment, so the gateway is searched for under ``home`` and not
+    found. Reported as a gateway that is down, the operator could not tell
+    which to fix; the read names the prefix instead.
+    """
+    lock = build_zui_lock(
+        hass,
+        await async_discover_zui_lock(
+            hass, prefix="home/zwave", include_availability=False
+        ),
+    )
+
+    with pytest.raises(LockDisconnected, match="multi-level prefix"):
+        await lock.async_get_users([1])
