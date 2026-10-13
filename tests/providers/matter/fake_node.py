@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress
+import dataclasses
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from functools import partial
@@ -441,6 +442,24 @@ class FakeMatterLock:
             user_index,
             index,
             source=DoorLock.Enums.OperationSourceEnum.kKeypad,
+        )
+
+    def set_available(self, available: bool) -> None:
+        """
+        Have the server report the node reachable or not, as a ``node_updated``.
+
+        What the client does with one (MS_CLIENT:877-893): update the node's
+        data and signal ``NODE_UPDATED``; Home Assistant's entities take their
+        availability from ``node.available``. Commands still reach the fake
+        while it is unavailable; install a ``fail`` fault for that.
+        """
+        node_data = dataclasses.replace(self.node.node_data, available=available)
+        self.node.update(node_data)
+        MatterClient._signal_event(
+            self.client,
+            EventType.NODE_UPDATED,
+            data=self.node,
+            node_id=self.node.node_id,
         )
 
     def keypad_unlock(
