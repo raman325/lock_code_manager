@@ -61,6 +61,7 @@ from .common import (
     async_switch_slot,
     async_tick_until,
     in_sync_entity_id,
+    lcm_issue_ids,
     mock_lock,
     short_stop_grace,
     when_mock_lock_built,
@@ -77,15 +78,6 @@ def short_grace() -> Iterator[None]:
     """
     with short_stop_grace():
         yield
-
-
-def _lcm_issues(hass: HomeAssistant) -> list[str]:
-    """Return the ids of every Lock Code Manager repair."""
-    return [
-        issue.issue_id
-        for issue in ir.async_get(hass).issues.values()
-        if issue.domain == DOMAIN
-    ]
 
 
 async def _async_setup_two_slots(
@@ -139,7 +131,7 @@ async def test_a_deleted_users_code_does_not_stay_on_the_lock_unreported(
     await hass.async_block_till_done()
     await async_advance_sync_ticks(hass, freezer, 10)
 
-    assert 2 not in lock.codes or _lcm_issues(hass)
+    assert 2 not in lock.codes or lcm_issue_ids(hass)
     await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -223,7 +215,7 @@ async def test_a_write_that_hangs_every_time_is_reported(
     for _ in range(6):
         await async_advance_clock(hass, freezer, OPERATION_TIMEOUT, settle=False)
 
-    issues = _lcm_issues(hass)
+    issues = lcm_issue_ids(hass)
     wedge.clear()
     assert issues
     await hass.config_entries.async_unload(entry.entry_id)
@@ -246,7 +238,7 @@ async def test_writes_failing_as_disconnected_are_reported(
     await async_set_slot_pin(hass, entry, 1, "4321")
     await async_advance_sync_ticks(hass, freezer, 60)
 
-    assert _lcm_issues(hass)
+    assert lcm_issue_ids(hass)
     lock.clear_faults()
     await hass.config_entries.async_unload(entry.entry_id)
 
@@ -349,7 +341,7 @@ async def test_an_existing_slot_overlap_is_reported_not_fought_over(
     writes = [call for call in lock.service_calls["set_usercode"] if call[0] == 1]
     # The mock lock's own code at slot 2 raises an unmanaged-code repair;
     # that one is not about the overlap.
-    issues = [i for i in _lcm_issues(hass) if not i.startswith("unmanaged_code")]
+    issues = [i for i in lcm_issue_ids(hass) if not i.startswith("unmanaged_code")]
     for entry in entries:
         await hass.config_entries.async_unload(entry.entry_id)
     assert issues or len(writes) <= 2
