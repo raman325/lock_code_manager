@@ -83,20 +83,26 @@ class Slot:
     ``wrote`` is what was last written and returned without error: a PIN's
     fingerprint, or ``CLEARED``. ``release`` marks a slot no entry manages any
     more, being cleared on its way out.
+
+    Two counts hold a slot. ``tries`` counts syncs the lock answered that did
+    not end in sync, since the target last changed or last agreed; they never
+    expire, so no pattern of retries can go on for ever. ``fights`` counts
+    times the lock went from agreeing to disagreeing -- a keypad taking the
+    code back (#776) -- and ages out of ``WINDOW``.
     """
 
     want: Want
     wrote: str | None = None
     seen: Reading | None = None
-    failures: list[float] = field(default_factory=list)
+    tries: int = 0
+    fights: list[float] = field(default_factory=list)
     hold: Repair | None = None
     release: bool = False
 
     def aim(self, want: Want, *, release: bool = False) -> None:
-        """Set what is wanted; a change of target clears failures and any hold."""
+        """Set what is wanted; a change of target starts the counts over."""
         if want != self.want or release != self.release:
-            self.failures.clear()
-            self.hold = None
+            self.resume()
         self.want = want
         self.release = release
 
@@ -125,16 +131,16 @@ class Slot:
         """
         Take what the lock said about the slot.
 
-        A reading that disagrees with a target Lock Code Manager wrote is one
-        failure -- a write the lock did not keep, or a keypad taking the code
-        back -- and that write is no longer trusted, so the same contradiction
-        read again counts nothing more.
+        Agreeing starts the tries over. Going from agreeing to disagreeing is
+        a fight, and the write behind the agreement is no longer trusted.
         """
-        trusted = self.wrote is not None and self.wrote == self._target(salt)
+        agreed = self.seen is not None and self.agrees(salt)
         self.seen = reading
-        if trusted and not self.agrees(salt):
+        if self.agrees(salt):
+            self.tries = 0
+        elif agreed:
             self.wrote = None
-            self.failed(now)
+            self.fought(now)
 
     def wrote_want(self, salt: bytes) -> None:
         """Record that a write of what is wanted returned without error."""
@@ -144,19 +150,26 @@ class Slot:
         """Return what ``wrote`` holds once what is wanted has been written."""
         return CLEARED if self.want is None else fingerprint(self.want, salt)
 
-    def failed(self, now: float) -> None:
-        """
-        Count a failure: a write raised, or the lock contradicted one.
-
-        ``LIMIT`` failures inside ``WINDOW`` seconds (``RELEASE_LIMIT`` for a
-        release clear) hold the slot. Agreement never clears them, so a keypad
-        fighting a code back still trips (#776); they age out of the window.
-        """
-        self.failures = [t for t in self.failures if t > now - WINDOW]
-        self.failures.append(now)
-        limit = RELEASE_LIMIT if self.release else LIMIT
-        if len(self.failures) >= limit:
+    def tried(self) -> None:
+        """Count a sync the lock answered that did not end in sync."""
+        self.tries += 1
+        if self.tries >= self._limit():
             self.hold = self._give_up()
+
+    def fought(self, now: float) -> None:
+        """
+        Count the lock going from agreeing to disagreeing.
+
+        Agreement never clears these, so a keypad fighting a code back trips
+        (#776); they age out of ``WINDOW``.
+        """
+        self.fights = [t for t in self.fights if t > now - WINDOW]
+        self.fights.append(now)
+        if len(self.fights) >= self._limit():
+            self.hold = self._give_up()
+
+    def _limit(self) -> int:
+        return RELEASE_LIMIT if self.release else LIMIT
 
     def refused(self, *, value: bool) -> None:
         """Hold the slot at once: the lock refused the value, or the slot."""
@@ -166,8 +179,9 @@ class Slot:
             self.hold = self._give_up()
 
     def resume(self) -> None:
-        """Lift a hold: the user acknowledged its repair."""
-        self.failures.clear()
+        """Lift any hold and start the counts over."""
+        self.tries = 0
+        self.fights.clear()
         self.hold = None
 
     def _give_up(self) -> Repair:

@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 import pytest
 
 from custom_components.lock_code_manager.core.slot import (
+    LIMIT,
+    WINDOW,
     Holds,
     Reading,
     Repair,
@@ -237,7 +239,7 @@ async def test_a_write_only_lock_clearing_an_empty_slot_settles(rig_factory) -> 
 
     assert rig.lock.writes == [(1, None)]
     assert rig.status(1) == (Status.IN_SYNC, None)
-    assert rig.worker.slots[1].failures == []
+    assert rig.worker.slots[1].tries == 0
 
 
 async def test_a_lock_never_reached_is_not_offline(rig_factory) -> None:
@@ -424,13 +426,20 @@ async def test_a_lock_that_stops_answering_backs_off_then_reports_offline(
     assert not rig.worker.offline
 
 
-async def test_a_write_that_never_reached_the_lock_counts_nothing(rig_factory) -> None:
-    """Nothing was sent: no failure against the slot, and nothing to read back."""
-    rig = await _started(rig_factory(FakeLock(writes_never_sent=True)), {1: "1234"})
-    await rig.pass_()
+async def test_writes_that_never_leave_while_reads_answer_hold_the_slot(
+    rig_factory,
+) -> None:
+    """
+    A lock that answers reads but takes no write is the slot's to give up on.
 
-    assert rig.worker.slots[1].failures == []
-    assert rig.status(1) == (Status.OUT_OF_SYNC, None)
+    Each write is read back, the read answers, and the slot stays out of sync:
+    three tries hold it, however the lock's no-answers reset (#1644).
+    """
+    lock = FakeLock(writes_never_sent=True)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert rig.worker.slots[1].tries == LIMIT
 
 
 async def test_a_write_that_hangs_while_reads_answer_holds_the_slot(
@@ -522,7 +531,7 @@ async def test_a_report_queued_before_a_write_is_dropped(rig_factory) -> None:
     )
     await _started(rig, {1: "1111", 2: "2222"})
 
-    assert rig.worker.slots[2].failures == []
+    assert rig.worker.slots[2].fights == []
     assert lock.writes == [(1, "1111"), (2, "2222")]
     assert rig.status(2) == (Status.IN_SYNC, None)
 
@@ -549,7 +558,7 @@ async def test_an_unanswered_write_to_an_unanswering_lock_charges_nothing(
     await rig.settle()
 
     assert lock.writes[-1] == (1, "4321")
-    assert rig.worker.slots[1].failures == []
+    assert rig.worker.slots[1].tries == 0
 
 
 async def test_stopping_answers_waiting_reads_and_refuses_new_ones(rig_factory) -> None:
@@ -848,23 +857,24 @@ async def test_a_report_during_a_write_survives_a_failed_read_back(
     """
     A push is dropped only for a read-back that actually came back.
 
-    The keypad's change contradicts the write, so it counts (#776): the
-    read-back's error is one failure and the contradiction a second.
+    On a masked lock a failed read-back leaves the slot trusting its write,
+    so the lock's own report that the slot is empty is the only news: it is
+    a fight, and the slot is written again.
     """
-    lock = FakeLock({1: "0000"})
+    lock = FakeLock(masked=True)
     rig = await _started(rig_factory(lock), {1: "0000"})
 
-    def _keypad() -> None:
+    def _report_empty() -> None:
         lock.during_write.clear()
         lock.read_errors = 1
-        rig.worker.push(1, Holds("9999"))
+        rig.worker.push(1, Seen.EMPTY)
 
-    lock.during_write.append(_keypad)
+    lock.during_write.append(_report_empty)
     rig.worker.want(1, "1234")
     await rig.settle()
 
-    assert len(rig.worker.slots[1].failures) == 2
-    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert lock.writes[-2:] == [(1, "1234"), (1, "1234")]
+    assert len(rig.worker.slots[1].fights) == 1
 
 
 async def test_a_provider_bug_is_logged(rig_factory, caplog) -> None:
@@ -923,3 +933,165 @@ async def test_a_second_stop_waits_for_the_first(rig_factory) -> None:
     assert not second.done()
     hang.set()
     await asyncio.wait_for(asyncio.gather(first, second), 5)
+
+
+async def test_writes_answered_with_reads_unanswered_hold_the_slot(rig_factory) -> None:
+    """
+    A lock that takes writes but never answers a read-back holds the slot.
+
+    Each answered write resets the lock's no-answers, so the lock never backs
+    off; the slot's tries do not reset, so it stops after three.
+    """
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    lock.reads_unanswered = True
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert len(lock.writes) == LIMIT
+
+
+async def test_many_slots_failing_in_turn_all_hold(rig_factory) -> None:
+    """
+    Tries do not age out, however long a round of many slots takes.
+
+    Forty slots each failing once a round would never put three failures
+    inside five minutes; counted as tries, every one holds after three.
+    """
+    slots = range(1, 41)
+    lock = FakeLock(transient=1_000_000)
+    rig = await _started(rig_factory(lock), dict.fromkeys(slots, "1234"))
+
+    assert rig.clock.now > WINDOW
+    assert all(rig.status(n) == (Status.SUSPENDED, Repair.CANT_SET) for n in slots)
+    assert len(lock.writes) == LIMIT * len(slots)
+
+
+async def test_a_stop_cut_off_does_not_hang_the_next(rig_factory) -> None:
+    """A stop() whose caller is cancelled still lets a later stop() return."""
+    hang = asyncio.Event()
+    rig = rig_factory(FakeLock(hang=hang), budget=60.0)
+    rig.worker.want(1, "1234")
+    rig.worker.start()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    first = asyncio.ensure_future(rig.worker.stop(grace=60))
+    await asyncio.sleep(0)
+    first.cancel()
+
+    # Straight after the cancel: the worker task has not ended yet.
+    await asyncio.wait_for(rig.worker.stop(grace=0.01), 5)
+    assert rig.worker._task is not None and rig.worker._task.done()
+    await asyncio.gather(first, return_exceptions=True)
+
+
+async def test_a_write_retargeted_while_out_is_not_read_back(rig_factory) -> None:
+    """The old target's write is not checked: the new one is synced on its own."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    reads: list[tuple[int, ...]] = []
+    original = lock.read
+
+    async def _note(slots):
+        reads.append(tuple(slots))
+        return await original(slots)
+
+    lock.read = _note  # type: ignore[method-assign]
+
+    def _retarget() -> None:
+        lock.during_write.clear()
+        rig.worker.want(1, "5555")
+
+    lock.during_write.append(_retarget)
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert lock.writes[-2:] == [(1, "1234"), (1, "5555")]
+    assert reads == [(1,)]
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+@pytest.mark.parametrize("lift", ["resume", "new target"])
+async def test_lifting_a_hold_starts_the_tries_over(rig_factory, lift) -> None:
+    """After a hold is lifted, two more failed tries do not hold again."""
+    lock = FakeLock(transient=LIMIT)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+
+    lock.transient = LIMIT - 1
+    if lift == "resume":
+        rig.worker.resume(1)
+    else:
+        rig.worker.want(1, "4321")
+    await rig.settle()
+
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_agreeing_starts_the_tries_over(rig_factory) -> None:
+    """Tries count toward one stretch out of sync, not a slot's whole life."""
+    lock = FakeLock(transient=LIMIT - 1)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+    lock.codes[1] = "9999"
+    lock.transient = LIMIT - 1
+    rig.worker.push(1, Holds("9999"))
+    await rig.settle()
+
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_retarget_mid_write_charges_the_new_target_nothing(
+    rig_factory,
+) -> None:
+    """The old target's failed write is not a try against the new one."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+
+    def _retarget() -> None:
+        lock.during_write.clear()
+        rig.worker.want(1, "5555")
+        # This write fails too, then the new target's first LIMIT - 1 do.
+        lock.transient = LIMIT
+
+    lock.during_write.append(_retarget)
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_fight_drops_trust_in_the_write(rig_factory) -> None:
+    """
+    After a masked lock reports the slot empty, its next masked report is
+    someone else's code, not the PIN that was written.
+    """
+    lock = FakeLock(masked=True)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    writes = len(lock.writes)
+
+    rig.worker.push(1, Seen.EMPTY)
+    rig.worker.push(1, Seen.MASKED)
+    await rig.settle()
+
+    assert len(lock.writes) == writes + 1
+
+
+async def test_a_report_from_before_a_write_is_dropped_without_a_read_back(
+    rig_factory,
+) -> None:
+    """A report older than the write is stale even if the read-back fails."""
+    lock = FakeLock(masked=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+
+    lock.during_write.append(lambda: setattr(lock, "read_errors", 1))
+    rig.worker.want(1, "1234")
+    # Taken in after the sync was queued, before its write started.
+    rig.worker.push(1, Seen.EMPTY)
+    await rig.settle()
+
+    assert lock.writes[-1:] == [(1, "1234")]
+    assert len([w for w in lock.writes if w == (1, "1234")]) == 1
+    assert rig.status(1) == (Status.IN_SYNC, None)
