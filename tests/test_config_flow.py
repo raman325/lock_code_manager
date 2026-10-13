@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 import re
+from typing import Any
 from unittest.mock import AsyncMock, PropertyMock, patch
 
 import pytest
@@ -66,11 +67,14 @@ from .common import (
     LockFault,
     MockLCMLock,
     async_configure_flow,
+    async_configure_options,
     async_discover_unclaimed_mqtt_lock,
     async_run_until_quiet,
+    current_entry,
     entry_users,
     flow_slots,
     flow_users,
+    in_sync_entity_id,
     reading_for,
     unnumbered_user_subentry,
     user_subentries,
@@ -3542,3 +3546,107 @@ async def test_a_failed_save_after_allocation_lets_the_user_start_over(
 
     assert result.get("reason") != "already_in_progress"
     assert result["type"] == "menu"
+
+
+class TestFlowsOnAFailedEntry:
+    """Reauth and options on an entry that really failed to set up (a lock gone)."""
+
+    @pytest.fixture(name="bypass_entry_setup_and_unload")
+    def run_entry_setup_and_unload_fixture(self) -> Generator[None]:
+        """Run the real entry setup and unload instead of bypassing them."""
+        yield
+
+    @staticmethod
+    async def _async_failed_entry(
+        hass: HomeAssistant, options: dict[str, Any] | None = None
+    ) -> MockConfigEntry:
+        """
+        Set up an entry on both locks after lock 2's entity was removed.
+
+        Setup finds the lock missing, starts a reauth naming it, and fails.
+        ``options`` is what an older release left saved on the entry. Bounded,
+        so a reauth that saves on its own and reloads into the same failure
+        fails the test instead of hanging it.
+        """
+        er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+        entry = current_entry(
+            "Failed Entry", {1: "1234"}, locks=(LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
+        )
+        entry.add_to_hass(hass)
+        if options:
+            hass.config_entries.async_update_entry(entry, options=options)
+        async with asyncio.timeout(10):
+            # Not asserted: this reports whether the entry loaded, and it did not.
+            await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+        if entry.state is not ConfigEntryState.SETUP_ERROR:
+            pytest.fail(f"setup: the entry is {entry.state}, not failed")
+        return entry
+
+    async def test_reauth_renders_then_saves_and_loads(
+        self, hass: HomeAssistant, mock_lock_config_entry: MockConfigEntry
+    ) -> None:
+        """
+        Regression for #1348 (PR #1349): the reauth a removed lock starts works.
+
+        The frontend opens the form by calling the step with no input; that
+        crashed. Submitted, the reauth saves the locks and the entry loads.
+        """
+        entry = await self._async_failed_entry(hass)
+        [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+
+        result = await async_configure_flow(hass, flow["flow_id"], None)
+        assert result["step_id"] == "reauth_confirm"
+        assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
+
+        result = await async_configure_flow(
+            hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+        await hass.async_block_till_done()
+
+        assert result["reason"] == "locks_updated"
+        assert entry.state is ConfigEntryState.LOADED
+        assert get_entry_config(entry).locks == (LOCK_1_ENTITY_ID,)
+        assert hass.states.get(in_sync_entity_id(hass, entry, 1, LOCK_1_ENTITY_ID))
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+    @pytest.mark.parametrize("flow_kind", ["reauth", "options"])
+    async def test_locks_saved_on_a_failed_entry_survive_a_reload(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry: MockConfigEntry,
+        flow_kind: str,
+    ) -> None:
+        """
+        Regressions for PRs #1344 and #1346: a fix saved while failed is kept.
+
+        The entry carries options an older release saved while it was down,
+        naming the lock that is gone. An entry is read options first, so a
+        save that left them in place was overwritten on the next load. Either
+        flow's lock list must be what the entry loads with, and loads with
+        again after a reload, with no reauth left behind.
+        """
+        entry = await self._async_failed_entry(
+            hass, options={CONF_LOCKS: [LOCK_2_ENTITY_ID]}
+        )
+        if flow_kind == "reauth":
+            [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+            result = await async_configure_flow(
+                hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+            )
+        else:
+            init = await hass.config_entries.options.async_init(entry.entry_id)
+            result = await async_configure_options(
+                hass, init["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+            )
+        await hass.async_block_till_done()
+        assert result["reason"] == "locks_updated"
+        assert entry.state is ConfigEntryState.LOADED
+
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+        assert entry.state is ConfigEntryState.LOADED
+        assert get_entry_config(entry).locks == (LOCK_1_ENTITY_ID,)
+        assert not list(entry.async_get_active_flows(hass, {SOURCE_REAUTH}))
+        assert await hass.config_entries.async_unload(entry.entry_id)
