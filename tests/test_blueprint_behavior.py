@@ -44,6 +44,7 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    SLOT_1_ACTIVE_ENTITY,
     SLOT_1_ENABLED_ENTITY,
     SLOT_1_EVENT_ENTITY,
     SLOT_2_EVENT_ENTITY,
@@ -1423,3 +1424,89 @@ async def test_lock_recovery_notifies_nobody(
     await hass.async_block_till_done()
 
     assert len(captured) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Regression net, batch 9
+# --------------------------------------------------------------------------- #
+
+LINKER_PATH = "condition_linker.yaml"
+
+
+async def test_limiter_spends_nothing_when_its_entry_reloads(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Regression for #1488 (PR #1499): a reload is not a use.
+
+    The event entity comes back from the reload with the last use it
+    recorded. Read as a new use, every restart spent one.
+    """
+    counter = await _setup_counter(hass, initial=3)
+    await _setup_blueprint_automation(
+        hass,
+        LIMITER_PATH,
+        {
+            "pin_used_entity": SLOT_1_EVENT_ENTITY,
+            "enabled_switch": SLOT_1_ENABLED_ENTITY,
+            "uses_counter": counter,
+        },
+    )
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
+    if float(hass.states.get(counter).state) != 2:
+        pytest.fail("setup: the use was not counted")
+
+    assert await hass.config_entries.async_reload(
+        lock_code_manager_config_entry.entry_id
+    )
+    await hass.async_block_till_done()
+
+    restored = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert restored.state == recorded.state
+    assert float(hass.states.get(counter).state) == 2
+
+
+async def test_condition_linker_links_the_condition_when_run(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    Regression for PR #1511: the Condition Linker runs against a real entry.
+
+    It called an action that had been removed, so running it from the
+    automations page failed and linked nothing.
+    """
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"guest_window": {"initial": True}}}
+    )
+    await _setup_blueprint_automation(
+        hass,
+        LINKER_PATH,
+        {
+            "config_entry": lock_code_manager_config_entry.entry_id,
+            "user_name": "test1",
+            "condition_entity": "input_boolean.guest_window",
+        },
+    )
+    if hass.states.get(SLOT_1_ACTIVE_ENTITY).state != "on":
+        pytest.fail("setup: slot 1 is not active before the link")
+    [linker] = hass.states.async_entity_ids("automation")
+    await hass.services.async_call(
+        "automation", "trigger", {"entity_id": linker}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        "input_boolean",
+        "turn_off",
+        {"entity_id": "input_boolean.guest_window"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(SLOT_1_ACTIVE_ENTITY).state == "off"

@@ -2,18 +2,23 @@
 
 import asyncio
 import contextlib
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from homeassistant.components.calendar import (
     DOMAIN as CALENDAR_DOMAIN,
     SERVICE_GET_EVENTS,
 )
+from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -31,6 +36,8 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
@@ -108,6 +115,8 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_EVENT_ENTITY,
+    current_entry,
+    slot_entity_id,
     unnumbered_user_subentry,
     user_subentries,
 )
@@ -3705,3 +3714,85 @@ class TestAddressingASlotByUser:
         result = await client.receive_json()
         assert not result["success"]
         assert "No entity" in result["error"]["message"]
+
+
+async def _async_subscribe_before_entities(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, pin: str
+) -> tuple[Any, MockConfigEntry]:
+    """
+    Subscribe a card to slot 1 of a new entry before its entities exist.
+
+    Returns the client and the entry once the first payload, which names no
+    entities, has been read.
+    """
+    # The component first: a websocket client freezes the HTTP router it
+    # registers its paths on.
+    assert await async_setup_component(hass, DOMAIN, {})
+    ws_client = await hass_ws_client(hass)
+    entry = current_entry("Early Card", {1: pin})
+    entry.add_to_hass(hass)
+    # Not till done: the entities are created by a task setup only schedules.
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            "config_entry_id": entry.entry_id,
+            ATTR_SLOT: 1,
+            "reveal": True,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    first = await ws_client.receive_json()
+    if first["event"][CONF_ENTITIES][CONF_PIN] is not None:
+        pytest.fail("setup: the slot's entities existed before the subscription")
+    return ws_client, entry
+
+
+async def _async_latest_payload(hass: HomeAssistant, ws_client: Any) -> dict | None:
+    """
+    Let a minute of sync run, then return the last payload the card got.
+
+    The frozen-clock tick helpers would also time the websocket out, so the
+    timers are fired instead, at a later moment each time: what a fired
+    tick schedules is due after it, and only a later firing reaches it.
+    Background tasks are waited for after each, as ``async_advance_time``
+    does, so every payload they send is queued before the drain.
+    """
+    start = dt_util.utcnow()
+    for second in range(2, 62, 2):
+        async_fire_time_changed(hass, start + timedelta(seconds=second))
+        await hass.async_block_till_done(wait_background_tasks=True)
+    latest = None
+    while True:
+        try:
+            async with asyncio.timeout(0.2):
+                latest = (await ws_client.receive_json())["event"]
+        except TimeoutError:
+            return latest
+
+
+async def test_a_card_subscribed_before_its_slot_s_entities_exist_gets_them(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    Regression for PR #933: a card that subscribes first still learns its entities.
+
+    Saving a new entry shows its cards before the slot's entities exist. The
+    subscription resolved them once, found nothing, and kept sending that
+    -- the card stayed blank until Home Assistant restarted. Writing the
+    new PIN updates the card, which must then name the entities.
+    """
+    ws_client, entry = await _async_subscribe_before_entities(
+        hass, hass_ws_client, "4321"
+    )
+
+    latest = await _async_latest_payload(hass, ws_client)
+
+    assert latest is not None
+    assert latest[CONF_ENTITIES][CONF_PIN] == slot_entity_id(
+        hass, TEXT_DOMAIN, entry, 1, CONF_PIN
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)

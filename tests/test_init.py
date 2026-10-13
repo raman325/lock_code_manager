@@ -32,6 +32,7 @@ from homeassistant.config_entries import (
 from homeassistant.const import (
     ATTR_CODE,
     ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
     CONF_CONDITION,
     CONF_ENABLED,
     CONF_ENTITY_ID,
@@ -82,6 +83,7 @@ from custom_components.lock_code_manager.const import (
     EVENT_CREDENTIAL_USED,
     MAX_SYNC_ATTEMPTS,
     POLL_FAILURE_ALERT_THRESHOLD,
+    SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
@@ -123,6 +125,8 @@ from .common import (
     LOCK_2_ENTITY_ID,
     LOCK_DEVICE_DOMAIN,
     NO_PIN_CAPABILITIES,
+    SLOT_1_ACTIVE_ENTITY,
+    SLOT_1_ENABLED_ENTITY,
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_NAME_ENTITY,
     MockLCMLock,
@@ -5728,4 +5732,132 @@ async def test_a_blip_during_the_deferred_setup_retry_is_retried_again(
     )
 
     assert lock.codes[1] == "4321"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_hard_refresh_naming_an_unmanaged_lock_warns_about_that_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Regression for PR #688: the warning names the target that is unmanaged.
+
+    Given a managed lock and an unmanaged one, the warning named the wrong
+    entity, sending the reader after a lock that was fine.
+    """
+    entry = current_entry("Refresh Targets", {1: "1234"})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    caplog.clear()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]},
+        blocking=True,
+    )
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and record.name.startswith("custom_components.lock_code_manager")
+    ]
+    assert any(LOCK_2_ENTITY_ID in message for message in warnings)
+    assert not any(LOCK_1_ENTITY_ID in message for message in warnings)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_slot_entities_are_named_in_title_case(
+    hass: HomeAssistant,
+    mock_lock_config_entry: MockConfigEntry,
+    lock_code_manager_config_entry: MockConfigEntry,
+) -> None:
+    """Regression for PR #1173: slot entity names read "Active", not "active"."""
+    for entity_id, name in (
+        (SLOT_1_ACTIVE_ENTITY, "Active"),
+        (SLOT_1_ENABLED_ENTITY, "Enabled"),
+        (SLOT_1_NAME_ENTITY, "Name"),
+    ):
+        assert (
+            hass.states.get(entity_id)
+            .attributes[ATTR_FRIENDLY_NAME]
+            .endswith(f" {name}")
+        )
+
+
+async def test_deleting_a_user_by_service_removes_its_slot_device(
+    hass: HomeAssistant,
+    mock_lock_config_entry: MockConfigEntry,
+    lock_code_manager_config_entry: MockConfigEntry,
+) -> None:
+    """
+    Regression for #1399 (PR #1402), through ``delete_user``.
+
+    A removed user's slot device stayed in the device registry, and Home
+    Assistant would not let it be deleted by hand.
+    """
+    entry = lock_code_manager_config_entry
+    dev_reg = dr.async_get(hass)
+    slot_2 = (DOMAIN, f"{entry.entry_id}|2")
+    if dev_reg.async_get_device_by_identifier(slot_2, entry.entry_id) is None:
+        pytest.fail("setup: slot 2 has no device")
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DELETE_USER,
+        {
+            "config_entry_id": entry.entry_id,
+            "name": [get_entry_config(entry).name_for(2)],
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert dev_reg.async_get_device_by_identifier(slot_2, entry.entry_id) is None
+    assert dev_reg.async_get_device_by_identifier(
+        (DOMAIN, f"{entry.entry_id}|1"), entry.entry_id
+    )
+
+
+async def test_the_code_sensor_shows_a_new_pin_when_in_sync_does(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_lock_config_entry: MockConfigEntry,
+) -> None:
+    """
+    Regression for #64 (PR #68): the code sensor does not trail in-sync.
+
+    On a polled lock the code sensor waited for the next poll, up to a
+    minute after in-sync had already said the new PIN was on the lock.
+    """
+    entry = current_entry("Code Sensor Lag", {1: "1234"})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    code = code_entity_id(hass, entry, 1)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: hass.states.get(in_sync).state == STATE_ON,
+        max_ticks=10,
+        what="slot 1 in sync",
+    )
+
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: (
+            hass.states.get(in_sync).state == STATE_ON
+            and mock_lock(entry).codes.get(1) == "4321"
+        ),
+        max_ticks=10,
+        what="the new PIN in sync",
+    )
+
+    assert hass.states.get(code).state == "4321"
     assert await hass.config_entries.async_unload(entry.entry_id)
