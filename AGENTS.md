@@ -462,7 +462,11 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     `async_wait_held`, context manager), act on a command and optionally one index: `ignore`
     (answered as done, nothing changed), `refuse` (`SetCredential` in band with a `DlStatus`,
     other writes by Interaction Model status), `fail` (`NodeNotResolving` by default), `hang`,
-    `slow`. Device rejections reach the client as `UnknownError("InteractionModelError: ...")`.
+    `slow`. Errors are the server Home Assistant uses (matterjs-server): a device rejection
+    reaches the client as `UnknownError` with matter.js's `StatusResponseError` text
+    (`Invalid command (code 133)`, `Failure (code 1; cluster code 3)`), an unreachable node as
+    `NodeNotResolving("Node 42 is not resolving")`; identical in-flight commands reach the lock
+    once, as the server coalesces them.
     `commands` records every command answered.
   - `test_node_harness.py` self-tests each behavior, and end to end through a loaded entry.
 
