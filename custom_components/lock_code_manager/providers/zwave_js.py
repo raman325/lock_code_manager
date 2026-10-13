@@ -186,6 +186,14 @@ class ZWaveJSLock(BaseLock):
     # subscriptions: registered in ``async_setup``, released in
     # ``async_unload``).
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
+    # The slot of a PIN write in flight on a node advertising User Code
+    # Command Class, and whether the lock refused it as a duplicate. User
+    # Code Command Class has no in-band duplicate result: the lock's only
+    # word is Access Control notification 15, which arrives while the driver
+    # is still verifying the write -- and a masking version 1 lock's
+    # read-back of the OLD code passes that verification.
+    _uc_write_slot: int | None = field(init=False, default=None)
+    _uc_write_refused: bool = field(init=False, default=False)
 
     @property
     def node(self) -> Node:
@@ -639,8 +647,13 @@ class ZWaveJSLock(BaseLock):
         User Code CC v1 case where code obfuscation produced this error
         falsely; this branch now guards the remaining unverifiable writes.)
         Definitive rejections (duplicate, occupied, manufacturer rules,
-        validation) still surface as typed errors.
+        validation) still surface as typed errors -- including a duplicate
+        a User Code lock refuses by notification alone (see
+        ``_uc_write_slot``), whatever the driver answered.
         """
+        self._uc_write_refused = False
+        if self._node_advertises_user_code_cc():
+            self._uc_write_slot = credential.slot
         try:
             await lock_helpers.async_set_credential(
                 self.node,
@@ -658,7 +671,7 @@ class ZWaveJSLock(BaseLock):
             ) from err
         except HomeAssistantError as err:
             key = getattr(err, "translation_key", None)
-            if key == "credential_rejected_unknown":
+            if key == "credential_rejected_unknown" and not self._uc_write_refused:
                 _LOGGER.debug(
                     "Lock %s slot %s: driver returned ERROR_UNKNOWN; treating "
                     "as an optimistic (unconfirmed) set -- the lock is "
@@ -678,7 +691,7 @@ class ZWaveJSLock(BaseLock):
             # entry would stay wrong forever (see
             # _async_uc_reconcile_value_db).
             await self._async_uc_reconcile_value_db(credential.slot)
-            if key == "credential_rejected_duplicate":
+            if key == "credential_rejected_duplicate" or self._uc_write_refused:
                 raise DuplicateCodeError(
                     code_slot=credential.slot,
                     lock_entity_id=self.lock.entity_id,
@@ -688,9 +701,18 @@ class ZWaveJSLock(BaseLock):
                 lock_entity_id=self.lock.entity_id,
                 reason=str(err),
             ) from err
+        finally:
+            self._uc_write_slot = None
         # Pre-15.25.2 drivers never persist a supervised success to the
-        # value database (see _async_uc_reconcile_value_db).
+        # value database (see _async_uc_reconcile_value_db). On a refusal the
+        # read also replaces the code the driver's "credential modified"
+        # event announced with what the lock reports holding.
         await self._async_uc_reconcile_value_db(credential.slot)
+        if self._uc_write_refused:
+            raise DuplicateCodeError(
+                code_slot=credential.slot,
+                lock_entity_id=self.lock.entity_id,
+            )
         # Push what the driver just confirmed, as every push provider does
         # before returning CONFIRMED: the seam records nothing pending for a
         # push provider on the strength of the value being on the coordinator
@@ -1035,6 +1057,19 @@ class ZWaveJSLock(BaseLock):
 
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
+
+        # Some locks name no slot in a duplicate refusal (no parameters, or
+        # user 0). Writes to a lock run one at a time, so one arriving during
+        # a write is that write's; one naming another slot, or arriving with
+        # no write in flight, is not ours to pin on a slot.
+        if (
+            evt.data[ATTR_EVENT]
+            == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+            and self._uc_write_slot is not None
+            and code_slot in (0, self._uc_write_slot)
+        ):
+            self._uc_write_refused = True
+            return
 
         self.async_fire_code_slot_event(
             code_slot=code_slot,
