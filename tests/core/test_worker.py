@@ -62,12 +62,20 @@ class FakeLock:
     # Reads say nothing about any slot.
     silent: bool = False
     refuse_value: set[str] = field(default_factory=set)
+    # Refusals come from the integration, before anything is sent.
+    refuse_unsent: bool = False
     refuse_clear: set[int] = field(default_factory=set)
     # Writes are acknowledged and not applied.
     ignore_writes: bool = False
     writes_unanswered: bool = False
     reads_unanswered: bool = False
     writes_never_sent: bool = False
+    # The next this many writes fail before leaving for the lock.
+    unsent_writes: int = 0
+    # The next this many reads are answered with an error.
+    read_errors: int = 0
+    # Every call fails before leaving: the driver in front of the lock is down.
+    driver_down: bool = False
     transient: int = 0
     hang: asyncio.Event | None = None
     # Raise something that is not a LockError on writes.
@@ -77,6 +85,11 @@ class FakeLock:
 
     async def read(self, slots: Collection[int]) -> dict[int, Reading]:
         """Answer a read the way this lock does."""
+        if self.driver_down:
+            raise LockError(ErrorKind.TRANSIENT, sent=False)
+        if self.read_errors:
+            self.read_errors -= 1
+            raise LockError(ErrorKind.TRANSIENT)
         if self.reads_unanswered:
             raise LockError(ErrorKind.NO_ANSWER)
         if self.silent:
@@ -90,8 +103,11 @@ class FakeLock:
 
     async def write(self, slot: int, pin: str | None) -> None:
         """Answer a write the way this lock does."""
-        if self.writes_never_sent:
+        if self.writes_never_sent or self.driver_down:
             raise LockError(ErrorKind.NO_ANSWER, sent=False)
+        if self.unsent_writes:
+            self.unsent_writes -= 1
+            raise LockError(ErrorKind.TRANSIENT, sent=False)
         self.writes.append((slot, pin))
         for act in self.during_write:
             act()
@@ -107,7 +123,7 @@ class FakeLock:
         if pin is None and slot in self.refuse_clear:
             raise LockError(ErrorKind.SLOT_REFUSED)
         if pin is not None and pin in self.refuse_value:
-            raise LockError(ErrorKind.VALUE_REFUSED)
+            raise LockError(ErrorKind.VALUE_REFUSED, sent=not self.refuse_unsent)
         if pin is None and slot not in self.codes:
             raise LockError(ErrorKind.ALREADY_SO)
         if self.ignore_writes:
@@ -748,3 +764,162 @@ async def test_a_slot_claimed_again_mid_release_is_not_dropped(rig_factory) -> N
 
     assert 5 in rig.worker.slots
     assert lock.codes == {5: "2468"}
+
+
+async def test_a_failed_first_read_still_syncs_every_slot(rig_factory) -> None:
+    """The first read failing leaves no slot stranded, never read or written."""
+    lock = FakeLock(read_errors=1)
+    await _started(rig := rig_factory(lock), {1: "1234"})
+
+    assert lock.codes == {1: "1234"}
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_write_that_never_left_is_tried_again(rig_factory) -> None:
+    """A write that failed before reaching the lock is retried, not forgotten."""
+    lock = FakeLock(unsent_writes=1)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+
+    assert lock.codes == {1: "1234"}
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_read_back_answered_with_an_error_is_retried_and_counted(
+    rig_factory,
+) -> None:
+    """A lock that answers every read with an error holds the slot, not loops."""
+    lock = FakeLock()
+    rig = await _started(rig_factory(lock), {})
+    lock.read_errors = 1_000
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert rig.worker.reachable
+
+
+async def test_a_release_of_an_empty_slot_is_dropped(rig_factory) -> None:
+    """A slot given up that the lock already shows empty is let go at once."""
+    rig = await _started(rig_factory(FakeLock()), {})
+    rig.worker.want(2, None, release=True)
+    await rig.settle()
+
+    assert 2 not in rig.worker.slots
+
+
+async def test_a_release_found_empty_by_the_first_read_is_dropped(rig_factory) -> None:
+    """A release registered before start, already empty, is let go too."""
+    rig = rig_factory(FakeLock())
+    rig.worker.want(2, None, release=True)
+    rig.worker.start()
+    await rig.settle()
+
+    assert 2 not in rig.worker.slots
+
+
+async def test_a_driver_that_sends_nothing_backs_the_lock_off(rig_factory) -> None:
+    """Failures that never leave for the lock are the lock not answering."""
+    lock = FakeLock({1: "1234"})
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    lock.driver_down = True
+    for _ in range(BACKOFF_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+
+    assert not rig.worker.reachable
+
+
+async def test_a_refusal_before_sending_is_an_answer(rig_factory) -> None:
+    """The integration refusing a PIN is not the lock going quiet."""
+    lock = FakeLock(refuse_value={"1"}, refuse_unsent=True)
+    slots = range(1, BACKOFF_AFTER + 2)
+    # Read already, so the refusals come back to back with no read between.
+    rig = await _started(rig_factory(lock), dict.fromkeys(slots))
+    for slot in slots:
+        rig.worker.want(slot, "1")
+    await rig.settle()
+
+    assert rig.worker.reachable
+
+
+async def test_a_report_during_a_write_survives_a_failed_read_back(
+    rig_factory,
+) -> None:
+    """
+    A push is dropped only for a read-back that actually came back.
+
+    The keypad's change contradicts the write, so it counts (#776): the
+    read-back's error is one failure and the contradiction a second.
+    """
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+
+    def _keypad() -> None:
+        lock.during_write.clear()
+        lock.read_errors = 1
+        rig.worker.push(1, Holds("9999"))
+
+    lock.during_write.append(_keypad)
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert len(rig.worker.slots[1].failures) == 2
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_provider_bug_is_logged(rig_factory, caplog) -> None:
+    """Something a provider raises that is not a LockError leaves a traceback."""
+    await _started(rig_factory(FakeLock(broken=True)), {1: "1234"})
+
+    assert "Lock provider failed" in caplog.text
+    assert "the provider broke" in caplog.text
+
+
+async def test_a_refusal_of_a_released_write_spares_the_new_owner(
+    rig_factory,
+) -> None:
+    """A write refused after its slot changed hands does not turn off the new one."""
+    lock = FakeLock(refuse_value={"1111"})
+    rig = rig_factory(lock)
+
+    def _hand_over() -> None:
+        lock.during_write.clear()
+        rig.worker.forget(3)
+        rig.worker.want(3, "1111")
+
+    lock.during_write.append(_hand_over)
+    await _started(rig, {3: "1111"})
+
+    assert rig.disabled == [3]
+
+
+async def test_settled_returns_after_a_stop_past_its_grace(rig_factory) -> None:
+    """A stop that had to cancel leaves nothing behind for settled() to wait on."""
+    hang = asyncio.Event()
+    rig = rig_factory(FakeLock(hang=hang), budget=60.0)
+    rig.worker.want(1, "1234")
+    rig.worker.start()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    await rig.worker.stop(grace=0.01)
+
+    await rig.settle()
+
+
+async def test_a_second_stop_waits_for_the_first(rig_factory) -> None:
+    """Two unloads stopping together both return only once the worker has."""
+    hang = asyncio.Event()
+    rig = rig_factory(FakeLock(hang=hang), budget=60.0)
+    rig.worker.want(1, "1234")
+    rig.worker.start()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    first = asyncio.ensure_future(rig.worker.stop(grace=5))
+    await asyncio.sleep(0)
+    second = asyncio.ensure_future(rig.worker.stop(grace=5))
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert not second.done()
+    hang.set()
+    await asyncio.wait_for(asyncio.gather(first, second), 5)
