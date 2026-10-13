@@ -48,6 +48,7 @@ from tests.common import (
     current_entry,
     in_sync_entity_id,
     lcm_issue_ids,
+    lcm_records_holding,
     slot_entity_id,
     sync_status,
     unfinished_tasks,
@@ -569,12 +570,7 @@ class TestBridge:
             if fake_z2m_bridge.users[1] != (ENABLED, pins[1]):
                 pytest.fail("setup: the PIN never reached the lock")
 
-        assert [
-            record.getMessage()
-            for record in caplog.records
-            if record.name.startswith("custom_components.lock_code_manager")
-            and any(pin in record.getMessage() for pin in pins.values())
-        ] == []
+        assert lcm_records_holding(caplog, pins.values()) == []
 
 
 class TestBridgeEvents:

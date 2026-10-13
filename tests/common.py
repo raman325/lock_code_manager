@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Collection, Iterator, Sequence
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Sequence,
+)
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -13,6 +20,7 @@ import json
 import math
 import sys
 import time
+import traceback
 from typing import Any, Literal, Protocol, Self
 from unittest.mock import patch
 import weakref
@@ -2061,3 +2069,27 @@ async def async_add_users(
         await hass.async_block_till_done()
         result = await hass.config_entries.subentries.async_configure(flow["flow_id"])
     return result
+
+
+def lcm_records_holding(
+    caplog: pytest.LogCaptureFixture, secrets: Iterable[str]
+) -> list[str]:
+    """
+    Return every Lock Code Manager log record that holds one of ``secrets``.
+
+    Searches what a log handler would write: the message, and any exception
+    or stack text attached to it, which ``getMessage`` leaves out.
+    """
+    secrets = tuple(secrets)
+    held = []
+    for record in caplog.records:
+        if not record.name.startswith("custom_components.lock_code_manager"):
+            continue
+        text = record.getMessage()
+        if record.exc_info:
+            text += "".join(traceback.format_exception(*record.exc_info))
+        if record.stack_info:
+            text += record.stack_info
+        if any(secret in text for secret in secrets):
+            held.append(f"{record.name}: {record.getMessage()}")
+    return held

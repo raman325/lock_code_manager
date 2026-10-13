@@ -3753,13 +3753,16 @@ async def _async_latest_payload(hass: HomeAssistant, ws_client: Any) -> dict | N
     """
     Let a minute of sync run, then return the last payload the card got.
 
-    Time moves by firing the due timers, not by freezing the clock, which
-    would also time the websocket out.
+    The frozen-clock tick helpers would also time the websocket out, so the
+    timers are fired instead, at a later moment each time: what a fired
+    tick schedules is due after it, and only a later firing reaches it.
+    Background tasks are waited for after each, as ``async_advance_time``
+    does, so every payload they send is queued before the drain.
     """
-    await hass.async_block_till_done()
-    for _ in range(30):
-        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
-        await hass.async_block_till_done()
+    start = dt_util.utcnow()
+    for second in range(2, 62, 2):
+        async_fire_time_changed(hass, start + timedelta(seconds=second))
+        await hass.async_block_till_done(wait_background_tasks=True)
     latest = None
     while True:
         try:

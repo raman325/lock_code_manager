@@ -5763,6 +5763,7 @@ async def test_a_hard_refresh_naming_an_unmanaged_lock_warns_about_that_lock(
         record.getMessage()
         for record in caplog.records
         if record.levelno == logging.WARNING
+        and record.name.startswith("custom_components.lock_code_manager")
     ]
     assert any(LOCK_2_ENTITY_ID in message for message in warnings)
     assert not any(LOCK_1_ENTITY_ID in message for message in warnings)

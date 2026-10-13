@@ -1493,6 +1493,8 @@ async def test_condition_linker_links_the_condition_when_run(
             "condition_entity": "input_boolean.guest_window",
         },
     )
+    if hass.states.get(SLOT_1_ACTIVE_ENTITY).state != "on":
+        pytest.fail("setup: slot 1 is not active before the link")
     [linker] = hass.states.async_entity_ids("automation")
     await hass.services.async_call(
         "automation", "trigger", {"entity_id": linker}, blocking=True

@@ -38,23 +38,14 @@ from .common import (
     async_tick_until,
     current_entry,
     in_sync_entity_id,
+    lcm_records_holding,
+    mock_lock,
 )
 
 _LCM_LOGGER = "custom_components.lock_code_manager"
 FIRST_PIN = "73915286"
 SECOND_PIN = "60482917"
 SET_PIN = "58203641"
-
-
-def _records_with_a_pin(caplog: pytest.LogCaptureFixture) -> list[str]:
-    """Return every Lock Code Manager record whose text holds a configured PIN."""
-    return [
-        f"{record.name}: {message}"
-        for record in caplog.records
-        if record.name.startswith(_LCM_LOGGER)
-        and (message := record.getMessage())
-        and any(pin in message for pin in (FIRST_PIN, SECOND_PIN, SET_PIN))
-    ]
 
 
 async def test_no_configured_pin_reaches_a_log_record(
@@ -80,7 +71,13 @@ async def test_no_configured_pin_reaches_a_log_record(
     name = get_entry_config(entry).name_for(1)
 
     await async_set_slot_pin(hass, entry, 1, SECOND_PIN)
-    await async_advance_sync_ticks(hass, freezer, 5)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: mock_lock(entry).codes.get(1) == SECOND_PIN,
+        max_ticks=10,
+        what="the changed PIN on the lock",
+    )
     for service, data in (
         (
             SERVICE_SET_CREDENTIAL,
@@ -104,11 +101,19 @@ async def test_no_configured_pin_reaches_a_log_record(
             blocking=True,
         )
         await async_advance_sync_ticks(hass, freezer, 5)
+        if service == SERVICE_SET_CREDENTIAL:
+            await async_tick_until(
+                hass,
+                freezer,
+                lambda: mock_lock(entry).codes.get(1) == SET_PIN,
+                max_ticks=10,
+                what="the credential service's PIN on the lock",
+            )
 
     if not any(
         r.name.startswith(_LCM_LOGGER) and r.levelno == logging.DEBUG
         for r in caplog.records
     ):
         pytest.fail("setup: nothing was logged at DEBUG")
-    assert _records_with_a_pin(caplog) == []
+    assert lcm_records_holding(caplog, (FIRST_PIN, SECOND_PIN, SET_PIN)) == []
     assert await hass.config_entries.async_unload(entry.entry_id)
