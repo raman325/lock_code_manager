@@ -30,6 +30,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
 from ...common import user_subentries
+from .fake_node import FakeMatterLock
 from .helpers import create_node_from_fixture, setup_matter_integration_with_node
 
 MOCK_FABRIC_ID = 12341234
@@ -330,3 +331,91 @@ def e2e_matter_lock(
 ) -> MatterLock:
     """Extract the MatterLock from the LCM config entry."""
     return get_matter_lock(hass, lcm_config_entry, lock_entity)
+
+
+# ---------------------------------------------------------------------------
+# Stateful lock fixtures -- the lock faked where Home Assistant's client meets
+# the server (see fake_node.py), so the client's encoding, Home Assistant's
+# lock_helpers and the provider all run for real. New tests should prefer
+# these to ``matter_mock_helpers``, which patches the helpers with canned
+# answers and changes nothing when written to.
+# ---------------------------------------------------------------------------
+
+# A real lock that manages users (FeatureMap 385: PIN, USR), from Home
+# Assistant core's Matter fixtures (core e4c72622600d, secuyou_smart_lock.json):
+# ten users, ten PIN credentials, three per user, PINs of six to eight digits.
+FAKE_MATTER_NODE_FIXTURE = "secuyou_smart_lock"
+
+FAKE_MATTER_SLOTS = {
+    1: {CONF_NAME: "slot1", CONF_PIN: "123456", CONF_ENABLED: True},
+    2: {CONF_NAME: "slot2", CONF_PIN: "567890", CONF_ENABLED: True},
+}
+
+
+@pytest.fixture
+def fake_matter_lock_options() -> dict[str, Any]:
+    """Keyword arguments for ``FakeMatterLock``; override to change the lock."""
+    return {}
+
+
+@pytest.fixture
+async def fake_matter_lock(
+    hass: HomeAssistant,
+    matter_client: MagicMock,
+    fake_matter_lock_options: dict[str, Any],
+) -> FakeMatterLock:
+    """
+    Set the Matter integration up on a stateful fake of a lock that manages users.
+
+    Installed before the integration starts, so its own setup already talks
+    to the fake.
+    """
+    node = create_node_from_fixture(FAKE_MATTER_NODE_FIXTURE)
+    fake = FakeMatterLock(matter_client, node, **fake_matter_lock_options)
+    await setup_matter_integration_with_node(hass, matter_client, node)
+    return fake
+
+
+@pytest.fixture
+def fake_matter_lock_entity(
+    hass: HomeAssistant, fake_matter_lock: FakeMatterLock
+) -> er.RegistryEntry:
+    """Return the lock entity the Matter integration created for the fake lock."""
+    [lock_entity] = [
+        entry
+        for entry in er.async_get(hass).entities.values()
+        if entry.domain == "lock" and entry.platform == "matter"
+    ]
+    return lock_entity
+
+
+@pytest.fixture
+async def fake_matter_lock_entry(
+    hass: HomeAssistant,
+    fake_matter_lock: FakeMatterLock,
+    fake_matter_lock_entity: er.RegistryEntry,
+) -> AsyncGenerator[MockConfigEntry]:
+    """Set up a Lock Code Manager entry on the fake lock, slots 1 and 2."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [fake_matter_lock_entity.entity_id]},
+        subentries_data=user_subentries(FAKE_MATTER_SLOTS),
+        unique_id="test_matter_fake_lock",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield entry
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.fixture
+def fake_e2e_matter_lock(
+    hass: HomeAssistant,
+    fake_matter_lock_entry: MockConfigEntry,
+    fake_matter_lock_entity: er.RegistryEntry,
+) -> MatterLock:
+    """Return the provider ``fake_matter_lock_entry`` set up on the fake lock."""
+    return get_matter_lock(hass, fake_matter_lock_entry, fake_matter_lock_entity)

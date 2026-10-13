@@ -431,6 +431,41 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
   - `test_node_harness.py` self-tests each behavior against the driver, and end to end through
     a loaded entry.
 
+- `tests/providers/matter/fake_node.py`: `FakeMatterLock`, a stateful Matter door lock faked
+  at the Matter client's `send_command` (the websocket's place), so `MatterClient.send_device_command`
+  and its `dataclass_to_dict` encoding, Home Assistant's Matter `lock_helpers` and the provider
+  run for real above it. It answers the Door Lock cluster's `GetUser`, `SetUser`, `ClearUser`,
+  `SetCredential`, `GetCredentialStatus` and `ClearCredential` the way the Matter SDK's
+  door-lock server does (connectedhomeip v1.4.2.0, cited by line), and delivers `LockOperation`
+  and `LockUserChange` events through the client's own subscriber filters.
+  - Fixtures (`tests/providers/matter/conftest.py`): `fake_matter_lock` (the real Secuyou dump
+    from Home Assistant core, which manages users: ten users, ten PINs, three per user, PINs of
+    six to eight digits; `fake_matter_lock_options` passes keyword arguments),
+    `fake_matter_lock_entity`, `fake_matter_lock_entry` (an entry on it, slots 1 and 2,
+    `FAKE_MATTER_SLOTS`), `fake_e2e_matter_lock` (that entry's provider).
+    `matter_mock_helpers` stays for the method-level tests built on canned answers; prefer the
+    fake for anything that writes and then reads.
+  - Capacities come from the node's Door Lock attributes. `max_user_name` is the longest name
+    the lock stores (ten, the SDK's default): the provider's canonical `lcm:<slot>:<name>` tag
+    is longer than that, so on the SDK's default the provider falls back to its compact tag.
+  - Users: an empty index answers no user fields and the next occupied index; adding to an
+    occupied index fails; modifying needs an occupied index, and only the creating fabric may
+    rename; clearing a user clears its credentials.
+  - Credentials, answered in band: Duplicate (another index holds the PIN), Occupied (adding
+    over one), InvalidField (index or length out of range, a user that is not there or not this
+    fabric's), ResourceExhausted (past the per-user limit). With no user index a user is created
+    at the first free index; clearing a user's only PIN clears the user.
+  - Every remote write is logged as a `LockUserChange` naming Home Assistant's fabric, as the SDK
+    logs it; `program(user, pin)` changes the lock as the keypad or another admin would (no
+    fabric), and `keypad_unlock(credential_index)` logs a `LockOperation`.
+  - Faults, named as the other fakes' and returning a `NodeFault` (`times`, `hits`, `held`,
+    `async_wait_held`, context manager), act on a command and optionally one index: `ignore`
+    (answered as done, nothing changed), `refuse` (`SetCredential` in band with a `DlStatus`,
+    other writes by Interaction Model status), `fail` (`NodeNotResolving` by default), `hang`,
+    `slow`. Device rejections reach the client as `UnknownError("InteractionModelError: ...")`.
+    `commands` records every command answered.
+  - `test_node_harness.py` self-tests each behavior, and end to end through a loaded entry.
+
 ### Test philosophy
 
 **Mock at the boundary, not the code under test.** Let as much end-to-end code run as possible.
