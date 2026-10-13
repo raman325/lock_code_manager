@@ -3403,23 +3403,37 @@ def _entry_on_the_second_lock(
     )
 
 
-async def _set_up(hass: HomeAssistant, *entries: MockConfigEntry) -> MockLCMLock:
+def _locks_set_up(built: list[MockLCMLock]) -> list[MockLCMLock]:
+    """Return the locks among ``built`` that ran provider setup."""
+    return [built_lock for built_lock in built if built_lock.service_calls["setup"]]
+
+
+async def _set_up(
+    hass: HomeAssistant, *entries: MockConfigEntry, builds: int = 1
+) -> MockLCMLock:
     """
     Set up ``entries`` in order and return the second lock, which they share.
 
-    Shared means set up once: every entry after the first, here or in an
-    earlier call, joins the lock instead of setting up its own.
+    Shared means one fake lock set up once: ``builds`` is 1 when these
+    entries bring the lock up and 0 when they join one an earlier call set
+    up. Every entry reaches that same fake, and each user's code on it reads
+    as the code the lock holds, so its read answered.
     """
-    with when_mock_lock_built(lambda lock: lock) as built:
+    # Setup moves each entry's users out of its data.
+    users = {entry.entry_id: dict(entry.data[CONF_SLOTS]) for entry in entries}
+    with when_mock_lock_built(lambda built_lock: built_lock) as built:
         for entry in entries:
             entry.add_to_hass(hass)
             assert await hass.config_entries.async_setup(entry.entry_id)
             await hass.async_block_till_done()
-    assert len([lock for lock in built if lock.service_calls["setup"]]) <= 1
     lock = mock_lock(entries[0], LOCK_2_ENTITY_ID)
+    assert _locks_set_up(built) == ([lock] if builds else [])
+    assert all(mock_lock(entry, LOCK_2_ENTITY_ID) is lock for entry in entries)
     assert not lock.supports_push
-    # Read at setup, whatever the entries' polling option.
-    assert lock.service_calls["get_usercodes"]
+    for entry in entries:
+        for slot_num, slot in users[entry.entry_id].items():
+            code = code_entity_id(hass, entry, slot_num, LOCK_2_ENTITY_ID)
+            assert hass.states.get(code).state == slot[CONF_PIN]
     return lock
 
 
@@ -3532,10 +3546,11 @@ async def test_re_enabling_polling_on_one_holder_resumes_the_poll(
     assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 0
 
     hass.config_entries.async_update_entry(toggled, pref_disable_polling=False)
-    with when_mock_lock_built(lambda lock: lock) as rebuilt:
+    with when_mock_lock_built(lambda built_lock: built_lock) as rebuilt:
         assert await hass.config_entries.async_reload(toggled.entry_id)
         await hass.async_block_till_done()
-    assert not [lock for lock in rebuilt if lock.service_calls["setup"]]
+    assert _locks_set_up(rebuilt) == []
+    assert mock_lock(toggled, LOCK_2_ENTITY_ID) is lock
 
     assert await _reads_over_scan_intervals(hass, freezer, lock, 3) == 3
 
@@ -3561,7 +3576,9 @@ async def test_an_entry_joining_leaves_a_scheduled_poll_where_it_is(
     await hass.async_block_till_done()
     reads_before = len(lock.service_calls["get_usercodes"])
 
-    await _set_up(hass, _entry_on_the_second_lock(None, disable_polling=False))
+    await _set_up(
+        hass, _entry_on_the_second_lock(None, disable_polling=False), builds=0
+    )
     freezer.tick(lock.usercode_scan_interval / 2 + timedelta(seconds=1))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
