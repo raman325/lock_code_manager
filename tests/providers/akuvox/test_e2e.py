@@ -4,11 +4,26 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+from freezegun.api import FrozenDateTimeFactory
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryDisabler
+from homeassistant.const import (
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    SERVICE_TURN_OFF,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+)
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
@@ -16,13 +31,24 @@ from custom_components.lock_code_manager.domain.credentials import (
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.providers._util import (
+    make_tagged_name,
+    parse_tag,
+)
 from custom_components.lock_code_manager.providers.akuvox import (
     AKUVOX_DOMAIN,
     AkuvoxLock,
 )
+from tests.common import (
+    async_advance_sync_ticks,
+    async_switch_slot,
+    lcm_issue_ids,
+    user_subentries,
+)
 from tests.providers.helpers import register_mock_service
 
-from .conftest import make_user
+from .conftest import AKUVOX_LCM_CONFIG_SLOTS, make_user
+from .fake_service import FakeAkuvoxDevice
 
 
 class TestFullSetupLifecycle:
@@ -247,3 +273,91 @@ class TestGetUsers:
 
         assert codes[1] is SlotCredential.empty()
         assert codes[2] is SlotCredential.empty()
+
+
+class TestOpenBugs:
+    """Open Akuvox bugs, each pinned by a strict xfail on its own assertion."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason=(
+            "open: the tag pass hands an unmanaged user to any slot an entry "
+            "lists, a disabled entry's included"
+        ),
+    )
+    async def test_a_homeowner_is_not_tagged_into_a_disabled_entry_s_slot(
+        self,
+        hass: HomeAssistant,
+        fake_akuvox_device: FakeAkuvoxDevice,
+        akuvox_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Slot 3 belongs to a disabled entry's user, so it is not free to adopt a user."""
+        fake_akuvox_device.add(make_tagged_name(1, "slot1"), "1234")
+        fake_akuvox_device.add(make_tagged_name(2, "slot2"), "5678")
+        mom = fake_akuvox_device.add("Mom", "9999")
+        MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [akuvox_lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {3: {CONF_NAME: "slot3", CONF_PIN: "5555", CONF_ENABLED: True}}
+            ),
+            unique_id="test_akuvox_disabled",
+            disabled_by=ConfigEntryDisabler.USER,
+        ).add_to_hass(hass)
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [akuvox_lock_entity.entity_id],
+                CONF_SLOTS: AKUVOX_LCM_CONFIG_SLOTS,
+            },
+            unique_id="test_akuvox_batch6",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        name = next(u["name"] for u in fake_akuvox_device.users if u["id"] == mom)
+        await hass.config_entries.async_unload(entry.entry_id)
+
+        assert parse_tag(name)[0] != 3
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason=(
+            "open: a delete the device acknowledges but ignores is sent again "
+            "every tick, never charged and never reported"
+        ),
+    )
+    async def test_a_delete_the_device_keeps_ignoring_is_reported(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_akuvox_device: FakeAkuvoxDevice,
+        akuvox_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A user turned off whose delete never sticks is suspended with a repair."""
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [akuvox_lock_entity.entity_id],
+                CONF_SLOTS: AKUVOX_LCM_CONFIG_SLOTS,
+            },
+            unique_id="test_akuvox_batch6",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 5)
+        if fake_akuvox_device.pin_of(make_tagged_name(1, "slot1")) != "1234":
+            pytest.fail("slot 1's user never reached the device")
+        fake_akuvox_device.ignore("delete_user")
+
+        await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
+        await async_advance_sync_ticks(hass, freezer, 30)
+        deletes = fake_akuvox_device.count("delete_user")
+        suspended = lcm_issue_ids(hass, "slot_suspended")
+        await hass.config_entries.async_unload(entry.entry_id)
+
+        assert deletes <= MAX_SYNC_ATTEMPTS + 1
+        assert suspended

@@ -471,6 +471,20 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     `commands` records every command answered.
   - `test_node_harness.py` self-tests each behavior, and end to end through a loaded entry.
 
+- `tests/providers/schlage/fake_service.py`: `FakeSchlageCloud`, the Schlage cloud's access codes
+  behind `schlage.get_codes`/`add_code`/`delete_code`, answered as Home Assistant core's Schlage
+  lock entity does (name or code already there refused with core's own message, a missing name
+  deleted as a success). `read_lag` makes refreshes answer the codes from before the last write,
+  as the cloud did in #1083; `time_out(service)` raises the raw `requests` `ReadTimeout` core
+  lets through. Fixture `fake_schlage_cloud` (async: it caches core's Schlage exception
+  translations, so errors read as they do in production).
+- `tests/providers/akuvox/fake_service.py`: `FakeAkuvoxDevice`, an Akuvox device's users behind
+  the `local_akuvox` integration's `list_users`/`add_user`/`modify_user`/`delete_user`, answered
+  as that integration does (PIN 4-8 digits, unknown or cloud-provisioned users refused, every
+  `pylocal-akuvox` `User` field listed; local users marked as A08S/E18C firmware marks them).
+  `ignore(service)` acknowledges a write without applying it. Fixture `fake_akuvox_device`.
+  Both fakes have self-tests in `test_fake_service.py`.
+
 ### Test philosophy
 
 **Mock at the boundary, not the code under test.** Let as much end-to-end code run as possible.

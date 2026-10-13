@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
+from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryDisabler
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+)
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
@@ -29,9 +37,17 @@ from custom_components.lock_code_manager.providers.schlage import (
     SCHLAGE_DOMAIN,
     SchlageLock,
 )
-from tests.common import user_subentries
+from tests.common import (
+    async_advance_clock,
+    async_advance_sync_ticks,
+    async_set_slot_pin,
+    in_sync_entity_id,
+    lcm_issue_ids,
+    user_subentries,
+)
 from tests.providers.helpers import register_mock_service
 from tests.providers.schlage.conftest import SCHLAGE_LCM_CONFIG_SLOTS
+from tests.providers.schlage.fake_service import FakeSchlageCloud
 
 
 class TestFullSetupLifecycle:
@@ -319,3 +335,131 @@ class TestOpenBugs:
             await hass.config_entries.async_unload(entry.entry_id)
 
         assert 3 not in tagged
+
+
+@contextmanager
+def _schlage_entry(
+    hass: HomeAssistant, lock_entity: er.RegistryEntry
+) -> Iterator[MockConfigEntry]:
+    """
+    Add an entry on the Schlage lock, slots 1 and 2.
+
+    The Schlage entry is a mock that never loads, so the integration is
+    reported connected for as long as the entry is in use, as the
+    ``lcm_config_entry`` fixture does.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [lock_entity.entity_id],
+            CONF_SLOTS: SCHLAGE_LCM_CONFIG_SLOTS,
+        },
+        unique_id="test_schlage_batch6",
+    )
+    entry.add_to_hass(hass)
+    with patch.object(SchlageLock, "async_is_integration_connected", return_value=True):
+        yield entry
+
+
+class TestCloud:
+    """The Schlage cloud's lag and timeouts (#1083)."""
+
+    async def test_codes_the_cloud_reads_back_late_are_written_once(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for #1083 (PRs #1089, #1090): a lagging read does not churn codes.
+
+        Read back before the cloud caught up, each code looked missing and
+        was deleted and added again every cycle.
+        """
+        fake_schlage_cloud.read_lag = 2
+        with _schlage_entry(hass, schlage_lock_entity) as entry:
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+            await async_advance_sync_ticks(hass, freezer, 10)
+            # A write is a delete of the name, then an add (one each per slot).
+            writes = len(fake_schlage_cloud.calls) - fake_schlage_cloud.count(
+                "get_codes"
+            )
+            await async_advance_sync_ticks(hass, freezer, 10)
+
+            pins = sorted(code for _name, code in fake_schlage_cloud.codes.values())
+            assert pins == sorted(
+                c[CONF_PIN] for c in SCHLAGE_LCM_CONFIG_SLOTS.values()
+            )
+            assert fake_schlage_cloud.count("add_code") == len(SCHLAGE_LCM_CONFIG_SLOTS)
+            assert (
+                len(fake_schlage_cloud.calls) - fake_schlage_cloud.count("get_codes")
+                == writes
+            )
+            for slot in SCHLAGE_LCM_CONFIG_SLOTS:
+                assert (
+                    hass.states.get(
+                        in_sync_entity_id(
+                            hass, entry, slot, schlage_lock_entity.entity_id
+                        )
+                    ).state
+                    == STATE_ON
+                )
+            await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_new_pin_racing_the_cloud_s_delete_is_not_a_failure(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for #1083 (PR #1090): "already exists" after a delete is not refused.
+
+        A new PIN is written as a delete of the slot's code, then an add. The
+        cloud still reads the deleted code back, so the add is refused for a
+        name that "already exists"; counted as a failed write, it suspended the
+        slot while the cloud caught up.
+        """
+        with _schlage_entry(hass, schlage_lock_entity) as entry:
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+            await async_advance_sync_ticks(hass, freezer, 5)
+            fake_schlage_cloud.read_lag = 3 * MAX_SYNC_ATTEMPTS
+
+            await async_set_slot_pin(hass, entry, 1, "4321")
+            await async_advance_sync_ticks(hass, freezer, 30)
+            # The refused add left the slot empty; the next poll sees that.
+            await async_advance_clock(hass, freezer, 6 * 60)
+            await async_advance_sync_ticks(hass, freezer, 5)
+
+            assert lcm_issue_ids(hass, "slot_suspended") == []
+            assert "4321" in (code for _n, code in fake_schlage_cloud.codes.values())
+            await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_cloud_timeout_on_a_write_is_retried_not_suspended(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Regression for #1083 (PR #1089): a cloud read timeout is a transient failure.
+
+        The raw ``ReadTimeout`` the Schlage service lets through suspended
+        the slot's sync.
+        """
+        fake_schlage_cloud.time_out("add_code", times=1)
+        with _schlage_entry(hass, schlage_lock_entity) as entry:
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+            await async_advance_sync_ticks(hass, freezer, 10)
+
+            assert lcm_issue_ids(hass, "slot_suspended") == []
+            assert sorted(
+                code for _n, code in fake_schlage_cloud.codes.values()
+            ) == sorted(c[CONF_PIN] for c in SCHLAGE_LCM_CONFIG_SLOTS.values())
+            await hass.config_entries.async_unload(entry.entry_id)

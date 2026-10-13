@@ -30,6 +30,7 @@ from custom_components.lock_code_manager.providers.akuvox import (
 from tests.providers.helpers import register_mock_service
 
 from ...common import user_subentries
+from .fake_service import FakeAkuvoxDevice
 
 LOCK_ENTITY_ID = "lock.local_akuvox_test_relay_a"
 
@@ -260,3 +261,18 @@ def e2e_akuvox_lock(
 ) -> AkuvoxLock:
     """Extract the AkuvoxLock from the LCM config entry."""
     return get_akuvox_lock(hass, e2e_lcm_config_entry, akuvox_lock_entity)
+
+
+@pytest.fixture
+def fake_akuvox_device(
+    hass: HomeAssistant, akuvox_lock_entity: er.RegistryEntry
+) -> FakeAkuvoxDevice:
+    """
+    Answer the Akuvox user services from a stateful device (``fake_service.py``).
+
+    Request it before an entry is set up; it replaces ``akuvox_mock_services``,
+    which answers with canned values and changes nothing when written to.
+    """
+    device = FakeAkuvoxDevice(hass, akuvox_lock_entity.entity_id)
+    device.install()
+    return device
