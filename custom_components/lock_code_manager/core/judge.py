@@ -18,14 +18,16 @@ The rules are the credential-model decisions:
 - A reading that disagrees with the target contradicts it at once: out of
   sync, and written again (decision 2). If the target was what Lock Code
   Manager last wrote, that write failed: the verdict names it
-  (``charge_for``, the time it returned), so the caller charges the breaker
-  once for it however often the address is judged.
+  (``charge_for``, its write id), so the caller charges the breaker once for
+  it however often the address is judged.
 - A code that is on the lock but disabled always contradicts (decision 5).
 - A code still there after a clear contradicts the clear: the lock is
   believed, and the clear sent again (decision 12).
 - Silence never contradicts and never confirms: the caller passes only the
   latest informative observation since the last write.
-- A tripped breaker suspends the address until its target changes.
+- A tripped breaker suspends the address until its target changes. A clear
+  that would not take may leave a working code on the door, and says so.
+- While a write to the address is out, nothing more is written to it.
 """
 
 from __future__ import annotations
@@ -73,8 +75,10 @@ class Written(StrEnum):
     TARGET = "target"
     # The last write was something else, and it returned.
     OTHER = "other"
-    # The last write raised, or has not returned.
-    UNSETTLED = "unsettled"
+    # The last write has not ended yet.
+    IN_FLIGHT = "in_flight"
+    # The last write raised.
+    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,8 +86,8 @@ class LastWrite:
     """How the last write to an address relates to its target, and when."""
 
     kind: Written
-    # When the write returned (or, unsettled, started); None if nothing written.
-    at: float | None = None
+    # The write's id; None if nothing has been written.
+    write_id: int | None = None
 
 
 NOTHING_WRITTEN = LastWrite(Written.NOTHING)
@@ -96,9 +100,9 @@ class Verdict:
     status: Status
     # What to write now, or None to leave the address alone.
     write: Desired | None = None
-    # A write of the target that has been contradicted, by when it returned:
-    # charge the breaker for it, once.
-    charge_for: float | None = None
+    # A write of the target that has been contradicted, by its id: charge the
+    # breaker for it, once.
+    charge_for: int | None = None
     # The repair a suspension raises.
     repair: Repair | None = None
 
@@ -109,13 +113,14 @@ def written(beliefs: BeliefRecord, address: Address, desired: Desired) -> LastWr
     if belief is None:
         return NOTHING_WRITTEN
     if isinstance(belief, Unknown):
-        return LastWrite(Written.UNSETTLED, belief.at)
+        kind = Written.FAILED if belief.failed else Written.IN_FLIGHT
+        return LastWrite(kind, belief.write_id)
     assert isinstance(belief, Wrote | Cleared)
     if isinstance(desired, WantPin):
         target = beliefs.holds(address, desired)
     else:
         target = isinstance(belief, Cleared)
-    return LastWrite(Written.TARGET if target else Written.OTHER, belief.at)
+    return LastWrite(Written.TARGET if target else Written.OTHER, belief.write_id)
 
 
 def contradicts(desired: Desired, observation: Observation) -> bool:
@@ -163,13 +168,18 @@ def judge(
     if desired is None:
         return Verdict(Status.NOT_OURS)
     if tripped:
-        repair = Repair.CODE_MAY_REMAIN if release else Repair.SLOT_SUSPENDED
+        clearing = release or isinstance(desired, WantEmpty)
+        repair = Repair.CODE_MAY_REMAIN if clearing else Repair.SLOT_SUSPENDED
         return Verdict(Status.SUSPENDED, repair=repair)
+    if last_write.kind is Written.IN_FLIGHT:
+        return Verdict(Status.OUT_OF_SYNC)
     if seen is not None and contradicts(desired, seen):
         return Verdict(
             Status.OUT_OF_SYNC,
             write=desired,
-            charge_for=last_write.at if last_write.kind is Written.TARGET else None,
+            charge_for=(
+                last_write.write_id if last_write.kind is Written.TARGET else None
+            ),
         )
     if last_write.kind is Written.TARGET:
         return Verdict(Status.IN_SYNC)

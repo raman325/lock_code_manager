@@ -50,8 +50,8 @@ READINGS = st.one_of(
     PINS.map(Holds),
 )
 DESIRED = st.one_of(st.just(WANT_EMPTY), PINS.map(WantPin))
-WRITTEN = st.builds(LastWrite, st.sampled_from(list(Written)), st.just(2.0)).map(
-    lambda w: LastWrite(Written.NOTHING) if w.kind is Written.NOTHING else w
+WRITTEN = st.sampled_from(list(Written)).map(
+    lambda kind: LastWrite(kind, None if kind is Written.NOTHING else 1)
 )
 TIMES = st.floats(min_value=0, max_value=1_000, allow_nan=False)
 
@@ -89,24 +89,34 @@ def test_silence_never_changes_a_verdict(
 
 @given(
     reading=READINGS,
+    before=st.one_of(st.none(), READINGS),
     after=st.one_of(st.none(), READINGS),
+    returned=st.booleans(),
     write_at=TIMES,
     gap=st.floats(min_value=0.001, max_value=100, allow_nan=False),
     desired=DESIRED,
     last_write=WRITTEN,
 )
 def test_an_observation_from_before_the_write_changes_nothing(
-    reading, after, write_at, gap, desired, last_write
+    reading, before, after, returned, write_at, gap, desired, last_write
 ) -> None:
-    """Property 2: a reading older than the last write is superseded."""
+    """
+    Property 2: a reading said before the last write started is superseded.
+
+    Whether or not a read had completed before the write, with or without a
+    reading after it, and whether the write returned or raised.
+    """
     with_it = ObservationLog()
     without = ObservationLog()
     for log in (with_it, without):
-        log.observe(SLOT, NOTHING, write_at - gap - 1)
+        if before is not None:
+            log.observe(SLOT, before, write_at - 2 * gap)
         log.mark_write(SLOT, write_at)
+        if returned:
+            log.mark_returned(SLOT, write_at + gap)
         if after is not None:
-            log.observe(SLOT, after, write_at + gap)
-    # Arriving after everything else, but said before the write.
+            log.observe(SLOT, after, write_at + 2 * gap)
+    # Arriving after everything else, but said before the write started.
     with_it.observe(SLOT, reading, write_at - gap)
 
     assert _verdict(with_it, desired, last_write, False) == _verdict(
@@ -130,21 +140,28 @@ def test_a_disabled_code_is_never_in_sync(desired, last_write, ever_read) -> Non
 
 
 @given(
-    times=st.lists(TIMES, min_size=1, max_size=10).map(sorted),
+    times=st.lists(TIMES, min_size=1, max_size=10),
     later=st.floats(min_value=0, max_value=100_000, allow_nan=False),
 )
 def test_a_breaker_trips_on_three_inside_the_window_and_stays_tripped(
     times, later
 ) -> None:
-    """Property 6."""
+    """
+    Property 6, with charges in arrival order, late ones included.
+
+    The model: after each charge, the charges so far that fall inside the
+    window back from the latest of them; three of those trip it for good.
+    """
     breaker = SlotBreaker(window=300.0, limit=3)
     should_trip = False
     for index, at in enumerate(times):
         breaker.charge(at)
-        recent = [t for t in times[: index + 1] if t > at - 300.0]
+        so_far = times[: index + 1]
+        latest = max(so_far)
+        recent = [t for t in so_far if t > latest - 300.0]
         should_trip = should_trip or len(recent) >= 3
         assert breaker.tripped is should_trip
-    breaker.charge(times[-1] + later)
+    breaker.charge(max(times) + later)
     assert breaker.tripped or not should_trip
     breaker.reset()
     assert not breaker.tripped
@@ -157,12 +174,13 @@ def test_a_write_that_raised_never_leaves_a_belief(writes) -> None:
     """Property 7: each write is invalidated first and recorded only if it returned."""
     beliefs = BeliefRecord(b"salt")
     for at, (pin, returned) in enumerate(writes):
-        beliefs.invalidate(SLOT, float(at))
+        write = beliefs.invalidate(SLOT, float(at))
         if returned:
-            beliefs.record_pin(SLOT, pin, Strength.APPLIED, float(at) + 0.5)
+            beliefs.record_pin(SLOT, write, pin, Strength.APPLIED, float(at) + 0.5)
         else:
+            beliefs.record_failed(SLOT, write)
             assert isinstance(beliefs.get(SLOT), Unknown)
-            assert written(beliefs, SLOT, WantPin(pin)).kind is Written.UNSETTLED
+            assert written(beliefs, SLOT, WantPin(pin)).kind is Written.FAILED
 
 
 @given(reading=READINGS, first=TIMES, gap=st.floats(min_value=0, max_value=100))

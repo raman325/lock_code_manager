@@ -98,6 +98,37 @@ def test_a_probe_answering_brings_reads_back_but_not_writes() -> None:
     assert link.down_for == {Operation.WRITE}
 
 
+def test_a_write_getting_through_brings_everything_back() -> None:
+    """A write answering shows the lock can be read as well as written."""
+    link = LinkState(trip_after=3)
+    for at in range(3):
+        link.outcome(Operation.READ, OutcomeKind.DISCONNECTED, float(at))
+        link.outcome(Operation.WRITE, OutcomeKind.DISCONNECTED, float(at))
+    link.outcome(Operation.WRITE, OutcomeKind.OK, 10.0)
+
+    assert link.reachable
+
+
+def test_a_lock_answering_reads_is_not_offline_while_its_writes_fail() -> None:
+    """Down for writes is not offline: the lock answers (#1644)."""
+    link = LinkState(trip_after=3, alert_after=4)
+    for at in range(10):
+        link.outcome(Operation.READ, OutcomeKind.OK, float(at))
+        link.outcome(Operation.WRITE, OutcomeKind.DISCONNECTED, float(at))
+
+    assert link.down_for == {Operation.WRITE}
+    assert not link.offline_alert
+
+
+def test_backoff_survives_a_lock_dead_for_weeks() -> None:
+    """Thousands of disconnects back off at the ceiling, never overflow."""
+    link = LinkState(trip_after=3, backoff_max=1800.0)
+    for at in range(2000):
+        link.outcome(Operation.READ, OutcomeKind.DISCONNECTED, float(at))
+
+    assert link.next_attempt_in(Operation.READ, 1999.0) == 1800.0
+
+
 def test_each_kind_backs_off_from_its_own_failures() -> None:
     """A stray read failure does not push a down write's retry back."""
     link = LinkState(trip_after=3, backoff_min=60.0)

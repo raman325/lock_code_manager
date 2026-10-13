@@ -144,9 +144,9 @@ def fingerprint(pin: str, salt: bytes) -> str:
     return hashlib.blake2b(pin.encode(), key=salt, digest_size=16).hexdigest()
 
 
-# What Lock Code Manager last wrote to an address. Set to Unknown before every
-# write and recorded only when the write returns, so a write that raised
-# leaves no belief behind.
+# What Lock Code Manager last wrote to an address. Each write has an id, given
+# when it starts: the address is Unknown until that write returns or fails,
+# and only that write may settle it. A write that raised leaves no belief.
 
 
 class Belief:
@@ -157,15 +157,23 @@ class Belief:
 
 @dataclass(frozen=True, slots=True)
 class Unknown(Belief):
-    """A write started at ``at`` and has not returned, or raised."""
+    """
+    Write ``write_id`` started at ``at``; ``failed`` once it raised.
 
+    While not failed, the write is still out: nothing else should be written
+    to the address until it ends.
+    """
+
+    write_id: int
     at: float
+    failed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class Wrote(Belief):
-    """A PIN with this fingerprint was written, returning at ``at``."""
+    """Write ``write_id`` of a PIN with this fingerprint returned at ``at``."""
 
+    write_id: int
     fingerprint: str
     strength: Strength
     at: float
@@ -173,7 +181,8 @@ class Wrote(Belief):
 
 @dataclass(frozen=True, slots=True)
 class Cleared(Belief):
-    """The address was cleared, returning at ``at``."""
+    """Write ``write_id``, a clear, returned at ``at``."""
 
+    write_id: int
     strength: Strength
     at: float

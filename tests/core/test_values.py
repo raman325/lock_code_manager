@@ -19,7 +19,7 @@ def test_no_pin_reaches_a_repr() -> None:
     for value in (
         Holds(pin),
         WantPin(pin),
-        Wrote(fingerprint(pin, salt), Strength.APPLIED, 1.0),
+        Wrote(1, fingerprint(pin, salt), Strength.APPLIED, 1.0),
         pin_at(3),
     ):
         assert pin not in repr(value)

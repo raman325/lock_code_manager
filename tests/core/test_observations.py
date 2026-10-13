@@ -73,3 +73,35 @@ def test_silence_does_not_shut_out_a_later_real_reading() -> None:
     assert log.observe(SLOT, EMPTY, at=3.0)
     assert log.informative_since_write(SLOT) == Observation(EMPTY, 3.0)
     assert log.latest(SLOT) == Observation(NOTHING, 5.0)
+
+
+def test_a_report_stamped_while_the_write_was_out_is_superseded() -> None:
+    """Until a write returns, the lock may still report the value it replaced."""
+    log = ObservationLog()
+    log.mark_write(SLOT, at=10.0)
+    log.observe(SLOT, EMPTY, at=11.0)
+    log.mark_returned(SLOT, at=12.0)
+
+    assert log.informative_since_write(SLOT) is None
+    log.observe(SLOT, Holds("1234"), at=13.0)
+    assert log.informative_since_write(SLOT) == Observation(Holds("1234"), 13.0)
+
+
+def test_a_reading_from_before_a_write_arriving_late_is_not_a_read() -> None:
+    """Whether a read completed is fixed when a write starts, and moved on only after."""
+    log = ObservationLog()
+    log.mark_write(SLOT, at=10.0)
+    log.observe(SLOT, EMPTY, at=5.0)
+
+    assert not log.ever_read(SLOT)
+    log.observe(SLOT, NOTHING, at=11.0)
+    assert log.ever_read(SLOT)
+
+
+def test_a_read_before_the_write_still_counts_after_it() -> None:
+    """A read that completed before a write started stays completed."""
+    log = ObservationLog()
+    log.observe(SLOT, EMPTY, at=5.0)
+    log.mark_write(SLOT, at=10.0)
+
+    assert log.ever_read(SLOT)

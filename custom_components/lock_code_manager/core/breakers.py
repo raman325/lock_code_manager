@@ -83,9 +83,9 @@ class LinkState:
     Each kind of operation keeps its own run of consecutive disconnects, and
     an answer of any kind ends only that kind's run. A lock that answers
     every read while every write disconnects is down for writes (#1644): a
-    read succeeding says nothing about whether writes get through. A probe or
-    a read answering ends both of their runs, since either shows the lock can
-    be read; only a write getting through ends the write run. Each kind whose
+    read succeeding says nothing about whether writes get through. Any answer
+    ends the read and probe runs, since it shows the lock can be read; only a
+    write getting through ends the write run. Each kind whose
     run is ``trip_after`` or longer is down, and is retried on its own
     backoff, doubling from ``backoff_min`` to ``backoff_max``.
 
@@ -118,15 +118,12 @@ class LinkState:
             self._last_failure[operation] = now
             return
         self._reached = True
-        # A lock that answers a probe or a read can be read; only a write
-        # getting through shows that writes do.
-        ended = (
-            (Operation.WRITE,)
-            if operation is Operation.WRITE
-            else (Operation.READ, Operation.PROBE)
-        )
-        for done in ended:
-            self._runs[done] = 0
+        # Any answer shows the lock can be read; only a write getting through
+        # shows that writes do.
+        self._runs[Operation.READ] = 0
+        self._runs[Operation.PROBE] = 0
+        if operation is Operation.WRITE:
+            self._runs[Operation.WRITE] = 0
 
     @property
     def reached(self) -> bool:
@@ -150,12 +147,19 @@ class LinkState:
         run = self._runs[operation]
         if run < self._trip_after:
             return 0.0
-        delay = min(
-            self._backoff_min * 2 ** (run - self._trip_after), self._backoff_max
-        )
+        # Capped before raising to a power: a dead lock retried for weeks would
+        # otherwise overflow a float.
+        doublings = min(run - self._trip_after, 32)
+        delay = min(self._backoff_min * 2**doublings, self._backoff_max)
         return max(0.0, self._last_failure[operation] + delay - now)
 
     @property
     def offline_alert(self) -> bool:
-        """Return whether to tell the user the lock is offline."""
-        return self._reached and max(self._runs.values()) >= self._alert_after
+        """
+        Return whether to tell the user the lock is offline.
+
+        Only when nothing answers: a lock answering reads while its writes
+        disconnect is down for writes, not offline.
+        """
+        unanswered = max(self._runs[Operation.READ], self._runs[Operation.PROBE])
+        return self._reached and unanswered >= self._alert_after

@@ -7,7 +7,9 @@ writes Lock Code Manager has made since:
 
 - An observation older than the address's last write is superseded: it says
   what the address held before the write, so it neither confirms nor
-  contradicts it.
+  contradicts it. A write is "done" when it returns: until then the lock may
+  still report the old value, so anything stamped before the return is
+  superseded too. A write that raised is measured from its start.
 - Silence (``Nothing``) never becomes the address's informative observation,
   so it never contradicts a write and never erases a contradiction.
 - A fresh observation of the same value is still news: its time moves on
@@ -26,7 +28,12 @@ class ObservationLog:
         """Start with nothing observed and nothing written."""
         self._latest: dict[Address, Observation] = {}
         self._informative: dict[Address, Observation] = {}
-        self._write_started: dict[Address, float] = {}
+        # Supersession cutoff: the last write's return, or its start until it
+        # returns (and for good, if it raised).
+        self._cutoff: dict[Address, float] = {}
+        # Whether a read had completed when the last write started: a
+        # reading from before the write arriving late must not change it.
+        self._read_by_write: dict[Address, bool] = {}
 
     def observe(self, address: Address, reading: Reading, at: float) -> bool:
         """
@@ -54,17 +61,22 @@ class ObservationLog:
 
     def mark_write(self, address: Address, at: float) -> None:
         """Record that a write to ``address`` started at ``at``."""
-        self._write_started[address] = at
+        self._read_by_write[address] = self.ever_read(address)
+        self._cutoff[address] = at
+
+    def mark_returned(self, address: Address, at: float) -> None:
+        """Record that the last write to ``address`` returned at ``at``."""
+        self._cutoff[address] = max(self._cutoff.get(address, at), at)
 
     def latest(self, address: Address) -> Observation | None:
         """Return the last thing the lock said about ``address``, if anything."""
         return self._latest.get(address)
 
     def is_superseded(self, address: Address) -> bool:
-        """Return whether the last observation predates the last write."""
+        """Return whether the last observation predates the last write's end."""
         latest = self._latest.get(address)
-        written = self._write_started.get(address)
-        return latest is not None and written is not None and latest.at < written
+        cutoff = self._cutoff.get(address)
+        return latest is not None and cutoff is not None and latest.at < cutoff
 
     def informative_since_write(self, address: Address) -> Observation | None:
         """
@@ -76,20 +88,32 @@ class ObservationLog:
         observation = self._informative.get(address)
         if observation is None:
             return None
-        written = self._write_started.get(address)
-        if written is not None and observation.at < written:
+        cutoff = self._cutoff.get(address)
+        if cutoff is not None and observation.at < cutoff:
             return None
         return observation
 
     def ever_read(self, address: Address) -> bool:
-        """Return whether the lock has said anything at all about ``address``."""
-        return address in self._latest
+        """
+        Return whether a read of ``address`` has completed, silence included.
+
+        Counted as of the last write's start, plus anything said since: a
+        reading from before the write that arrives after it changes nothing.
+        """
+        latest = self._latest.get(address)
+        if latest is None:
+            return False
+        cutoff = self._cutoff.get(address)
+        if cutoff is None:
+            return True
+        return self._read_by_write.get(address, False) or latest.at >= cutoff
 
     def forget(self, address: Address) -> None:
         """Drop everything known about ``address``."""
         self._latest.pop(address, None)
         self._informative.pop(address, None)
-        self._write_started.pop(address, None)
+        self._cutoff.pop(address, None)
+        self._read_by_write.pop(address, None)
 
     def addresses(self) -> frozenset[Address]:
         """Return every address the lock has said something about."""
