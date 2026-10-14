@@ -595,6 +595,14 @@ class BaseLock:
         """Return integration domain."""
         raise NotImplementedError()
 
+    # The core reads through ``async_hard_refresh_codes`` instead of
+    # ``async_get_usercodes`` when only it asks the lock now: a read the core
+    # checks a write against must never come from a cache (#873, #1090).
+    fresh_read_is_hard_refresh: ClassVar[bool] = False
+    # Slots the last read asked about that the lock said nothing about, for
+    # providers that can tell: the core reads them as silent, not unreadable.
+    last_silent_slots: frozenset[int] = field(default=frozenset(), init=False)
+
     @property
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes."""
@@ -788,7 +796,11 @@ class BaseLock:
         )
 
     @final
-    async def async_setup_internal(self, config_entry: ConfigEntry) -> None:
+    async def async_setup_internal(
+        self,
+        config_entry: ConfigEntry,
+        coordinator: LockUsercodeUpdateCoordinator | None = None,
+    ) -> None:
         """
         Set up lock and coordinator, signaling completion to waiters.
 
@@ -863,6 +875,10 @@ class BaseLock:
                     self.operation_timeout_seconds,
                 )
             except (LockDisconnected, LockOperationFailed) as err:
+                # Re-armed like the reconnect path does: an integration that
+                # stays loaded (a Z-Wave node dead at boot) never brings the
+                # LOADED transition this would otherwise wait for.
+                self._setup_deferred = True
                 LOGGER.warning(
                     "Provider setup failed for %s: %s. Coordinator will be "
                     "created but data will be unavailable until the lock "
@@ -892,7 +908,9 @@ class BaseLock:
                     f"Refresh coordinator for {lock_entity_id}",
                 )
             else:
-                self.coordinator = LockUsercodeUpdateCoordinator(self.hass, self)
+                self.coordinator = coordinator or LockUsercodeUpdateCoordinator(
+                    self.hass, self
+                )
                 # Bounded, unlike the write path. Setup runs while Home
                 # Assistant holds this entry's lock, so a read that never
                 # returns parks it in `setup_in_progress` and takes reload and

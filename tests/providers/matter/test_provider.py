@@ -541,6 +541,10 @@ async def test_setup_internal_caps_service_validation_error(
     with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
         await matter_lock.async_setup_internal(simple_lcm_config_entry)
     assert matter_lock._capabilities_cache is None
+    # A failed setup is retried: let it go before the test ends.
+    await matter_lock.async_unload(False)
+    assert matter_lock.coordinator is not None
+    await matter_lock.coordinator.async_shutdown()
 
 
 async def test_setup_internal_caps_communication_error(
@@ -556,6 +560,10 @@ async def test_setup_internal_caps_communication_error(
         # coordinator can be created and retry once the lock comes online.
         await matter_lock.async_setup_internal(simple_lcm_config_entry)
     assert matter_lock._capabilities_cache is None
+    # A failed setup is retried: let it go before the test ends.
+    await matter_lock.async_unload(False)
+    assert matter_lock.coordinator is not None
+    await matter_lock.coordinator.async_shutdown()
 
 
 async def test_require_client_and_node_no_client(

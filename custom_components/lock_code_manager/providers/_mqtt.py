@@ -299,6 +299,9 @@ class BaseMqttLock(BaseLock):
             return []
 
         reads = {slot_num: await read_slot(slot_num) for slot_num in sorted(code_slots)}
+        self.last_silent_slots = frozenset(
+            s for s, state in reads.items() if state is None
+        )
         if any(state is not None for state in reads.values()):
             self._reads_have_succeeded = True
         elif len(reads) > 1 and self._reads_have_succeeded:
