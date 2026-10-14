@@ -102,6 +102,9 @@ class FakeLock:
         return readings
 
     async def _read(self, slots: Collection[int]) -> dict[int, Reading]:
+        if not slots:
+            # Reading nothing asks the lock nothing.
+            return {}
         if self.unreachable:
             raise OSError("host unreachable")
         if self.ignored and (
@@ -1975,3 +1978,255 @@ async def test_a_refusal_before_sending_says_nothing_about_the_lock(
 
     assert rig.status(2)[0] is Status.SUSPENDED
     assert rig.worker.slots[1].tries == 0
+
+
+# Round 10 ------------------------------------------------------------------------
+
+
+async def test_an_unsent_refusal_on_a_read_does_not_loop(rig_factory) -> None:
+    """The integration refusing a read is the slot's: held, never synced for ever."""
+    lock = FakeLock({1: "1111", 2: "2222"})
+    rig = await _started(rig_factory(lock), {1: "1111", 2: "2222"})
+    original = lock.read
+
+    async def _refused(slots):
+        if 3 in slots:
+            raise LockError(ErrorKind.SLOT_REFUSED, sent=False)
+        return await original(slots)
+
+    lock.read = _refused  # type: ignore[method-assign]
+    rig.worker.want(3, "3333")
+    await rig.settle()
+
+    assert rig.status(3)[0] is Status.SUSPENDED
+
+
+async def test_an_unsent_refusal_on_a_probe_does_not_end_the_probing(
+    rig_factory,
+) -> None:
+    """The integration refusing a probe's read is no answer: probing goes on."""
+    lock = FakeLock({1: "1111", 2: "2222"})
+    rig = await _started(rig_factory(lock), {1: "1111", 2: "2222"})
+    lock.unreachable = True
+    for _ in range(BACKOFF_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+    assert not rig.worker.reachable
+    original = lock.read
+
+    async def _refused(slots):
+        if lock.unreachable:
+            raise OSError("down")
+        if 2 in slots:
+            raise LockError(ErrorKind.SLOT_REFUSED, sent=False)
+        return await original(slots)
+
+    lock.read = _refused  # type: ignore[method-assign]
+    lock.unreachable = False
+    rig.worker.want(1, "5555")
+    await _run(rig, lambda: rig.status(1)[0] is Status.IN_SYNC, 50)
+
+    # Guarantee: in sync, held, or offline. Observed: out of sync, no repair,
+    # lock "not answering" (not offline) for ever.
+    assert rig.status(1)[0] in (Status.IN_SYNC, Status.SUSPENDED) or rig.worker.offline
+
+
+async def test_a_provider_raising_cancelled_does_not_kill_the_worker(
+    rig_factory,
+) -> None:
+    """A provider's own cancelled future is no answer, not the worker stopping."""
+    lock = FakeLock({1: "1111"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    original = lock.write
+
+    async def _cancelled(slot, pin):
+        lock.write = original  # type: ignore[method-assign]
+        fut = asyncio.get_running_loop().create_future()
+        fut.cancel()
+        await fut
+
+    lock.write = _cancelled  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await rig.settle()
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+@pytest.mark.parametrize("answer_lost", [False, True], ids=["answered", "answer lost"])
+async def test_a_push_during_a_retargeted_write_does_not_hide_the_pin(
+    rig_factory, answer_lost
+) -> None:
+    """A report taken in during a write that landed for an old target is older than it."""
+    lock = FakeLock({})
+    rig = await _started(rig_factory(lock), {1: None})
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+    def _meanwhile():
+        if lock.writes == [(1, "1234")]:
+            # The lock reports the slot as it was; then the user turns it off.
+            rig.worker.push(1, Seen.EMPTY)
+            rig.worker.want(1, None)
+
+    lock.during_write.append(_meanwhile)
+    if answer_lost:
+        original = lock.write
+
+        async def _lost(slot, pin):
+            await original(slot, pin)
+            if pin == "1234":
+                raise LockError(ErrorKind.NO_ANSWER)
+
+        lock.write = _lost  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    # The old write landed: either it is cleared, or status must not say in sync.
+    assert not (lock.codes == {1: "1234"} and rig.status(1)[0] is Status.IN_SYNC)
+
+
+async def test_an_owed_try_paid_by_an_agreeing_read_does_not_hold(rig_factory) -> None:
+    """A read that pays an owed try and shows the slot in sync charges nothing."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    original = lock.write
+    calls = 0
+
+    async def _write(slot, pin):
+        nonlocal calls
+        calls += 1
+        if calls <= 2:  # answered, not applied: two real tries
+            if calls == 2:
+                # A poll answers between this sync and the next.
+                asyncio.ensure_future(rig.worker.read([1]))
+            raise LockError(ErrorKind.TRANSIENT)
+        lock.write = original  # type: ignore[method-assign]
+        lock.codes[slot] = pin  # the write lands ...
+        lock.unreachable = True  # ... and the answer is lost
+        raise OSError("gone")
+
+    lock.write = _write  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: not rig.worker.reachable, 30)
+    assert rig.status(1) == (Status.OUT_OF_SYNC, None)
+    assert rig.worker.slots[1].tries == 2 and rig.worker._owed  # precondition
+    lock.unreachable = False
+    # The probe reads slot 1: the lock answers that it holds 1234.
+    await _run(rig, lambda: rig.worker.reachable, 30)
+    await rig.settle()
+
+    assert lock.codes == {1: "1234"}
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert rig.worker.slots[1].tries == 0
+
+
+async def test_an_owed_try_is_not_charged_to_a_new_slot(rig_factory) -> None:
+    """A slot forgotten and claimed again does not inherit the old one's owed try."""
+    lock = FakeLock({1: "0000", 2: "2222"})
+    rig = await _started(rig_factory(lock), {2: "2222"})
+    lock.unreachable = True
+    rig.worker.want(1, "1111")  # a new Slot: epoch 0
+    await _run(rig, lambda: not rig.worker.reachable)
+    rig.worker.forget(1)
+    rig.worker.want(1, "5555")  # another new Slot: epoch 0 again
+    lock.unreachable = False
+    lock.ignore_writes = True  # the new target fails for real
+    await _run(rig, lambda: rig.status(1)[0] is Status.SUSPENDED)
+
+    assert rig.status(1)[0] is Status.SUSPENDED
+    assert lock.writes.count((1, "5555")) == 3, lock.writes
+
+
+async def test_held_ignored_slots_do_not_take_a_polled_lock_offline(
+    rig_factory,
+) -> None:
+    """Probes read slots not held: held slots the lock ignores never take it offline."""
+    good = {1: "1111"}
+    bad = {n: str(n) * 4 for n in range(2, 13)}  # 11 ignored slots
+    lock = FakeLock({**good}, strict=True)
+    rig = await _started(rig_factory(lock), good)
+    lock.ignored = set(bad)
+    for n, pin in bad.items():
+        rig.worker.want(n, pin)
+    await _run(
+        rig,
+        lambda: all(rig.status(n)[0] is Status.SUSPENDED for n in bad),
+        500,
+    )
+    assert all(rig.status(n)[0] is Status.SUSPENDED for n in bad)
+    went_offline = was = False
+    flips = 0
+    for _ in range(200):
+        try:
+            await rig.worker.read()
+        except LockError:
+            pass
+        await rig.settle()
+        await asyncio.sleep(0)
+        flips += rig.worker.offline and not was
+        was = rig.worker.offline
+        went_offline |= rig.worker.offline
+    assert not went_offline, f"offline {flips} separate times in 200 polls"
+
+
+async def test_stop_does_not_hang_on_a_provider_that_swallows_cancel(
+    rig_factory,
+) -> None:
+    """A provider that eats the cancel is left behind: stop returns."""
+    lock = FakeLock({1: "1111"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    entered, let_go = asyncio.Event(), asyncio.Event()
+
+    async def _stubborn(slot, pin):
+        entered.set()
+        while not let_go.is_set():
+            try:
+                await let_go.wait()
+            except asyncio.CancelledError:
+                pass  # a provider retry loop that eats cancellation
+
+    lock.write = _stubborn  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await entered.wait()
+    stop = asyncio.ensure_future(rig.worker.stop(grace=0.1))
+    done, _ = await asyncio.wait({stop}, timeout=2)  # real seconds
+    let_go.set()
+    await stop
+    assert done, "stop() still waiting 2 s after a 0.1 s grace"
+
+
+@pytest.mark.parametrize("transient", [0, 1], ids=["written", "answered error"])
+async def test_any_answer_pays_what_is_owed(rig_factory, transient) -> None:
+    """A write the lock answers -- taken or not -- proves it is there."""
+    lock = FakeLock({1: "1111", 2: "2222"})
+    rig = await _started(rig_factory(lock), {1: "1111", 2: "2222"})
+    lock.ignored = {1}
+    seen: list[int] = []
+
+    def _note() -> None:
+        # Slot 2's read-back: after its write's answer, before the read's.
+        lock.after_read.clear()
+        seen.append(rig.worker.slots[1].tries)
+
+    lock.transient = transient
+    lock.after_read.append(_note)
+    # Slot 1's sync goes unanswered and is owed; slot 2's write is answered.
+    rig.worker.want(1, "1234")
+    rig.worker.want(2, "5678")
+    await rig.settle()
+
+    assert seen == [1]
+
+
+async def test_a_probe_with_every_slot_held_still_asks_the_lock(rig_factory) -> None:
+    """Reading nothing asks the lock nothing: a dead lock is not taken for back."""
+    lock = FakeLock({1: "1111"}, refuse_value={"9999"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    rig.worker.want(1, "9999")
+    await rig.settle()
+    assert rig.status(1)[1] is Repair.SLOT_DISABLED
+    lock.unreachable = True
+    for _ in range(BACKOFF_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+    await _run(rig, lambda: rig.worker.reachable, 30)
+
+    assert not rig.worker.reachable

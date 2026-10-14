@@ -144,7 +144,7 @@ class LockWorker:
         # Slots whose sync failed with nothing answering, by epoch: charged
         # when the lock next answers, as nothing else tells an outage from a
         # slot the lock ignores.
-        self._owed: dict[int, int] = {}
+        self._owed: dict[int, tuple[Slot, int]] = {}
         self._probes = 0
         self._no_answers = 0
         self._down_until: float | None = None
@@ -256,7 +256,8 @@ class LockWorker:
                         await asyncio.shield(self._task)
                 except TimeoutError:
                     self._task.cancel()
-                    await asyncio.gather(self._task, return_exceptions=True)
+                    # A provider that eats the cancel is left behind, not awaited.
+                    await asyncio.wait({self._task}, timeout=grace)
             if self._retry is not None:
                 self._retry.cancel()
                 await asyncio.gather(self._retry, return_exceptions=True)
@@ -288,7 +289,11 @@ class LockWorker:
     # The loop ------------------------------------------------------------------
 
     async def _run(self) -> None:
-        while (job := await self._queue.get()) is not None:
+        while True:
+            if self._stopping and self._queue.empty():
+                return  # it ate stop's cancel; nothing is left to do
+            if (job := await self._queue.get()) is None:
+                break
             try:
                 await self._do(job)
             except LockError as err:
@@ -371,7 +376,7 @@ class LockWorker:
             elif self._answers > answers:
                 self._charge(number, slot)
             elif number not in self._charged:
-                self._owed[number] = epoch
+                self._owed[number] = (slot, epoch)
         if (
             slot.release
             and slot.status(self.salt) is Status.IN_SYNC
@@ -412,6 +417,7 @@ class LockWorker:
         except LockError as err:
             if not current():
                 slot.seen = None
+                self._written[number] = self._next()
                 return
             if err.kind is ErrorKind.ALREADY_SO:
                 slot.wrote_want(self.salt)
@@ -426,6 +432,7 @@ class LockWorker:
         else:
             if not current():
                 slot.seen = None
+                self._written[number] = self._next()
                 return
             slot.wrote_want(self.salt)
         if self._down_until is None:
@@ -446,7 +453,10 @@ class LockWorker:
         read was sent; one taken in while it was out may be newer, and is
         kept. A slot the read left out says nothing, and drops no report.
         """
-        readings = dict(await self._exchange(lambda: self.port.read(numbers)))
+        readings = dict(
+            await self._exchange(lambda: self.port.read(numbers), pay=False)
+        )
+        due = self._due()
         for number in numbers:
             if number in readings:
                 self._written[number] = self._sent
@@ -455,27 +465,29 @@ class LockWorker:
                 slot.observe(reading, self.salt, self.clock())
                 if follow:
                     self._again(number)
+        self._pay(due)
         return readings
 
     def _again(self, number: int) -> None:
         """
         Queue another sync of ``number`` if it still needs one.
 
-        Every sync that does not end in sync is a try against the slot, or
-        the lock's: backing off, or reported unreachable. So this ends in
-        sync, held, or with the lock on its way to the offline repair --
-        never in a loop. (A job queued while backing off fails at once, and
-        an answer queues every slot again.)
+        Every sync that does not end in sync is charged to the slot, or owed
+        until the lock next answers -- and with no answer, the lock backs off
+        on its way to the offline repair. So this ends in sync, held, or with
+        the lock offline -- never in a loop. (A job queued while backing off
+        fails at once, and an answer queues every slot again.)
         """
         slot = self.slots.get(number)
-        if slot is not None and slot.status(self.salt) in (
-            Status.UNKNOWN,
-            Status.OUT_OF_SYNC,
-        ):
+        if slot is not None and self._failed(slot):
             self.request_sync((number,))
 
     async def _exchange(
-        self, call: Callable[[], Awaitable[Any]], *, mark: int | None = None
+        self,
+        call: Callable[[], Awaitable[Any]],
+        *,
+        mark: int | None = None,
+        pay: bool = True,
     ) -> Any:
         """
         Run one exchange after the gap, within the budget.
@@ -508,7 +520,18 @@ class LockWorker:
                 self._no_answer()
             elif err.sent:
                 self._answer()
+                self._pay()
+            else:
+                # The integration refusing: the slot's, like a bug.
+                self._bug = True
+                if self._down_until is not None:
+                    self._no_answer()
             raise
+        except asyncio.CancelledError:
+            if (task := asyncio.current_task()) is not None and task.cancelling():
+                raise
+            self._no_answer()
+            raise LockError(ErrorKind.NO_ANSWER, message="cancelled") from None
         except OSError as err:  # timeouts and dropped connections included
             self._no_answer()
             raise LockError(
@@ -523,6 +546,8 @@ class LockWorker:
         finally:
             self._last_exchange = self.clock()
         self._answer()
+        if pay:
+            self._pay()
         return result
 
     def _answer(self) -> None:
@@ -530,18 +555,26 @@ class LockWorker:
         self._answered = True
         self._answers += 1
         self._charged.clear()
-        # The lock is there: syncs that failed with nothing answering were
-        # the slots', not an outage's.
-        owed, self._owed = self._owed, {}
-        for number, epoch in owed.items():
-            slot = self.slots.get(number)
-            if slot is not None and slot.epoch == epoch and self._failed(slot):
-                self._charge(number, slot)
         self._no_answers = 0
         self._down_until = None
         if was_down:
             # Back: every slot dropped while backing off is synced again.
             self.request_sync()
+
+    def _due(self) -> list[tuple[int, Slot]]:
+        """Take the owed tries: the lock answered, so they were the slots'."""
+        owed, self._owed = self._owed, {}
+        return [
+            (number, owing)
+            for number, (owing, epoch) in owed.items()
+            if owing.epoch == epoch and self._failed(owing)
+        ]
+
+    def _pay(self, due: list[tuple[int, Slot]] | None = None) -> None:
+        """Charge owed tries still failing once the answer's reading is in."""
+        for number, slot in self._due() if due is None else due:
+            if self._failed(slot):
+                self._charge(number, slot)
 
     def _no_answer(self) -> None:
         self._no_answers += 1
@@ -564,12 +597,16 @@ class LockWorker:
         """
         After the backoff, read one slot; an answer brings the lock back.
 
-        Each probe reads the next slot in turn, so a slot the lock ignores
-        cannot keep it down for long; a provider bug on one is no answer.
+        Each probe reads the next slot not held in turn (any slot, if all
+        are), so a slot the lock ignores cannot keep it down for long; a
+        provider bug on one is no answer.
         """
         await self.sleep(delay)
         slots: tuple[int, ...] = ()
-        if numbers := sorted(self.slots):
+        if numbers := (
+            sorted(n for n, slot in self.slots.items() if slot.hold is None)
+            or sorted(self.slots)
+        ):
             self._probes += 1
             slots = (numbers[self._probes % len(numbers)],)
         self._put(_Job("probe", slots=slots))
