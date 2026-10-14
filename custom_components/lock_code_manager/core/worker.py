@@ -235,6 +235,11 @@ class LockWorker:
         return self._down_until is None
 
     @property
+    def answered(self) -> bool:
+        """Return whether the lock has answered this worker at all."""
+        return self._answers > 0
+
+    @property
     def offline(self) -> bool:
         """
         Return whether a lock that answered before has stopped answering.

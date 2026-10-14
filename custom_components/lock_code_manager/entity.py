@@ -26,6 +26,7 @@ from .const import (
     DOMAIN,
 )
 from .core.slot import Slot, Status
+from .core.worker import LockWorker
 from .domain.config import build_slot_device_identifier, build_slot_unique_id
 from .domain.lock_runtime import lock_registry, signal_lock_changed
 from .domain.models import LockCodeManagerConfigEntry
@@ -388,24 +389,40 @@ class LockWorkerView:
     lock: BaseLock
     slot_num: int
 
+    config_entry: ConfigEntry
+
+    def _core_worker(self) -> LockWorker | None:
+        """
+        Return the lock's worker if it syncs this slot for this entry.
+
+        A slot another entry already manages on the lock is that entry's:
+        its state is not this entry's user's (their code is not there).
+        """
+        registry = lock_registry(self.hass)
+        lock_entity_id = self.lock.lock.entity_id
+        if registry.owner(lock_entity_id, int(self.slot_num)) not in (
+            None,
+            self.config_entry.entry_id,
+        ):
+            return None
+        return registry.worker(lock_entity_id)
+
     def _core_slot(self) -> Slot | None:
         """Return the worker's view of this slot, if the lock's worker has it."""
-        if (
-            worker := lock_registry(self.hass).worker(self.lock.lock.entity_id)
-        ) is None:
+        if (worker := self._core_worker()) is None:
             return None
         return worker.slots.get(int(self.slot_num))
 
     def _core_status(self) -> Status | None:
         """Return the slot's sync status, or None if the worker does not have it."""
-        worker = lock_registry(self.hass).worker(self.lock.lock.entity_id)
+        worker = self._core_worker()
         if worker is None or int(self.slot_num) not in worker.slots:
             return None
         return worker.status(int(self.slot_num))[0]
 
     def _core_syncing(self) -> bool:
         """Return whether a sync of this slot is queued or running."""
-        worker = lock_registry(self.hass).worker(self.lock.lock.entity_id)
+        worker = self._core_worker()
         return worker is not None and worker.syncing(int(self.slot_num))
 
     @callback

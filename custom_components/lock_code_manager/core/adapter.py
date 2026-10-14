@@ -34,6 +34,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from ..domain.credentials import CredentialAddress
 from ..domain.exceptions import (
     CodeRejectedError,
+    DuplicateCodeError,
     LockBusy,
     LockCodeManagerError,
     LockCodeManagerProviderError,
@@ -204,6 +205,26 @@ class ProviderPort:
         self._answered = self._answered or bool(readings)
         return readings
 
+    def _duplicate_of(self, slot: int, pin: str) -> int | None:
+        """
+        Return another slot ``pin`` is on, or is wanted on; None if none.
+
+        A tracked slot counts by what it wants (one on its way to another
+        PIN, or out, does not); any other slot by what the lock said of it.
+        """
+        tracked = {} if self.worker is None else self.worker.slots
+        for other, held in self.others.items():
+            if other != slot and other not in tracked and held == Holds(pin):
+                return other
+        return next(
+            (
+                other
+                for other, current in tracked.items()
+                if other != slot and current.want == pin and not current.release
+            ),
+            None,
+        )
+
     async def write(self, slot: int, pin: str | None) -> bool | None:
         """
         Put ``pin`` in ``slot``, or clear it for None.
@@ -242,6 +263,15 @@ class ProviderPort:
                 return await provider.async_clear_usercode(slot)
             else:
                 await self._capacity(slot)
+                if (other := self._duplicate_of(slot, pin)) is not None:
+                    # Two users sharing a PIN: whoever types it opens the door
+                    # as the other, and turning one off leaves it working.
+                    raise DuplicateCodeError(
+                        code_slot=slot,
+                        lock_entity_id=provider.lock.entity_id,
+                        conflicting_slot=other,
+                        conflicting_slot_managed=provider.is_slot_managed(other),
+                    )
                 await provider.async_set_usercode(
                     slot, pin, self.name_for(slot), source="sync"
                 )

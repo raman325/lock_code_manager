@@ -145,6 +145,11 @@ class LockRegistry:
         """Return ``lock``'s worker, if it has one in service."""
         return None if (entry := self._locks.get(lock)) is None else entry.worker
 
+    def owner(self, lock: str, slot: int) -> str | None:
+        """Return the entry that owns ``slot`` on ``lock``, if one does."""
+        entry = self._locks.get(lock)
+        return None if entry is None else entry.owners.get(slot)
+
     def want(self, lock: str, owner: str, slot: int, pin: Want) -> None:
         """Claim ``slot`` for ``owner`` and set what it should hold."""
         entry = self._held(lock, owner)

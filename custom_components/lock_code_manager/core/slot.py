@@ -109,6 +109,8 @@ class Slot:
         """Set what is wanted; a change of target starts the counts over."""
         if want != self.want or release != self.release:
             self.resume()
+        if release and not self.release:
+            self.released = False
         self.want = want
         self.release = release
 

@@ -1309,7 +1309,7 @@ async def test_set_usercode_operation_failure(
                 "type": "lock_code_manager/write_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
-                ATTR_USERCODE: "1234",
+                ATTR_USERCODE: "9876",
             }
         )
         msg = await _async_result_for(ws_client, 1)
@@ -1383,7 +1383,7 @@ async def test_set_usercode_duplicate_code_error(
                 "type": "lock_code_manager/write_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
-                ATTR_USERCODE: "1234",
+                ATTR_USERCODE: "9876",
             }
         )
         msg = await _async_result_for(ws_client, 1)

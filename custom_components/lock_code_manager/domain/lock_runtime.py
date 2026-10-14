@@ -315,8 +315,10 @@ def async_give_up(
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
-    if not port_of(worker).provider.provider_setup_succeeded:
+    if not port_of(worker).provider.provider_setup_succeeded and not worker.answered:
         # Nothing can be written to a lock never set up: no clear to wait on.
+        # One that answered and has lost its setup (a failed revalidation)
+        # holds codes: the clear waits for it.
         clear = False
     try:
         if clear:
@@ -461,7 +463,9 @@ def async_reconcile_issues(
             translation_key="lock_offline",
             translation_placeholders={"lock_entity_id": lock_entity_id},
         )
-    else:
+    elif worker.answered and worker.reachable:
+        # Only the lock answering resolves it: a worker started since (a
+        # reload, a restart) has not heard from a lock that is still gone.
         async_delete_issue(hass, DOMAIN, offline_issue)
 
 

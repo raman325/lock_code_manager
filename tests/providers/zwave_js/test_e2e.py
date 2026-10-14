@@ -2230,9 +2230,8 @@ class TestDuplicateRefusedByUserCredentialLock:
         """
         Regression for #848: a duplicate is not retried forever.
 
-        The slot is disabled with a repair. There is no duplicate pre-check:
-        the PIN is sent, and the lock refuses it whether it shows its codes
-        or hashes them.
+        The slot is disabled with a repair, whether the lock shows its codes
+        (caught before sending) or hashes them (refused in band).
         """
         for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
             await _async_settle_in_sync(
@@ -2259,7 +2258,9 @@ class TestDuplicateRefusedByUserCredentialLock:
         assert issue is not None
         # The worker passes on only that the PIN was refused, not why.
         assert "refused" in issue.translation_placeholders["reason"]
-        assert fake_zwave_lock.sets[written:] == [(2, "5555")]
+        # A lock that shows its codes is caught before the PIN is sent; one
+        # that hashes them refuses it in band.
+        assert fake_zwave_lock.sets[written:] == ([(2, "5555")] if hash_length else [])
         assert fake_zwave_lock.holds(2) is None
 
 
