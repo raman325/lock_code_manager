@@ -73,15 +73,6 @@ class LockPort(Protocol):
         """
         ...
 
-    def reachable(self) -> bool:
-        """
-        Return False when the provider knows the lock cannot be reached.
-
-        Trusted only when it says so: a sync that fails while it does is the
-        lock's, never the slot's. A provider with no such signal returns True.
-        """
-        ...
-
     async def write(self, slot: int, pin: str | None) -> None:
         """Put ``pin`` in ``slot``, or clear it for None; raise ``LockError``."""
         ...
@@ -143,17 +134,18 @@ class LockWorker:
         self._written: dict[int, int] = {}
         self._last_exchange: float | None = None
         self._answered = False
-        # The lock answered while its provider said it was down: the provider
-        # is not believed about that until it says the lock is up again.
-        self._doubted = False
-        # Slots a read came back with, and no read since failed on: what a
-        # backoff probe reads, in turn, so a slot the lock ignores never keeps
-        # it down.
-        self._witnesses: set[int] = set()
-        self._probes = 0
-        # Slots charged a try since the lock last answered anything: an
-        # outage it does not report costs each slot one try at most.
+        # Exchanges the lock answered: proof it is there.
+        self._answers = 0
+        # The provider raised something that is not a LockError.
+        self._bug = False
+        # Slots charged a try since the lock last answered: an outage costs
+        # each slot one try at most.
         self._charged: set[int] = set()
+        # Slots whose sync failed with nothing answering, by epoch: charged
+        # when the lock next answers, as nothing else tells an outage from a
+        # slot the lock ignores.
+        self._owed: dict[int, int] = {}
+        self._probes = 0
         self._no_answers = 0
         self._down_until: float | None = None
 
@@ -337,7 +329,7 @@ class LockWorker:
             self._again(job.slot)
             return
         # A probe left unanswered schedules the next one through _no_answer.
-        _resolve(job.done, await self._read(job.slots, probe=job.kind == "probe"))
+        _resolve(job.done, await self._read(job.slots))
 
     def _take_push(self, job: _Job) -> None:
         assert job.slot is not None and job.reading is not None
@@ -351,21 +343,21 @@ class LockWorker:
         """
         Bring one slot in line: read it if never read, write it if it differs.
 
-        A sync that ends out of sync is one try against the slot, whatever
-        went wrong -- unless the lock is backing off, or its provider says it
-        cannot be reached and nothing has answered since it began saying so:
-        then it is the lock's, never the slot's. Between two answers from the lock, a
-        slot is charged once at most. Nothing is awaited between looking and
-        charging, and a sync begun before the counts started over is not
-        charged.
+        A sync that ends out of sync costs the slot one try, charged once the
+        lock has shown it is there: at once if anything in the sync was
+        answered, else when the lock next answers. Between two answers a slot
+        is charged once at most, so an outage costs it one try at most. A
+        provider bug is the slot's: charged at once, every time. Nothing is
+        awaited between looking and charging, and a sync begun before the
+        counts started over is not charged.
 
-        So a sync that does not end in sync is charged, or excused while
+        So every sync that does not end in sync is charged, or owed while
         nothing answers -- and only an answer resets the lock's no-answers:
         each slot ends in sync, held, or with the lock offline.
         """
         if (slot := self.slots.get(number)) is None:
             return
-        epoch = slot.epoch
+        epoch, answers, self._bug = slot.epoch, self._answers, False
         try:
             if slot.status(self.salt) is Status.UNKNOWN:
                 await self._read((number,), follow=False)
@@ -373,15 +365,13 @@ class LockWorker:
                 await self._write(number, slot)
         except LockError as err:
             _LOGGER.debug("Sync of slot %s failed: %s", number, err)
-        if (
-            slot.epoch == epoch
-            and slot.status(self.salt) in (Status.UNKNOWN, Status.OUT_OF_SYNC)
-            and self._down_until is None
-            and number not in self._charged
-            and not self._reported_down()
-        ):
-            slot.tried()
-            self._charged.add(number)
+        if slot.epoch == epoch and self._failed(slot):
+            if self._bug:
+                slot.tried()
+            elif self._answers > answers:
+                self._charge(number, slot)
+            elif number not in self._charged:
+                self._owed[number] = epoch
         if (
             slot.release
             and slot.status(self.salt) is Status.IN_SYNC
@@ -389,21 +379,14 @@ class LockWorker:
         ):
             del self.slots[number]
 
-    def _reported_down(self) -> bool:
-        """
-        Return whether the provider says the lock is gone, and is believed.
+    def _failed(self, slot: Slot) -> bool:
+        return slot.status(self.salt) in (Status.UNKNOWN, Status.OUT_OF_SYNC)
 
-        A bug in the provider says nothing; an answer from the lock while it
-        says so is believed over it until it says the lock is up again.
-        """
-        try:
-            down = not self.port.reachable()
-        except Exception:
-            _LOGGER.exception("Lock provider failed to say if the lock is there")
-            down = False
-        if not down:
-            self._doubted = False
-        return down and not self._doubted
+    def _charge(self, number: int, slot: Slot) -> None:
+        """Charge ``slot`` one try, unless charged since the lock last answered."""
+        if number not in self._charged:
+            self._charged.add(number)
+            slot.tried()
 
     async def _write(self, number: int, slot: Slot) -> None:
         """
@@ -454,28 +437,19 @@ class LockWorker:
         return self._seq
 
     async def _read(
-        self, numbers: Collection[int], *, follow: bool = True, probe: bool = False
+        self, numbers: Collection[int], *, follow: bool = True
     ) -> dict[int, Reading]:
         """
         Read ``numbers``; unless ``follow`` is off, queue any slot that needs work.
 
-        A failed read of one slot drops it from the witnesses -- unless it is
-        a probe: the lock is down, and that says nothing about the slot. A
-        failed batch says nothing about any one slot in it. A
-        reading is newer than every report on its slot taken in before the
+        A reading is newer than every report on its slot taken in before the
         read was sent; one taken in while it was out may be newer, and is
         kept. A slot the read left out says nothing, and drops no report.
         """
-        try:
-            readings = dict(await self._exchange(lambda: self.port.read(numbers)))
-        except LockError:
-            if not probe and len(numbers) == 1:
-                self._witnesses.difference_update(numbers)
-            raise
+        readings = dict(await self._exchange(lambda: self.port.read(numbers)))
         for number in numbers:
             if number in readings:
                 self._written[number] = self._sent
-                self._witnesses.add(number)
             reading = readings.setdefault(number, Seen.SILENT)
             if (slot := self.slots.get(number)) is not None:
                 slot.observe(reading, self.salt, self.clock())
@@ -511,10 +485,11 @@ class LockWorker:
 
         No answer -- the budget running out, a ``NO_ANSWER``, a transient
         failure that never left for the lock, or a network error -- counts
-        against the lock. Any other ``LockError`` is the lock (or its
-        integration) answering, refusals included. Anything else a provider
-        raises is a bug in it: logged, and a transient failure the lock
-        answered, so it holds the slot it hits rather than the whole lock.
+        against the lock. Any other ``LockError`` that was sent is the lock
+        answering, refusals included. One that never left (the integration
+        refusing) and anything else a provider raises (a bug in it, logged)
+        say nothing about the lock: a bug is a transient failure charged to
+        the slot it hits -- or, on a probe, no answer, so probing goes on.
         """
         if self._last_exchange is not None:
             wait = self._last_exchange + self.gap - self.clock()
@@ -531,7 +506,7 @@ class LockWorker:
                 not err.sent and err.kind is ErrorKind.TRANSIENT
             ):
                 self._no_answer()
-            else:
+            elif err.sent:
                 self._answer()
             raise
         except OSError as err:  # timeouts and dropped connections included
@@ -541,7 +516,9 @@ class LockWorker:
             ) from err
         except Exception as err:
             _LOGGER.exception("Lock provider failed")
-            self._answer()
+            self._bug = True
+            if self._down_until is not None:
+                self._no_answer()
             raise LockError(ErrorKind.TRANSIENT, message=str(err)) from err
         finally:
             self._last_exchange = self.clock()
@@ -551,9 +528,15 @@ class LockWorker:
     def _answer(self) -> None:
         was_down = self._down_until is not None
         self._answered = True
+        self._answers += 1
         self._charged.clear()
-        if self._reported_down():
-            self._doubted = True
+        # The lock is there: syncs that failed with nothing answering were
+        # the slots', not an outage's.
+        owed, self._owed = self._owed, {}
+        for number, epoch in owed.items():
+            slot = self.slots.get(number)
+            if slot is not None and slot.epoch == epoch and self._failed(slot):
+                self._charge(number, slot)
         self._no_answers = 0
         self._down_until = None
         if was_down:
@@ -579,18 +562,14 @@ class LockWorker:
 
     async def _probe_after(self, delay: float) -> None:
         """
-        After the backoff, read one witness; an answer brings the lock back.
+        After the backoff, read one slot; an answer brings the lock back.
 
-        Each probe reads the next witness in turn, so one the lock started
-        ignoring while down cannot keep it down. With no witness -- a lock
-        never reached, or one whose every slot went unanswered -- every
-        tracked slot not held is read: a held slot may be a provider bug,
-        whose error would pass for the lock answering.
+        Each probe reads the next slot in turn, so a slot the lock ignores
+        cannot keep it down for long; a provider bug on one is no answer.
         """
         await self.sleep(delay)
-        if witnesses := sorted(self._witnesses):
+        slots: tuple[int, ...] = ()
+        if numbers := sorted(self.slots):
             self._probes += 1
-            slots: tuple[int, ...] = (witnesses[self._probes % len(witnesses)],)
-        else:
-            slots = tuple(n for n, slot in self.slots.items() if slot.hold is None)
+            slots = (numbers[self._probes % len(numbers)],)
         self._put(_Job("probe", slots=slots))

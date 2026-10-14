@@ -93,12 +93,6 @@ class FakeLock:
     strict: bool = False
     # The host is gone: every call raises the network's own error.
     unreachable: bool = False
-    # The provider says the lock cannot be reached.
-    reported_down: bool = False
-
-    def reachable(self) -> bool:
-        """Say what the provider knows of the lock."""
-        return not self.reported_down
 
     async def read(self, slots: Collection[int]) -> dict[int, Reading]:
         """Answer a read the way this lock does."""
@@ -578,21 +572,19 @@ async def test_a_broken_provider_fails_its_slot_not_the_pass(rig_factory) -> Non
         assert lock.writes.count((slot, "1234" if slot == 1 else "5678")) == 3
 
 
-@pytest.mark.parametrize("reported", [True, False], ids=["reported", "unreported"])
-async def test_an_outage_holds_no_slot(rig_factory, reported) -> None:
+async def test_an_outage_holds_no_slot(rig_factory) -> None:
     """
     A lock that has gone is the lock's problem: no slot is held.
 
-    Reported by the provider, it charges nothing. Unreported, a slot whose
-    sync ends before the lock backs off is charged once at most, and the
-    first fresh read that agrees after it comes back clears that.
+    Syncs that fail with nothing answering are owed, not charged, while it
+    is gone; when it answers again each is charged once at most, and the
+    first fresh read that agrees clears that.
     """
     slots = range(1, 6)
     lock = FakeLock()
     rig = await _started(rig_factory(lock), dict.fromkeys(slots, "1234"))
     lock.writes_unanswered = True
     lock.reads_unanswered = True
-    lock.reported_down = reported
     for n in slots:
         rig.worker.want(n, "4321")
     for _ in range(20):
@@ -601,10 +593,9 @@ async def test_an_outage_holds_no_slot(rig_factory, reported) -> None:
 
     assert not rig.worker.reachable
     assert all(rig.status(n) == (Status.OUT_OF_SYNC, None) for n in slots)
-    tries = [rig.worker.slots[n].tries for n in slots]
-    assert max(tries) == (0 if reported else 1)
+    assert all(rig.worker.slots[n].tries == 0 for n in slots)
 
-    lock.writes_unanswered = lock.reads_unanswered = lock.reported_down = False
+    lock.writes_unanswered = lock.reads_unanswered = False
     for _ in range(50):
         if all(rig.status(n)[0] is Status.IN_SYNC for n in slots):
             break
@@ -1300,21 +1291,17 @@ async def test_a_report_from_before_a_read_is_dropped(rig_factory) -> None:
     assert rig.worker.slots[1].fights == []
 
 
-@pytest.mark.parametrize("reported", [True, False], ids=["reported", "unreported"])
 @pytest.mark.parametrize(
     ("added", "release"),
     [({9: None}, True), ({5: "5555"}, False), ({5: "5555", 6: "6666"}, False)],
     ids=["release", "new slot", "two new slots"],
 )
-async def test_an_outage_holds_no_slot_never_read(
-    rig_factory, added, release, reported
-) -> None:
+async def test_an_outage_holds_no_slot_never_read(rig_factory, added, release) -> None:
     """Slots added during an outage, never read, are not held either."""
     lock = FakeLock({1: "1111"})
     rig = await _started(rig_factory(lock), {1: "1111"})
     lock.writes_unanswered = True
     lock.reads_unanswered = True
-    lock.reported_down = reported
     for n, pin in added.items():
         rig.worker.want(n, pin, release=release)
     for _ in range(30):
@@ -1322,7 +1309,7 @@ async def test_an_outage_holds_no_slot_never_read(
         await asyncio.sleep(0)
 
     assert rig.worker.offline
-    assert all(rig.worker.slots[n].tries <= (0 if reported else 1) for n in added)
+    assert all(rig.worker.slots[n].tries == 0 for n in added)
     assert all(rig.status(n)[1] is None for n in added)
 
 
@@ -1410,12 +1397,12 @@ async def test_a_report_taken_in_during_a_read_is_kept(rig_factory) -> None:
     assert lock.codes == {1: "1234"}
 
 
-async def test_a_witness_the_lock_stops_answering_for_is_not_asked_again(
+async def test_a_slot_the_lock_stops_answering_for_holds_while_others_answer(
     rig_factory,
 ) -> None:
     """
-    A slot that answered once, then is ignored, stops being a witness;
-    another one is asked, and the ignored slot is still held.
+    A slot that answered once, then is ignored, is held: the lock answers
+    for the others.
     """
     lock = FakeLock({1: "1111", 2: "2222"})
     rig = await _started(rig_factory(lock), {1: "1111", 2: "2222"})
@@ -1550,11 +1537,11 @@ async def test_a_probe_reads_one_slot_that_answered(rig_factory) -> None:
     assert rig.worker.offline
     assert len(probes) >= 4
     assert all(len(probe) == 1 for probe in probes)
-    # The witnesses take turns; slot 1 stopped being one when it went unanswered.
-    assert {n for (n,) in probes} == {2, 3, 4, 5}
+    # The slots take turns.
+    assert {n for (n,) in probes} == {1, 2, 3, 4, 5}
 
 
-async def test_a_witness_ignored_after_the_outage_does_not_keep_it_down(
+async def test_a_slot_ignored_after_the_outage_does_not_keep_it_down(
     rig_factory,
 ) -> None:
     """The lock comes back ignoring the slot a probe would read: the next is read."""
@@ -1589,25 +1576,19 @@ async def test_a_witness_ignored_after_the_outage_does_not_keep_it_down(
     ],
     ids=["provider bug", "writes not kept", "answered failures"],
 )
-async def test_an_answered_sync_is_charged_whatever_the_provider_says(
-    rig_factory, lock
-) -> None:
-    """An answer outranks the provider saying the lock is gone: held, no loop."""
+async def test_a_sync_that_fails_answered_is_charged(rig_factory, lock) -> None:
+    """A lock that answers and does not take the write: held, never a loop."""
     rig = await _started(rig_factory(lock), {1: "0000"})
-    lock.reported_down = True
     rig.worker.want(1, "1234")
     await rig.settle()
 
     assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
 
 
-async def test_writes_answered_and_reads_not_while_reported_down_hold(
-    rig_factory,
-) -> None:
+async def test_writes_answered_and_reads_not_hold(rig_factory) -> None:
     """Each sync heard the write answered: charged, though its read-back was not."""
     lock = FakeLock({1: "0000"}, ignore_writes=True)
     rig = await _started(rig_factory(lock), {1: "0000"})
-    lock.reported_down = True
     original = lock.read
 
     async def _unanswered(slots):
@@ -1626,55 +1607,38 @@ async def test_writes_answered_and_reads_not_while_reported_down_hold(
     assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
 
 
-async def test_a_provider_that_cannot_say_if_the_lock_is_there_says_nothing(
+async def test_an_outage_mid_sync_costs_one_try_and_recovery_clears_it(
     rig_factory,
 ) -> None:
-    """A bug in the reachability signal is no signal: an outage costs one try."""
+    """The write was answered, then the lock went: one try at most, then cleared."""
     lock = FakeLock({1: "0000"})
     rig = await _started(rig_factory(lock), {1: "0000"})
+    original = lock.write
 
-    def _boom() -> bool:
-        raise RuntimeError("the provider broke")
+    async def _answered_then_gone(slot, pin):
+        lock.write = original  # type: ignore[method-assign]
+        await original(slot, pin)
+        lock.reads_unanswered = lock.writes_unanswered = True
 
-    lock.reachable = _boom  # type: ignore[method-assign]
-    lock.writes_unanswered = lock.reads_unanswered = True
+    lock.write = _answered_then_gone  # type: ignore[method-assign]
     rig.worker.want(1, "1234")
     for _ in range(20):
         await rig.settle()
         await asyncio.sleep(0)
-
+    assert rig.worker.offline
     assert rig.worker.slots[1].tries == 1
-    assert rig.status(1) == (Status.OUT_OF_SYNC, None)
 
-
-async def test_a_reported_outage_mid_sync_charges_nothing(rig_factory) -> None:
-    """The write was answered, then the lock went, and its provider says so."""
-    lock = FakeLock({1: "0000"})
-    rig = await _started(rig_factory(lock), {1: "0000"})
-
-    def _gone() -> None:
-        # Once the write is answered: the next exchange finds the lock gone.
-        lock.during_write.clear()
-        lock.reads_unanswered = True
-
-    original = lock.read
-
-    async def _read(slots):
-        if lock.reads_unanswered:
-            lock.reported_down = lock.writes_unanswered = True
-        return await original(slots)
-
-    lock.read = _read  # type: ignore[method-assign]
-    lock.during_write.append(_gone)
-    rig.worker.want(1, "1234")
-    for _ in range(20):
+    lock.reads_unanswered = lock.writes_unanswered = False
+    for _ in range(50):
+        if rig.status(1)[0] is Status.IN_SYNC:
+            break
         await rig.settle()
         await asyncio.sleep(0)
-
+    assert rig.status(1) == (Status.IN_SYNC, None)
     assert rig.worker.slots[1].tries == 0
 
 
-# Witnesses and probes -----------------------------------------------------------
+# Probes ------------------------------------------------------------------------
 
 
 async def _poll(rig: Rig) -> None:
@@ -1682,7 +1646,7 @@ async def _poll(rig: Rig) -> None:
         await rig.worker.read()
 
 
-async def test_a_failed_poll_leaves_the_witnesses_for_an_ignored_slot(
+async def test_a_failed_poll_does_not_strand_an_ignored_slot(
     rig_factory,
 ) -> None:
     """A batch failing over one ignored slot says nothing of the others."""
@@ -1793,37 +1757,221 @@ async def test_a_report_taken_in_while_a_read_waits_its_turn_is_dropped(
     assert rig.worker.slots[1].fights == []
 
 
-async def test_a_provider_wrongly_saying_down_does_not_spare_an_ignored_slot(
+# Round 9: nothing shared between slots decides a charge.
+
+
+async def _run(rig: Rig, until, rounds: int = 100) -> None:
+    for _ in range(rounds):
+        if until():
+            return
+        await rig.settle()
+        await asyncio.sleep(0)
+
+
+async def test_an_outage_mid_retarget_then_an_ignored_slot_does_not_strand_the_lock(
     rig_factory,
 ) -> None:
-    """The lock answering for others while its provider says it is gone wins."""
-    lock = FakeLock({1: "1111"}, ignored={7})
+    """Probes take every slot in turn: one the lock now ignores cannot keep it down."""
+    lock = FakeLock({1: "1111", 7: "7777"})
+    rig = await _started(rig_factory(lock), {1: "1111", 7: "7777"})
+    lock.unreachable = True
+    rig.worker.want(1, "2222")
+    await _run(rig, lambda: not rig.worker.reachable)
+    assert not rig.worker.reachable
+    lock.unreachable = False
+    lock.ignored = {7}
+    await _run(rig, lambda: rig.status(1)[0] is Status.IN_SYNC)
+
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert rig.worker.reachable
+
+
+async def test_an_answered_error_on_a_lone_read_does_not_strand_an_ignored_slot(
+    rig_factory,
+) -> None:
+    """A row-5 lock after a one-off error: the ignored slot is still held."""
+    lock = FakeLock({1: "1111"}, strict=True)
     rig = await _started(rig_factory(lock), {1: "1111"})
-    lock.reported_down = True
+    lock.read_errors = 1
+    await _poll(rig)
+    lock.ignored = {7}
     rig.worker.want(7, "7777")
-    for _ in range(100):
-        if rig.status(7)[0] is Status.SUSPENDED:
-            break
-        await rig.settle()
-        await asyncio.sleep(0)
+    await _run(rig, lambda: rig.status(7)[0] is Status.SUSPENDED)
 
     assert rig.status(7) == (Status.SUSPENDED, Repair.CANT_SET)
-    assert not rig.worker.offline
 
 
-async def test_a_reported_outage_after_a_doubt_is_believed_again(rig_factory) -> None:
-    """Once the provider says the lock is up, its next "down" is believed."""
+async def test_a_provider_bug_during_an_outage_holds_only_its_own_slot(
+    rig_factory,
+) -> None:
+    """A bug's errors say nothing about the lock: the healthy slot is not charged."""
+    lock = FakeLock({1: "1111", 7: "7777"})
+    rig = await _started(rig_factory(lock), {1: "1111", 7: "7777"})
+    read, write = lock.read, lock.write
+
+    async def _read(slots):
+        if 7 in slots:
+            raise KeyError(7)
+        return await read(slots)
+
+    async def _write(slot, pin):
+        if slot == 7:
+            raise KeyError(7)
+        return await write(slot, pin)
+
+    lock.read, lock.write = _read, _write  # type: ignore[method-assign]
+    lock.unreachable = True
+    rig.worker.want(7, "7778")
+    rig.worker.want(1, "2222")
+    await _run(rig, lambda: False, 30)
+
+    assert rig.worker.slots[1].tries == 0
+    assert rig.status(1) == (Status.OUT_OF_SYNC, None)
+
+
+async def test_a_poll_during_each_probe_does_not_spare_an_ignored_slot(
+    rig_factory,
+) -> None:
+    """No-answers from other exchanges never excuse a slot: it is held."""
+    lock = FakeLock({1: "1111"}, strict=True)
+    rig = await _started(rig_factory(lock), {1: "1111", 7: None})
+    lock.ignored = {7}
+    original = lock.read
+    probes = 0
+
+    async def _read(slots):
+        nonlocal probes
+        if not rig.worker.reachable and tuple(slots) == (1,):
+            probes += 1
+            asyncio.ensure_future(_poll(rig))
+            await asyncio.sleep(0)
+        return await original(slots)
+
+    lock.read = _read  # type: ignore[method-assign]
+    rig.worker.want(7, "7777")
+    await _run(rig, lambda: rig.status(7)[0] is Status.SUSPENDED or probes > 30, 300)
+
+    assert rig.status(7) == (Status.SUSPENDED, Repair.CANT_SET)
+
+
+async def test_a_provider_bug_on_a_probe_does_not_end_the_probing(rig_factory) -> None:
+    """A probe that hits a bug is no answer: the next probe reads the next slot."""
+    lock = FakeLock({1: "1111", 7: "7777"})
+    rig = await _started(rig_factory(lock), {1: "1111", 7: "7777"})
+    _bug_on(lock, 7)
+    lock.unreachable = True
+    for _ in range(BACKOFF_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+    lock.unreachable = False
+    await _run(rig, lambda: rig.worker.reachable)
+
+    assert rig.worker.reachable
+
+
+async def test_a_release_cut_off_by_an_outage_mid_sync_is_not_held(rig_factory) -> None:
+    """Charged once for the outage, never owed on top: a release has two tries."""
     lock = FakeLock({1: "1111"})
     rig = await _started(rig_factory(lock), {1: "1111"})
-    lock.reported_down = True
-    await rig.worker.read([1])  # answered while reported down: doubted
-    lock.reported_down = False
-    await rig.worker.read([1])
-    lock.reported_down = True
-    lock.writes_unanswered = lock.reads_unanswered = True
-    rig.worker.want(1, "2222")
-    for _ in range(20):
-        await rig.settle()
-        await asyncio.sleep(0)
+    original = lock.write
 
+    async def _answered_then_gone(slot, pin):
+        lock.write = original  # type: ignore[method-assign]
+        await original(slot, pin)
+        lock.codes[slot] = "1111"  # the clear did not take
+        lock.reads_unanswered = lock.writes_unanswered = True
+
+    lock.write = _answered_then_gone  # type: ignore[method-assign]
+    rig.worker.want(1, None, release=True)
+    await _run(rig, lambda: rig.worker.offline, 30)
+    lock.reads_unanswered = lock.writes_unanswered = False
+    await _run(rig, lambda: 1 not in rig.worker.slots)
+
+    assert 1 not in rig.worker.slots
+    assert lock.codes == {}
+
+
+async def test_a_try_owed_before_a_retarget_is_not_charged_to_it(rig_factory) -> None:
+    """The new target gets its full limit after the outage."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    lock.unreachable = True
+    rig.worker.want(1, "1111")
+    await _run(rig, lambda: not rig.worker.reachable)
+    rig.worker.want(1, "2222")
+    lock.unreachable = False
+    lock.ignore_writes = True
+    await _run(rig, lambda: rig.status(1)[0] is Status.SUSPENDED)
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert lock.writes.count((1, "2222")) == LIMIT
+
+
+async def test_a_try_owed_by_a_slot_since_in_sync_is_not_charged(rig_factory) -> None:
+    """
+    A report that the slot agrees, while the lock is gone: nothing owed is
+    charged when it answers -- the slot later failing for real gets every try.
+    """
+    lock = FakeLock({1: "0000", 2: "2222"})
+    rig = await _started(rig_factory(lock), {1: "0000", 2: "2222"})
+    lock.unreachable = True
+    rig.worker.want(1, "1111")
+    await _run(rig, lambda: not rig.worker.reachable)
+    rig.worker.push(1, Holds("1111"))
+    await rig.settle()
+    lock.unreachable = False
+    lock.ignore_writes = True
+    await _run(rig, lambda: rig.worker.reachable)
+    # The cached report was wrong: the lock still holds the old code.
+    rig.worker.push(1, Holds("0000"))
+    await _run(rig, lambda: rig.status(1)[0] is Status.SUSPENDED)
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert lock.writes.count((1, "1111")) == LIMIT
+
+
+async def test_a_try_owed_and_paid_in_the_slot_s_own_sync_is_charged_once(
+    rig_factory,
+) -> None:
+    """
+    Owed, then paid by the only answer in the slot's next sync: that sync is
+    not charged on top -- one try between two answers.
+    """
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    write, read = lock.write, lock.read
+    lost_reads = 2
+
+    async def _lost_write(slot, pin):
+        lock.write = write  # type: ignore[method-assign]
+        raise LockError(ErrorKind.NO_ANSWER)
+
+    async def _lost_read(slots):
+        nonlocal lost_reads
+        lost_reads -= 1
+        if not lost_reads:
+            lock.read = read  # type: ignore[method-assign]
+        raise LockError(ErrorKind.NO_ANSWER)
+
+    lock.write, lock.read = _lost_write, _lost_read  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: rig.status(1)[0] is Status.SUSPENDED)
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    # The owed try and the sync that paid it are one; then one per try.
+    assert lock.writes.count((1, "1234")) == LIMIT
+
+
+async def test_a_refusal_before_sending_says_nothing_about_the_lock(
+    rig_factory,
+) -> None:
+    """The integration refusing is no answer from the lock: nothing owed is paid."""
+    lock = FakeLock({1: "1111", 2: "2222"}, refuse_value={"9999"}, refuse_unsent=True)
+    rig = await _started(rig_factory(lock), {1: "1111", 2: "2222"})
+    lock.ignored = {1}
+    rig.worker.want(1, "1234")
+    rig.worker.want(2, "9999")
+    await rig.settle()
+
+    assert rig.status(2)[0] is Status.SUSPENDED
     assert rig.worker.slots[1].tries == 0
