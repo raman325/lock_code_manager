@@ -185,6 +185,11 @@ class LockWorker:
         return current.status(self.salt), current.hold
 
     @property
+    def started(self) -> bool:
+        """Return whether ``start`` was called."""
+        return self._started
+
+    @property
     def reachable(self) -> bool:
         """Return whether the lock is answering (not backing off)."""
         return self._down_until is None
