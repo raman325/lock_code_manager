@@ -2230,3 +2230,165 @@ async def test_a_probe_with_every_slot_held_still_asks_the_lock(rig_factory) -> 
     await _run(rig, lambda: rig.worker.reachable, 30)
 
     assert not rig.worker.reachable
+
+
+# Round 11 ------------------------------------------------------------------------
+
+
+async def test_a_clear_after_an_unverified_write_is_not_taken_as_done(
+    rig_factory,
+) -> None:
+    """
+    Writes land, read-backs are answered with errors: the slot is held. The
+    user turns the slot off; the read from before the write says "empty".
+    """
+    lock = FakeLock({})
+    rig = await _started(rig_factory(lock), {1: None})
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    lock.read_errors = 1000  # reads answered with an error, writes land
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: rig.status(1)[0] is Status.SUSPENDED)
+    assert lock.codes == {1: "1234"}
+    rig.worker.want(1, None)
+    await rig.settle()
+
+    # Guarantee: no PIN left on the lock while status says in sync.
+    assert not (lock.codes.get(1) == "1234" and rig.status(1)[0] is Status.IN_SYNC)
+
+
+async def test_a_clear_after_a_write_lost_in_an_outage_is_not_taken_as_done(
+    rig_factory,
+) -> None:
+    """The write lands but its answer is lost; the user clears during the outage."""
+    lock = FakeLock({2: "2222"})
+    rig = await _started(rig_factory(lock), {1: None, 2: "2222"})
+    original = lock.write
+
+    async def _lands_then_gone(slot, pin):
+        lock.write = original  # type: ignore[method-assign]
+        lock.codes[slot] = pin
+        lock.unreachable = True
+        raise OSError("gone")
+
+    lock.write = _lands_then_gone  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: not rig.worker.reachable)
+    assert not rig.worker.reachable
+    rig.worker.want(1, None)
+    lock.unreachable = False
+    await _run(rig, lambda: rig.worker.reachable)
+    await rig.settle()
+
+    assert not (lock.codes.get(1) == "1234" and rig.status(1)[0] is Status.IN_SYNC)
+
+
+async def test_a_lock_started_with_no_slots_is_not_taken_as_reached(
+    rig_factory,
+) -> None:
+    """The first read of no slots is no answer: a dead lock stays not yet reached."""
+    lock = FakeLock(unreachable=True)
+    rig = await _started(rig_factory(lock), {})
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: rig.worker.offline, 100)
+
+    assert not rig.worker.offline  # #1257: never reached is not offline
+
+
+async def test_empty_polls_during_an_outage_do_not_hold_a_slot(rig_factory) -> None:
+    """A poll of no slots between syncs pays owed tries while the lock is dead."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    original = lock.read
+
+    async def _read(slots):
+        if lock.unreachable and slots:
+            # The integration polls an empty set while this read is out.
+            polls.append(asyncio.ensure_future(rig.worker.read([])))
+            await asyncio.sleep(0)
+        return await original(slots)
+
+    polls: list = []
+    lock.read = _read  # type: ignore[method-assign]
+    lock.unreachable = True
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: rig.status(1)[0] is Status.SUSPENDED, 50)
+
+    # An outage never holds a normal slot.
+    assert rig.status(1)[0] is not Status.SUSPENDED
+
+
+async def test_a_charge_to_the_old_target_does_not_excuse_the_new_one(
+    rig_factory,
+) -> None:
+    """
+    Target A is charged (answered, not kept); the user retargets to B and the
+    lock goes away before it answers again. B's failed sync is owed, and paid
+    when the lock is back.
+    """
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    armed = False
+
+    def _on_change() -> None:
+        nonlocal armed
+        if armed and rig.worker.slots[1].tries == 1:
+            armed = False
+            rig.worker.want(1, "BBBB")
+            lock.unreachable = True
+
+    rig = rig_factory(lock, on_change=_on_change)
+    await _started(rig, {1: "0000"})
+    armed = True
+    rig.worker.want(1, "AAAA")
+    await _run(rig, lambda: not rig.worker.reachable)
+    assert not rig.worker.reachable and rig.worker.slots[1].want == "BBBB"
+    lock.unreachable = False
+    await _run(rig, lambda: rig.status(1)[0] is Status.SUSPENDED)
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    # One try owed for B's sync during the outage, then one per write.
+    assert lock.writes.count((1, "BBBB")) == LIMIT - 1, lock.writes
+
+
+async def test_an_ignored_slot_beside_a_held_one_is_held_not_the_lock_offline(
+    rig_factory,
+) -> None:
+    """Slot 1 is held (the lock refused its PIN); the lock ignores slot 2."""
+    lock = FakeLock({1: "1111"}, refuse_value={"9999"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    rig.worker.want(1, "9999")
+    await rig.settle()
+    assert rig.status(1) == (Status.SUSPENDED, Repair.SLOT_DISABLED)
+    lock.ignored = {2}
+    rig.worker.want(2, "2222")
+    await _run(
+        rig,
+        lambda: rig.worker.offline or rig.status(2)[0] is Status.SUSPENDED,
+        200,
+    )
+
+    assert rig.status(2)[0] is Status.SUSPENDED
+    assert not rig.worker.offline
+
+
+async def test_a_slot_wanted_after_the_probe_found_none_starts_the_probing(
+    rig_factory,
+) -> None:
+    """The only slot is forgotten while backing off; the next one wanted is probed."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    lock.unreachable = True
+    rig.worker.want(1, "1111")
+    await _run(rig, lambda: not rig.worker.reachable)
+    rig.worker.forget(1)
+    # A probe already queued goes unanswered; the next finds nothing to read.
+    await rig.settle()
+    await _run(rig, rig.worker._retry.done)
+    await rig.settle()
+    assert not rig.worker.reachable
+    lock.unreachable = False
+    rig.worker.want(2, "2222")
+    await _run(rig, lambda: rig.worker.reachable)
+    await rig.settle()
+
+    assert rig.worker.reachable
+    assert rig.status(2) == (Status.IN_SYNC, None)
