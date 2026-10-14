@@ -412,3 +412,36 @@ async def test_stopping_twice_beside_a_release_raises_nothing(setup) -> None:
     await asyncio.gather(registry.stop(), registry.stop(), releasing)
 
     assert locks.running("front") == locks.running("back") == []
+
+
+async def test_a_cancelled_shutdown_does_not_cancel_an_unload(setup) -> None:
+    """Shutdown's caller cancelled: an unload and a hold waiting on it are not."""
+    lock = FakeLock({1: "1111"})
+    registry, _ = setup(front=lock)
+    old = await registry.hold("front", "a", {1: "1111"})
+    await _settle(old)
+    gate = asyncio.Event()
+    original = lock.read
+
+    async def _slow(slots):
+        await gate.wait()
+        return await original(slots)
+
+    lock.read = _slow  # type: ignore[method-assign]
+    reading = asyncio.ensure_future(old.read([1]))
+    await asyncio.sleep(0)
+    releasing = asyncio.ensure_future(registry.release("front", "a"))
+    holding = asyncio.ensure_future(registry.hold("front", "b", {1: "1111"}))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    stopping = asyncio.ensure_future(registry.stop())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    stopping.cancel()
+    gate.set()
+    lock.read = original  # type: ignore[method-assign]
+    await asyncio.gather(reading, stopping, return_exceptions=True)
+
+    assert await releasing is None
+    with pytest.raises(RuntimeError):
+        await holding

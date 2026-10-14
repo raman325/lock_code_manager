@@ -65,7 +65,8 @@ class LockRegistry:
         """
         wants = wants or {}
         while (stopping := self._stops.get(lock)) is not None:
-            await asyncio.shield(stopping)
+            # Not shield: a stop cancelled with stop()'s caller is still done.
+            await asyncio.wait({stopping})
         if self._closed:
             raise RuntimeError("the lock registry has stopped")
         if new := (entry := self._locks.get(lock)) is None:
@@ -132,7 +133,7 @@ class LockRegistry:
             entry.worker.forget(slot)
         self._maybe_stop(lock)
         if (stopping := self._stops.get(lock)) is not None:
-            await asyncio.shield(stopping)
+            await asyncio.wait({stopping})
 
     async def read_once(self, lock: str, slots: Collection[int]) -> dict[int, Reading]:
         """Read ``slots`` in the lock's turn, starting a worker for it if none runs."""
