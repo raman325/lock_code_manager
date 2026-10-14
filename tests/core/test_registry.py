@@ -306,3 +306,109 @@ async def test_stopping_stops_every_worker_clears_included(setup) -> None:
     await registry.stop()
 
     assert locks.running("front") == locks.running("back") == []
+
+
+async def _until_stopped(locks: Locks, lock: str) -> None:
+    async with asyncio.timeout(SETTLE_LIMIT):
+        while locks.running(lock):
+            await asyncio.sleep(0)
+
+
+async def test_a_failing_change_callback_still_stops_the_worker(setup) -> None:
+    """The worker shrugs off an integration callback that raises; so does stopping."""
+    lock = FakeLock({1: "1111"})
+    registry, locks = setup(front=lock)
+
+    def _make(name: str) -> LockWorker:
+        worker = locks.make(name)
+
+        def _boom() -> None:
+            raise RuntimeError("integration bug")
+
+        worker.on_change = _boom
+        return worker
+
+    registry._make = _make
+    worker = await registry.hold("front", "a", {1: "1111"})
+    await _settle(worker)
+    registry.give_up("front", "a", 1)
+    await registry.release("front", "a")
+    await _until_stopped(locks, "front")
+
+    assert lock.codes == {}
+
+
+async def test_a_hold_after_stopping_is_refused(setup) -> None:
+    """Home Assistant stopped: nothing would ever stop a worker started now."""
+    registry, locks = setup(front=FakeLock())
+    await registry.stop()
+
+    with pytest.raises(RuntimeError):
+        await registry.hold("front", "a", {1: "1111"})
+    assert locks.running("front") == []
+
+
+async def test_a_hold_waiting_on_a_stop_when_stopping_starts_nothing(setup) -> None:
+    """A hold queued behind a stopping worker does not outlive the registry."""
+    lock = FakeLock({1: "1111"})
+    registry, locks = setup(front=lock)
+    old = await registry.hold("front", "a", {1: "1111"})
+    await _settle(old)
+    gate = asyncio.Event()
+    original = lock.read
+
+    async def _slow(slots):
+        await gate.wait()
+        return await original(slots)
+
+    lock.read = _slow  # type: ignore[method-assign]
+    reading = asyncio.ensure_future(old.read([1]))
+    await asyncio.sleep(0)
+    releasing = asyncio.ensure_future(registry.release("front", "a"))
+    holding = asyncio.ensure_future(registry.hold("front", "b", {1: "1111"}))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    stopping = asyncio.ensure_future(registry.stop())
+    gate.set()
+    lock.read = original  # type: ignore[method-assign]
+    await asyncio.gather(reading, releasing, stopping, return_exceptions=True)
+
+    with pytest.raises(RuntimeError):
+        await holding
+    assert locks.running("front") == []
+
+
+async def test_a_read_abandoned_midway_leaves_nothing(setup) -> None:
+    """A config flow cancelled mid-read leaves no worker running."""
+    lock = FakeLock({3: "3333"})
+    registry, locks = setup(front=lock)
+    gate = asyncio.Event()
+    original = lock.read
+
+    async def _slow(slots):
+        await gate.wait()
+        return await original(slots)
+
+    lock.read = _slow  # type: ignore[method-assign]
+    task = asyncio.ensure_future(registry.read_once("front", [3]))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    task.cancel()
+    gate.set()
+    await asyncio.gather(task, return_exceptions=True)
+    await _until_stopped(locks, "front")
+
+    assert locks.running("front") == []
+
+
+async def test_stopping_twice_beside_a_release_raises_nothing(setup) -> None:
+    """Shutdown racing an entry's unload, and itself, ends cleanly."""
+    registry, locks = setup(front=FakeLock(), back=FakeLock())
+    worker = await registry.hold("front", "a", {1: "1111"})
+    await registry.hold("back", "a", {1: "1111"})
+    await _settle(worker)
+    releasing = asyncio.ensure_future(registry.release("front", "a"))
+    await asyncio.sleep(0)
+    await asyncio.gather(registry.stop(), registry.stop(), releasing)
+
+    assert locks.running("front") == locks.running("back") == []

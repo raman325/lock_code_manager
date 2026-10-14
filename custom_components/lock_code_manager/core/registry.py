@@ -51,6 +51,7 @@ class LockRegistry:
         self._locks: dict[str, _Lock] = {}
         self._stops: dict[str, asyncio.Task[None]] = {}
         self._once = itertools.count()
+        self._closed = False
 
     async def hold(
         self, lock: str, owner: str, wants: Mapping[int, Want] | None = None
@@ -60,28 +61,33 @@ class LockRegistry:
 
         A new worker starts with every slot wanted, so its first read takes
         them all at once. A worker still stopping is waited for: one lock
-        never has two.
+        never has two. Once the registry has stopped, nothing is held.
         """
         wants = wants or {}
         while (stopping := self._stops.get(lock)) is not None:
             await asyncio.shield(stopping)
-        entry = self._locks.get(lock)
-        if entry is not None:
-            _check_free(entry, owner, wants)
-        else:
-            entry = self._locks[lock] = _Lock(self._make(lock))
-            inner = entry.worker.on_change
+        if self._closed:
+            raise RuntimeError("the lock registry has stopped")
+        if new := (entry := self._locks.get(lock)) is None:
+            worker = self._make(lock)
+            entry = self._locks[lock] = _Lock(worker)
+            inner = worker.on_change
 
             def _on_change() -> None:
-                inner()
-                self._maybe_stop(lock)
+                try:
+                    inner()
+                finally:
+                    # The worker logs what ``inner`` raises; stopping goes on.
+                    self._maybe_stop(lock)
 
-            entry.worker.on_change = _on_change
+            worker.on_change = _on_change
+        else:
+            _check_free(entry, owner, wants)
         entry.holders.add(owner)
         for slot, pin in wants.items():
             entry.owners[slot] = owner
             entry.worker.want(slot, pin)
-        if not entry.worker.started:
+        if new:
             entry.worker.start()
         return entry.worker
 
@@ -139,9 +145,9 @@ class LockRegistry:
 
     async def stop(self) -> None:
         """Stop every worker, clears still going included (Home Assistant stops)."""
-        for lock, entry in list(self._locks.items()):
-            del self._locks[lock]
-            self._stops[lock] = asyncio.create_task(self._stop(lock, entry.worker))
+        self._closed = True
+        for lock in list(self._locks):
+            self._retire(lock)
         await asyncio.gather(*self._stops.values())
 
     def _held(self, lock: str, owner: str) -> _Lock:
@@ -158,7 +164,11 @@ class LockRegistry:
             slot.release and slot.hold is None for slot in entry.worker.slots.values()
         ):
             return  # a slot given up is still being cleared
-        del self._locks[lock]
+        self._retire(lock)
+
+    def _retire(self, lock: str) -> None:
+        """Take ``lock``'s worker out of service and stop it."""
+        entry = self._locks.pop(lock)
         self._stops[lock] = asyncio.create_task(self._stop(lock, entry.worker))
 
     async def _stop(self, lock: str, worker: LockWorker) -> None:
