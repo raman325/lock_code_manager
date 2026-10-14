@@ -104,11 +104,21 @@ async def _async_setup_two_slots(
         hass, freezer, setup.done, 100, "setup", step=MIN_OPERATION_DELAY / 2
     )
     assert setup.result()
-    in_syncs = [in_sync_entity_id(hass, entry, slot) for slot in (1, 2)]
+
+    def _both_in_sync() -> bool:
+        try:
+            in_syncs = [in_sync_entity_id(hass, entry, slot) for slot in (1, 2)]
+        except AssertionError:
+            return False  # the per-lock entities are added after setup returns
+        return all(
+            (state := hass.states.get(e)) is not None and state.state == STATE_ON
+            for e in in_syncs
+        )
+
     await async_tick_until(
         hass,
         freezer,
-        lambda: all(hass.states.get(e).state == STATE_ON for e in in_syncs),
+        _both_in_sync,
         max_ticks=5,
         what="both slots in sync",
         settle=not paced,
