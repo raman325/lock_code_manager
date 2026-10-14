@@ -13,11 +13,11 @@ import warnings
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from zhaquirks.legacy import get_device
 from zigpy.application import ControllerApplication
 import zigpy.config
 import zigpy.device
 from zigpy.profiles import zha as zha_profile
-import zigpy.quirks
 import zigpy.state
 import zigpy.types
 from zigpy.zcl import foundation
@@ -345,7 +345,7 @@ def zigpy_device_mock(
                 endpoint.add_output_cluster(cluster_id)
 
         device.status = zigpy.device.Status.ENDPOINTS_INIT
-        device = zigpy.quirks.get_device(device)
+        device = get_device(device)
 
         if patch_cluster_flag:
             for endpoint in (ep for epid, ep in device.endpoints.items() if epid):
