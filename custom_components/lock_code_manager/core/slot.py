@@ -99,6 +99,9 @@ class Slot:
     fights: list[float] = field(default_factory=list)
     hold: Repair | None = None
     release: bool = False
+    # Bumped each time the counts start over: a sync begun before is not
+    # charged to what came after.
+    epoch: int = 0
 
     def aim(self, want: Want, *, release: bool = False) -> None:
         """Set what is wanted; a change of target starts the counts over."""
@@ -106,11 +109,6 @@ class Slot:
             self.resume()
         self.want = want
         self.release = release
-
-    @property
-    def target(self) -> tuple[Want, bool]:
-        """Return what a sync aims at: the PIN or empty, and whether a release."""
-        return self.want, self.release
 
     def agrees(self, salt: bytes) -> bool:
         """Return whether what the lock said agrees with what is wanted."""
@@ -190,6 +188,7 @@ class Slot:
 
     def resume(self) -> None:
         """Lift any hold and start the counts over."""
+        self.epoch += 1
         self.tries = 0
         self.fights.clear()
         self.hold = None
