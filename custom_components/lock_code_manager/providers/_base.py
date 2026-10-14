@@ -875,6 +875,10 @@ class BaseLock:
                     self.operation_timeout_seconds,
                 )
             except (LockDisconnected, LockOperationFailed) as err:
+                # Re-armed like the reconnect path does: an integration that
+                # stays loaded (a Z-Wave node dead at boot) never brings the
+                # LOADED transition this would otherwise wait for.
+                self._setup_deferred = True
                 LOGGER.warning(
                     "Provider setup failed for %s: %s. Coordinator will be "
                     "created but data will be unavailable until the lock "

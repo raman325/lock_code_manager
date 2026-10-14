@@ -1320,7 +1320,9 @@ async def test_a_lock_whose_setup_raised_comes_up_with_its_integration(
     )
     assert hass.states.get(per_lock[1]).state == "4321"
     assert lock.codes[1] == "4321"
-    assert lock.service_calls["setup"] == [(entry.entry_id,)] * 2
+    # Retried on the connection check while down, and again on the reload.
+    assert len(lock.service_calls["setup"]) >= 2
+    assert set(lock.service_calls["setup"]) == {(entry.entry_id,)}
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

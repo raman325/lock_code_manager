@@ -49,7 +49,12 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers._mqtt import BaseMqttLock
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
-from ..common import MockLCMLock, MockLCMPushLock, when_mock_lock_built
+from ..common import (
+    NO_PIN_CAPABILITIES,
+    MockLCMLock,
+    MockLCMPushLock,
+    when_mock_lock_built,
+)
 
 SALT = b"salt"
 
@@ -554,3 +559,105 @@ async def test_a_lock_that_turns_out_to_push_stops_polling(
     await worker.settled()
 
     assert len(lock.service_calls["get_usercodes"]) == reads
+
+
+# Setup and unload ----------------------------------------------------------------
+
+
+async def _sync_until_quiet(worker, rounds: int = 10) -> None:
+    for _ in range(rounds):
+        worker.request_sync()
+        await worker.settled()
+        await asyncio.sleep(0)
+
+
+# F1 -------------------------------------------------------------------------------
+
+
+async def test_a_setup_that_failed_on_a_blip_is_retried_by_the_next_write(
+    hass: HomeAssistant, ports
+) -> None:
+    """Z-Wave JS at boot with its node dead: the integration stays loaded."""
+    with when_mock_lock_built(
+        lambda lock: lock.fail("setup", error=LockDisconnected, times=1)
+    ):
+        port, _, lock = await ports(_NoConnectionCheck)
+    assert not lock.provider_setup_succeeded
+
+    with contextlib.suppress(LockError):
+        await port.write(3, "3333")
+    await hass.async_block_till_done()
+
+    assert lock.provider_setup_succeeded
+
+
+async def test_a_lock_whose_setup_failed_on_a_blip_gets_its_slots_written(
+    hass: HomeAssistant, ports
+) -> None:
+    """Reads answer once the node is back: the slot must not be held forever."""
+    with when_mock_lock_built(
+        lambda lock: lock.fail("setup", error=LockDisconnected, times=1)
+    ):
+        _, worker, lock = await ports(_NoConnectionCheck)
+    worker.want(3, "3333")
+    worker.start()
+    await _sync_until_quiet(worker)
+    await hass.async_block_till_done()
+    await _sync_until_quiet(worker)
+
+    assert lock.codes.get(3) == "3333"
+    assert worker.status(3) == (Status.IN_SYNC, None)
+
+
+# F2 -------------------------------------------------------------------------------
+
+
+async def test_a_lock_not_set_up_holds_no_slot(hass: HomeAssistant, ports) -> None:
+    """Setup failed validation: the lock backs off; no slot is held for it."""
+
+    def _no_pin(lock) -> None:
+        lock.capabilities = NO_PIN_CAPABILITIES
+
+    with when_mock_lock_built(_no_pin):
+        _, worker, lock = await ports()
+    assert not lock.provider_setup_succeeded
+    worker.want(3, "3333")
+    worker.start()
+    await _sync_until_quiet(worker)
+
+    assert worker.status(3)[1] is None
+    assert lock.service_calls["set_usercode"] == []
+
+
+# F3 -------------------------------------------------------------------------------
+
+
+async def test_the_poll_is_not_rearmed_once_unloaded(ports) -> None:
+    """A reconnect finishing while unload awaits the poll arms nothing."""
+    port, worker, lock = await ports()
+    assert port._poll_unsub is not None
+    assert lock.coordinator is not None
+    coordinator = lock.coordinator
+
+    async def _poll_racing_a_reconnect() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            coordinator.note_push_capability()
+
+    port._poll = asyncio.create_task(_poll_racing_a_reconnect())
+    await asyncio.sleep(0)
+    await worker.stop(grace=0.1)
+    await port.async_unload(False)
+
+    leaked = port._poll_unsub
+    if leaked is not None:
+        leaked()
+    assert leaked is None
+
+
+async def test_a_provider_the_port_never_set_up_is_read(ports) -> None:
+    """A one-off read's provider is never set up: reading it needs nothing more."""
+    port, _, lock = await ports(setup=False)
+
+    assert await port.read([1]) == {1: Holds("1234")}

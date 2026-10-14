@@ -103,6 +103,10 @@ class ProviderPort:
         self._answered = False
         self._poll: asyncio.Task[None] | None = None
         self._poll_unsub: Callable[[], None] | None = None
+        # Unloaded: nothing may start a poll or arm its timer again.
+        self._closed = False
+        # This port set the provider up, and owns its lifecycle.
+        self._managed = False
         self._unsubs: list[Callable[[], None]] = []
 
     # LockPort ----------------------------------------------------------------
@@ -117,6 +121,10 @@ class ProviderPort:
         reads before, is no answer.
         """
         provider = self.provider
+        if self._managed and not await self._set_up():
+            raise LockError(
+                ErrorKind.NO_ANSWER, sent=False, message="provider not set up"
+            )
         fetch = (
             provider.async_hard_refresh_codes
             if provider.fresh_read_is_hard_refresh
@@ -152,15 +160,10 @@ class ProviderPort:
         the lock's capacity (#1398).
         """
         provider = self.provider
-        if not provider.provider_setup_succeeded:
-            # Asking is what retries a deferred setup; a provider with no
-            # connection check (Z-Wave JS) is asked nowhere else.
-            with contextlib.suppress(LockCodeManagerError):
-                await provider.async_internal_is_reachable()
-            if not provider.provider_setup_succeeded:
-                raise LockError(
-                    ErrorKind.NO_ANSWER, sent=False, message="provider not set up"
-                )
+        if not await self._set_up():
+            raise LockError(
+                ErrorKind.NO_ANSWER, sent=False, message="provider not set up"
+            )
         self._writing = slot
         try:
             if pin is None:
@@ -177,6 +180,23 @@ class ProviderPort:
         finally:
             self._writing = None
 
+    async def _set_up(self) -> bool:
+        """
+        Return whether the provider is set up, asking it first if not.
+
+        Asking is what retries a deferred setup; a provider with no
+        connection check (Z-Wave JS) is asked nowhere else. Reads are gated
+        too once this port set the provider up: a lock that answers reads
+        while every write is refused unsent would charge each slot's sync
+        (the read-back answers) and hold it. A provider this port never set
+        up (a one-off read's) is only read.
+        """
+        provider = self.provider
+        if not provider.provider_setup_succeeded:
+            with contextlib.suppress(LockCodeManagerError):
+                await provider.async_internal_is_reachable()
+        return provider.provider_setup_succeeded
+
     async def _capacity(self, slot: int) -> None:
         """Refuse, unsent, a slot past the lock's capacity."""
         try:
@@ -191,6 +211,7 @@ class ProviderPort:
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set the provider up with the stand-in coordinator; start the cadence."""
         provider = self.provider
+        self._managed = True
         await provider.async_setup_internal(
             config_entry,
             # The old coordinator's type until the swap deletes it.
@@ -209,6 +230,7 @@ class ProviderPort:
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Stop the cadence and unload the provider."""
+        self._closed = True
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -264,7 +286,7 @@ class ProviderPort:
         if self._poll_unsub is not None:
             self._poll_unsub()
             self._poll_unsub = None
-        if interval := self._poll_interval():
+        if not self._closed and (interval := self._poll_interval()):
             self._poll_unsub = async_track_time_interval(
                 self.provider.hass, self._on_poll, interval, cancel_on_shutdown=True
             )
