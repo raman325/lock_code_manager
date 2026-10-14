@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Collection
+import contextlib
 from datetime import datetime, timedelta
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
 
 from ..domain.credentials import CredentialAddress
@@ -62,15 +64,20 @@ def reading(credential: SlotCredential) -> Reading:
 def lock_error(
     err: LockCodeManagerProviderError, *, clearing: bool
 ) -> LockError | None:
-    """Return what a provider's error means to the worker; None for a bug."""
+    """
+    Return what a provider's error on a write means to the worker; None for a bug.
+
+    A refusal is the lock's answer about the slot. Any other failure is no
+    answer: providers wrap an integration or cloud outage as a failed
+    operation, and a slot is still charged when the lock answers anything
+    else in its sync, such as the read-back.
+    """
     if isinstance(err, CodeRejectedError):
         # A refused clear holds at once; a refused PIN turns the slot off.
         kind = ErrorKind.SLOT_REFUSED if clearing else ErrorKind.VALUE_REFUSED
     elif isinstance(err, LockOperationUnsupported):
         kind = ErrorKind.SLOT_REFUSED
-    elif isinstance(err, LockOperationFailed):
-        kind = ErrorKind.TRANSIENT
-    elif isinstance(err, (LockDisconnected, LockBusy)):
+    elif isinstance(err, (LockOperationFailed, LockDisconnected, LockBusy)):
         kind = ErrorKind.NO_ANSWER
     else:
         return None
@@ -95,6 +102,7 @@ class ProviderPort:
         # Some read has said something about a slot: silence is now no answer.
         self._answered = False
         self._poll: asyncio.Task[None] | None = None
+        self._poll_unsub: Callable[[], None] | None = None
         self._unsubs: list[Callable[[], None]] = []
 
     # LockPort ----------------------------------------------------------------
@@ -121,9 +129,10 @@ class ProviderPort:
         except TimeoutError as err:
             raise LockError(ErrorKind.NO_ANSWER, message="read timed out") from err
         except LockCodeManagerProviderError as err:
-            if (error := lock_error(err, clearing=False)) is None:
+            if lock_error(err, clearing=False) is None:
                 raise
-            raise error from err
+            # A read that failed said nothing about any slot: no answer.
+            raise LockError(ErrorKind.NO_ANSWER, message=str(err)) from err
         silent = provider.last_silent_slots & set(slots)
         if self._answered and silent >= set(slots):
             raise LockError(ErrorKind.NO_ANSWER, message="the lock said nothing")
@@ -144,9 +153,14 @@ class ProviderPort:
         """
         provider = self.provider
         if not provider.provider_setup_succeeded:
-            raise LockError(
-                ErrorKind.NO_ANSWER, sent=False, message="provider not set up"
-            )
+            # Asking is what retries a deferred setup; a provider with no
+            # connection check (Z-Wave JS) is asked nowhere else.
+            with contextlib.suppress(LockCodeManagerError):
+                await provider.async_internal_is_reachable()
+            if not provider.provider_setup_succeeded:
+                raise LockError(
+                    ErrorKind.NO_ANSWER, sent=False, message="provider not set up"
+                )
         self._writing = slot
         try:
             if pin is None:
@@ -182,12 +196,7 @@ class ProviderPort:
             # The old coordinator's type until the swap deletes it.
             cast("LockUsercodeUpdateCoordinator", _Coordinator(self)),
         )
-        if interval := self._poll_interval():
-            self._unsubs.append(
-                async_track_time_interval(
-                    provider.hass, self._on_poll, interval, cancel_on_shutdown=True
-                )
-            )
+        self._arm_poll()
         if interval := provider.connection_check_interval:
             self._unsubs.append(
                 async_track_time_interval(
@@ -203,6 +212,9 @@ class ProviderPort:
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        if self._poll_unsub is not None:
+            self._poll_unsub()
+            self._poll_unsub = None
         if self._poll is not None:
             self._poll.cancel()
             await asyncio.gather(self._poll, return_exceptions=True)
@@ -247,6 +259,17 @@ class ProviderPort:
             intervals.append(provider.usercode_scan_interval)
         return min((i for i in intervals if i is not None), default=None)
 
+    def _arm_poll(self) -> None:
+        """(Re)start the poll at the provider's cadence as it stands now."""
+        if self._poll_unsub is not None:
+            self._poll_unsub()
+            self._poll_unsub = None
+        if interval := self._poll_interval():
+            self._poll_unsub = async_track_time_interval(
+                self.provider.hass, self._on_poll, interval, cancel_on_shutdown=True
+            )
+
+    @callback
     def _on_poll(self, now: datetime) -> None:
         self.poll()
 
@@ -313,4 +336,5 @@ class _Coordinator:
         """Do nothing: the core keeps no pending writes."""
 
     def note_push_capability(self) -> None:
-        """Do nothing: the cadence is set when the provider is set up."""
+        """Re-arm the poll: a bridged provider has learned it can push."""
+        self._port._arm_poll()

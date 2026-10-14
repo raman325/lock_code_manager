@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection
+import contextlib
 from datetime import timedelta
 from pathlib import Path
 import re
@@ -11,7 +12,10 @@ from types import SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -45,7 +49,7 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers._mqtt import BaseMqttLock
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
-from ..common import MockLCMLock, MockLCMPushLock
+from ..common import MockLCMLock, MockLCMPushLock, when_mock_lock_built
 
 SALT = b"salt"
 
@@ -108,7 +112,7 @@ def test_readings() -> None:
         (DuplicateCodeError(1, "lock.front"), False, ErrorKind.VALUE_REFUSED),
         (CodeRejectedError(1, "lock.front", "no"), True, ErrorKind.SLOT_REFUSED),
         (LockOperationUnsupported("bad slot"), False, ErrorKind.SLOT_REFUSED),
-        (LockOperationFailed("try again"), False, ErrorKind.TRANSIENT),
+        (LockOperationFailed("api down"), False, ErrorKind.NO_ANSWER),
         (LockDisconnected("gone"), False, ErrorKind.NO_ANSWER),
         (LockBusy("busy"), True, ErrorKind.NO_ANSWER),
     ],
@@ -455,3 +459,98 @@ async def test_an_mqtt_bridge_records_the_slots_its_lock_said_nothing_about() ->
     )
 
     assert bridge.last_silent_slots == {2}
+
+
+# An outage the provider calls a failure ----------------------------------------------
+
+
+async def test_an_outage_on_reads_and_writes_holds_no_slot(ports) -> None:
+    """Providers wrap an API outage as a failed operation: the lock backs off."""
+    _, worker, lock = await ports()
+    lock.fail("get", error=LockOperationFailed)
+    lock.fail("set", error=LockOperationFailed)
+    worker.want(3, "3333")
+    worker.start()
+    await worker.settled()
+
+    assert worker.status(3)[1] is None
+    assert not worker.reachable
+
+
+async def test_writes_failing_while_reads_answer_hold_the_slot(ports) -> None:
+    """The read-back answers in the same sync: the failed write is the slot's."""
+    _, worker, lock = await ports()
+    lock.fail("set", 3, error=LockOperationFailed)
+    worker.want(3, "3333")
+    worker.start()
+    async with asyncio.timeout(5):
+        while worker.status(3)[0] is not Status.SUSPENDED:
+            worker.request_sync()
+            await worker.settled()
+
+    assert worker.status(3) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert worker.reachable
+
+
+class _NoConnectionCheck(MockLCMPushLock):
+    """Like Z-Wave JS: no connection check, no poll."""
+
+    @property
+    def connection_check_interval(self) -> timedelta | None:
+        return None
+
+
+async def test_a_deferred_setup_is_retried_by_the_next_write(
+    hass: HomeAssistant, ports
+) -> None:
+    """Nothing else asks a provider with no connection check whether it is up."""
+    with when_mock_lock_built(
+        lambda lock: lock.fail("setup", error=TimeoutError, times=1)
+    ):
+        port, _, lock = await ports(_NoConnectionCheck)
+    assert not lock.provider_setup_succeeded
+
+    with contextlib.suppress(LockError):
+        await port.write(3, "3333")
+    await hass.async_block_till_done()
+
+    assert lock.provider_setup_succeeded
+
+
+async def test_the_poll_reads_the_lock(hass: HomeAssistant, ports) -> None:
+    """On the event loop, at the provider's cadence."""
+    _, worker, lock = await ports()
+    worker.want(1, "1234")
+    worker.start()
+    await worker.settled()
+    reads = len(lock.service_calls["get_usercodes"])
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=2))
+    await hass.async_block_till_done()
+    async with asyncio.timeout(2):
+        while len(lock.service_calls["get_usercodes"]) == reads:
+            await asyncio.sleep(0.01)
+
+
+async def test_a_lock_that_turns_out_to_push_stops_polling(
+    hass: HomeAssistant, ports
+) -> None:
+    """A bridge learns it can push once discovery lands; its poll goes."""
+    port, worker, lock = await ports(MockLCMPushLock, setup=False)
+    lock._supports_push = False
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    await port.async_setup(entry)
+    worker.want(1, "1234")
+    worker.start()
+    await worker.settled()
+
+    lock._supports_push = True
+    assert lock.coordinator is not None
+    lock.coordinator.note_push_capability()
+    reads = len(lock.service_calls["get_usercodes"])
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=2))
+    await hass.async_block_till_done()
+    await worker.settled()
+
+    assert len(lock.service_calls["get_usercodes"]) == reads
