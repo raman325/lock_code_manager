@@ -212,6 +212,9 @@ class ZWaveJSLock(BaseLock):
         except ValueError as err:
             raise LockDisconnected(f"Z-Wave JS node unavailable: {err}") from err
 
+    # The plain read is the driver's value cache; only a hard refresh asks the node.
+    fresh_read_is_hard_refresh = True
+
     @property
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
