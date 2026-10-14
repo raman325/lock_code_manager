@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -14,10 +16,14 @@ from homeassistant.const import (
     SERVICE_TURN_ON,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.core.slot import Repair, Status
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
+from custom_components.lock_code_manager.domain.exceptions import (
+    LockDisconnected,
+    LockOperationUnsupported,
+)
 from custom_components.lock_code_manager.domain.lock_runtime import (
     async_give_up,
     async_resume_slot,
@@ -200,3 +206,63 @@ async def test_a_held_release_tried_again_without_its_entry_is_still_a_release(
         await hass.async_block_till_done()
 
     assert built
+
+
+LINK_HEALTH = "Radio link: 126 of 256 commands went unanswered."
+
+
+def _hold_reason(hass: HomeAssistant, entry: MockConfigEntry, slot: int) -> str:
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_{slot}"
+    )
+    assert issue is not None
+    assert issue.translation_placeholders is not None
+    return issue.translation_placeholders["reason"]
+
+
+async def test_a_driver_that_will_not_set_a_code_is_quoted_in_the_repair(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The driver's own explanation reaches the repair, not a generic one (#1398)."""
+    entry = await _entry(hass)
+    mock_lock(entry).fail(
+        "set",
+        1,
+        error=LockOperationUnsupported(
+            "set credential slot 1 failed: zwave_error: Z-Wave error 322"
+        ),
+    )
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await hass.async_block_till_done()
+
+    assert "Z-Wave error 322" in _hold_reason(hass, entry, 1)
+
+
+async def test_what_the_provider_measures_of_its_link_is_quoted_in_the_repair(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A provider that can measure its transport is quoted, after the reason (#1397)."""
+    entry = await _entry(hass)
+    lock = mock_lock(entry)
+    lock.ignore("set", 1)
+    with patch.object(lock, "describe_link_health", return_value=LINK_HEALTH):
+        await async_set_slot_pin(hass, entry, 1, "4321")
+        await hass.async_block_till_done()
+
+    reason = _hold_reason(hass, entry, 1)
+    assert reason.startswith("the lock did not take the code after several tries")
+    assert reason.endswith(LINK_HEALTH)
+
+
+async def test_a_provider_that_cannot_measure_its_link_leaves_the_reason_alone(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Nothing is added when the provider has nothing to say of its transport."""
+    entry = await _entry(hass)
+    mock_lock(entry).ignore("set", 1)
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await hass.async_block_till_done()
+
+    assert _hold_reason(hass, entry, 1) == (
+        "the lock did not take the code after several tries"
+    )

@@ -62,6 +62,7 @@ class LockError(Exception):
         super().__init__(message or kind.value)
         self.kind = kind
         self.sent = sent
+        self.message = message
 
 
 class LockPort(Protocol):
@@ -481,7 +482,7 @@ class LockWorker:
             _LOGGER.debug("Sync of slot %s failed: %s", number, err)
             if err.kind is ErrorKind.SLOT_REFUSED and slot.epoch == epoch:
                 # A read refused for the slot (past the lock's capacity).
-                slot.refused(value=False)
+                slot.refused(value=False, why=err.message)
         if slot.epoch == epoch and self._failed(slot):
             if self._bug:
                 slot.tried()
@@ -545,12 +546,12 @@ class LockWorker:
                 slot.wrote_want(self.salt)
                 slot.released = slot.release
             elif err.kind is ErrorKind.VALUE_REFUSED:
-                slot.refused(value=True)
+                slot.refused(value=True, why=err.message)
                 if pin is not None:
                     self.on_disable(number)
                 return
             elif err.kind is ErrorKind.SLOT_REFUSED:
-                slot.refused(value=False)
+                slot.refused(value=False, why=err.message)
                 return
         else:
             if not current():

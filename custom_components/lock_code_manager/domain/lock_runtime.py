@@ -425,6 +425,13 @@ def async_reconcile_issues(
         raised.add(issue_id)
         translation_key, reason = issue
         provider = port_of(worker).provider
+        # The driver's own words over ours when it would not set the code
+        # (#1398) -- a refused clear's are about setting, and mislead; whatever
+        # the provider can measure of its transport, verbatim (#1397).
+        if slot.hold is Repair.CANT_SET and slot.why:
+            reason = slot.why
+        if link_health := provider.describe_link_health():
+            reason = f"{reason}\n\n{link_health}"
         async_create_issue(
             hass,
             DOMAIN,
