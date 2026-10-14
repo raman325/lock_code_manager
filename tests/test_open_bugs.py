@@ -320,7 +320,7 @@ async def test_an_existing_slot_overlap_is_reported_not_fought_over(
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "open (#1536 residual): adding users through the user subentry flow "
+        "open (#1536): adding users through the user subentry flow "
         "waits on the lock read with no progress step"
     ),
 )
@@ -492,7 +492,7 @@ async def test_an_overlap_error_names_the_users_in_the_way(
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "open: adding a lock in the options flow never reads it, so codes "
+        "open (#1684): adding a lock in the options flow never reads it, so codes "
         "already on it are overwritten"
     ),
 )

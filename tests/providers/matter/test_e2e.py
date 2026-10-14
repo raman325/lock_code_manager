@@ -855,7 +855,7 @@ class TestOpenBugs:
         strict=True,
         raises=AssertionError,
         reason=(
-            "open: a turned-off slot's clear adopts an untagged user holding a "
+            "open (#1518): a turned-off slot's clear adopts an untagged user holding a "
             "PIN at the slot's credential index and removes the homeowner's code"
         ),
     )
