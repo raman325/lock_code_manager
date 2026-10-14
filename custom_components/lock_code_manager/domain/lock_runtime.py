@@ -124,6 +124,11 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
         def _on_disable(slot: int) -> None:
             if (entry := configured_owner(hass, lock_entity_id, slot)) is None:
                 return
+            # Why, as the lock or the duplicate check said it (which slot
+            # already has the PIN): re-enabling blind is refused again. Read
+            # first: turning the slot off (an eager task) starts it over.
+            held = worker.slots.get(slot)
+            why = f" {held.why}" if held is not None and held.why else ""
             # Through the config, not the switch: during setup the switch
             # entity may not exist yet, and it reads the config when it does.
             runtime = getattr(entry, "runtime_data", None)
@@ -145,7 +150,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
                     "slot_num": str(slot),
                     "reason": (
                         f"Lock **{lock_entity_id}** refused the PIN for slot "
-                        f"**{slot}**.\n\nFix the issue and re-enable the slot."
+                        f"**{slot}**.{why}\n\nFix the issue and re-enable the slot."
                     ),
                 },
             )
@@ -315,10 +320,17 @@ def async_give_up(
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
-    if not port_of(worker).provider.provider_setup_succeeded and not worker.answered:
-        # Nothing can be written to a lock never set up: no clear to wait on.
-        # One that answered and has lost its setup (a failed revalidation)
-        # holds codes: the clear waits for it.
+    provider = port_of(worker).provider
+    if (
+        not provider.provider_setup_succeeded
+        and not provider._setup_deferred
+        and not worker.answered
+    ):
+        # Nothing can be written to a lock whose setup failed for good (no
+        # room for codes): no clear to wait on. One whose setup is only
+        # deferred (its integration loading, a node dead at boot) may hold
+        # codes, and so may one that answered and has lost its setup (a
+        # failed revalidation): the clear waits for it.
         clear = False
     try:
         if clear:

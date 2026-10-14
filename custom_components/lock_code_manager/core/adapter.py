@@ -266,12 +266,16 @@ class ProviderPort:
                 if (other := self._duplicate_of(slot, pin)) is not None:
                     # Two users sharing a PIN: whoever types it opens the door
                     # as the other, and turning one off leaves it working.
-                    raise DuplicateCodeError(
+                    # Refused unsent: not the lock answering.
+                    duplicate = DuplicateCodeError(
                         code_slot=slot,
                         lock_entity_id=provider.lock.entity_id,
                         conflicting_slot=other,
                         conflicting_slot_managed=provider.is_slot_managed(other),
                     )
+                    raise LockError(
+                        ErrorKind.VALUE_REFUSED, sent=False, message=str(duplicate)
+                    ) from duplicate
                 await provider.async_set_usercode(
                     slot, pin, self.name_for(slot), source="sync"
                 )
