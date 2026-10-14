@@ -70,6 +70,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
@@ -2388,3 +2389,44 @@ class TestOpenBugs:
         await hass.config_entries.async_unload(entry.entry_id)
         assert len(clears) <= 1
         assert states == (STATE_ON, "")
+
+
+class TestUserRemoved:
+    """A user deleted from the entry: their code leaves the lock."""
+
+    @pytest.fixture(params=["user_code", "user_credential"])
+    def lock_schlage_be469_state(
+        self, request: pytest.FixtureRequest, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """A User Code lock (the BE469), or a User Credential one."""
+        if request.param == "user_credential":
+            return user_credential_lock_state(lock_schlage_be469_state)
+        return lock_schlage_be469_state
+
+    async def test_a_deleted_user_s_code_is_cleared(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+    ) -> None:
+        """
+        Removing a user takes their PIN off the lock.
+
+        A User Code slot is its own nameless user and never carries Lock
+        Code Manager's tag, so a release that adopts no untagged user found
+        no owner and sent nothing: the deleted user's PIN kept opening the
+        door.
+        """
+        entry = fake_zwave_lock_entry
+        await async_advance_sync_ticks(hass, freezer, 5)
+        assert fake_zwave_lock.holds(2) == "1234"
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.holds(2) is None
+        assert fake_zwave_lock.holds(1) == "9999"
