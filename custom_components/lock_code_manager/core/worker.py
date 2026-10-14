@@ -140,9 +140,10 @@ class LockWorker:
         # Slots charged a try since the lock last answered, by Slot and epoch:
         # an outage costs each target one try at most.
         self._charged: dict[int, tuple[Slot, int]] = {}
-        # Slots written since the lock last gave a reading of them: the write
-        # may have landed, so what it said before is no guide to a new target.
-        self._unsure: set[int] = set()
+        # Slots written since the lock last gave a reading of them, by the
+        # Slot and epoch written for: the write may have landed, so what it
+        # said before is no guide to a new target.
+        self._unsure: dict[int, tuple[Slot, int]] = {}
         # Slots whose sync failed with nothing answering, by epoch: charged
         # when the lock next answers, as nothing else tells an outage from a
         # slot the lock ignores.
@@ -350,7 +351,15 @@ class LockWorker:
         slot = self.slots.get(job.slot)
         if slot is None or self._written.get(job.slot, 0) > job.seq:
             return
-        slot.observe(job.reading, self.salt, self.clock(), fresh=False)
+        if (unsure := self._unsure.get(job.slot)) is not None and (
+            unsure[0] is not slot or unsure[1] != slot.epoch
+        ):
+            # A write for another target since the last reading may have
+            # landed, and a report may be a cache older than it: it cannot
+            # vouch for this target. Read first.
+            slot.seen = None
+        else:
+            slot.observe(job.reading, self.salt, self.clock(), fresh=False)
         self.request_sync((job.slot,))
 
     async def _sync(self, number: int) -> None:
@@ -420,18 +429,21 @@ class LockWorker:
         """
         pin = slot.want
         slot.wrote = None
-        self._unsure.add(number)
 
         def current() -> bool:
             # Still the slot in place, still wanting what was sent.
             return self.slots.get(number) is slot and slot.want == pin
 
+        # Forgotten or retargeted while waiting its turn: send nothing.
+        await self._pace()
+        if not current():
+            return
+        self._unsure[number] = (slot, slot.epoch)
         try:
             # Reports taken in before the write is sent are older than it.
             await self._exchange(lambda: self.port.write(number, pin), mark=number)
         except LockError as err:
             if not current():
-                self._written[number] = self._next()
                 return
             if err.kind is ErrorKind.ALREADY_SO:
                 slot.wrote_want(self.salt)
@@ -445,7 +457,6 @@ class LockWorker:
                 return
         else:
             if not current():
-                self._written[number] = self._next()
                 return
             slot.wrote_want(self.salt)
         if self._down_until is None:
@@ -469,14 +480,17 @@ class LockWorker:
         if not numbers:
             # Reading nothing asks the lock nothing: no answer, no no-answer.
             return {}
-        readings = dict(
-            await self._exchange(lambda: self.port.read(numbers), pay=False)
-        )
+
+        async def _readings() -> dict[int, Reading]:
+            # Inside the exchange: a provider returning garbage is its bug.
+            return dict(await self.port.read(numbers))
+
+        readings = await self._exchange(_readings, pay=False)
         due = self._due()
         for number in numbers:
             if number in readings:
                 self._written[number] = self._sent
-                self._unsure.discard(number)
+                self._unsure.pop(number, None)
             reading = readings.setdefault(number, Seen.SILENT)
             if (slot := self.slots.get(number)) is not None:
                 slot.observe(reading, self.salt, self.clock())
@@ -520,10 +534,7 @@ class LockWorker:
         say nothing about the lock: a bug is a transient failure charged to
         the slot it hits -- or, on a probe, no answer, so probing goes on.
         """
-        if self._last_exchange is not None:
-            wait = self._last_exchange + self.gap - self.clock()
-            if wait > 0:
-                await self.sleep(wait)
+        await self._pace()
         self._sent = self._next()
         if mark is not None:
             self._written[mark] = self._sent
@@ -566,6 +577,13 @@ class LockWorker:
         if pay:
             self._pay()
         return result
+
+    async def _pace(self) -> None:
+        """Wait out the gap since the last exchange."""
+        if self._last_exchange is not None:
+            wait = self._last_exchange + self.gap - self.clock()
+            if wait > 0:
+                await self.sleep(wait)
 
     def _answer(self) -> None:
         was_down = self._down_until is not None

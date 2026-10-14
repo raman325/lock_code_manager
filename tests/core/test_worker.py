@@ -2392,3 +2392,118 @@ async def test_a_slot_wanted_after_the_probe_found_none_starts_the_probing(
 
     assert rig.worker.reachable
     assert rig.status(2) == (Status.IN_SYNC, None)
+
+
+# Round 12
+
+
+async def test_a_read_returning_garbage_is_a_provider_bug_charged_to_the_slot(
+    rig_factory,
+) -> None:
+    """
+    R12-1: a provider whose read returns something that is not a mapping
+    (a forgotten ``return``) for one slot. The TypeError is raised after the
+    exchange, outside its handling: the sync is neither charged nor queued
+    again, and the slot sits out of sync for ever with the lock answering.
+    """
+    lock = FakeLock({1: "1111"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    original = lock.read
+
+    async def _read(slots):
+        if 7 in slots:
+            return None  # the provider forgot to return its readings
+        return await original(slots)
+
+    lock.read = _read  # type: ignore[method-assign]
+    rig.worker.want(7, "7777")
+    await _run(rig, lambda: rig.status(7)[0] is Status.SUSPENDED, 50)
+
+    # In sync, held, or the lock offline: nothing else.
+    assert rig.status(7)[0] is Status.SUSPENDED or rig.worker.offline, rig.status(7)
+
+
+async def test_a_slot_forgotten_while_its_write_waits_the_gap_is_not_written(
+    rig_factory,
+) -> None:
+    """
+    R12-2: the integration forgets slot 1 while its write waits out the gap
+    between exchanges. The PIN chosen before the wait is sent anyway: a code
+    nothing tracks is put on the lock.
+    """
+    lock = FakeLock({2: "2222"})
+    rig = await _started(rig_factory(lock), {1: None, 2: "2222"})
+    real_sleep = rig.worker.sleep
+
+    async def _sleep(seconds: float) -> None:
+        if rig.worker.slots[1].want == "1234":  # the write waits its turn
+            rig.worker.sleep = real_sleep
+            rig.worker.forget(1)
+        await real_sleep(seconds)
+
+    rig.worker.sleep = _sleep
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert 1 not in lock.codes
+
+
+async def test_a_cached_report_after_a_lost_write_does_not_hide_the_pin(
+    rig_factory,
+) -> None:
+    """
+    R12-3: the write of 1234 lands but its answer is lost in an outage; the
+    user turns the slot off (want() forgets the old reading), then a cached
+    view of the slot ("empty", from before the write) comes in as a push.
+    The push is taken as the truth: in sync, never read again -- while the
+    lock still holds the revoked PIN. No polling.
+    """
+    lock = FakeLock({2: "2222"})
+    rig = await _started(rig_factory(lock), {1: None, 2: "2222"})
+    original = lock.write
+
+    async def _lands_then_gone(slot, pin):
+        lock.write = original  # type: ignore[method-assign]
+        lock.codes[slot] = pin
+        lock.unreachable = True
+        raise OSError("gone")
+
+    lock.write = _lands_then_gone  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: not rig.worker.reachable)
+    assert not rig.worker.reachable
+    rig.worker.want(1, None)
+    rig.worker.push(1, Seen.EMPTY)  # the provider's cache, from before the write
+    await rig.settle()
+
+    # While the lock is away: the worker knows the write may have landed.
+    assert not (lock.codes.get(1) == "1234" and rig.status(1)[0] is Status.IN_SYNC)
+
+
+async def test_a_cached_report_after_a_lost_write_is_not_kept_once_back(
+    rig_factory,
+) -> None:
+    """R12-3b: as above; the lock comes back through a probe of another slot."""
+    lock = FakeLock({2: "2222"})
+    rig = await _started(rig_factory(lock), {1: None, 2: "2222"})
+    original = lock.write
+
+    async def _lands_then_gone(slot, pin):
+        lock.write = original  # type: ignore[method-assign]
+        lock.codes[slot] = pin
+        lock.unreachable = True
+        raise OSError("gone")
+
+    lock.write = _lands_then_gone  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: not rig.worker.reachable)
+    rig.worker.want(1, None)
+    rig.worker.push(1, Seen.EMPTY)
+    await rig.settle()
+    lock.unreachable = False
+    lock.ignored = {1}  # only probes of slot 2 bring the lock back
+    await _run(rig, lambda: rig.worker.reachable)
+    lock.ignored = set()
+    await rig.settle()
+
+    assert not (lock.codes.get(1) == "1234" and rig.status(1)[0] is Status.IN_SYNC)
