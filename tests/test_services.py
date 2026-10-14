@@ -284,13 +284,14 @@ async def test_the_actions_still_answer_once_every_entry_has_unloaded(
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
-    # Nothing manages the lock now, so there is nothing to refresh.
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_HARD_REFRESH_USERCODES,
-        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
-        blocking=True,
-    )
+    # Nothing manages the lock now, so there is nothing to refresh: it says so.
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_HARD_REFRESH_USERCODES,
+            {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+            blocking=True,
+        )
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(
             DOMAIN,
@@ -321,13 +322,15 @@ async def test_the_actions_still_answer_once_every_entry_has_unloaded(
     assert response is not None
     assert response["summary"]["matched"] == 1
     assert "pin=4321" in response["deobfuscated_text"]
+    reads = len(mock_lock(entry).service_calls["get_usercodes"])
     await hass.services.async_call(
         DOMAIN,
         SERVICE_HARD_REFRESH_USERCODES,
         {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
         blocking=True,
     )
-    assert mock_lock(entry).service_calls["hard_refresh_codes"] == [(None,)]
+    # Read afresh, through the lock's worker.
+    assert len(mock_lock(entry).service_calls["get_usercodes"]) > reads
 
 
 async def test_add_user_service(

@@ -287,16 +287,21 @@ async def test_hard_refresh_usercodes_resolves_targets(
     are not managed locks; only an entity named directly earns a warning.
     """
     target = build_target(hass, mock_lock_config_entry)
+    locks = lock_code_manager_config_entry.runtime_data.locks
+    reads_before = {
+        entity_id: len(lock.service_calls["get_usercodes"])
+        for entity_id, lock in locks.items()
+    }
 
     await hass.services.async_call(
         DOMAIN, SERVICE_HARD_REFRESH_USERCODES, target, blocking=True
     )
 
-    locks = lock_code_manager_config_entry.runtime_data.locks
+    # Read afresh, through each lock's worker.
     assert {
         entity_id
         for entity_id, lock in locks.items()
-        if lock.service_calls["hard_refresh_codes"]
+        if len(lock.service_calls["get_usercodes"]) > reads_before[entity_id]
     } == refreshed
     assert not [
         record

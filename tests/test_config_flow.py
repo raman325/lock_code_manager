@@ -2990,6 +2990,8 @@ async def test_ui_allocation_runs_as_a_progress_step(
         assert result["step_id"] == "ui"
         assert result["progress_action"] == "allocating"
 
+        # The read runs in the lock's worker, a loop turn or two later.
+        await async_run_until_quiet()
         assert sum(fault.held for fault in faults) == 1
         for fault in faults:
             fault.clear()
@@ -3230,9 +3232,17 @@ async def test_a_second_request_while_an_unread_entry_is_saved_is_turned_away(
             await let_it_save.wait()
         return await finish_flow(self, flow, result)
 
+    result = await hass.config_entries.flow.async_configure(flow_id, users)
+    if result["type"] == "progress":
+        # The lock is read in its worker, so allocation is answered a turn
+        # later; the request that takes its answer is the one that saves.
+        await hass.async_block_till_done()
+        users_again: dict | None = None
+    else:
+        users_again = users
     with patch.object(ConfigEntriesFlowManager, "async_finish_flow", _slow_first_save):
         saved = hass.async_create_task(
-            hass.config_entries.flow.async_configure(flow_id, users)
+            hass.config_entries.flow.async_configure(flow_id, users_again)
         )
         await async_run_until_quiet()
         assert saving.is_set(), "the submitting request did not save the entry"
@@ -3265,6 +3275,8 @@ async def test_a_refusal_after_a_held_read_comes_back_to_the_users_form(
         assert result["type"] == "progress"
         assert result["step_id"] == "yaml"
 
+        # The read runs in the lock's worker, a loop turn or two later.
+        await async_run_until_quiet()
         assert sum(fault.held for fault in faults) == 1
         for fault in faults:
             fault.clear()
@@ -3299,6 +3311,8 @@ async def test_a_refusal_after_a_held_read_comes_back_to_the_count_form(
         assert result["type"] == "progress"
         assert result["step_id"] == "ui"
 
+        # The read runs in the lock's worker, a loop turn or two later.
+        await async_run_until_quiet()
         assert sum(fault.held for fault in faults) == 1
         for fault in faults:
             fault.clear()
@@ -3327,10 +3341,17 @@ async def test_a_refusal_answered_at_once_can_be_submitted_again(
 
     with when_mock_lock_built(lambda lock: lock.fail("get")):
         result = await hass.config_entries.flow.async_configure(flow_id, users)
+        if result["type"] == "progress":
+            # Read in the lock's worker: answered a turn later, not at once.
+            await hass.async_block_till_done()
+            result = await hass.config_entries.flow.async_configure(flow_id)
     assert result["type"] == "form"
     assert result["errors"] == {"base": "occupancy_unknown"}
 
     result = await hass.config_entries.flow.async_configure(flow_id, users)
+    if result["type"] == "progress":
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
     assert result["type"] == "create_entry"
 
 

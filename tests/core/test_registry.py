@@ -646,3 +646,14 @@ async def test_a_one_off_write_to_an_owned_slot_is_refused(setup) -> None:
     with pytest.raises(SlotTaken):
         await registry.write_once("front", 1, "9999")
     assert worker.slots[1].want == "1111"
+
+
+async def test_the_worker_in_service_is_the_one_held(setup) -> None:
+    """Looked up by lock: the held worker, and none once it has stopped."""
+    registry, _ = setup(front=FakeLock())
+    worker = await registry.hold("front", "a", {1: "1111"})
+
+    assert registry.worker("front") is worker
+    assert registry.worker("back") is None
+    await registry.release("front", "a")
+    assert registry.worker("front") is None

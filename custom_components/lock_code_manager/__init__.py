@@ -47,6 +47,7 @@ from homeassistant.core_config import Config
 from homeassistant.exceptions import (
     ConfigEntryError,
     HomeAssistantError,
+    ServiceValidationError,
 )
 from homeassistant.helpers import (
     config_validation as cv,
@@ -109,8 +110,15 @@ from .domain.config import (
     slot_unique_id_key,
 )
 from .domain.credentials import CredentialType
-from .domain.exceptions import LockCodeManagerProviderError, UnclaimedLockError
-from .domain.locks import async_create_lock_instance, get_locks_from_targets
+from .domain.exceptions import UnclaimedLockError
+from .domain.lock_runtime import (
+    async_give_up,
+    async_hard_refresh,
+    async_hold_lock,
+    async_release_lock,
+    lock_registry,
+)
+from .domain.locks import get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
     LockCodeManagerConfigEntryRuntimeData,
@@ -123,7 +131,6 @@ from .domain.pin_generator import (
 )
 from .domain.queries import (
     another_enabled_entry_configures,
-    entries_holding,
     get_entry_config,
     subentry_id_for_slot,
 )
@@ -598,6 +605,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {"resources": False})
     hass.data[DOMAIN]["instance_id"] = await instance_id.async_get(hass)
+    lock_registry(hass)
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
         [
@@ -617,8 +625,21 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         """Hard refresh all usercodes."""
         _LOGGER.debug("Hard refresh usercodes service called: %s", service.data)
         locks = get_locks_from_targets(hass, service.data)
+        registry = lock_registry(hass)
+        workers = [
+            worker
+            for lock in locks
+            if (worker := registry.worker(lock.lock.entity_id)) is not None
+        ]
+        if not workers:
+            # Saying so, rather than succeeding with nothing refreshed.
+            raise ServiceValidationError(
+                "No lock Lock Code Manager manages was targeted, so nothing "
+                "was refreshed"
+            )
+        # Through each lock's worker: in its turn, and every slot it tracks.
         results = await asyncio.gather(
-            *(lock.async_internal_hard_refresh_codes() for lock in locks),
+            *(async_hard_refresh(worker) for worker in workers),
             return_exceptions=True,
         )
         errors = [err for err in results if isinstance(err, Exception)]
@@ -1013,105 +1034,40 @@ async def async_setup_entry(
     return True
 
 
-def _find_shared_lock_instance(
-    hass: HomeAssistant,
-    config_entry: LockCodeManagerConfigEntry,
-    lock_entity_id: str,
-) -> BaseLock | None:
-    """
-    Return an existing BaseLock for ``lock_entity_id`` from another loaded entry.
-
-    A single physical lock may be referenced by multiple Lock Code Manager
-    entries. We keep one BaseLock instance and share it: when a new entry
-    references a lock that another loaded entry is already managing,
-    reuse that entry's instance instead of creating a duplicate.
-    """
-    return next(
-        (
-            entry.runtime_data.locks[lock_entity_id]
-            for entry in hass.config_entries.async_entries(
-                DOMAIN, include_disabled=False, include_ignore=False
-            )
-            if entry.entry_id != config_entry.entry_id
-            and entry.state is ConfigEntryState.LOADED
-            and lock_entity_id in entry.runtime_data.locks
-        ),
-        None,
-    )
-
-
-def _lock_instance_held_by_another_entry(
-    hass: HomeAssistant,
-    config_entry: LockCodeManagerConfigEntry,
-    lock_entity_id: str,
-    lock: BaseLock,
-) -> bool:
-    """
-    Return True if another entry still holds this very lock instance.
-
-    An entry takes a shared instance by putting it in its ``runtime_data.locks``
-    and gives it up by taking it out, so whichever takes it out last tears it
-    down: its push subscription, its config-entry state listener and its
-    coordinator stop with no entry left to stop them otherwise. Asked by
-    identity: an entry setting up while another unloads finds nothing to share
-    and builds its own instance for the same lock, and that one being held
-    says nothing about this one. Config membership is not the question either
-    -- an entry that dropped this lock during setup lists it but does not
-    hold it.
-
-    Deliberately not the question acquisition asks. ``_find_shared_lock_instance``
-    joins only instances held by LOADED entries, so it never joins one that is
-    being torn down. Release counts every entry still holding the instance,
-    whatever its state -- a reference count -- so an instance another entry is
-    joining, or is still unloading, is not torn down underneath it. An entry
-    stuck in FAILED_UNLOAD never lets go, so it keeps its instance alive; that
-    is accepted.
-    """
-    return any(
-        entry.entry_id != config_entry.entry_id
-        for entry in entries_holding(hass, lock_entity_id, lock)
-    )
-
-
 async def async_unload_lock(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     lock_entity_ids: Iterable[str] | None = None,
     remove_permanently: bool = False,
 ):
-    """Unload some locks of an entry, or every one of them."""
+    """
+    Let go of some locks of an entry, or every one of them; codes stay on them.
+
+    The registry stops a lock's worker, and unloads its provider, once no
+    entry holds it and no slot given up is still being cleared.
+    ``remove_permanently`` discards the provider's kept state -- the per-lock
+    setup-failed repair, the virtual lock's stored codes -- and only for a
+    lock no other entry still lists.
+    """
     runtime_data = config_entry.runtime_data
     lock_entity_ids = (
         list(runtime_data.locks) if lock_entity_ids is None else list(lock_entity_ids)
     )
-    # Whether this entry is the last to hold each lock is decided as it is
-    # popped, with no await in between: two entries letting go of one lock
-    # at once would otherwise each pop it, each find no other holder, and
-    # both tear it down. Then the managers are stopped together: one grace
-    # for all of them.
-    last_held = {
-        _lock_entity_id: lock
-        for _lock_entity_id in lock_entity_ids
-        if (lock := runtime_data.locks.pop(_lock_entity_id, None))
-        and not _lock_instance_held_by_another_entry(
-            hass, config_entry, _lock_entity_id, lock
-        )
-    }
-    await _async_stop_slot_sync(runtime_data, lock_entity_ids)
-    for _lock_entity_id, lock in last_held.items():
-        # ``remove_permanently`` discards state that deliberately outlives
-        # an unload -- the per-lock setup-failed repair, the provider's
-        # stored codes. Only a lock leaving Lock Code Manager altogether
-        # should lose those, so an entry that still manages it downgrades
-        # this to a plain teardown even while that entry is unloaded.
-        await lock.async_unload(
-            remove_permanently
-            and not another_enabled_entry_configures(
-                hass, config_entry, _lock_entity_id
+    await asyncio.gather(
+        *(
+            async_release_lock(
+                hass,
+                config_entry,
+                lock_entity_id,
+                leaving=remove_permanently
+                and not another_enabled_entry_configures(
+                    hass, config_entry, lock_entity_id
+                ),
             )
+            for lock_entity_id in lock_entity_ids
+            if runtime_data.locks.pop(lock_entity_id, None) is not None
         )
-        if lock.coordinator is not None:
-            await lock.coordinator.async_shutdown()
+    )
 
 
 async def async_release_locks(
@@ -1469,29 +1425,17 @@ def _async_purge_dropped_locks(
     )
 
 
-async def _async_start_slot_sync(
+@callback
+def _async_push_wants(
     runtime_data: LockCodeManagerConfigEntryRuntimeData,
-    locks: Collection[BaseLock],
+    lock_entity_ids: Collection[str],
     *,
     slot_nums: Collection[int],
 ) -> None:
-    """
-    Start sync managers together for ``locks`` on ``slot_nums``.
-
-    Started after the per-lock entity adders. A manager whose entities are
-    not there yet (a new lock on a slot whose standard entities this pass adds
-    later) waits for them and resolves on a later tick; the in-sync sensors
-    are views and read unknown until then. Started together, so no slot or
-    lock waits on another.
-    """
-    await asyncio.gather(
-        *(
-            coordinator.async_start_sync(lock)
-            for slot_num in slot_nums
-            if (coordinator := runtime_data.slot_coordinators.get(slot_num))
-            for lock in locks
-        )
-    )
+    """Tell ``lock_entity_ids`` what each of ``slot_nums`` wants."""
+    for slot_num in slot_nums:
+        if coordinator := runtime_data.slot_coordinators.get(slot_num):
+            coordinator.async_push_want(lock_entity_ids)
 
 
 async def _async_shutdown_slots(
@@ -1521,29 +1465,10 @@ async def _async_shutdown_slots(
         except Exception:
             _LOGGER.exception("%s coordinator stop raised", coordinator.log_prefix)
     await asyncio.gather(
-        *(coordinator.async_stop_sync() for coordinator in removed),
         *(
             runtime_data.callbacks.invoke_entity_removers_for_slot(slot_num)
             for slot_num in slot_nums
         ),
-    )
-
-
-async def _async_stop_slot_sync(
-    runtime_data: LockCodeManagerConfigEntryRuntimeData,
-    lock_entity_ids: Collection[str],
-) -> None:
-    """
-    Stop the sync managers of some locks on every slot.
-
-    One gather across the whole set, so several locks that have stopped
-    answering cost one stop grace rather than one each.
-    """
-    await asyncio.gather(
-        *(
-            coordinator.async_stop_sync(lock_entity_ids)
-            for coordinator in runtime_data.slot_coordinators.values()
-        )
     )
 
 
@@ -1829,34 +1754,15 @@ async def _async_setup_new_locks(
     )
 
     async def _setup_one_lock(lock_entity_id: str) -> BaseLock:
-        existing_lock = _find_shared_lock_instance(hass, config_entry, lock_entity_id)
-        if existing_lock is not None:
-            _LOGGER.debug(
-                "%s (%s): Reusing lock instance for lock %s",
-                entry_id,
-                entry_title,
-                existing_lock,
-            )
-            runtime_data.locks[lock_entity_id] = existing_lock
-            await existing_lock.async_wait_for_setup()
-            if existing_lock.coordinator is not None:
-                existing_lock.coordinator.note_holder_joined()
-            return existing_lock
-
-        lock = runtime_data.locks[lock_entity_id] = async_create_lock_instance(
-            hass,
-            dr.async_get(hass),
-            ent_reg,
-            config_entry,
-            lock_entity_id,
-        )
-        _LOGGER.debug(
-            "%s (%s): Creating lock instance for lock %s",
-            entry_id,
-            entry_title,
-            lock,
-        )
-        await lock.async_setup_internal(config_entry)
+        # Every slot's want goes in with the hold: a new worker reads them all
+        # in its first exchange.
+        wants = {
+            slot_num: coordinator.want
+            for slot_num, coordinator in runtime_data.slot_coordinators.items()
+        }
+        lock = await async_hold_lock(hass, config_entry, lock_entity_id, wants)
+        runtime_data.locks[lock_entity_id] = lock
+        _LOGGER.debug("%s (%s): Holding lock %s", entry_id, entry_title, lock_entity_id)
         return lock
 
     # Set up locks concurrently. Each lock's initial usercode fetch can take
@@ -1894,17 +1800,6 @@ async def _async_setup_new_locks(
                 result,
                 exc_info=result,
             )
-            failed_lock = runtime_data.locks.pop(lock_entity_id, None)
-            if (
-                failed_lock is not None
-                and failed_lock.coordinator is not None
-                and not _lock_instance_held_by_another_entry(
-                    hass, config_entry, lock_entity_id, failed_lock
-                )
-            ):
-                # Built before setup failed, and nothing reaches a dropped lock
-                # to stop it later.
-                await failed_lock.coordinator.async_shutdown()
             if isinstance(result, UnclaimedLockError):
                 # Only this failure has a diagnosis and an action to offer.
                 # Any other exception is a bug in a provider LCM does speak,
@@ -1918,16 +1813,6 @@ async def _async_setup_new_locks(
             hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
         )
 
-        if not await result.async_internal_is_reachable():
-            _LOGGER.debug(
-                "%s (%s): Lock %s is not connected yet. Entities will be created "
-                "but will be unavailable until the lock comes online. This is normal "
-                "during startup if Z-Wave JS is still initializing.",
-                entry_id,
-                entry_title,
-                result.lock.entity_id,
-            )
-
     for lock in added_locks:
         for slot_num in new_config.slot_numbers:
             _LOGGER.debug(
@@ -1938,9 +1823,6 @@ async def _async_setup_new_locks(
                 slot_num,
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
-    await _async_start_slot_sync(
-        runtime_data, added_locks, slot_nums=new_config.slot_numbers
-    )
 
     if added_locks:
         callbacks.invoke_lock_added_handlers(added_locks)
@@ -2101,13 +1983,11 @@ async def _async_apply_entry_update_locked(
         # matches a normal removal (entities first, then their device).
         _async_remove_slot_devices(hass, config_entry, slots_to_remove)
 
-    # Release lock-side state LCM owns for any (lock, slot) pair that no
-    # longer exists in config. Native-user providers (Matter, Z-Wave User
-    # Credential CC under the user-tag idempotency design) override
-    # ``async_release_managed_slot`` to delete the LCM-tagged user that
-    # anchored the slot; slot-only providers leave the default no-op in
-    # place. This runs before ``locks_to_remove`` processing so providers
-    # in ``runtime_data.locks`` are still usable.
+    # Give up every (lock, slot) pair that no longer exists in config: the
+    # lock's worker clears it as a release (a native-user provider deletes the
+    # user Lock Code Manager tagged), and goes on doing so after this entry
+    # lets go of the lock. This runs before ``locks_to_remove`` processing,
+    # while the entry still holds those locks.
     # Consumed pair by pair, not drained wholesale. A hand-off applies to the
     # write that requested it and must not outlive it -- leaving a pair behind
     # would spare the next occupant of that number the cleanup it does need --
@@ -2119,10 +1999,10 @@ async def _async_apply_entry_update_locked(
     retained_pairs = runtime_data.retained_pairs
     runtime_data.retained_pairs = retained_pairs - diff.pairs_removed
     for lock_entity_id, slot_num in diff.pairs_removed:
-        release_lock = runtime_data.locks.get(lock_entity_id)
-        if release_lock is None:
+        if lock_entity_id not in runtime_data.locks:
             continue
-        if (lock_entity_id, slot_num) in retained_pairs:
+        retained = (lock_entity_id, slot_num) in retained_pairs
+        if retained:
             _LOGGER.info(
                 "%s (%s): leaving slot %s on lock %s programmed; it is no longer "
                 "managed here",
@@ -2131,21 +2011,8 @@ async def _async_apply_entry_update_locked(
                 slot_num,
                 lock_entity_id,
             )
-            continue
-        try:
-            await release_lock.async_release_managed_slot(slot_num)
-        except LockCodeManagerProviderError as err:
-            # The slot is gone from LCM config either way; lock-side cleanup
-            # is best-effort and must not block the teardown -- whatever the
-            # provider had to say about it (unreachable, refused, or busy).
-            _LOGGER.warning(
-                "%s (%s): could not release slot %s on lock %s: %s",
-                entry_id,
-                entry_title,
-                slot_num,
-                lock_entity_id,
-                err,
-            )
+        # A release: it goes on after this entry lets go of the lock.
+        async_give_up(hass, config_entry, lock_entity_id, slot_num, clear=not retained)
 
     if locks_to_remove:
         _LOGGER.debug(
@@ -2195,9 +2062,7 @@ async def _async_apply_entry_update_locked(
                 slot_num,
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
-    await _async_start_slot_sync(
-        runtime_data, list(existing_locks.values()), slot_nums=slots_to_add
-    )
+    _async_push_wants(runtime_data, list(existing_locks), slot_nums=slots_to_add)
 
     _LOGGER.info(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title

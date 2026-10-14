@@ -118,8 +118,18 @@ class LockRegistry:
         for slot, pin in wants.items():
             entry.owners[slot] = owner
             entry.worker.want(slot, pin)
+        joined = None
         if prepare and entry.prepared is None:
             entry.prepared = asyncio.create_task(self._prepared(lock, entry.worker))
+            if not new:
+                # A one-off read's worker, already started: what it asked the
+                # lock before the lock was ready went unanswered.
+                joined = entry.prepared
+        if joined is not None:
+            await asyncio.wait({joined})
+            if self._locks.get(lock) is entry:
+                entry.worker.wake()
+                entry.worker.request_sync()
         if new:
             try:
                 if entry.prepared is not None:
@@ -130,6 +140,10 @@ class LockRegistry:
                 if self._locks.get(lock) is entry:
                     entry.worker.start()
         return entry.worker
+
+    def worker(self, lock: str) -> LockWorker | None:
+        """Return ``lock``'s worker, if it has one in service."""
+        return None if (entry := self._locks.get(lock)) is None else entry.worker
 
     def want(self, lock: str, owner: str, slot: int, pin: Want) -> None:
         """Claim ``slot`` for ``owner`` and set what it should hold."""
@@ -184,20 +198,33 @@ class LockRegistry:
         finally:
             await self.release(lock, owner)
 
-    async def write_once(self, lock: str, slot: int, pin: Want) -> None:
+    async def write_once(
+        self,
+        lock: str,
+        slot: int,
+        pin: Want,
+        *,
+        before: Callable[[LockWorker], None] = lambda worker: None,
+    ) -> LockWorker:
         """
         Put ``pin`` in a slot no entry owns, or clear it for None.
 
         Ownerless and one-shot, like a slot given up: the worker runs on until
-        it is in sync, then drops it, or holds it after its tries.
+        it is in sync, then drops it, or holds it after its tries. Returns the
+        worker, whose view of the slot says how it went.
         """
         owner = f"once-{next(self._once)}"
         worker = await self._hold(lock, owner, {}, prepare=True)
         try:
             _check_free(self._held(lock, owner), owner, (slot,))
+            before(worker)
             worker.want(slot, pin, release=True)
+            if worker.slots[slot].hold is not None:
+                # Asked again after it was held: the user saying try again.
+                worker.resume(slot)
         finally:
             await self.release(lock, owner)
+        return worker
 
     async def stop(self) -> None:
         """Stop every worker, clears still going included (Home Assistant stops)."""

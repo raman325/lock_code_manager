@@ -15,6 +15,7 @@ from homeassistant.helpers import issue_registry as ir
 from custom_components.lock_code_manager import async_migrate_entry
 from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
+from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.unmanaged import unmanaged_issue_id
 from custom_components.lock_code_manager.providers import BaseLock
@@ -186,8 +187,9 @@ async def test_a_code_appearing_after_the_sweep_is_not_reported(
     there is no way to tell them from anyone else.
     """
     lock = stranded.runtime_data.locks[LOCK_1_ENTITY_ID]
-    await lock.async_internal_set_usercode(9, "9999")
-    await lock.coordinator.async_refresh()
+    lock.codes[9] = "9999"
+    await lock_registry(hass).worker(LOCK_1_ENTITY_ID).read()
+    await hass.async_block_till_done()
     # And a second migration pass finds nothing to do: the entry is already
     # at the swept version.
     assert await async_migrate_entry(hass, stranded)
@@ -259,12 +261,11 @@ async def test_a_clear_that_fails_leaves_the_repair_standing(
         hass, issue_id, {"lock_entity_id": LOCK_1_ENTITY_ID, "slot": STRANDED_SLOT}
     )
     flow.hass = hass
-    with patch.object(
-        lock,
-        "async_internal_clear_usercode",
-        AsyncMock(side_effect=LockDisconnected("lock is asleep")),
-    ):
-        result = await flow.async_step_clear()
+    # The lock acknowledges the clear and keeps the code: every read-back
+    # still finds it, so the slot is held after its tries.
+    lock.ignore("clear", STRANDED_SLOT)
+    result = await flow.async_step_clear()
+    lock.clear_faults()
 
     assert result["type"] == "abort"
     assert result["reason"] == "unmanaged_code_clear_failed"
@@ -289,19 +290,14 @@ async def test_a_failed_clear_quotes_the_lock_link_health(
         hass, issue_id, {"lock_entity_id": LOCK_1_ENTITY_ID, "slot": STRANDED_SLOT}
     )
     flow.hass = hass
-    with (
-        patch.object(
-            lock,
-            "async_internal_clear_usercode",
-            AsyncMock(side_effect=LockDisconnected("lock is asleep")),
-        ),
-        patch.object(
-            lock,
-            "describe_link_health",
-            return_value="39 read requests went unanswered",
-        ),
+    lock.ignore("clear", STRANDED_SLOT)
+    with patch.object(
+        lock,
+        "describe_link_health",
+        return_value="39 read requests went unanswered",
     ):
         result = await flow.async_step_clear()
+    lock.clear_faults()
 
     assert result["type"] == "abort"
     assert result["reason"] == "unmanaged_code_clear_failed"
@@ -311,10 +307,6 @@ async def test_a_failed_clear_quotes_the_lock_link_health(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="open: a refused clear is reported with the set's wording, cannot set code",
-)
 async def test_a_refused_clear_is_reported_as_a_clear(
     hass: HomeAssistant, stranded
 ) -> None:

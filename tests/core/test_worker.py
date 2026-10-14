@@ -25,7 +25,9 @@ from custom_components.lock_code_manager.core.slot import (
 )
 from custom_components.lock_code_manager.core.worker import (
     BACKOFF_AFTER,
+    BACKOFF_MIN,
     OFFLINE_AFTER,
+    RETRY_AFTER,
     ErrorKind,
     LockError,
     LockWorker,
@@ -184,6 +186,10 @@ class Rig:
         """
         async with asyncio.timeout(SETTLE_LIMIT):
             await self.worker.settled()
+            # A slot waiting before its next try: the fake clock lets it go.
+            while any(not wait.done() for wait in self.worker._waits.values()):
+                await asyncio.sleep(0)
+                await self.worker.settled()
 
     async def pass_(self) -> None:
         """Run one more sync pass to the end."""
@@ -2507,3 +2513,329 @@ async def test_a_cached_report_after_a_lost_write_is_not_kept_once_back(
     await rig.settle()
 
     assert not (lock.codes.get(1) == "1234" and rig.status(1)[0] is Status.IN_SYNC)
+
+
+async def test_a_slot_is_syncing_while_its_sync_is_queued_or_running(
+    rig_factory,
+) -> None:
+    """The card's spinner: queued, then running, then done."""
+    lock = FakeLock({})
+    rig = await _started(rig_factory(lock), {1: None})
+    seen: list[bool] = []
+    lock.during_write.append(lambda: seen.append(rig.worker.syncing(1)))
+    rig.worker.want(1, "1234")
+
+    assert rig.worker.syncing(1)
+    await rig.settle()
+    assert seen == [True]
+    assert not rig.worker.syncing(1)
+
+
+async def test_a_release_reaches_the_lock_even_when_it_reads_empty(
+    rig_factory,
+) -> None:
+    """A lock with users tears down the one the slot anchored, code or not."""
+    lock = FakeLock({})
+    rig = await _started(rig_factory(lock), {1: None})
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    rig.worker.want(1, None, release=True)
+    await rig.settle()
+
+    assert lock.writes == [(1, None)]
+    assert 1 not in rig.worker.slots
+
+
+async def test_waking_a_lock_backing_off_probes_it_now(rig_factory) -> None:
+    """A reconnect ends the wait: the lock is probed at once, and syncs if back."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    paced = rig.clock.sleep
+
+    async def _no_backoff_ends(seconds: float) -> None:
+        if seconds >= BACKOFF_MIN:
+            await asyncio.Event().wait()  # a backoff that never ends on its own
+        await paced(seconds)
+
+    rig.worker.sleep = _no_backoff_ends
+    lock.unreachable = True
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: not rig.worker.reachable)
+    assert not rig.worker.reachable
+    lock.unreachable = False
+    await _run(rig, lambda: rig.worker.reachable, 20)
+    assert not rig.worker.reachable  # nothing ends the backoff on its own
+
+    rig.worker.wake()
+    await _run(rig, lambda: rig.status(1)[0] is Status.IN_SYNC)
+
+    assert lock.codes[1] == "1234"
+
+
+async def test_waking_a_lock_that_answers_does_nothing(rig_factory) -> None:
+    """Nothing to end: no probe is started."""
+    rig = await _started(rig_factory(FakeLock({1: "0000"})), {1: "0000"})
+    rig.worker.wake()
+
+    assert rig.worker._retry is None
+
+
+async def test_a_clear_on_a_lock_that_hides_its_codes_is_trusted(rig_factory) -> None:
+    """#1437: a lock still calling a cleared slot occupied is cleared once."""
+    lock = FakeLock({1: "1234"}, masked=True)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    # Takes the clear, and goes on calling the slot occupied (a code it hides).
+    lock.ignore_writes = True
+    rig.worker.want(1, None)
+    await rig.settle()
+
+    assert lock.writes.count((1, None)) == 1
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_clear_that_changed_nothing_is_not_trusted_on_a_hiding_lock(
+    rig_factory,
+) -> None:
+    """Answered, but nothing changed: no proof of what the slot holds."""
+    lock = FakeLock({1: "1234"}, masked=True)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    original = lock.write
+
+    async def _found_nothing(slot, pin):
+        await original(slot, pin)
+        lock.codes[slot] = "????"  # still occupied, someone else's
+        return False
+
+    lock.write = _found_nothing  # type: ignore[method-assign]
+    rig.worker.want(1, None)
+    await _run(rig, lambda: rig.status(1)[0] is Status.SUSPENDED)
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+
+
+async def test_a_release_that_found_nothing_to_clear_is_done(rig_factory) -> None:
+    """The release reached the lock; the slot reads empty: nothing left to do."""
+    lock = FakeLock({})
+    rig = await _started(rig_factory(lock), {1: None})
+    original = lock.write
+
+    async def _found_nothing(slot, pin):
+        await original(slot, pin)
+        return False
+
+    lock.write = _found_nothing  # type: ignore[method-assign]
+    rig.worker.want(1, None, release=True)
+    await rig.settle()
+
+    assert lock.writes == [(1, None)]
+    assert 1 not in rig.worker.slots
+
+
+@pytest.mark.paced
+async def test_a_slot_waits_longer_before_each_try_again(rig_factory) -> None:
+    """#1257: a lock refusing writes for a while does not burn every try at once."""
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    times: list[float] = []
+    lock.during_write.append(lambda: times.append(rig.clock.now))
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert len(times) == LIMIT
+    assert times[1] - times[0] >= RETRY_AFTER[0]
+    assert times[2] - times[1] >= RETRY_AFTER[1]
+
+
+@pytest.mark.paced
+async def test_a_new_target_does_not_wait_out_the_old_ones_pause(rig_factory) -> None:
+    """A PIN changed after a failed try is written at once."""
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    rig.clock.sleep = _forever_if_long(rig.clock.sleep)  # type: ignore[method-assign]
+    rig.worker.sleep = rig.clock.sleep
+    rig.worker.want(1, "1234")
+    await rig.worker.settled()
+    assert rig.worker._waits  # waiting out its pause
+    lock.ignore_writes = False
+    rig.worker.want(1, "5678")
+    await rig.worker.settled()
+
+    assert lock.codes[1] == "5678"
+    assert not rig.worker._waits
+
+
+def _forever_if_long(sleep):
+    async def _sleep(seconds: float) -> None:
+        if seconds >= RETRY_AFTER[0]:
+            await asyncio.Event().wait()
+        await sleep(seconds)
+
+    return _sleep
+
+
+async def test_a_turn_runs_in_the_lock_s_queue_and_counts_as_an_answer(
+    rig_factory,
+) -> None:
+    """A question asked through another provider waits its turn like any job."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    order: list[str] = []
+    lock.during_write.append(lambda: order.append("write"))
+
+    async def _ask() -> str:
+        order.append("turn")
+        return "answer"
+
+    rig.worker.want(1, "1234")
+    answer = await rig.worker.turn(_ask)
+
+    assert answer == "answer"
+    assert order == ["write", "turn"]  # after the sync queued before it
+
+
+async def test_a_turn_while_backing_off_is_refused_unsent(rig_factory) -> None:
+    """Nothing reaches a lock that is not answering, this included."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    lock.unreachable = True
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: not rig.worker.reachable)
+
+    async def _ask() -> None:
+        raise AssertionError("reached the lock")
+
+    with pytest.raises(LockError) as caught:
+        await rig.worker.turn(_ask)
+    assert not caught.value.sent
+
+
+@pytest.mark.paced
+async def test_stopping_cancels_a_slot_waiting_to_try_again(rig_factory) -> None:
+    """Nothing is left running: a pause before the next try ends with the worker."""
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    rig.worker.sleep = _forever_if_long(rig.clock.sleep)
+    rig.worker.want(1, "1234")
+    await rig.worker.settled()
+    [waiting] = rig.worker._waits.values()
+
+    await rig.worker.stop(grace=0.1)
+
+    assert waiting.cancelled() or waiting.done()
+    assert not rig.worker._waits
+
+
+@pytest.mark.paced
+async def test_a_poll_during_a_pause_does_not_bring_the_next_try_forward(
+    rig_factory,
+) -> None:
+    """The slot waits out its pause, whatever reads the lock meanwhile."""
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    rig.worker.sleep = _forever_if_long(rig.clock.sleep)
+    rig.worker.want(1, "1234")
+    await rig.worker.settled()
+    writes = len(lock.writes)
+
+    await rig.worker.read()
+    await rig.worker.settled()
+
+    assert len(lock.writes) == writes
+    assert len(rig.worker._waits) == 1
+
+
+@pytest.mark.paced
+async def test_a_resumed_slot_starts_its_pauses_over(rig_factory) -> None:
+    """A pause left over from before the resume does not cut the next one short."""
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    rig.worker.sleep = _forever_if_long(rig.clock.sleep)
+    rig.worker.want(1, "1234")
+    await rig.worker.settled()
+    [before] = rig.worker._waits.values()
+
+    rig.worker.resume(1)
+    await rig.worker.settled()
+
+    [after] = rig.worker._waits.values()
+    assert after is not before
+    await asyncio.sleep(0)
+    assert before.cancelled()
+
+
+async def test_a_turn_waits_out_the_gap_like_any_exchange(rig_factory) -> None:
+    """Paced like the rest: the lock gets its pause before the question."""
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    last = rig.worker._last_exchange
+    asked_at: list[float] = []
+
+    async def _ask() -> None:
+        asked_at.append(rig.clock.now)
+
+    await rig.worker.turn(_ask)
+
+    assert last is not None
+    assert asked_at[0] - last >= rig.worker.gap
+
+
+async def test_a_turn_after_stopping_is_refused_not_left_waiting(rig_factory) -> None:
+    """A stopped worker answers at once: nobody waits for ever."""
+    rig = await _started(rig_factory(FakeLock()), {})
+    await rig.worker.stop(grace=0.1)
+
+    async def _ask() -> None:
+        raise AssertionError("reached the lock")
+
+    with pytest.raises(LockError):
+        async with asyncio.timeout(1):
+            await rig.worker.turn(_ask)
+
+
+async def test_a_probe_reads_the_slots_not_held_first(rig_factory) -> None:
+    """
+    A held slot is probed only once every slot not held went unanswered --
+    counted afresh in each outage.
+    """
+    lock = FakeLock({1: "1111", 2: "2222", 3: "3333"}, refuse_value={"9999"})
+    rig = await _started(rig_factory(lock), {1: "1111", 2: "2222", 3: "3333"})
+    rig.worker.want(3, "9999")
+    await rig.settle()
+    assert rig.status(3)[1] is Repair.SLOT_DISABLED
+    probes: list[int] = []
+    original = lock.read
+
+    async def _record(numbers):
+        probes.extend(numbers)
+        return await original(numbers)
+
+    for _ in range(2):  # two outages
+        lock.unreachable = True
+        for _ in range(BACKOFF_AFTER):
+            with pytest.raises(LockError):
+                await rig.worker.read([1])
+        probes.clear()
+        lock.read = _record  # type: ignore[method-assign]
+        await _run(rig, lambda: len(probes) >= 2, 30)
+        lock.read = original  # type: ignore[method-assign]
+
+        assert set(probes[:2]) == {1, 2}
+        lock.unreachable = False
+        await _run(rig, lambda: rig.worker.reachable, 30)
+        await rig.settle()
+
+
+async def test_a_held_slot_resumed_is_read_before_it_is_written(rig_factory) -> None:
+    """The code was taken off at the keypad while held: nothing is sent again."""
+    rig = await _started(
+        rig_factory(FakeLock({1: "1234"}, refuse_clear={1})), {1: None}
+    )
+    await rig.pass_()
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+    del rig.lock.codes[1]  # at the keypad; polls leave the held slot out
+
+    rig.worker.resume(1)
+    await rig.settle()
+
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert rig.lock.writes == [(1, None)]

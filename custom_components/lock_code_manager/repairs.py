@@ -8,14 +8,30 @@ from typing import Any
 from homeassistant import data_entry_flow
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import issue_registry as ir
 
 from .const import DOMAIN
-from .domain.exceptions import LockCodeManagerError
+from .core.registry import SlotTaken
+from .domain.lock_runtime import async_resume_slot, async_write_once
 from .domain.locks import get_managed_lock
 from .domain.unmanaged import UNMANAGED_ISSUE_KEY, unmanaged_issue_id
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _link_health(hass: HomeAssistant, lock_entity_id: str) -> str:
+    """
+    Return what the provider can measure about its link, set off for a repair.
+
+    A failed clear cannot tell a lock that rejected it from a link that
+    dropped the reply; whatever the provider measures settles it (#1397).
+    """
+    try:
+        health = get_managed_lock(hass, lock_entity_id).describe_link_health()
+    except ServiceValidationError:
+        return ""
+    return f"\n\n{health}" if health else ""
 
 
 class AcknowledgeRepairFlow(RepairsFlow):
@@ -26,6 +42,37 @@ class AcknowledgeRepairFlow(RepairsFlow):
     ) -> data_entry_flow.FlowResult:
         """Handle the confirm step."""
         if user_input is not None:
+            return self.async_create_entry(title="", data={})
+        return self.async_show_form(step_id="init")
+
+
+class ResumeSlotRepairFlow(RepairsFlow):
+    """
+    Acknowledge a held slot: its lock tries it again.
+
+    A hold means "stop trying until something changes". The things that
+    change it are a new target, or the user saying "try again" here.
+    """
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        """Record which slot on which lock to try again."""
+        self._lock_entity_id: str = data["lock_entity_id"]
+        self._slot: int = int(data["slot"])
+        self._entry_id: str | None = data.get("entry_id")
+        self._release = bool(data.get("release"))
+
+    async def async_step_init(
+        self, user_input: dict[str, str] | None = None
+    ) -> data_entry_flow.FlowResult:
+        """Handle the confirm step."""
+        if user_input is not None:
+            await async_resume_slot(
+                self.hass,
+                self._lock_entity_id,
+                self._slot,
+                entry_id=self._entry_id,
+                release=self._release,
+            )
             return self.async_create_entry(title="", data={})
         return self.async_show_form(step_id="init")
 
@@ -62,31 +109,44 @@ class UnmanagedCodeRepairFlow(RepairsFlow):
     async def async_step_clear(
         self, user_input: dict[str, str] | None = None
     ) -> data_entry_flow.FlowResult:
-        """Clear the code off the lock."""
-        lock = get_managed_lock(self.hass, self._lock_entity_id)
+        """Clear the code off the lock, through its worker."""
         try:
-            await lock.async_internal_clear_usercode(self._slot)
-        except LockCodeManagerError as err:
-            _LOGGER.warning(
-                "Could not clear slot %s on %s: %s",
-                self._slot,
-                self._lock_entity_id,
-                err,
+            # Only a lock an entry holds is set up to be written.
+            get_managed_lock(self.hass, self._lock_entity_id)
+        except ServiceValidationError as err:
+            return self.async_abort(
+                reason="unmanaged_code_clear_failed",
+                description_placeholders={
+                    **self.description_placeholders,
+                    "error": str(err),
+                    "link_health": "",
+                },
             )
-            # The error alone cannot distinguish a lock that rejected the
-            # clear from a link that dropped the reply. Whatever the
-            # provider can measure about its transport goes in verbatim so
-            # the reader can settle it at a glance (issue #1397, resurfaced
-            # by #1307's failed clear).
-            link_health = lock.describe_link_health()
+        try:
+            cleared = await async_write_once(
+                self.hass, self._lock_entity_id, self._slot, None
+            )
+        except SlotTaken:
+            # An entry took the slot since: the code is its own now.
+            return self.async_create_entry(title="", data={})
+        if cleared is None:
+            # Left standing: the clear goes on while the lock is unreachable.
+            return self.async_abort(
+                reason="unmanaged_code_clear_pending",
+                description_placeholders=self.description_placeholders,
+            )
+        if not cleared:
+            _LOGGER.warning(
+                "Could not clear slot %s on %s", self._slot, self._lock_entity_id
+            )
             # Left standing deliberately: the code is still on the lock, so
             # resolving the issue would report a clear that did not happen.
             return self.async_abort(
                 reason="unmanaged_code_clear_failed",
                 description_placeholders={
                     **self.description_placeholders,
-                    "error": str(err),
-                    "link_health": f"\n\n{link_health}" if link_health else "",
+                    "error": "the lock did not clear the slot after two tries",
+                    "link_health": _link_health(self.hass, self._lock_entity_id),
                 },
             )
         return self.async_create_entry(title="", data={})
@@ -111,6 +171,8 @@ async def async_create_fix_flow(
     if issue_id.startswith(UNMANAGED_ISSUE_KEY):
         assert data is not None
         return UnmanagedCodeRepairFlow(data)
+    if issue_id.startswith("slot_suspended_") and data is not None:
+        return ResumeSlotRepairFlow(data)
     if issue_id.startswith(
         (
             "number_of_uses_removed",

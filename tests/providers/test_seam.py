@@ -14,6 +14,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.core.adapter import (
+    ProviderPort,
+    _Coordinator,
+)
+from custom_components.lock_code_manager.core.slot import Holds, Seen
+from custom_components.lock_code_manager.core.worker import ErrorKind, LockError
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
@@ -31,7 +37,6 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
-    LockOperationUnsupported,
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -47,6 +52,24 @@ def _make_lock(hass: HomeAssistant, cls: type[BaseLock], unique: str) -> BaseLoc
         "lock", "test", unique, config_entry=config_entry
     )
     return cls(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+
+def _stand_in(lock: BaseLock) -> _Coordinator:
+    """Return the coordinator stand-in setup is given; its port never arms a poll."""
+    port = ProviderPort(lock)
+    port._closed = True
+    return _Coordinator(port)
+
+
+def _port(lock: BaseLock, names: dict[int, str] | None = None) -> ProviderPort:
+    """
+    Return the provider port a worker writes ``lock`` through, set up.
+
+    ``names`` names the user each slot's PIN is written for, as the entry
+    configuring the slot does.
+    """
+    lock._setup_succeeded = True
+    return ProviderPort(lock, name_for=(names or {}).get)
 
 
 class _NativeStubLock(BaseLock):
@@ -214,12 +237,11 @@ async def test_setup_internal_rejects_lock_without_pin_support(
     # The stub's config entry never loads; force the connected signal so
     # setup runs the capability validation instead of deferring it.
     with patch.object(lock, "async_is_integration_connected", return_value=True):
-        await lock.async_setup_internal(config_entry)
+        await lock.async_setup_internal(config_entry, _stand_in(lock))
 
     assert lock._setup_succeeded is False
     assert lock.coordinator is not None
 
-    await lock.coordinator.async_shutdown()
     await lock.async_unload(False)
 
 
@@ -255,7 +277,7 @@ async def test_setup_internal_accepts_slot_only_capabilities(
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
     with patch.object(lock, "async_is_integration_connected", return_value=True):
-        await lock.async_setup_internal(config_entry)
+        await lock.async_setup_internal(config_entry, _stand_in(lock))
 
     assert lock._setup_succeeded is True
     assert await lock._supports_user_records() is False
@@ -271,7 +293,7 @@ async def test_setup_internal_skips_capability_check_for_slot_only_providers(
     # The default async_get_capabilities raises ProviderNotImplementedError;
     # if the base attempted to read caps, that error would propagate. The
     # gate on supports_native_users keeps it from running.
-    await lock.async_setup_internal(config_entry)
+    await lock.async_setup_internal(config_entry, _stand_in(lock))
 
 
 async def test_get_usercodes_projects_pin_credentials(hass: HomeAssistant) -> None:
@@ -896,32 +918,22 @@ async def test_clear_usercode_native_only_clears_the_targeted_credential(
 async def test_internal_set_usercode_drives_orchestration(
     hass: HomeAssistant,
 ) -> None:
-    """The external set wrapper routes through the orchestration to primitives."""
+    """A write through the provider port routes through the orchestration to primitives."""
     lock = _make_lock(hass, _NativeStubLock, "seam_internal_set")
-    lock._min_operation_delay = 0.0
-    # async_is_device_available is intentionally left at its default (True);
-    # only the connection gate needs forcing to reach the orchestration.
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        await lock.async_internal_set_usercode(4, "4321", "carol")
+    await _port(lock, {4: "carol"}).write(4, "4321")
     assert ("set_user", 4, "lcm:4:carol") in lock.calls
     assert ("set_credential", 4, 4) in lock.calls
 
 
 async def test_internal_roundtrip_set_get_clear(hass: HomeAssistant) -> None:
-    """Set then get then clear round-trips through the seam end to end."""
+    """Set then read then clear round-trips through the provider port end to end."""
     lock = _make_lock(hass, _NativeStubLock, "seam_internal_roundtrip")
-    lock._min_operation_delay = 0.0
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        await lock.async_internal_set_usercode(1, "1111", "a")
-        await lock.async_internal_set_usercode(2, "2222", "b")
-        assert await lock.async_internal_get_usercodes() == {
-            1: SlotCredential.known("1111"),
-            2: SlotCredential.known("2222"),
-        }
-        await lock.async_internal_clear_usercode(1)
-        assert await lock.async_internal_get_usercodes() == {
-            2: SlotCredential.known("2222")
-        }
+    port = _port(lock, {1: "a", 2: "b"})
+    await port.write(1, "1111")
+    await port.write(2, "2222")
+    assert await port.read([1, 2]) == {1: Holds("1111"), 2: Holds("2222")}
+    await port.write(1, None)
+    assert await port.read([1, 2]) == {1: Seen.EMPTY, 2: Holds("2222")}
 
 
 async def test_set_usercode_threads_name_and_source(hass: HomeAssistant) -> None:
@@ -1042,16 +1054,16 @@ async def test_set_usercode_logs_warning_when_rollback_user_delete_fails(
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: optimistic-write pending tracking + confirmation (base helpers)
+# What the provider reports about a slot reaches its coordinator
 # ---------------------------------------------------------------------------
 
 
 def _slot_only_lock_with_coordinator(hass: HomeAssistant):
     """Build a _DegenerateStubLock with a mock coordinator that records pushes.
 
-    The coordinator owns pending writes, so what the seam is tested for here
-    is what it tells the coordinator: ``record_write``, ``drop_pending`` and
-    ``observe_push`` are plain mocks the assertions read.
+    What the seam is tested for here is what it tells the coordinator (the
+    provider port's stand-in in production): ``observe_push`` and
+    ``push_update`` are plain mocks the assertions read.
     """
     lock = _make_lock(hass, _DegenerateStubLock, "seam_optimistic")
     coord = MagicMock()
@@ -1106,12 +1118,11 @@ async def test_set_usercode_rejects_slot_beyond_capacity(hass: HomeAssistant) ->
     driver and misread as a transport failure, retrying forever.
     """
     lock = _make_lock(hass, _NativeStubLock, "seam_capacity_reject")
-    lock._min_operation_delay = 0.0
-    with (
-        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
-        pytest.raises(LockOperationUnsupported, match="30 PIN code slots"),
-    ):
-        await lock.async_internal_set_usercode(50, "4321", "guest")
+    with pytest.raises(LockError, match="30 PIN code slots") as err:
+        await _port(lock, {50: "guest"}).write(50, "4321")
+    # Refused, unsent: the slot is held without charging the lock.
+    assert err.value.kind is ErrorKind.SLOT_REFUSED
+    assert err.value.sent is False
     assert lock.calls == []
 
 
@@ -1120,9 +1131,7 @@ async def test_set_usercode_accepts_slot_at_capacity_boundary(
 ) -> None:
     """The highest advertised slot is usable; the bound is inclusive."""
     lock = _make_lock(hass, _NativeStubLock, "seam_capacity_boundary")
-    lock._min_operation_delay = 0.0
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        await lock.async_internal_set_usercode(30, "4321", "guest")
+    await _port(lock, {30: "guest"}).write(30, "4321")
     assert ("set_credential", 30, 30) in lock.calls
 
 
@@ -1131,9 +1140,7 @@ async def test_set_usercode_skips_capacity_check_when_lock_allocates_index(
 ) -> None:
     """A high slot number is legal when the lock picks its own credential index."""
     lock = _make_lock(hass, _AutoIndexStubLock, "seam_capacity_auto_index")
-    lock._min_operation_delay = 0.0
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        await lock.async_internal_set_usercode(50, "4321", "guest")
+    await _port(lock, {50: "guest"}).write(50, "4321")
     assert ("set_credential", 50, 50) in lock.calls
 
 
@@ -1142,9 +1149,7 @@ async def test_set_usercode_skips_capacity_check_when_capacity_unknown(
 ) -> None:
     """``num_slots`` of 0 means unknown capacity, so it must not block the write."""
     lock = _make_lock(hass, _UnknownCapacityStubLock, "seam_capacity_unknown")
-    lock._min_operation_delay = 0.0
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        await lock.async_internal_set_usercode(50, "4321", "guest")
+    await _port(lock, {50: "guest"}).write(50, "4321")
     assert ("set_credential", 50, 50) in lock.calls
 
 
@@ -1153,107 +1158,13 @@ async def test_set_usercode_skips_capacity_check_when_capabilities_unavailable(
 ) -> None:
     """A provider with no capabilities read keeps writing as it did before."""
     lock = _make_lock(hass, _DegenerateStubLock, "seam_capacity_no_caps")
-    lock._min_operation_delay = 0.0
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        await lock.async_internal_set_usercode(50, "4321", "guest")
+    await _port(lock, {50: "guest"}).write(50, "4321")
     assert ("set_credential", 50, 50) in lock.calls
 
 
 # =============================================================================
 # The seam hands writes and observations to the coordinator
 # =============================================================================
-
-
-async def _set_through_seam(lock, result: WriteResult, *, push: bool = False) -> None:
-    """Drive one set through the seam with the provider answering ``result``."""
-    lock._min_operation_delay = 0.0
-    with (
-        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
-        patch.object(type(lock), "supports_push", property(lambda _self: push)),
-        patch.object(lock, "async_set_usercode", AsyncMock(return_value=result)),
-    ):
-        await lock.async_internal_set_usercode(4, "1234", "carol")
-
-
-async def test_optimistic_set_is_recorded_pending_with_the_value_believed(
-    hass: HomeAssistant,
-) -> None:
-    """An ambiguous write is recorded believed; the coordinator reads it back."""
-    lock, _pushed = _slot_only_lock_with_coordinator(hass)
-    await _set_through_seam(lock, WriteResult.OPTIMISTIC)
-    lock.coordinator.record_write.assert_called_once_with(
-        pin_address(4), "1234", believed=True
-    )
-
-
-async def test_confirmed_set_on_a_poller_is_recorded_pending_without_a_value(
-    hass: HomeAssistant,
-) -> None:
-    """The cloud accepting a write is not the lock reporting it: pending, not believed.
-
-    For any slot -- the coordinator's read names every pending address, so a
-    slot nothing manages is asked about too.
-    """
-    lock, pushed = _slot_only_lock_with_coordinator(hass)
-    await _set_through_seam(lock, WriteResult.CONFIRMED)
-    lock.coordinator.record_write.assert_called_once_with(
-        pin_address(4), "1234", believed=False
-    )
-    lock.coordinator.async_request_refresh.assert_not_awaited()
-    assert pushed == []
-
-
-async def test_confirmed_set_on_a_push_provider_records_nothing_pending(
-    hass: HomeAssistant,
-) -> None:
-    """The provider's own push is the lock's word; any older pending write is superseded."""
-    lock, _pushed = _slot_only_lock_with_coordinator(hass)
-    await _set_through_seam(lock, WriteResult.CONFIRMED, push=True)
-    lock.coordinator.record_write.assert_not_called()
-    lock.coordinator.drop_pending.assert_called_once_with(pin_address(4))
-
-
-async def test_no_change_records_nothing(hass: HomeAssistant) -> None:
-    """Nothing was written, so there is nothing to confirm."""
-    lock, _pushed = _slot_only_lock_with_coordinator(hass)
-    await _set_through_seam(lock, WriteResult.NO_CHANGE)
-    lock.coordinator.record_write.assert_not_called()
-    lock.coordinator.drop_pending.assert_not_called()
-
-
-async def test_clear_drops_any_pending_write_once_it_has_run(
-    hass: HomeAssistant,
-) -> None:
-    """A clear that ran supersedes whatever write was pending on the slot."""
-    lock, _pushed = _slot_only_lock_with_coordinator(hass)
-    lock._min_operation_delay = 0.0
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        await lock.async_internal_clear_usercode(4)
-    lock.coordinator.drop_pending.assert_called_once_with(pin_address(4))
-
-
-async def test_clear_that_raises_leaves_the_pending_write_standing(
-    hass: HomeAssistant,
-) -> None:
-    """A clear that never reached the lock supersedes nothing.
-
-    Otherwise a believed optimistic write would lose its pending record here,
-    read as verified, and put the slot falsely in sync on a value the lock
-    was never seen holding.
-    """
-    lock, _pushed = _slot_only_lock_with_coordinator(hass)
-    lock._min_operation_delay = 0.0
-    with (
-        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
-        patch.object(
-            lock,
-            "async_clear_usercode",
-            AsyncMock(side_effect=LockDisconnected("offline")),
-        ),
-        pytest.raises(LockDisconnected),
-    ):
-        await lock.async_internal_clear_usercode(4)
-    lock.coordinator.drop_pending.assert_not_called()
 
 
 async def test_confirm_slot_hands_the_observation_to_the_coordinator(

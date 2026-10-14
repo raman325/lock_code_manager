@@ -422,7 +422,7 @@
         "step": {
           "init": {
             "title": "Sync suspended for slot {slot_num} on {lock_name}",
-            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nSyncing for this slot will resume automatically once the lock accepts the code or you change the PIN for this slot. Click **Submit** to acknowledge this issue."
+            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nLock Code Manager has stopped trying. Click **Submit** to try again, or change the PIN for this slot."
           }
         }
       }
@@ -433,7 +433,7 @@
         "step": {
           "init": {
             "title": "Code not removed from slot {slot_num} on {lock_name}",
-            "description": "Lock Code Manager couldn't remove the code from slot {slot_num} on lock {lock_entity_id}: {reason}\n\nThe code may still be on the lock and may still open the door. To remove it, delete it at the lock itself, from its keypad or the lock maker's app.\n\nSync for this slot is suspended. It resumes once the lock reports the slot empty, or when this slot's PIN or active state changes. Submit to acknowledge this issue."
+            "description": "Lock Code Manager couldn't remove the code from slot {slot_num} on lock {lock_entity_id}: {reason}\n\nThe code may still be on the lock and may still open the door. To remove it, delete it at the lock itself, from its keypad or the lock maker's app.\n\nLock Code Manager has stopped trying. Submit to try again."
           }
         }
       }
@@ -465,6 +465,7 @@
         },
         "abort": {
           "unmanaged_code_kept": "The code in slot {slot} on {lock} was left alone. Lock Code Manager will not ask about this slot again, and will not assign a user to it.",
+          "unmanaged_code_clear_pending": "The lock is not answering right now. Lock Code Manager will clear the code in slot {slot} on {lock} when it is back. Choose **Clear** here again afterwards to close this repair.",
           "unmanaged_code_clear_failed": "The code in slot {slot} on {lock} could not be cleared: {error}{link_health}\n\nIt is still on the lock, so this repair stays open."
         }
       }

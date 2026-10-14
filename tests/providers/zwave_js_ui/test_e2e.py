@@ -42,11 +42,14 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
-    MAX_SYNC_ATTEMPTS,
-    TICK_INTERVAL,
 )
-from custom_components.lock_code_manager.domain.credentials import pin_address
-from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.core.slot import LIMIT
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_codes,
+    lock_registry,
+    port_of,
+)
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 from tests.common import (
     async_advance_clock,
@@ -59,9 +62,9 @@ from tests.common import (
     slot_entity_id,
     sync_status,
 )
-from tests.conftest import async_advance_time, sync_manager_for
+from tests.conftest import async_advance_time
 
-from ...common import user_subentries
+from ...common import TICK_INTERVAL, user_subentries
 from .conftest import (
     ZUI_API_BASE,
     ZUI_NODE_ID,
@@ -141,6 +144,29 @@ class UserCodeTable:
         elif method == "getUsersCount":
             result = LOCK_CAPACITY
         return {"success": True, "result": result}
+
+
+def held_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, SlotCredential]:
+    """Return what the lock's worker last heard about each slot."""
+    return lock_codes(hass, lock_entity_id)
+
+
+def charged(hass: HomeAssistant, lock_entity_id: str, slot_num: int) -> bool:
+    """Return whether a failed sync of the slot was charged to it."""
+    worker = lock_registry(hass).worker(lock_entity_id)
+    assert worker is not None
+    slot = worker.slots[slot_num]
+    return slot.tries > 0 or slot.hold is not None
+
+
+def poll_interval(hass: HomeAssistant, lock: ZWaveJSUILock) -> timedelta | None:
+    """Return how often the lock's worker reads it unasked."""
+    worker = lock_registry(hass).worker(lock.lock.entity_id)
+    assert worker is not None
+    return min(
+        (interval for interval in port_of(worker)._cadence() if interval),
+        default=None,
+    )
 
 
 def send_commands(responder: ZWaveJSUIApiResponder) -> list[list[Any]]:
@@ -415,7 +441,7 @@ class TestRefusedSet:
         assert user_code_table.codes == {}
         lock_entity_id = zui_lock.lock.entity_id
         for slot_num in E2E_SLOT_PINS:
-            assert zui_lock.coordinator.data.get(pin_address(slot_num)) == (
+            assert held_codes(hass, lock_entity_id).get(slot_num) == (
                 SlotCredential.empty()
             )
             entity_id = in_sync_entity_id(
@@ -424,7 +450,7 @@ class TestRefusedSet:
             in_sync = hass.states.get(entity_id)
             assert in_sync is not None
             assert in_sync.state == STATE_OFF
-            assert sync_manager_for(hass, entity_id)._slot_breaker.failure_count > 0
+            assert charged(hass, lock_entity_id, slot_num)
 
     async def test_refused_writes_suspend_the_slot(
         self,
@@ -457,7 +483,7 @@ class TestRefusedSet:
                 issue_registry.async_get_issue(DOMAIN, issue_id)
                 for issue_id in issue_ids.values()
             ),
-            max_ticks=len(E2E_SLOT_PINS) * (MAX_SYNC_ATTEMPTS + 2),
+            max_ticks=len(E2E_SLOT_PINS) * (LIMIT + 2),
             what="every refused slot suspended",
         )
 
@@ -467,11 +493,11 @@ class TestRefusedSet:
                 hass, lcm_config_entry, slot_num, lock_entity_id
             )
             assert hass.states.get(in_sync).state == STATE_OFF
-            assert sync_status(hass, in_sync) == SyncState.SUSPENDED.value
+            assert sync_status(hass, in_sync) == "suspended"
         refused = [
             args for args in send_commands(zui_api_responder) if args[1] == "set"
         ]
-        assert len(refused) == len(E2E_SLOT_PINS) * MAX_SYNC_ATTEMPTS
+        assert len(refused) == len(E2E_SLOT_PINS) * LIMIT
 
 
 class TestRefusedClear:
@@ -511,13 +537,13 @@ class TestRefusedClear:
             await async_advance_time(hass, TICK_INTERVAL)
 
         assert user_code_table.codes == E2E_SLOT_PINS
-        assert zui_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
+        assert held_codes(hass, lock_entity_id).get(1) == SlotCredential.known(
             E2E_SLOT_PINS[1]
         )
         in_sync = hass.states.get(entity_id)
         assert in_sync is not None
         assert in_sync.state == STATE_OFF
-        assert sync_manager_for(hass, entity_id)._slot_breaker.failure_count > 0
+        assert charged(hass, lock_entity_id, 1)
 
 
 class TestPushUpdates:
@@ -528,19 +554,44 @@ class TestPushUpdates:
         hass: HomeAssistant,
         synced_lcm_config_entry: MockConfigEntry,
         zui_lock: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: UserCodeTable,
     ) -> None:
-        """A userCode publication is a confirmed code, no api round trip needed."""
+        """
+        A userCode publication is the lock's word, no api round trip needed.
+
+        On a slot nobody manages it is simply what the lock holds. On a
+        managed slot it is a code someone changed at the keypad: believed
+        without a ``get``, and answered by writing the configured PIN back.
+        """
+        lock_entity_id = zui_lock.lock.entity_id
+        unmanaged_slot = max(E2E_SLOT_PINS) + 1
+        before = len(send_commands(zui_api_responder))
+
+        fire_zui_node_value(hass, f"99/0/userCode/{unmanaged_slot}", "4321")
+        await hass.async_block_till_done()
+
+        assert held_codes(hass, lock_entity_id).get(
+            unmanaged_slot
+        ) == SlotCredential.known("4321")
+        assert send_commands(zui_api_responder)[before:] == []
+
+        user_code_table.codes[1] = "4321"
         fire_zui_node_value(hass, "99/0/userCode/1", "4321")
         await hass.async_block_till_done()
 
-        assert zui_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
-            "4321"
-        )
+        # The set goes out on the push alone; the get after it is the
+        # write's read-back.
+        assert send_commands(zui_api_responder)[before:] == [
+            user_code_call("set", [1, STATUS_ENABLED, E2E_SLOT_PINS[1]]),
+            user_code_call("get", [1]),
+        ]
+        assert user_code_table.codes[1] == E2E_SLOT_PINS[1]
         code = hass.states.get(
-            code_entity_id(hass, synced_lcm_config_entry, 1, zui_lock.lock.entity_id)
+            code_entity_id(hass, synced_lcm_config_entry, 1, lock_entity_id)
         )
         assert code is not None
-        assert code.state == "4321"
+        assert code.state == E2E_SLOT_PINS[1]
 
     async def test_pushed_available_status_updates_state(
         self,
@@ -562,9 +613,8 @@ class TestPushUpdates:
         )
         await hass.async_block_till_done()
 
-        assert (
-            zui_lock.coordinator.data.get(pin_address(unconfigured_slot))
-            is SlotCredential.empty()
+        assert held_codes(hass, zui_lock.lock.entity_id).get(unconfigured_slot) == (
+            SlotCredential.empty()
         )
 
     async def test_stale_available_does_not_unwind_a_synced_slot(
@@ -586,7 +636,7 @@ class TestPushUpdates:
         )
         await hass.async_block_till_done()
 
-        assert zui_lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
+        assert held_codes(hass, zui_lock.lock.entity_id).get(2) == SlotCredential.known(
             E2E_SLOT_PINS[2]
         )
 
@@ -684,8 +734,8 @@ class TestSharedLock:
             STATUS_AVAILABLE,
         )
         await hass.async_block_till_done()
-        assert zui_lock.coordinator.data.get(
-            pin_address(second_slot)
+        assert held_codes(hass, zui_lock.lock.entity_id).get(
+            second_slot
         ) == SlotCredential.known(second_pin)
 
         for _ in range(3):
@@ -834,8 +884,7 @@ class TestApiOnlyManualGateway:
         """
         lock = self._lock(api_only_entry)
 
-        assert lock.coordinator is not None
-        assert lock.coordinator.update_interval == lock.usercode_scan_interval
+        assert poll_interval(hass, lock) == lock.usercode_scan_interval
 
     async def test_configured_pins_still_reach_the_lock(
         self,
@@ -967,12 +1016,11 @@ class TestMixedPushAndApiOnlyEntry:
         """
         push_lock, api_only_lock = self._locks(mixed_entry)
 
-        assert push_lock.coordinator is not None
-        assert push_lock.coordinator.update_interval is None
-        assert api_only_lock.coordinator is not None
+        # The push lock is only re-read on the slow drift check, if at all.
+        assert poll_interval(hass, push_lock) == push_lock.hard_refresh_interval
+        assert poll_interval(hass, push_lock) != push_lock.usercode_scan_interval
         assert (
-            api_only_lock.coordinator.update_interval
-            == api_only_lock.usercode_scan_interval
+            poll_interval(hass, api_only_lock) == api_only_lock.usercode_scan_interval
         )
 
     async def test_one_shared_wildcard_carries_both_locks_api_traffic(
@@ -1393,14 +1441,6 @@ class TestStatusGatedPush:
             what="slot 1 in sync",
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "open: a Disabled slot's code replayed before its status confirms "
-            "the slot, and the later status does not take that back"
-        ),
-    )
     async def test_a_code_replayed_before_its_disabled_status_does_not_confirm_it(
         self,
         hass: HomeAssistant,

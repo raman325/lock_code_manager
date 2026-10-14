@@ -22,8 +22,8 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    MAX_SYNC_ATTEMPTS,
 )
+from custom_components.lock_code_manager.core.slot import LIMIT
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
@@ -166,9 +166,9 @@ class TestSetAndClearCredentials:
         e2e_akuvox_lock: AkuvoxLock,
         akuvox_mock_services: dict[str, AsyncMock],
     ) -> None:
-        """Set via async_internal_set_usercode routes through base → async_set_credential."""
+        """The worker's write, async_set_usercode, routes through base → async_set_credential."""
         akuvox_mock_services["add_user"].reset_mock()
-        await e2e_akuvox_lock.async_internal_set_usercode(1, "9999", "E2E Guest")
+        await e2e_akuvox_lock.async_set_usercode(1, "9999", "E2E Guest", source="sync")
 
         assert akuvox_mock_services["add_user"].call_count >= 1
 
@@ -179,7 +179,7 @@ class TestSetAndClearCredentials:
         akuvox_lock_entity: er.RegistryEntry,
         akuvox_mock_services: dict[str, AsyncMock],
     ) -> None:
-        """Clear via async_internal_clear_usercode routes through base → async_delete_credential."""
+        """The worker's clear, async_clear_usercode, routes through base → async_delete_credential."""
         entity_id = akuvox_lock_entity.entity_id
 
         # Override list_users to report a tagged user to delete
@@ -195,7 +195,7 @@ class TestSetAndClearCredentials:
         )
 
         akuvox_mock_services["delete_user"].reset_mock()
-        await e2e_akuvox_lock.async_internal_clear_usercode(1)
+        await e2e_akuvox_lock.async_clear_usercode(1)
 
         assert akuvox_mock_services["delete_user"].call_count >= 1
 
@@ -321,14 +321,6 @@ class TestOpenBugs:
 
         assert parse_tag(name)[0] != 3
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "open: a delete the device acknowledges but ignores is sent again "
-            "every tick, never charged and never reported"
-        ),
-    )
     async def test_a_delete_the_device_keeps_ignoring_is_reported(
         self,
         hass: HomeAssistant,
@@ -359,5 +351,5 @@ class TestOpenBugs:
         suspended = lcm_issue_ids(hass, "slot_suspended")
         await hass.config_entries.async_unload(entry.entry_id)
 
-        assert deletes <= MAX_SYNC_ATTEMPTS + 1
+        assert deletes <= LIMIT + 1
         assert suspended

@@ -336,6 +336,8 @@ async def test_a_refused_pin_turns_the_slot_off(ports) -> None:
 async def test_a_providers_echo_of_its_own_write_is_not_a_push(ports) -> None:
     """Only the lock reports: an echo stands in for nothing it said."""
     port, worker, lock = await ports(MockLCMPushLock)
+    worker.want(2, None)
+    worker.want(3, "3333")
     pushed: list[tuple[int, object]] = []
     worker.push = lambda slot, value: pushed.append((slot, value))  # type: ignore[method-assign]
     await port.write(3, "3333")
@@ -408,6 +410,7 @@ async def test_silence_from_an_earlier_read_is_not_carried_over(ports) -> None:
 async def test_a_push_after_the_write_is_back_is_the_lock(ports) -> None:
     """Only the echo during the write is dropped; the lock's later word counts."""
     port, worker, lock = await ports(MockLCMPushLock)
+    worker.want(3, "3333")
     pushed: list[tuple[int, object]] = []
     worker.push = lambda slot, value: pushed.append((slot, value))  # type: ignore[method-assign]
     await port.write(3, "3333")
@@ -419,21 +422,42 @@ async def test_a_push_after_the_write_is_back_is_the_lock(ports) -> None:
 @pytest.mark.parametrize(
     ("push", "drift", "interval"),
     [
-        (False, None, timedelta(minutes=1)),
-        (False, timedelta(seconds=30), timedelta(seconds=30)),
-        (True, None, None),
-        (True, timedelta(hours=1), timedelta(hours=1)),
+        (False, None, (timedelta(minutes=1), None)),
+        (False, timedelta(hours=1), (timedelta(minutes=1), timedelta(hours=1))),
+        (True, None, (None, None)),
+        (True, timedelta(hours=1), (None, timedelta(hours=1))),
     ],
 )
 async def test_polls_come_at_the_providers_cadence(
     hass: HomeAssistant, push, drift, interval
 ) -> None:
-    """Every read is fresh: polling and drift checks are one cadence."""
+    """A lock that does not push is scanned; the drift check runs regardless."""
     port, _, lock = await _port(hass, MockLCMPushLock, setup=False)
     lock._supports_push = push
     lock._hard_refresh_interval = drift
 
-    assert port._poll_interval() == interval
+    assert port._cadence() == interval
+
+
+async def test_disabled_polling_skips_the_scan_not_the_drift_check(
+    hass: HomeAssistant, ports
+) -> None:
+    """ "Disable polling" spares the drift check, which catches keypad changes."""
+    port, worker, lock = await ports()
+    worker.want(1, "1234")
+    worker.start()
+    await worker.settled()
+    port.polling = lambda: False
+    reads = len(lock.service_calls["get_usercodes"])
+
+    port._on_scan(dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert len(lock.service_calls["get_usercodes"]) == reads
+
+    port._on_poll(dt_util.utcnow())
+    async with asyncio.timeout(5):
+        while len(lock.service_calls["get_usercodes"]) == reads:
+            await asyncio.sleep(0)
 
 
 async def test_the_connection_check_lets_the_provider_see_its_integration(
@@ -635,7 +659,7 @@ async def test_a_lock_not_set_up_holds_no_slot(hass: HomeAssistant, ports) -> No
 async def test_the_poll_is_not_rearmed_once_unloaded(ports) -> None:
     """A reconnect finishing while unload awaits the poll arms nothing."""
     port, worker, lock = await ports()
-    assert port._poll_unsub is not None
+    assert port._poll_unsubs
     assert lock.coordinator is not None
     coordinator = lock.coordinator
 
@@ -650,10 +674,10 @@ async def test_the_poll_is_not_rearmed_once_unloaded(ports) -> None:
     await worker.stop(grace=0.1)
     await port.async_unload(False)
 
-    leaked = port._poll_unsub
-    if leaked is not None:
-        leaked()
-    assert leaked is None
+    leaked = list(port._poll_unsubs)
+    for unsub in leaked:
+        unsub()
+    assert not leaked
 
 
 async def test_a_provider_the_port_never_set_up_is_read(ports) -> None:
@@ -661,3 +685,79 @@ async def test_a_provider_the_port_never_set_up_is_read(ports) -> None:
     port, _, lock = await ports(setup=False)
 
     assert await port.read([1]) == {1: Holds("1234")}
+
+
+# Codes nobody here manages ------------------------------------------------------------
+
+
+async def test_a_read_keeps_what_the_lock_said_of_slots_nobody_here_manages(
+    ports,
+) -> None:
+    """A provider that reads the whole lock tells of every code on it."""
+    port, _, lock = await ports()
+    lock.codes = {1: "1234", 7: "7777"}
+
+    assert await port.read([1]) == {1: Holds("1234")}
+    assert port.others[7] == Holds("7777")
+
+
+async def test_a_push_about_a_slot_nobody_here_manages_is_kept_aside(ports) -> None:
+    """The worker tracks only wanted slots; the card still shows the rest."""
+    port, worker, lock = await ports(MockLCMPushLock)
+    lock._push_credential_update(9, SlotCredential.known("9999"))
+
+    assert port.others == {9: Holds("9999")}
+    assert 9 not in worker.slots
+
+
+async def test_the_last_word_on_a_slot_stays_after_the_worker_lets_it_go(
+    ports,
+) -> None:
+    """A one-off write's read-back is still on the card once the slot is dropped."""
+    port, _, lock = await ports()
+    lock.codes = {1: "1234", 7: "7777"}
+    await port.read([7])
+    lock.codes[7] = "7070"
+    await port.read([7])
+
+    assert port.others[7] == Holds("7070")
+
+
+async def test_a_clear_that_found_nothing_says_so(ports) -> None:
+    """Not proof of what the slot holds: the worker does not record it as cleared."""
+    port, _, lock = await ports()
+
+    assert await port.write(9, None) is False
+    assert await port.write(1, None) is True
+
+
+async def test_an_unknown_capacity_does_not_stop_a_read(ports) -> None:
+    """A capability probe that breaks limits nothing: the slot is still read."""
+    port, _, lock = await ports()
+    with patch.object(
+        type(lock), "_assert_slot_within_capacity", side_effect=RuntimeError("bug")
+    ):
+        assert await port.read([1]) == {1: Holds("1234")}
+
+
+async def test_a_code_gone_from_a_lock_read_whole_leaves_the_side_table(ports) -> None:
+    """A read of the whole lock tells of every code: one it omits is gone."""
+    port, _, lock = await ports()
+    lock.codes = {1: "1234", 7: "7777"}
+    await port.read([1])
+    del lock.codes[7]  # deleted at the keypad
+    await port.read([1])
+
+    assert 7 not in port.others
+
+
+async def test_a_lock_walked_slot_by_slot_keeps_what_it_was_not_asked(ports) -> None:
+    """A walk of the slots asked for says nothing about the others."""
+    port, _, lock = await ports()
+    lock.codes = {1: "1234", 7: "7777"}
+    await port.read([1])
+    with patch.object(type(lock), "per_exchange_budget", 10.0):
+        del lock.codes[7]
+        await port.read([1])
+
+    assert port.others[7] == Holds("7777")

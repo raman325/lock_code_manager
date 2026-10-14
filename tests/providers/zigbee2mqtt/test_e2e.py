@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 import json
 import logging
@@ -36,9 +36,14 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
+from custom_components.lock_code_manager.core.adapter import reading
+from custom_components.lock_code_manager.core.slot import Reading, Status
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.credentials import pin_address
-from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_registry,
+    port_of,
+)
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -91,6 +96,29 @@ def _published_payloads(mqtt_mock, topic: str) -> list[dict[str, Any]]:
     ]
 
 
+def _record_pushes(
+    hass: HomeAssistant, lock: Zigbee2MQTTLock
+) -> Callable[[int], Reading | None]:
+    """
+    Record what the provider pushes from now on, as the core takes it.
+
+    A push about a slot the lock's worker tracks is recorded as it reaches
+    the worker; one about any other slot lands in the port's ``others``.
+    Returns a lookup of the latest pushed reading per slot.
+    """
+    worker = lock_registry(hass).worker(lock.lock.entity_id)
+    assert worker is not None
+    port = port_of(worker)
+    port.others.clear()
+    pushed: dict[int, Reading] = {}
+    worker.push = pushed.__setitem__  # type: ignore[method-assign]
+
+    def _seen(slot: int) -> Reading | None:
+        return pushed.get(slot, port.others.get(slot))
+
+    return _seen
+
+
 def _fire_device_payload(hass: HomeAssistant, payload: dict[str, Any]) -> None:
     """Fire a JSON payload on the lock's Zigbee2MQTT device topic."""
     async_fire_mqtt_message(hass, Z2M_FULL_TOPIC, json.dumps(payload))
@@ -127,31 +155,30 @@ class TestFullSetupLifecycle:
 
 
 class TestPushUpdatesViaMqtt:
-    """Verify MQTT messages flow through to the coordinator."""
+    """Verify MQTT messages flow through to the lock's worker."""
 
     async def test_users_payload_updates_coordinator(
         self,
         hass: HomeAssistant,
         z2m_lock,
     ) -> None:
-        """Firing a users payload on the device topic updates coordinator data."""
+        """Firing a users payload on the device topic reaches the worker."""
+        seen = _record_pushes(hass, z2m_lock)
         _fire_device_payload(
             hass,
             {"users": {"1": {"status": "enabled", "pin_code": "1234"}}},
         )
         await hass.async_block_till_done()
-        await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
-            "1234"
-        )
+        assert seen(1) == reading(SlotCredential.known("1234"))
 
     async def test_multiple_slots_in_single_message(
         self,
         hass: HomeAssistant,
         z2m_lock,
     ) -> None:
-        """Multiple user slots in one MQTT message all reach the coordinator."""
+        """Multiple user slots in one MQTT message all reach the core."""
+        seen = _record_pushes(hass, z2m_lock)
         _fire_device_payload(
             hass,
             {
@@ -163,17 +190,11 @@ class TestPushUpdatesViaMqtt:
             },
         )
         await hass.async_block_till_done()
-        await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
-            "1111"
-        )
-        assert z2m_lock.coordinator.data.get(pin_address(2)) == SlotCredential.known(
-            "2222"
-        )
-        assert (
-            z2m_lock.coordinator.data.get(pin_address(3)) is SlotCredential.unreadable()
-        )
+        assert seen(1) == reading(SlotCredential.known("1111"))
+        assert seen(2) == reading(SlotCredential.known("2222"))
+        # Slot 3 is no slot LCM manages: a code nobody manages.
+        assert seen(3) == reading(SlotCredential.unreadable())
 
     async def test_disabled_slot_is_occupied_not_empty(
         self,
@@ -185,16 +206,14 @@ class TestPushUpdatesViaMqtt:
         Reporting it empty tells sync the slot is confirmed cleared and tells
         allocation the credential index is free to hand out.
         """
+        seen = _record_pushes(hass, z2m_lock)
         _fire_device_payload(
             hass,
             {"users": {"5": {"status": "disabled"}}},
         )
         await hass.async_block_till_done()
-        await hass.async_block_till_done()
 
-        credential = z2m_lock.coordinator.data.get(pin_address(5))
-        assert credential.is_present
-        assert not credential.is_readable
+        assert seen(5) == reading(SlotCredential.unreadable())
 
     async def test_available_slot_is_empty(
         self,
@@ -202,14 +221,14 @@ class TestPushUpdatesViaMqtt:
         z2m_lock,
     ) -> None:
         """``available`` is the one status that does mean nothing is there."""
+        seen = _record_pushes(hass, z2m_lock)
         _fire_device_payload(
             hass,
             {"users": {"6": {"status": "available"}}},
         )
         await hass.async_block_till_done()
-        await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(pin_address(6)) is SlotCredential.empty()
+        assert seen(6) == reading(SlotCredential.empty())
 
 
 class TestSetAndClearUsercodes:
@@ -238,12 +257,11 @@ class TestSetAndClearUsercodes:
         hass: HomeAssistant,
         z2m_lock,
     ) -> None:
-        """After set, the coordinator has the optimistic value."""
+        """After set, the optimistic value is pushed to the worker."""
+        seen = _record_pushes(hass, z2m_lock)
         await z2m_lock.async_set_usercode(1, "9999")
 
-        assert z2m_lock.coordinator.data.get(pin_address(1)) == SlotCredential.known(
-            "9999"
-        )
+        assert seen(1) == reading(SlotCredential.known("9999"))
 
     async def test_clear_usercode_publishes_disable_payload(
         self,
@@ -266,10 +284,11 @@ class TestSetAndClearUsercodes:
         hass: HomeAssistant,
         z2m_lock,
     ) -> None:
-        """After clear, the coordinator has SlotCredential.empty()."""
+        """After clear, an empty slot is pushed to the worker."""
+        seen = _record_pushes(hass, z2m_lock)
         await z2m_lock.async_clear_usercode(1)
 
-        assert z2m_lock.coordinator.data.get(pin_address(1)) is SlotCredential.empty()
+        assert seen(1) == reading(SlotCredential.empty())
 
 
 class TestGetUsercodes:
@@ -563,7 +582,7 @@ class TestBridge:
                 status = sync_status(
                     hass, in_sync_entity_id(hass, entry, slot, lock_id)
                 )
-                assert status != SyncState.SUSPENDED
+                assert status != Status.SUSPENDED
             assert hass.states.get(lock_id).state != STATE_UNAVAILABLE
 
     async def test_no_pin_reaches_a_log_record(

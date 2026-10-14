@@ -24,6 +24,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.core.adapter import ProviderPort, _Coordinator
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     pin_address,
@@ -55,7 +56,9 @@ async def test_subscribe_push_updates(
     """Test subscribing to push updates."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     # Subscribe to push updates (idempotent - may already be subscribed)
     zwave_js_lock.subscribe_push_updates()
@@ -78,7 +81,9 @@ async def test_subscribe_is_idempotent(
     """Test that calling subscribe multiple times is safe."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.subscribe_push_updates()
     first_unsubs = list(zwave_js_lock._push_unsubs)
@@ -100,7 +105,9 @@ async def test_subscribe_push_no_crash_on_client_not_ready(
     """Test that push subscription handles client not ready without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
     assert not zwave_js_lock._push_unsubs
@@ -128,7 +135,9 @@ async def test_subscribe_push_no_crash_on_node_error(
     """Test that push subscription handles node.on error without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
     assert not zwave_js_lock._push_unsubs
@@ -151,7 +160,9 @@ async def test_subscribe_push_cleans_up_partial_subscription_on_error(
     """A failure partway through subscribing releases the unsubs already registered."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
     assert not zwave_js_lock._push_unsubs
@@ -194,7 +205,9 @@ async def test_subscribe_registers_credential_and_shim_listeners(
     """Test that subscribing registers the credential and shim listeners."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.subscribe_push_updates()
     assert len(zwave_js_lock._push_unsubs) == _EXPECTED_PUSH_UNSUB_COUNT
@@ -214,7 +227,9 @@ async def test_subscribe_skips_shim_listener_without_user_code_cc(
     """A node without User Code CC gets only the unified credential listeners."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
     with patch.object(ZWaveJSLock, "_node_advertises_user_code_cc", return_value=False):
@@ -319,7 +334,9 @@ async def test_notification_event_keypad_lock_fires_a_code_slot_event(
     """Test that a keypad lock notification event reaches the code slot event funnel."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     # Capture LCM lock state changed events
     fired = MagicMock()
@@ -363,7 +380,9 @@ async def test_notification_event_keypad_unlock_fires_a_code_slot_event(
     """Test that a keypad unlock notification event reaches the code slot event funnel."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     fired = MagicMock()
     zwave_js_lock.async_fire_code_slot_event = fired
@@ -405,7 +424,9 @@ async def test_notification_event_non_access_control_ignored(
     """A notification of a non Access Control type is ignored (no LCM event)."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     fired = MagicMock()
     zwave_js_lock.async_fire_code_slot_event = fired

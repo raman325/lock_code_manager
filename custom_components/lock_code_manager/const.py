@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from homeassistant.const import Platform
 
 DOMAIN = "lock_code_manager"
@@ -236,23 +234,6 @@ PENDING_WRITE_TTL: float = 60.0
 # looks inside one time to live, so a write that landed late is seen well
 # before the deadline and a lock that never keeps it is asked, not hammered.
 CONFIRM_READ_INTERVAL: float = PENDING_WRITE_TTL / 4
-
-# Sync timing
-TICK_INTERVAL = timedelta(seconds=2)
-# How long ``SlotSyncManager.async_stop`` lets an in-flight tick finish before
-# cancelling it, measured from when the call took the lock's turn. An
-# operational cancel needs the whole OPERATION_TIMEOUT (see providers/_base.py)
-# because nothing follows it but a retry; a stop is different because a
-# reload reads the slot before it writes, so a single command cut here is
-# simply redone. What the window protects is a sequence: Schlage and Matter
-# delete a credential before writing its replacement, and a cancel between
-# the two leaves the door with no working PIN. Those are cloud and local
-# calls that answer in seconds when healthy. Providers that legitimately
-# take longer on a degraded link (ZHA retries, the zwave-js-ui API timeout)
-# write in one command, so a cut there loses nothing the reload cannot redo.
-STOP_GRACE_SECONDS: float = 30.0
-MAX_SYNC_ATTEMPTS = 3
-SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 
 
 # Defaults

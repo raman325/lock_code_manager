@@ -4,17 +4,27 @@ import logging
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import (
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from custom_components.lock_code_manager.domain.credentials import pin_address
+from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.providers import BaseLock
 
-from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, code_entity_id
+from .common import (
+    LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
+    async_switch_slot,
+    code_entity_id,
+    mock_lock,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,20 +34,24 @@ async def test_sensor_entity(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test sensor entity shows lock code values."""
-    for code_slot, pin in ((1, "1234"), (2, "5678")):
-        state = hass.states.get(
-            code_entity_id(hass, lock_code_manager_config_entry, code_slot)
-        )
-        assert state
-        assert state.state == pin
-        state = hass.states.get(
-            code_entity_id(
-                hass, lock_code_manager_config_entry, code_slot, LOCK_2_ENTITY_ID
+    """
+    Test sensor entity shows lock code values.
+
+    Slot 2's calendar has no event, so the slot is inactive and the lock was
+    cleared at setup: its sensor shows the empty slot.
+    """
+    for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        lock = mock_lock(lock_code_manager_config_entry, lock_entity_id)
+        assert lock.codes.get(1) == "1234"
+        assert 2 not in lock.codes
+        for code_slot, shown in ((1, "1234"), (2, "")):
+            state = hass.states.get(
+                code_entity_id(
+                    hass, lock_code_manager_config_entry, code_slot, lock_entity_id
+                )
             )
-        )
-        assert state
-        assert state.state == pin
+            assert state
+            assert state.state == shown
 
 
 async def test_sensor_native_value_with_slot_code(
@@ -45,31 +59,39 @@ async def test_sensor_native_value_with_slot_code(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test sensor native_value handles empty and unreadable credentials."""
-    lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock.coordinator
-    assert coordinator is not None
+    """Test sensor native_value handles empty, unreadable and known codes."""
+    entry = lock_code_manager_config_entry
+    lock = mock_lock(entry)
+    entity_id = code_entity_id(hass, entry, 1)
 
-    # Empty credential -> sensor shows empty string
-    coordinator.async_set_updated_data({pin_address(1): SlotCredential.empty()})
+    # Empty slot -> sensor shows empty string
+    await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
     await hass.async_block_till_done()
-    state = hass.states.get(code_entity_id(hass, lock_code_manager_config_entry, 1))
+    assert 1 not in lock.codes
+    state = hass.states.get(entity_id)
     assert state is not None
     assert state.state == ""
 
-    # Unreadable credential -> sensor resolves to expected PIN from config
-    coordinator.async_set_updated_data({pin_address(1): SlotCredential.unreadable()})
+    # Unreadable code, in sync -> sensor shows the configured PIN
+    lock.write_only.add(1)
+    await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
     await hass.async_block_till_done()
-    state = hass.states.get(code_entity_id(hass, lock_code_manager_config_entry, 1))
+    state = hass.states.get(entity_id)
     assert state is not None
     assert state.state == "1234"
 
-    # Known credential -> sensor shows the code
-    coordinator.async_set_updated_data({pin_address(1): SlotCredential.known("5678")})
+    # Known code -> sensor shows what the lock holds, not what is configured
+    lock.write_only.clear()
+    lock.codes[1] = "5678"
+    lock.ignore("set", 1)
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None
+    await worker.read()
     await hass.async_block_till_done()
-    state = hass.states.get(code_entity_id(hass, lock_code_manager_config_entry, 1))
+    state = hass.states.get(entity_id)
     assert state is not None
     assert state.state == "5678"
+    lock.clear_faults()
 
 
 async def test_sensor_unreadable_code_on_a_shared_lock_shows_its_entrys_pin(
@@ -81,8 +103,11 @@ async def test_sensor_unreadable_code_on_a_shared_lock_shows_its_entrys_pin(
     An unreadable code falls back to the PIN of the entry that owns the slot.
 
     The second entry shares the first entry's lock, and with it the lock's
-    coordinator, which the first entry built.
+    worker, which the first entry started.
     """
+    lock = mock_lock(lock_code_manager_config_entry)
+    # The lock hides slot 3's code: it reads occupied, never the PIN.
+    lock.write_only.add(3)
     second_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -96,13 +121,7 @@ async def test_sensor_unreadable_code_on_a_shared_lock_shows_its_entrys_pin(
     second_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(second_entry.entry_id)
     await hass.async_block_till_done()
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     assert second_entry.runtime_data.locks[LOCK_1_ENTITY_ID] is lock
-    coordinator = lock.coordinator
-    assert coordinator is not None
-
-    coordinator.async_set_updated_data({pin_address(3): SlotCredential.unreadable()})
-    await hass.async_block_till_done()
 
     state = hass.states.get(code_entity_id(hass, second_entry, 3))
     assert state is not None

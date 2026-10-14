@@ -99,6 +99,8 @@ class Slot:
     fights: list[float] = field(default_factory=list)
     hold: Repair | None = None
     release: bool = False
+    # A release has been sent and answered: it reaches the lock once.
+    released: bool = False
     # Bumped each time the counts start over: a sync begun before is not
     # charged to what came after.
     epoch: int = 0
@@ -114,9 +116,16 @@ class Slot:
         """Return whether what the lock said agrees with what is wanted."""
         seen = self.seen
         if self.want is None:
+            if self.release and not self.released:
+                # A release reaches the lock once, whatever it says: a lock
+                # with users tears down the one this slot anchored, even
+                # with no code on it.
+                return False
             if seen is Seen.EMPTY:
                 return True
-            return seen is Seen.SILENT and self.wrote == CLEARED
+            # A lock that will not show its codes, or says nothing, may go on
+            # calling the slot occupied after a clear (#1437): trust the clear.
+            return seen in (Seen.MASKED, Seen.SILENT) and self.wrote == CLEARED
         written = self.wrote == fingerprint(self.want, salt)
         if isinstance(seen, Holds):
             return seen.pin == self.want

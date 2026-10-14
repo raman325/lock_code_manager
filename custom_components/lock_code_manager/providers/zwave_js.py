@@ -214,6 +214,8 @@ class ZWaveJSLock(BaseLock):
 
     # The plain read is the driver's value cache; only a hard refresh asks the node.
     fresh_read_is_hard_refresh = True
+    # A dead node's commands are queued and land whenever it comes back.
+    check_available_before_exchange = True
 
     @property
     def supports_push(self) -> bool:

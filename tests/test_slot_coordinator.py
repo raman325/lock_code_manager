@@ -44,7 +44,6 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
-    pin_address,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_coordinator import (
@@ -904,51 +903,6 @@ async def test_handle_condition_state_change_after_stop_is_noop(
     recompute.assert_not_called()
 
     await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_poke_sync_managers_isolates_individual_failures(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    caplog: pytest.LogCaptureFixture,
-):
-    """One raising sync manager does not abort the poke of the others."""
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    coordinator = runtime_data.slot_coordinators[1]
-
-    # Inject two stand-in managers so the poke loop has predictable
-    # targets regardless of how many real sync managers ended up wired
-    # to this slot via the fixture entity registrations.
-    boom = RuntimeError("simulated sync manager poke failure")
-    healthy_called = {"value": False}
-
-    class _StandIn:
-        def __init__(self, raise_on_call: bool) -> None:
-            self._raise = raise_on_call
-
-        def request_sync_check(self) -> None:
-            if self._raise:
-                raise boom
-            healthy_called["value"] = True
-
-    failing = _StandIn(raise_on_call=True)
-    healthy = _StandIn(raise_on_call=False)
-    coordinator._sync_managers[("lock.failing", pin_address(1))] = failing  # type: ignore[assignment]
-    coordinator._sync_managers[("lock.healthy", pin_address(1))] = healthy  # type: ignore[assignment]
-
-    try:
-        with caplog.at_level(logging.ERROR):
-            coordinator._poke_sync_managers()
-    finally:
-        coordinator._sync_managers.pop(("lock.failing", pin_address(1)))
-        coordinator._sync_managers.pop(("lock.healthy", pin_address(1)))
-
-    assert healthy_called["value"] is True
-    assert any(
-        record.exc_info is not None and record.exc_info[1] is boom
-        for record in caplog.records
-        if record.levelname == "ERROR"
-    )
 
 
 async def test_base_entity_caches_slot_coordinator_on_add(

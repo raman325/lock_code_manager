@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,15 +20,18 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import MAX_SEARCHED_SLOT
-from custom_components.lock_code_manager.domain.coordinator import (
-    LockUsercodeUpdateCoordinator,
+from custom_components.lock_code_manager.core.adapter import (
+    ProviderPort,
+    _Coordinator,
+    reading,
 )
+from custom_components.lock_code_manager.core.slot import Reading, Slot
+from custom_components.lock_code_manager.core.worker import LockWorker
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
     WriteResult,
     credential_from_slot,
-    pin_address,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -290,17 +293,20 @@ _STANDING = {
 
 
 @pytest.fixture
-async def coordinator(
-    hass: HomeAssistant,
-    zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
-) -> AsyncGenerator[LockUsercodeUpdateCoordinator]:
-    """Attach a real coordinator to the lock, loaded with its first read."""
-    coordinator = LockUsercodeUpdateCoordinator(hass, zha_lock)
-    zha_lock.coordinator = coordinator
-    await coordinator.async_refresh()
-    yield coordinator
-    await coordinator.async_shutdown()
+def pushed_to_worker(zha_lock: ZHALock) -> dict[int, Reading]:
+    """
+    Give the lock the core's stand-in coordinator; return what reaches the worker.
+
+    Slot 3 is tracked by the lock's worker, so what the provider pushes about
+    it is handed to ``worker.push``, recorded here by slot.
+    """
+    port = ProviderPort(zha_lock)
+    worker = port.worker = LockWorker(port, b"salt", gap=0.0)
+    worker.slots[3] = Slot(None)
+    pushes: dict[int, Reading] = {}
+    worker.push = pushes.__setitem__  # type: ignore[method-assign]
+    zha_lock.coordinator = _Coordinator(port)
+    return pushes
 
 
 async def _write(zha_lock: ZHALock, command: str) -> WriteResult | bool:
@@ -419,7 +425,7 @@ _CLUSTERS = pytest.mark.parametrize(
 @pytest.mark.parametrize("reply", _OWN_SUCCESSES)
 async def test_a_write_its_own_reply_does_not_refuse_stands(
     zha_lock: ZHALock,
-    coordinator: LockUsercodeUpdateCoordinator,
+    pushed_to_worker: dict[int, Reading],
     command: str,
     request_id: int,
     response: str,
@@ -445,7 +451,7 @@ async def test_a_write_its_own_reply_does_not_refuse_stands(
         )
     else:
         cluster.clear_pin_code.assert_called_once_with(3)
-    assert coordinator.data[pin_address(3)] == pushed
+    assert pushed_to_worker[3] == reading(pushed)
 
 
 @_CLUSTERS
@@ -453,7 +459,7 @@ async def test_a_write_its_own_reply_does_not_refuse_stands(
 @pytest.mark.parametrize("reply", _FOREIGN_REPLIES)
 async def test_a_write_answered_by_another_frame_fails_for_a_retry(
     zha_lock: ZHALock,
-    coordinator: LockUsercodeUpdateCoordinator,
+    pushed_to_worker: dict[int, Reading],
     command: str,
     request_id: int,
     response: str,
@@ -475,7 +481,7 @@ async def test_a_write_answered_by_another_frame_fails_for_a_retry(
 
     with pytest.raises(LockOperationFailed, match="answered by a reply to something"):
         await _write(zha_lock, command)
-    assert pin_address(3) not in coordinator.data
+    assert 3 not in pushed_to_worker
 
 
 @_CLUSTERS
@@ -483,7 +489,7 @@ async def test_a_write_answered_by_another_frame_fails_for_a_retry(
 @pytest.mark.parametrize("reply", _OWN_REFUSALS)
 async def test_the_writes_own_refusal_rejects_the_code(
     zha_lock: ZHALock,
-    coordinator: LockUsercodeUpdateCoordinator,
+    pushed_to_worker: dict[int, Reading],
     command: str,
     request_id: int,
     response: str,
@@ -498,7 +504,7 @@ async def test_the_writes_own_refusal_rejects_the_code(
 
     with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
         await _write(zha_lock, command)
-    assert pin_address(3) not in coordinator.data
+    assert 3 not in pushed_to_worker
 
 
 # A quirk redefining a write's own response so its status is unusable: the
@@ -543,7 +549,7 @@ _UNUSABLE_STATUS = [
 )
 async def test_an_own_response_with_an_unusable_status(
     zha_lock: ZHALock,
-    coordinator: LockUsercodeUpdateCoordinator,
+    pushed_to_worker: dict[int, Reading],
     command: str,
     response: str,
     fields: dict[str, Any],
@@ -567,11 +573,11 @@ async def test_an_own_response_with_an_unusable_status(
     if rejected:
         with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
             await _write(zha_lock, command)
-        assert pin_address(3) not in coordinator.data
+        assert 3 not in pushed_to_worker
         return
     returned, pushed = _STANDING[command]
     assert await _write(zha_lock, command) is returned
-    assert coordinator.data[pin_address(3)] == pushed
+    assert pushed_to_worker[3] == reading(pushed)
 
 
 # ---------------------------------------------------------------------------
@@ -1134,15 +1140,13 @@ async def test_get_users_slot_read_failure(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test async_get_users marks unreadable for slots that fail to read."""
+    """A slot that fails to read fails the read: it is not a reading."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(side_effect=RuntimeError("zigpy timeout"))
 
-    users = await zha_lock.async_get_users()
-    by_slot = {u.user_id: u for u in users}
-    assert by_slot[1].pin_credentials[0].state is SlotCredential.unreadable()
-    assert by_slot[2].pin_credentials[0].state is SlotCredential.unreadable()
+    with pytest.raises(LockOperationFailed):
+        await zha_lock.async_get_users()
 
 
 async def test_get_users_no_managed_slots(
@@ -1287,7 +1291,7 @@ async def test_occupied_indices_stops_at_the_limit(
     assert cluster.get_pin_code.await_count == 3
 
 
-async def test_a_failed_index_is_unreadable_not_empty(
+async def test_a_failed_index_fails_the_read_not_reads_empty(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
@@ -1295,8 +1299,9 @@ async def test_a_failed_index_is_unreadable_not_empty(
     """An index the lock did not answer about is not an empty index.
 
     Calling it empty understates what the lock holds, and an understated
-    answer is the one that overwrites a code. Only a read that fails outright
-    makes occupancy unknown; a single index does not.
+    answer is the one that overwrites a code. Nor is it a reading at all:
+    reported as unreadable, a clear the lock acknowledged would read as done.
+    The read fails, and the lock's worker asks again.
     """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
@@ -1308,11 +1313,8 @@ async def test_a_failed_index_is_unreadable_not_empty(
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
-    codes = await zha_lock.async_get_usercodes(range(1, 4))
-    # Unreadable, not empty: the index holds something we could not read, and
-    # calling that empty is what lets a real credential be overwritten.
-    assert codes[2] is SlotCredential.unreadable()
-    assert codes[1].is_empty and codes[3].is_empty
+    with pytest.raises(LockOperationFailed):
+        await zha_lock.async_get_usercodes(range(1, 4))
 
 
 async def test_occupied_indices_counts_a_write_only_slot(
@@ -1332,7 +1334,7 @@ async def test_occupied_indices_counts_a_write_only_slot(
     assert codes[2] is SlotCredential.unreadable()
 
 
-async def test_unparseable_response_is_unreadable_not_empty(
+async def test_an_unparseable_response_fails_the_read_not_reads_empty(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
@@ -1348,10 +1350,8 @@ async def test_unparseable_response_is_unreadable_not_empty(
     # A command the cluster has no definition for reaches the request as bytes.
     cluster.get_pin_code = AsyncMock(return_value=b"unexpected shape")
 
-    codes = await zha_lock.async_get_usercodes(range(1, 3))
-
-    assert codes[1] is SlotCredential.unreadable()
-    assert codes[2] is SlotCredential.unreadable()
+    with pytest.raises(LockOperationFailed):
+        await zha_lock.async_get_usercodes(range(1, 3))
 
 
 @pytest.mark.parametrize(
@@ -1609,12 +1609,12 @@ async def test_a_slot_read_nobody_answers_is_a_disconnect_not_an_unreadable_slot
         await asyncio.wait_for(zha_lock.async_get_users(), timeout=5)
 
 
-async def test_zigpys_own_timeout_marks_the_slot_unreadable_and_walks_on(
+async def test_zigpys_own_timeout_fails_the_read_as_a_flaky_slot(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """zigpy giving up on one slot is a flaky slot, not a dead transport."""
+    """zigpy giving up on one slot is a failed read, not a dead transport."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
 
@@ -1624,10 +1624,9 @@ async def test_zigpys_own_timeout_marks_the_slot_unreadable_and_walks_on(
         return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
-    users = await zha_lock.async_get_users()
-    by_slot = {u.user_id: u for u in users}
-    assert by_slot[1].pin_credentials[0].state == SlotCredential.unreadable()
-    assert by_slot[2].pin_credentials[0].state is SlotCredential.empty()
+    with pytest.raises(LockOperationFailed) as caught:
+        await zha_lock.async_get_users()
+    assert not isinstance(caught.value, LockDisconnected)
 
 
 async def test_scoped_hard_refresh_still_names_every_managed_slot(

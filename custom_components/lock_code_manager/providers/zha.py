@@ -38,6 +38,7 @@ from ..domain.credentials import (
 )
 from ..domain.exceptions import (
     CodeRejectedError,
+    LockCodeManagerError,
     LockDisconnected,
     LockOperationFailed,
 )
@@ -453,9 +454,12 @@ class ZHALock(BaseLock):
 
         ``empty`` means confirmed cleared, and ``AVAILABLE`` is the only
         status that says so. ``known`` means the lock is accepting this code,
-        which only ``ENABLED`` says. Every other answer -- another status, a
-        failed read, a response shape this cannot parse -- is ``unreadable``:
-        something is there and its value cannot be trusted.
+        which only ``ENABLED`` says. Every other status is ``unreadable``:
+        something is there and its value cannot be trusted. A read that
+        failed -- an error, a reply that is not this slot's answer, zigpy
+        giving up on the slot -- is not a reading at all, and fails the read:
+        reported as unreadable, a clear the lock acknowledged would read as
+        done while the code is still there.
 
         Both directions matter. Reporting a clear that did not happen makes
         sync reprogram a slot that already holds a code and tells allocation
@@ -496,31 +500,21 @@ class ZHALock(BaseLock):
                         f"Lock {self.lock.entity_id}: no answer for slot {slot_num} "
                         f"within {_WORST_CASE_ZCL_COMMAND:.0f}s"
                     ) from None
-                _LOGGER.debug(
-                    "Lock %s: slot %s timed out on the mesh, marking unreadable",
-                    self.lock.entity_id,
-                    slot_num,
-                )
-                slot_states[slot_num] = SlotCredential.unreadable()
-                continue
-            except Exception:
-                _LOGGER.debug(
-                    "Lock %s: failed to read slot %s, marking unreadable",
-                    self.lock.entity_id,
-                    slot_num,
-                    exc_info=True,
-                )
-                slot_states[slot_num] = SlotCredential.unreadable()
-                continue
+                raise LockOperationFailed(
+                    f"Lock {self.lock.entity_id}: slot {slot_num} timed out on the mesh"
+                ) from None
+            except LockCodeManagerError:
+                raise
+            except Exception as err:
+                raise LockOperationFailed(
+                    f"Lock {self.lock.entity_id}: failed to read slot {slot_num}: {err}"
+                ) from err
 
             if parsed is None:
-                _LOGGER.debug(
-                    "Lock %s: get_pin_code reply is not slot %s's answer",
-                    self.lock.entity_id,
-                    slot_num,
+                raise LockOperationFailed(
+                    f"Lock {self.lock.entity_id}: get_pin_code reply is not slot "
+                    f"{slot_num}'s answer"
                 )
-                slot_states[slot_num] = SlotCredential.unreadable()
-                continue
 
             user_status, pin_code = parsed
             # Available is the only status leaving this index free to write

@@ -47,6 +47,7 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util, slugify
 
@@ -100,7 +101,7 @@ from .const import (
     EVENT_CREDENTIAL_USED,
 )
 from .domain.config import parse_slot_unique_id
-from .domain.credentials import pin_address
+from .domain.lock_runtime import lock_codes, lock_reachable, signal_lock_changed
 from .domain.locks import get_managed_locks
 from .domain.models import SlotCode, SlotCredential
 from .domain.queries import (
@@ -654,9 +655,8 @@ def _get_lock_friendly_name(hass: HomeAssistant, lock: BaseLock) -> str:
 def _serialize_lock_coordinator(
     hass: HomeAssistant, lock: BaseLock, *, reveal: bool = False
 ) -> dict[str, Any]:
-    """Serialize coordinator data for a lock."""
-    coordinator = lock.coordinator
-    data = coordinator.credentials_by_slot() if coordinator is not None else {}
+    """Serialize what the lock holds, as its worker knows it."""
+    data = lock_codes(hass, lock.lock.entity_id)
     managed_slots = slots_configured_on(hass, lock.lock.entity_id)
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
     slot_metadata = _get_slot_metadata(hass, slot_entity_ids)
@@ -697,7 +697,7 @@ def _serialize_lock_coordinator(
         ATTR_LOCK_NAME: _get_lock_friendly_name(hass, lock),
         CONF_SLOTS: slots,
     }
-    if coordinator and coordinator.unreachable:
+    if lock_reachable(hass, lock.lock.entity_id) is False:
         result[ATTR_SYNC_STATUS] = "suspended"
     return result
 
@@ -733,8 +733,6 @@ async def subscribe_lock_codes(
         )
         return
 
-    coordinator = lock.coordinator
-
     @callback
     def _send_update() -> None:
         connection.send_event(
@@ -762,9 +760,9 @@ async def subscribe_lock_codes(
     )
     unsub_state = _refresh_state_tracking()
 
-    # Track coordinator updates (lock code changes).
-    unsub_coordinator = (
-        coordinator.async_add_listener(_send_update) if coordinator else lambda: None
+    # Track what the lock's worker learns (lock code changes).
+    unsub_coordinator = async_dispatcher_connect(
+        hass, signal_lock_changed(lock_entity_id), _send_update
     )
 
     def _unsub_all() -> None:
@@ -909,9 +907,8 @@ def _build_lock_status(
         if in_sync_state:
             sync_status = in_sync_state.attributes.get(ATTR_SYNC_STATUS)
 
-    # Get code from coordinator — SlotCode sentinels pass through as strings
-    coordinator = lock.coordinator
-    raw_code = coordinator.credential(pin_address(slot_num)) if coordinator else None
+    # What the lock's worker knows of the slot
+    raw_code = lock_codes(hass, lock_entity_id).get(slot_num)
 
     lock_status: dict[str, Any] = {
         ATTR_ENTITY_ID: lock_entity_id,
@@ -1204,13 +1201,16 @@ async def subscribe_code_slot(
 
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
-    entry_locks = config_entry.runtime_data.locks
     entry_lock_ids = get_entry_config(config_entry).locks
 
+    # Every lock the entry lists, held yet or not: a card can subscribe before
+    # the entry has its locks (#933).
     for lock_entity_id in entry_lock_ids:
-        lock = entry_locks.get(lock_entity_id)
-        if lock and lock.coordinator:
-            unsub_coordinators.append(lock.coordinator.async_add_listener(_send_update))
+        unsub_coordinators.append(
+            async_dispatcher_connect(
+                hass, signal_lock_changed(lock_entity_id), _send_update
+            )
+        )
 
     def _unsub_all() -> None:
         unsub_state()

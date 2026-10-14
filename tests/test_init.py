@@ -5,7 +5,7 @@ import copy
 from datetime import timedelta
 import logging
 import sys
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
@@ -71,8 +71,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_IN_SYNC,
     ATTR_PIN_IN_SYNC,
     ATTR_TEXT,
-    BACKOFF_FAILURE_THRESHOLD,
-    BACKOFF_MAX_SECONDS,
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOT,
@@ -81,30 +79,26 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     ENTITY_IDS_RENAMED_ISSUE,
     EVENT_CREDENTIAL_USED,
-    MAX_SYNC_ATTEMPTS,
-    POLL_FAILURE_ALERT_THRESHOLD,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
     SUBENTRY_TYPE_USER,
-    TICK_INTERVAL,
 )
+from custom_components.lock_code_manager.core.slot import LIMIT
+from custom_components.lock_code_manager.domain import lock_runtime
 from custom_components.lock_code_manager.domain.config import (
     EntryConfig,
     build_slot_device_identifier,
     build_slot_unique_id,
 )
-from custom_components.lock_code_manager.domain.coordinator import (
-    LockUsercodeUpdateCoordinator,
-)
-from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import (
     LockBusy,
     LockDisconnected,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
@@ -129,9 +123,9 @@ from .common import (
     SLOT_1_ENABLED_ENTITY,
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_NAME_ENTITY,
+    TICK_INTERVAL,
     MockLCMLock,
     MockLCMPushLock,
-    all_sync_managers,
     async_advance_clock,
     async_advance_sync_ticks,
     async_blocking_stub,
@@ -141,14 +135,11 @@ from .common import (
     async_run_until_quiet,
     async_set_slot_pin,
     async_tick_until,
-    async_trip_slot_breaker,
     code_entity_id,
     current_entry,
     entry_users,
     in_sync_entity_id,
     mock_lock,
-    short_stop_grace,
-    sync_manager_of,
     sync_status,
     when_mock_lock_built,
     write_entry_config,
@@ -156,7 +147,6 @@ from .common import (
 from .conftest import (
     async_initial_tick,
     async_trigger_sync_tick,
-    get_in_sync_entity_obj,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -174,6 +164,24 @@ def _loaded_lcm_lock_entity_ids(hass: HomeAssistant) -> set[str]:
         if (runtime_data := getattr(entry, "runtime_data", None)) is not None
         for entity_id in runtime_data.locks
     }
+
+
+def _failing_lock_build(lock_entity_id: str, error: BaseException):
+    """
+    Make building ``lock_entity_id``'s provider raise ``error``.
+
+    Building the provider is the step of a lock's setup that can escape it:
+    the provider's own setup is the lock's worker's to retry, and never
+    drops the lock.
+    """
+    original = lock_runtime.async_create_lock_instance
+
+    def _build(hass, dev_reg, ent_reg, config_entry, entity_id):
+        if entity_id == lock_entity_id:
+            raise error
+        return original(hass, dev_reg, ent_reg, config_entry, entity_id)
+
+    return patch.object(lock_runtime, "async_create_lock_instance", _build)
 
 
 @pytest.mark.parametrize("config", [{}])
@@ -268,9 +276,13 @@ async def test_entry_setup_and_unload(
     assert resources.loaded
     assert any(data[CONF_URL] == STRATEGY_PATH for data in resources.async_items())
 
+    # A hard refresh is a fresh read of the targeted lock only: the provider's
+    # own read, as the mock lock does not read through a hard refresh.
     locks = lock_code_manager_config_entry.runtime_data.locks
-    for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-        assert not locks[lock_entity_id].service_calls["hard_refresh_codes"]
+    reads_before = {
+        lock_entity_id: len(locks[lock_entity_id].service_calls["get_usercodes"])
+        for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
+    }
 
     await hass.services.async_call(
         DOMAIN,
@@ -278,8 +290,14 @@ async def test_entry_setup_and_unload(
         {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
         blocking=True,
     )
-    assert locks[LOCK_1_ENTITY_ID].service_calls["hard_refresh_codes"]
-    assert not locks[LOCK_2_ENTITY_ID].service_calls["hard_refresh_codes"]
+    assert (
+        len(locks[LOCK_1_ENTITY_ID].service_calls["get_usercodes"])
+        > reads_before[LOCK_1_ENTITY_ID]
+    )
+    assert (
+        len(locks[LOCK_2_ENTITY_ID].service_calls["get_usercodes"])
+        == reads_before[LOCK_2_ENTITY_ID]
+    )
 
     new_config = copy.deepcopy(BASE_CONFIG)
     # number_of_uses values in options are accepted (for backward compatibility
@@ -1244,12 +1262,7 @@ def _require(condition: bool, what: str) -> None:
         pytest.fail(what)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="latent state-listener leak; see catalog",
-)
-async def test_a_lock_dropped_after_its_listener_started_never_sets_up_again(
+async def test_a_lock_whose_setup_failed_never_sets_up_again_after_unload(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
@@ -1258,12 +1271,12 @@ async def test_a_lock_dropped_after_its_listener_started_never_sets_up_again(
 
     A push lock whose subscription is not implemented fails its setup after
     the listener on its integration's config entry is registered. The entry
-    drops the lock and stops its coordinator, but nothing removes that
-    listener, so every reload of the lock's integration runs the dropped
-    instance's provider setup again, after the entry has unloaded too. For a
-    provider whose setup registers a listener of its own, that is a ghost
-    listener and every event twice. The shared-lock property machine exempts
-    such an instance from its own check for this, and only that instance.
+    used to drop the lock without removing that listener, so every reload of
+    the lock's integration ran the dropped instance's provider setup again,
+    after the entry had unloaded too. For a provider whose setup registers a
+    listener of its own, that is a ghost listener and every event twice.
+    The lock's worker now keeps a lock whose setup failed (it is the lock's
+    to retry), and unloading the entry unloads its provider, listener and all.
 
     Only the last assertion is the defect; everything before it is the setup
     reaching the state the defect needs, and fails as ``Failed`` if it does
@@ -1289,8 +1302,8 @@ async def test_a_lock_dropped_after_its_listener_started_never_sets_up_again(
             DOMAIN,
             build_slot_unique_id(entry.entry_id, 1, ATTR_IN_SYNC, LOCK_1_ENTITY_ID),
         )
-        is None,
-        "the lock dropped from the entry",
+        is not None,
+        "the lock kept by the entry",
     )
     _require(
         dropped.service_calls["setup"] == [(entry.entry_id,)], "one provider setup"
@@ -1746,7 +1759,15 @@ async def test_a_reload_keeps_the_repair_for_a_slot_suspended_by_real_failures(
     in_sync = in_sync_entity_id(hass, entry, 1)
     await async_advance_sync_ticks(hass, freezer)
     await async_set_slot_pin(hass, entry, 1, "4321")
-    await async_trip_slot_breaker(hass, freezer, entry, 1)
+    # The lock fails every write of slot 1 until the slot is held.
+    mock_lock(entry).fail("set", 1)
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: sync_status(hass, in_sync) == "suspended",
+        max_ticks=2 * LIMIT + 3,
+        what="slot 1 suspended",
+    )
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
 
     # The lock built anew fails the same writes.
@@ -1762,8 +1783,8 @@ async def test_a_reload_keeps_the_repair_for_a_slot_suspended_by_real_failures(
     await async_tick_until(
         hass,
         freezer,
-        lambda: sync_status(hass, in_sync) == SyncState.SUSPENDED.value,
-        max_ticks=2 * MAX_SYNC_ATTEMPTS + 3,
+        lambda: sync_status(hass, in_sync) == "suspended",
+        max_ticks=2 * LIMIT + 3,
         what="slot 1 suspended again",
     )
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
@@ -1852,49 +1873,31 @@ async def test_reload_resets_sync_state_cleanly(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Config entry reload creates fresh sync managers with clean state."""
+    """A config entry reload starts the lock over with a fresh worker."""
     entry = lock_code_manager_config_entry
 
-    # Drive initial sync so _last_set_pin gets populated
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    old_worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert old_worker is not None
 
-    # Get the sync manager reference and verify _last_set_pin has a value
-    entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    old_sync_mgr = sync_manager_of(entity_obj)
-    # After sync the _last_set_pin should be set (the initial code was set)
-    # or the slot is already in sync without needing a set. Either way we
-    # capture the reference for identity comparison later.
-    old_mgr_id = id(old_sync_mgr)
-
-    # Unload the config entry
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+    # No entry holds the lock any more: its worker is gone with it.
+    assert lock_registry(hass).worker(LOCK_1_ENTITY_ID) is None
 
-    # Re-setup the config entry
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    # Get new sync manager reference (should be a different object)
-    new_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
-    new_sync_mgr = sync_manager_of(new_entity_obj)
-    assert id(new_sync_mgr) != old_mgr_id, (
-        "After reload, sync manager should be a fresh instance"
-    )
-
-    # Fresh instance should have _last_set_pin as None
-    assert new_sync_mgr._last_set_pin is None
-
-    # Drive initial tick and verify the sync manager reaches a real state
+    new_worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert new_worker is not None
+    assert new_worker is not old_worker
+    # The fresh worker read the lock and brought the slot in line.
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-    assert new_sync_mgr._state in (
-        SyncState.IN_SYNC,
-        SyncState.OUT_OF_SYNC,
-    ), f"Expected IN_SYNC or OUT_OF_SYNC, got {new_sync_mgr._state}"
+    assert new_worker.slots[1].tries == 0
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
-async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
+async def test_removing_lock_from_config_stops_its_worker(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
@@ -1904,12 +1907,13 @@ async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
     runtime_data = entry.runtime_data
     ent_reg = er.async_get(hass)
 
-    # Verify both locks have coordinators and are running
+    # Verify both locks have workers and are running
     assert LOCK_1_ENTITY_ID in runtime_data.locks
     assert LOCK_2_ENTITY_ID in runtime_data.locks
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-        lock = runtime_data.locks[lock_entity_id]
-        assert lock.coordinator is not None
+        worker = lock_registry(hass).worker(lock_entity_id)
+        assert worker is not None and worker.started
+    lock_2 = runtime_data.locks[LOCK_2_ENTITY_ID]
 
     # Verify LOCK_2 has in-sync entities in the entity registry
     lock_2_in_sync_entities = [
@@ -1928,10 +1932,9 @@ async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
 
     # Verify LOCK_2 is gone from runtime_data, and nothing keeps syncing it
     assert LOCK_2_ENTITY_ID not in runtime_data.locks
-    assert not any(
-        coordinator.sync_manager(LOCK_2_ENTITY_ID, pin_address(slot_num))
-        for slot_num, coordinator in runtime_data.slot_coordinators.items()
-    )
+    assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is None
+    # Its provider was unloaded for good (the lock left the entry), once.
+    assert lock_2.service_calls["unload"] == [(True,)]
 
     # Verify LOCK_2's in-sync entities are removed (state no longer present)
     for entity in lock_2_in_sync_entities:
@@ -1940,25 +1943,24 @@ async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
             f"Expected {entity.entity_id} to be removed, but state is {state}"
         )
 
-    # Verify LOCK_1 is still running with coordinator intact
+    # Verify LOCK_1 is still running with its worker intact
     assert LOCK_1_ENTITY_ID in runtime_data.locks
-    lock_1 = runtime_data.locks[LOCK_1_ENTITY_ID]
-    assert lock_1.coordinator is not None
+    assert lock_registry(hass).worker(LOCK_1_ENTITY_ID) is not None
+    assert runtime_data.locks[LOCK_1_ENTITY_ID].service_calls["unload"] == []
 
 
 async def test_two_entries_same_lock_share_suspension_and_recovery(
     hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
     """
     An unreachable lock blocks another entry's out-of-sync slots on the same lock.
 
-    Lock-level suspension is by design: when the lock becomes unreachable
-    (its circuit breaker trips), ALL sync managers on that lock are blocked
-    from syncing. This prevents a misbehaving lock from being hammered by
-    multiple entries. When the coordinator recovers, all entries' sync
-    managers resume.
+    Lock-level backoff is by design: entries sharing a lock share its one
+    worker, so once the lock stops answering, nothing is sent to it for any
+    entry until it answers again. Then every entry's slots are synced again.
     """
     entry_a = lock_code_manager_config_entry
 
@@ -1974,72 +1976,37 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     await hass.config_entries.async_setup(entry_b.entry_id)
     await hass.async_block_till_done()
 
-    # Both entries share the same coordinator for LOCK_1
-    lock_a = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock_b = entry_b.runtime_data.locks[LOCK_1_ENTITY_ID]
-    assert lock_a.coordinator is lock_b.coordinator, (
-        "Both entries should share the same coordinator for the same lock"
-    )
+    # Both entries share the same provider, and the one worker, for LOCK_1
+    lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert entry_b.runtime_data.locks[LOCK_1_ENTITY_ID] is lock
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None and 3 in worker.slots and 1 in worker.slots
 
-    # Get entry B's in-sync entity for slot 3 on lock 1
     entry_b_in_sync_entity = in_sync_entity_id(hass, entry_b, 3)
-
-    # Ensure slot 3 exists in coordinator data so sync manager can resolve state.
-    # The mock lock only starts with slots 1 and 2, so push slot 3 data.
-    lock_a.coordinator.push_update({3: SlotCredential.known("0123")})
-    await hass.async_block_till_done()
-
-    # Drive initial ticks for entry B's sync managers to reach IN_SYNC
     await async_initial_tick(hass, entry_b_in_sync_entity)
-    await async_trigger_sync_tick(hass, entry_b_in_sync_entity)
+    assert hass.states.get(entry_b_in_sync_entity).state == STATE_ON
+    assert lock.codes[3] == "0123"
 
-    entry_b_entity_obj = get_in_sync_entity_obj(hass, entry_b_in_sync_entity)
-    assert sync_manager_of(entry_b_entity_obj)._state == SyncState.IN_SYNC
-
-    # Suspend the coordinator (simulating circuit breaker trip from entry A)
-    for _ in range(BACKOFF_FAILURE_THRESHOLD):
-        lock_a.coordinator._lock_breaker.record_failure()
-    lock_a.coordinator.async_update_listeners()
+    # The lock stops answering, right after it reported a keypad change.
+    fault = lock.fail(None, error=LockDisconnected)
+    lock.codes[3] = "different"
+    lock._push_credential_update(3, SlotCredential.known("different"))
     await hass.async_block_till_done()
+    for _ in range(3):
+        await async_trigger_sync_tick(hass, entry_b_in_sync_entity)
 
-    # An IN_SYNC slot stays IN_SYNC during suspension (nothing to do), which
-    # is correct behavior: it's already synced, no need to block.
-    assert sync_manager_of(entry_b_entity_obj)._state == SyncState.IN_SYNC
+    # Backing off: entry B's slot is out of sync and nothing reaches the lock.
+    assert not worker.reachable
+    assert hass.states.get(entry_b_in_sync_entity).state == STATE_OFF
+    assert sync_status(hass, entry_b_in_sync_entity) == "out_of_sync"
+    assert lock.codes[3] == "different"
 
-    # Now make entry B's slot out-of-sync by changing the code on the lock
-    # while the coordinator is suspended
-    lock_a.coordinator.push_update({3: SlotCredential.known("different")})
-    await hass.async_block_till_done()
-
-    # The push_update call above resets the lock breaker (successful push
-    # proves the lock is reachable). Re-trip it to test blocking, then let
-    # _request_sync_check detect the mismatch naturally.
-    for _ in range(BACKOFF_FAILURE_THRESHOLD):
-        lock_a.coordinator._lock_breaker.record_failure()
-    lock_a.coordinator.async_update_listeners()
-    await hass.async_block_till_done()
-
-    # The coordinator listener fires _request_sync_check. Since the code
-    # changed ("different" != "0123"), the slot should be OUT_OF_SYNC.
-    # async_update_listeners fires _request_sync_check on all managers. For
-    # an IN_SYNC manager with a mismatch, it transitions to OUT_OF_SYNC.
-    # Then on the next tick, the unreachable check blocks it into SUSPENDED.
-    await async_trigger_sync_tick(hass, entry_b_in_sync_entity, set_dirty=False)
-    await hass.async_block_till_done()
-    assert sync_manager_of(entry_b_entity_obj)._state == SyncState.SUSPENDED, (
-        "OUT_OF_SYNC slot should be blocked by lock-level suspension"
-    )
-
-    # Recovery: push a successful update to reset backoff and clear suspension
-    lock_a.coordinator.push_update({3: SlotCredential.known("0123")})
-    await hass.async_block_till_done()
-
-    # After recovery, entry B's sync manager should resume from SUSPENDED
-    # via _request_sync_check detecting the lock is reachable again
-    assert sync_manager_of(entry_b_entity_obj)._state == SyncState.OUT_OF_SYNC, (
-        f"Entry B's sync manager should have resumed to OUT_OF_SYNC, "
-        f"but state is {sync_manager_of(entry_b_entity_obj)._state}"
-    )
+    # Recovery: the lock answers again once the backoff is over.
+    fault.clear()
+    await async_advance_clock(hass, freezer, 61)
+    assert worker.reachable
+    assert hass.states.get(entry_b_in_sync_entity).state == STATE_ON
+    assert lock.codes[3] == "0123"
 
     await hass.config_entries.async_unload(entry_b.entry_id)
 
@@ -2141,17 +2108,18 @@ async def test_update_passes_run_one_at_a_time(
         await asyncio.wait_for(entered.wait(), timeout=5)
         # The release of the lock the first pass is still adding.
         hass.config_entries.async_update_entry(entry, options=one_lock)
-        await _async_let_the_loop_run()
-        assert LOCK_2_ENTITY_ID in runtime_data.locks
-        release.set()
+        try:
+            await _async_let_the_loop_run()
+            # The first pass is still adding lock 2; the second waits for it.
+            assert runtime_data.pass_lock.locked()
+            assert LOCK_2_ENTITY_ID not in runtime_data.locks
+        finally:
+            release.set()
         await hass.async_block_till_done()
 
     assert LOCK_2_ENTITY_ID not in runtime_data.locks
-    assert not [
-        manager
-        for manager in all_sync_managers(entry)
-        if manager._lock.lock.entity_id == LOCK_2_ENTITY_ID
-    ]
+    # Nothing keeps syncing lock 2: no entry holds it, so it has no worker.
+    assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is None
     assert (
         er.async_get(hass).async_get_entity_id(
             BINARY_SENSOR_DOMAIN,
@@ -2185,10 +2153,13 @@ async def test_unload_waits_for_the_pass_in_flight(
         unload = hass.async_create_task(
             hass.config_entries.async_unload(entry.entry_id)
         )
-        await _async_let_the_loop_run()
-        assert not unload.done()
-        assert LOCK_2_ENTITY_ID in runtime_data.locks
-        release.set()
+        try:
+            await _async_let_the_loop_run()
+            assert not unload.done()
+            # The pass adding lock 2 is still in flight.
+            assert runtime_data.pass_lock.locked()
+        finally:
+            release.set()
         assert await unload
         await hass.async_block_till_done()
 
@@ -2225,114 +2196,102 @@ async def test_removing_a_lock_purges_its_disabled_entities(
     assert LOCK_2_ENTITY_ID not in entry.runtime_data.locks
 
 
-async def test_unload_stops_sync_managers_before_callbacks_and_platforms(
+async def test_unload_stops_slot_coordinators_before_callbacks_and_platforms(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Unload sequence: stop sync managers -> fire lock-removed callbacks -> unload platforms."""
+    """Unload sequence: stop slot coordinators -> fire lock-removed callbacks -> unload platforms."""
     runtime_data = lock_code_manager_config_entry.runtime_data
     callbacks = runtime_data.callbacks
+    coordinators = list(runtime_data.slot_coordinators.values())
+    assert coordinators
 
-    # Capture ordering: sync managers must be stopped (and thus discarded from
-    # the registry) before lock-removed callbacks fire.
-    sync_manager_count_at_lock_removed: list[int] = []
+    # Capture ordering: the slot coordinators -- what tells each lock what a
+    # slot should hold -- must be stopped and out of the runtime before the
+    # lock-removed callbacks fire.
+    seen_at_lock_removed: list[tuple[int, bool]] = []
 
     def _on_lock_removed(_entity_id: str) -> None:
-        sync_manager_count_at_lock_removed.append(
-            len(all_sync_managers(lock_code_manager_config_entry))
+        seen_at_lock_removed.append(
+            (
+                len(runtime_data.slot_coordinators),
+                any(coordinator._started for coordinator in coordinators),
+            )
         )
 
     callbacks.register_lock_removed_handler(_on_lock_removed)
 
-    assert len(all_sync_managers(lock_code_manager_config_entry)) > 0
-    initial_manager_count = len(all_sync_managers(lock_code_manager_config_entry))
-
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Lock-removed handlers must have fired AFTER sync managers were stopped
-    # and cleared from the registry.
-    assert sync_manager_count_at_lock_removed
-    assert all(count == 0 for count in sync_manager_count_at_lock_removed)
-    # Multiple locks in the fixture means we saw multiple callback invocations.
-    assert len(sync_manager_count_at_lock_removed) >= 1
-
-    # And the original count was non-trivial -- we actually had managers to stop.
-    assert initial_manager_count >= 1
+    # One callback per lock, each after every slot coordinator was stopped.
+    assert len(seen_at_lock_removed) == 2
+    assert all(seen == (0, False) for seen in seen_at_lock_removed)
 
 
-async def test_unload_cancels_in_flight_sync_tick(
+async def test_unload_cuts_off_an_exchange_the_lock_never_answers(
     hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Unload cancels an in-flight sync tick instead of waiting it out."""
-    assert all_sync_managers(lock_code_manager_config_entry)
+    """Unload does not wait out a lock exchange that never answers: it is cut off."""
+    entry = lock_code_manager_config_entry
+    lock = mock_lock(entry)
+    hung = lock.hang("set", 1)
+    await async_set_slot_pin(hass, entry, 1, "9876")
+    await asyncio.wait_for(hung.async_wait_held(), timeout=5)
 
-    # Pick a manager and stall its tick mid-flight by patching its
-    # _async_tick_impl to never return.
-    manager = all_sync_managers(lock_code_manager_config_entry)[0]
-    manager._state = SyncState.OUT_OF_SYNC
-
-    stalled_tick_impl, mid_tick, _ = async_blocking_stub()
-
-    with (
-        patch.object(manager, "_async_tick_impl", stalled_tick_impl),
-        short_stop_grace(),
-    ):
-        tick_task = hass.async_create_task(manager._async_tick())
-        await asyncio.wait_for(mid_tick.wait(), timeout=5)
-
-        # The tick never releases on its own, so unload must not depend on it.
-        await asyncio.wait_for(
-            hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id),
-            timeout=5,
-        )
-
-    assert tick_task.cancelled()
+    unload = hass.async_create_task(hass.config_entries.async_unload(entry.entry_id))
+    # The exchange gets the worker's stop grace (30s), then it is cut off.
+    taken = await async_tick_until(
+        hass,
+        freezer,
+        unload.done,
+        max_ticks=int(30 / TICK_INTERVAL.total_seconds()) + 3,
+        what="the unload",
+        settle=False,
+    )
+    assert taken * TICK_INTERVAL.total_seconds() >= 28
+    assert unload.result()
+    assert lock_registry(hass).worker(LOCK_1_ENTITY_ID) is None
+    assert lock.codes[1] == "1234"
+    hung.clear()
 
 
-async def test_unload_logs_sync_manager_stop_exceptions(
+async def test_unload_logs_slot_coordinator_stop_exceptions(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     caplog: pytest.LogCaptureFixture,
 ):
-    """Unload logs warnings when individual sync manager stops raise and still stops the rest."""
-    managers = all_sync_managers(lock_code_manager_config_entry)
-    assert len(managers) >= 2
+    """Unload logs a slot coordinator stop that raises, and still stops the rest."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    failing, *others = runtime_data.slot_coordinators.values()
+    assert others
 
     boom = RuntimeError("simulated stop failure")
-    failing_mgr, *other_mgrs = managers
-    original_stop = failing_mgr.async_stop
-    # binary_sensor.async_will_remove_from_hass also calls async_stop after the
-    # unload entry has gathered them; clean up properly so timers do not leak,
-    # then raise on the first call only.
-    call_state = {"raised": False}
+    original_stop = failing.async_stop
 
-    async def failing_stop() -> None:
-        await original_stop()
-        if not call_state["raised"]:
-            call_state["raised"] = True
-            raise boom
+    def failing_stop() -> None:
+        original_stop()
+        raise boom
 
-    with patch.object(failing_mgr, "async_stop", failing_stop):
-        with caplog.at_level(logging.WARNING):
-            await hass.config_entries.async_unload(
-                lock_code_manager_config_entry.entry_id
-            )
-            await hass.async_block_till_done()
+    with patch.object(failing, "async_stop", failing_stop):
+        assert await hass.config_entries.async_unload(
+            lock_code_manager_config_entry.entry_id
+        )
+        await hass.async_block_till_done()
 
-    assert call_state["raised"]
     assert any(
         record.exc_info is not None and record.exc_info[1] is boom
         for record in caplog.records
-        if record.levelname == "WARNING"
+        if record.levelname == "ERROR"
     )
-    # Sibling managers must still have been stopped even though one raised.
-    for mgr in other_mgrs:
-        assert not mgr._started
+    # Sibling coordinators must still have been stopped even though one raised.
+    for coordinator in others:
+        assert not coordinator._started
 
 
 # Slot device lifecycle (issue #1399)
@@ -2526,10 +2485,11 @@ async def test_hard_refresh_usercodes_service_raises_on_lock_error(
     """
     locks = lock_code_manager_config_entry.runtime_data.locks
     lock_2 = locks[LOCK_2_ENTITY_ID]
+    reads_before = len(locks[LOCK_1_ENTITY_ID].service_calls["get_usercodes"])
 
     with patch.object(
         lock_2,
-        "async_hard_refresh_codes",
+        "async_get_usercodes",
         AsyncMock(side_effect=Exception("simulated refresh failure")),
     ):
         with pytest.raises(HomeAssistantError) as exc_info:
@@ -2544,7 +2504,7 @@ async def test_hard_refresh_usercodes_service_raises_on_lock_error(
     assert str(exc_info.value).endswith("simulated refresh failure")
 
     # LOCK_1's refresh still completed despite LOCK_2 raising.
-    assert locks[LOCK_1_ENTITY_ID].service_calls["hard_refresh_codes"]
+    assert len(locks[LOCK_1_ENTITY_ID].service_calls["get_usercodes"]) > reads_before
 
 
 async def test_deobfuscate_log_service_errors_when_not_fully_set_up(
@@ -2650,18 +2610,13 @@ async def test_new_lock_setup_failure_logged_and_lock_excluded(
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    original_setup_internal = MockLCMLock.async_setup_internal
-
-    async def _maybe_fail(self: MockLCMLock, config_entry) -> None:
-        if self.lock.entity_id == LOCK_2_ENTITY_ID:
-            raise RuntimeError("simulated unexpected setup failure")
-        await original_setup_internal(self, config_entry)
-
     new_config = copy.deepcopy(config)
     new_config[CONF_LOCKS] = [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
 
     caplog.set_level(logging.ERROR)
-    with patch.object(MockLCMLock, "async_setup_internal", _maybe_fail):
+    with _failing_lock_build(
+        LOCK_2_ENTITY_ID, RuntimeError("simulated unexpected setup failure")
+    ):
         hass.config_entries.async_update_entry(entry, options=new_config)
         await hass.async_block_till_done()
 
@@ -2672,30 +2627,25 @@ async def test_new_lock_setup_failure_logged_and_lock_excluded(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_a_lock_whose_setup_fails_after_its_coordinator_exists_stops_it(
+async def test_a_lock_whose_setup_fails_part_way_is_torn_down_with_the_entry(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
     """
-    A lock dropped after a failed setup stops the coordinator it built, once.
+    A lock whose setup failed part way stops being polled once the entry unloads.
 
     The second lock claims push updates but its provider never implemented
-    the subscription, which fails setup after the coordinator is built.
-    Nothing reaches a dropped lock again, so unless the drop stops that
-    coordinator, its connection check keeps polling the lock for good.
+    the subscription, which fails its setup after its connection check and
+    poll were started. The lock's worker keeps it (setup is the lock's to
+    retry), so the entry unloading is what stops it: unless that unloads the
+    provider, its connection check keeps polling the lock for good.
     """
     entry = MockConfigEntry(
         domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="No Subscription"
     )
     entry.add_to_hass(hass)
-    read: dict[str, MockLCMLock] = {}
     connection_checks: list[MockLCMLock] = []
-    original_get_usercodes = MockLCMLock.async_get_usercodes
     original_is_device_available = MockLCMLock.async_is_device_available
-
-    async def _note_reads(self: MockLCMLock, slots=None):
-        read[self.lock.entity_id] = self
-        return await original_get_usercodes(self, slots)
 
     async def _note_connection_checks(self: MockLCMLock) -> bool:
         connection_checks.append(self)
@@ -2707,135 +2657,36 @@ async def test_a_lock_whose_setup_fails_after_its_coordinator_exists_stops_it(
             "supports_push",
             property(lambda self: self.lock.entity_id == LOCK_2_ENTITY_ID),
         ),
-        patch.object(MockLCMLock, "async_get_usercodes", _note_reads),
         patch.object(MockLCMLock, "async_is_device_available", _note_connection_checks),
-        patch.object(
-            LockUsercodeUpdateCoordinator,
-            "async_shutdown",
-            autospec=True,
-            side_effect=LockUsercodeUpdateCoordinator.async_shutdown,
-        ) as shutdown,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
-        assert LOCK_2_ENTITY_ID not in entry.runtime_data.locks
-        lock_2 = read[LOCK_2_ENTITY_ID]
-        assert lock_2.coordinator is not None
-        shutdown.assert_awaited_once_with(lock_2.coordinator)
+        lock_2 = mock_lock(entry, LOCK_2_ENTITY_ID)
+        assert lock_2.service_calls["unload"] == []
+
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert lock_2.service_calls["unload"] == [(False,)]
+        assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is None
 
         connection_checks.clear()
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=5))
         await hass.async_block_till_done()
-        assert connection_checks
         assert lock_2 not in connection_checks
 
-        assert await hass.config_entries.async_unload(entry.entry_id)
-        await hass.async_block_till_done()
-        assert [
-            call
-            for call in shutdown.await_args_list
-            if call.args[0] is lock_2.coordinator
-        ] == [call(lock_2.coordinator)]
 
-
-async def test_a_failed_lock_another_entry_joined_keeps_its_coordinator(
+async def test_an_entry_setting_up_while_another_unloads_joins_the_lock_it_holds(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
     """
-    A lock whose setup fails while another entry is joining it stays running.
+    An entry setting up while another unloads shares the lock, which outlives the first.
 
-    The joining entry took the very instance being set up, so dropping it
-    from the entry whose setup failed leaves it in use, and its coordinator is
-    the joining entry's to stop.
-    """
-    config = copy.deepcopy(BASE_CONFIG)
-    config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="Adds A Lock")
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    joining_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [LOCK_2_ENTITY_ID],
-            CONF_SLOTS: {
-                3: {CONF_NAME: "joining", CONF_PIN: "2468", CONF_ENABLED: True}
-            },
-        },
-        unique_id="Joins The Lock",
-    )
-    joining_entry.add_to_hass(hass)
-    reading = asyncio.Event()
-    read_may_answer = asyncio.Event()
-    joined = asyncio.Event()
-    read: dict[str, MockLCMLock] = {}
-    original_get_usercodes = MockLCMLock.async_get_usercodes
-    original_wait_for_setup = MockLCMLock.async_wait_for_setup
-
-    async def _hold_the_first_read(self: MockLCMLock, slots=None):
-        if self.lock.entity_id == LOCK_2_ENTITY_ID and LOCK_2_ENTITY_ID not in read:
-            read[LOCK_2_ENTITY_ID] = self
-            reading.set()
-            await read_may_answer.wait()
-        return await original_get_usercodes(self, slots)
-
-    async def _note_joining(self: MockLCMLock) -> None:
-        joined.set()
-        await original_wait_for_setup(self)
-
-    with (
-        patch.object(
-            MockLCMLock,
-            "supports_push",
-            property(lambda self: self.lock.entity_id == LOCK_2_ENTITY_ID),
-        ),
-        patch.object(MockLCMLock, "async_get_usercodes", _hold_the_first_read),
-        patch.object(MockLCMLock, "async_wait_for_setup", _note_joining),
-        patch.object(
-            LockUsercodeUpdateCoordinator,
-            "async_shutdown",
-            autospec=True,
-            side_effect=LockUsercodeUpdateCoordinator.async_shutdown,
-        ) as shutdown,
-    ):
-        new_config = copy.deepcopy(config)
-        new_config[CONF_LOCKS] = [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
-        hass.config_entries.async_update_entry(entry, options=new_config)
-        await reading.wait()
-        assert await hass.config_entries.async_setup(joining_entry.entry_id)
-        await joined.wait()
-        read_may_answer.set()
-        await hass.async_block_till_done()
-
-        lock_2 = read[LOCK_2_ENTITY_ID]
-        assert LOCK_2_ENTITY_ID not in entry.runtime_data.locks
-        assert joining_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock_2
-        assert lock_2.coordinator is not None
-        shutdown.assert_not_called()
-        lock_2.codes[3] = "2468"
-        await lock_2.coordinator.async_refresh()
-        assert lock_2.coordinator.data[pin_address(3)] == SlotCredential.known("2468")
-
-        assert await hass.config_entries.async_unload(joining_entry.entry_id)
-        await hass.async_block_till_done()
-        shutdown.assert_awaited_once_with(lock_2.coordinator)
-
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_an_entry_unloading_while_another_builds_the_lock_anew_stops_its_own(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """
-    An unloading entry stops its lock even when another entry holds a new one.
-
-    While the first entry unloads it shares nothing, so a second entry setting
-    up then builds its own instance for the same lock. That instance being
-    held says nothing about the first one: left running, the first entry's
-    coordinator would outlive every entry. The first entry's unload is held
-    up the way an update pass in flight holds it.
+    A lock has one worker and one provider at a time. While the first entry
+    unloads it still holds the lock, so the second entry joins that same
+    instance rather than building a second one beside it; the first letting
+    go then leaves the lock up, read and written for the second. The first
+    entry's unload is held up the way an update pass in flight holds it.
     """
     config = copy.deepcopy(BASE_CONFIG)
     config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
@@ -2850,56 +2701,46 @@ async def test_an_entry_unloading_while_another_builds_the_lock_anew_stops_its_o
         },
         unique_id="Arriving",
     )
-    second_instance_set_up = asyncio.Event()
-    set_up: list[MockLCMLock] = []
-    original_setup_internal = MockLCMLock.async_setup_internal
+    unloading_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(unloading_entry.entry_id)
+    await hass.async_block_till_done()
+    old_lock = unloading_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
 
-    async def _note_set_up(self: MockLCMLock, config_entry) -> None:
-        await original_setup_internal(self, config_entry)
-        set_up.append(self)
-        if len(set_up) == 2:
-            second_instance_set_up.set()
+    pass_lock = unloading_entry.runtime_data.pass_lock
+    await pass_lock.acquire()
+    unload = hass.async_create_task(
+        hass.config_entries.async_unload(unloading_entry.entry_id)
+    )
+    await asyncio.sleep(0)
+    assert unloading_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
 
-    with (
-        patch.object(MockLCMLock, "async_setup_internal", _note_set_up),
-        patch.object(
-            LockUsercodeUpdateCoordinator,
-            "async_shutdown",
-            autospec=True,
-            side_effect=LockUsercodeUpdateCoordinator.async_shutdown,
-        ) as shutdown,
-    ):
-        unloading_entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(unloading_entry.entry_id)
-        await hass.async_block_till_done()
-        old_lock = unloading_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-        pass_lock = unloading_entry.runtime_data.pass_lock
-        await pass_lock.acquire()
-        unload = hass.async_create_task(
-            hass.config_entries.async_unload(unloading_entry.entry_id)
-        )
+    second_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(second_entry.entry_id)
+    # Not settled by blocking: that would wait out the unload held up above.
+    for _ in range(1000):
+        if LOCK_1_ENTITY_ID in second_entry.runtime_data.locks:
+            break
         await asyncio.sleep(0)
-        assert unloading_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
+    assert second_entry.runtime_data.locks[LOCK_1_ENTITY_ID] is old_lock
 
-        second_entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(second_entry.entry_id)
-        await second_instance_set_up.wait()
-        new_lock = second_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-        assert new_lock is not old_lock
+    pass_lock.release()
+    assert await unload
+    await hass.async_block_till_done()
 
-        pass_lock.release()
-        assert await unload
-        await hass.async_block_till_done()
+    assert lock_registry(hass).worker(LOCK_1_ENTITY_ID) is worker
+    assert old_lock.service_calls["unload"] == []
+    # Still the second entry's: its slot is on the lock, and a read sees it.
+    assert old_lock.codes[3] == "2468"
+    old_lock.codes[9] = "1357"
+    await worker.read((9,))
+    assert lock_runtime.lock_codes(hass, LOCK_1_ENTITY_ID)[9] == SlotCredential.known(
+        "1357"
+    )
 
-        assert old_lock.coordinator is not None
-        assert new_lock.coordinator is not None
-        shutdown.assert_awaited_once_with(old_lock.coordinator)
-        new_lock.codes[3] = "2468"
-        await new_lock.coordinator.async_refresh()
-        assert new_lock.coordinator.data[pin_address(3)] == SlotCredential.known("2468")
-
-        assert await hass.config_entries.async_unload(second_entry.entry_id)
+    assert await hass.config_entries.async_unload(second_entry.entry_id)
+    await hass.async_block_till_done()
+    assert old_lock.service_calls["unload"] == [(False,)]
 
 
 def _sharing_entries() -> tuple[MockConfigEntry, MockConfigEntry]:
@@ -2921,16 +2762,6 @@ def _sharing_entries() -> tuple[MockConfigEntry, MockConfigEntry]:
     )
 
 
-def _watch_coordinator_shutdowns():
-    """Count coordinator shutdowns, from before any coordinator is built."""
-    return patch.object(
-        LockUsercodeUpdateCoordinator,
-        "async_shutdown",
-        autospec=True,
-        side_effect=LockUsercodeUpdateCoordinator.async_shutdown,
-    )
-
-
 async def test_two_entries_unloading_one_shared_lock_at_once_tear_it_down_once(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -2938,18 +2769,17 @@ async def test_two_entries_unloading_one_shared_lock_at_once_tear_it_down_once(
     """
     Two entries letting go of one lock at once tear it down exactly once.
 
-    The first entry tears its unshared lock down before it reaches the shared
-    one, and that teardown is where the second entry takes the shared lock
-    out -- the way any await in a real teardown would give it the turn. Each
-    entry decides whether it is the last holder as it takes the lock out, so
-    only the second finds itself last.
+    The first entry tears its unshared lock down beside the shared one, and
+    that teardown is where the second entry takes the shared lock out -- the
+    way any await in a real teardown would give it the turn. Only the last
+    holder out stops the lock's worker and unloads its provider.
     """
     first_entry, second_entry = _sharing_entries()
-    original_shutdown = LockUsercodeUpdateCoordinator.async_shutdown
-    unshared: list[LockUsercodeUpdateCoordinator] = []
+    original_unload = MockLCMLock.async_unload
+    unshared: list[MockLCMLock] = []
 
     async def _let_the_other_entry_let_go_first(
-        self: LockUsercodeUpdateCoordinator,
+        self: MockLCMLock, remove_permanently: bool
     ) -> None:
         if self in unshared:
             for _ in range(100):
@@ -2960,14 +2790,9 @@ async def test_two_entries_unloading_one_shared_lock_at_once_tear_it_down_once(
                 await asyncio.sleep(0)
             else:
                 pytest.fail("the other entry never let go of the shared lock")
-        await original_shutdown(self)
+        await original_unload(self, remove_permanently)
 
-    with patch.object(
-        LockUsercodeUpdateCoordinator,
-        "async_shutdown",
-        autospec=True,
-        side_effect=_let_the_other_entry_let_go_first,
-    ) as shutdown:
+    with patch.object(MockLCMLock, "async_unload", _let_the_other_entry_let_go_first):
         for entry in (first_entry, second_entry):
             entry.add_to_hass(hass)
             assert await hass.config_entries.async_setup(entry.entry_id)
@@ -2976,7 +2801,7 @@ async def test_two_entries_unloading_one_shared_lock_at_once_tear_it_down_once(
             LOCK_1_ENTITY_ID,
             LOCK_2_ENTITY_ID,
         ]
-        unshared.append(first_entry.runtime_data.locks[LOCK_1_ENTITY_ID].coordinator)
+        unshared.append(first_entry.runtime_data.locks[LOCK_1_ENTITY_ID])
         lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
         assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
 
@@ -2988,12 +2813,9 @@ async def test_two_entries_unloading_one_shared_lock_at_once_tear_it_down_once(
         )
         await hass.async_block_till_done()
 
-        assert [
-            call
-            for call in shutdown.await_args_list
-            if call.args[0] is lock.coordinator
-        ] == [call(lock.coordinator)]
-        assert lock.service_calls["unload"] == [(False,)]
+    assert lock.service_calls["unload"] == [(False,)]
+    assert unshared[0].service_calls["unload"] == [(False,)]
+    assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is None
 
 
 async def test_a_lock_an_unloading_entry_still_holds_outlives_another_entry(
@@ -3009,97 +2831,31 @@ async def test_a_lock_an_unloading_entry_still_holds_outlives_another_entry(
     holds it.
     """
     first_entry, second_entry = _sharing_entries()
-    with _watch_coordinator_shutdowns() as shutdown:
-        for entry in (first_entry, second_entry):
-            entry.add_to_hass(hass)
-            assert await hass.config_entries.async_setup(entry.entry_id)
-            await hass.async_block_till_done()
-        lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
-
-        pass_lock = second_entry.runtime_data.pass_lock
-        await pass_lock.acquire()
-        second_unload = asyncio.create_task(
-            hass.config_entries.async_unload(second_entry.entry_id)
-        )
-        await asyncio.sleep(0)
-        assert second_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
-        assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
-
-        assert await hass.config_entries.async_unload(first_entry.entry_id)
+    for entry in (first_entry, second_entry):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
-        assert call(lock.coordinator) not in shutdown.await_args_list
-        assert lock.service_calls["unload"] == []
+    lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
 
-        pass_lock.release()
-        assert await second_unload
-        await hass.async_block_till_done()
-        assert [
-            call
-            for call in shutdown.await_args_list
-            if call.args[0] is lock.coordinator
-        ] == [call(lock.coordinator)]
-        assert lock.service_calls["unload"] == [(False,)]
+    pass_lock = second_entry.runtime_data.pass_lock
+    await pass_lock.acquire()
+    second_unload = asyncio.create_task(
+        hass.config_entries.async_unload(second_entry.entry_id)
+    )
+    await asyncio.sleep(0)
+    assert second_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
+    assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
 
+    assert await hass.config_entries.async_unload(first_entry.entry_id)
+    await hass.async_block_till_done()
+    assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is not None
+    assert lock.service_calls["unload"] == []
 
-async def test_a_new_instance_failing_setup_beside_an_unloading_one_is_stopped(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """
-    A failed new instance is stopped even while an unloading entry holds an old one.
-
-    The unloading entry holds a different instance for the same lock, so it
-    is no reason to keep the failed one's coordinator running. The new
-    instance claims push updates its provider never implemented, which fails
-    its setup after its coordinator is built.
-    """
-    unloading_entry, failing_entry = _sharing_entries()
-    with _watch_coordinator_shutdowns() as shutdown:
-        unloading_entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(unloading_entry.entry_id)
-        await hass.async_block_till_done()
-        old_lock = unloading_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
-
-        pass_lock = unloading_entry.runtime_data.pass_lock
-        await pass_lock.acquire()
-        unload = asyncio.create_task(
-            hass.config_entries.async_unload(unloading_entry.entry_id)
-        )
-        await asyncio.sleep(0)
-        assert unloading_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
-
-        read: list[MockLCMLock] = []
-        original_get_usercodes = MockLCMLock.async_get_usercodes
-
-        async def _note_reads(self: MockLCMLock, slots=None):
-            read.append(self)
-            return await original_get_usercodes(self, slots)
-
-        with (
-            patch.object(
-                MockLCMLock,
-                "supports_push",
-                property(lambda self: self is not old_lock),
-            ),
-            patch.object(MockLCMLock, "async_get_usercodes", _note_reads),
-        ):
-            failing_entry.add_to_hass(hass)
-            assert await hass.config_entries.async_setup(failing_entry.entry_id)
-            await hass.async_block_till_done()
-        # The one read with a coordinator; the setup's probe reads others.
-        (new_lock,) = {lock for lock in read if lock.coordinator is not None}
-        assert new_lock is not old_lock
-        assert LOCK_2_ENTITY_ID not in failing_entry.runtime_data.locks
-        assert unloading_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is old_lock
-        shutdown.assert_awaited_once_with(new_lock.coordinator)
-
-        pass_lock.release()
-        assert await unload
-        await hass.async_block_till_done()
-        assert call(old_lock.coordinator) in shutdown.await_args_list
-        assert shutdown.await_args_list.count(call(new_lock.coordinator)) == 1
-
-        assert await hass.config_entries.async_unload(failing_entry.entry_id)
+    pass_lock.release()
+    assert await second_unload
+    await hass.async_block_till_done()
+    assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is None
+    assert lock.service_calls["unload"] == [(False,)]
 
 
 def _offline_issue(hass: HomeAssistant) -> ir.IssueEntry | None:
@@ -3123,105 +2879,6 @@ def _raise_offline_issue_for_a_new_lock(hass: HomeAssistant) -> None:
     )
 
 
-async def _set_up_the_first_lock(
-    hass: HomeAssistant,
-) -> tuple[MockConfigEntry, MockLCMLock, LockUsercodeUpdateCoordinator]:
-    """Set up an entry and return it with its first lock and that lock's coordinator."""
-    entry = MockConfigEntry(
-        domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="Torn Down"
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    lock = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    assert lock.coordinator is not None and lock.coordinator.last_update_success
-    return entry, lock, lock.coordinator
-
-
-async def _fail_polls_until_one_short_of_offline(
-    coordinator: LockUsercodeUpdateCoordinator,
-) -> None:
-    """Fail polls until one more failure would raise the lock-offline repair."""
-    for _ in range(POLL_FAILURE_ALERT_THRESHOLD - 1):
-        await coordinator.async_refresh()
-
-
-@pytest.mark.parametrize("answer", ["fails", "answers"])
-async def test_a_poll_in_flight_when_the_lock_is_torn_down_records_nothing(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    answer: str,
-):
-    """
-    A scheduled poll still reading when its lock is torn down changes nothing.
-
-    The lock has failed one poll short of raising the lock-offline repair
-    when a scheduled poll starts reading and the last entry holding the lock
-    unloads. Whatever that read then says, the lock is gone: failing must not
-    raise the repair for it, and answering must neither move its data nor
-    clear a repair that is by then the lock set up in its place's.
-    """
-    entry, lock, coordinator = await _set_up_the_first_lock(hass)
-    holding = {"read": False}
-    reading = asyncio.Event()
-    read_may_answer = asyncio.Event()
-    original_get_usercodes = MockLCMLock.async_get_usercodes
-
-    async def _offline(self: MockLCMLock, slots=None):
-        if self is not lock:
-            return await original_get_usercodes(self, slots)
-        if holding["read"]:
-            reading.set()
-            await read_may_answer.wait()
-            if answer == "answers":
-                return {1: SlotCredential.known("0000")}
-        raise LockDisconnected("lock offline")
-
-    with patch.object(MockLCMLock, "async_get_usercodes", _offline):
-        await _fail_polls_until_one_short_of_offline(coordinator)
-        data_before = coordinator.data
-
-        holding["read"] = True
-        async_fire_time_changed(
-            hass, dt_util.utcnow() + timedelta(seconds=BACKOFF_MAX_SECONDS + 1)
-        )
-        await reading.wait()
-        assert await hass.config_entries.async_unload(entry.entry_id)
-        if answer == "answers":
-            _raise_offline_issue_for_a_new_lock(hass)
-        read_may_answer.set()
-        await hass.async_block_till_done()
-
-    assert (_offline_issue(hass) is not None) is (answer == "answers")
-    assert coordinator.data == data_before
-
-
-async def test_a_write_failing_after_the_lock_is_torn_down_records_nothing(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """
-    A write that fails once its lock is torn down charges nothing to the lock.
-
-    The lock is one failure short of the lock-offline repair; the sync layer
-    reporting a late write's connectivity failure must not raise it for a
-    lock that is gone.
-    """
-    entry, lock, coordinator = await _set_up_the_first_lock(hass)
-    with patch.object(
-        lock, "async_get_usercodes", side_effect=LockDisconnected("lock offline")
-    ):
-        await _fail_polls_until_one_short_of_offline(coordinator)
-    failures_before = coordinator._lock_breaker.failure_count
-    assert await hass.config_entries.async_unload(entry.entry_id)
-
-    coordinator.note_connectivity_failure()
-    await hass.async_block_till_done()
-
-    assert _offline_issue(hass) is None
-    assert coordinator._lock_breaker.failure_count == failures_before
-
-
 async def test_a_push_after_the_lock_is_torn_down_records_nothing(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -3229,19 +2886,28 @@ async def test_a_push_after_the_lock_is_torn_down_records_nothing(
     """
     A push that arrives once its lock is torn down changes nothing.
 
-    It must neither move the gone lock's data nor clear the lock-offline
-    repair, which is by then the lock set up in its place's.
+    It must neither bring back the gone lock's codes nor clear the
+    lock-offline repair, which is by then the lock set up in its place's.
     """
-    entry, _lock, coordinator = await _set_up_the_first_lock(hass)
-    data_before = coordinator.data
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=copy.deepcopy(BASE_CONFIG), unique_id="Torn Down"
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    lock = mock_lock(entry)
+    pushed_to = lock.coordinator
+    assert pushed_to is not None
     assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
     _raise_offline_issue_for_a_new_lock(hass)
 
-    coordinator.push_update({1: SlotCredential.known("0000")})
+    pushed_to.push_update({1: SlotCredential.known("0000")})
+    lock._push_credential_update(1, SlotCredential.known("0000"))
     await hass.async_block_till_done()
 
     assert _offline_issue(hass) is not None
-    assert coordinator.data == data_before
+    assert lock_runtime.lock_codes(hass, LOCK_1_ENTITY_ID) == {}
 
 
 async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_leaves(
@@ -3249,7 +2915,7 @@ async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_
     mock_lock_config_entry,
 ):
     """
-    A shared lock's coordinator belongs to no entry, so its polls outlive any one.
+    A shared lock's worker belongs to no entry, so its polls outlive any one.
 
     The first entry builds the lock, the second shares it, and once the first
     unloads, the scheduled poll keeps reading the lock for the second. The
@@ -3263,8 +2929,6 @@ async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_
         await hass.async_block_till_done()
     lock = first_entry.runtime_data.locks[LOCK_2_ENTITY_ID]
     assert second_entry.runtime_data.locks[LOCK_2_ENTITY_ID] is lock
-    assert lock.coordinator is not None
-    assert lock.coordinator.config_entry is None
     assert not lock.supports_push
 
     assert await hass.config_entries.async_unload(first_entry.entry_id)
@@ -3275,14 +2939,17 @@ async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_
         hass,
         dt_util.utcnow() + timedelta(seconds=REQUEST_REFRESH_DEFAULT_COOLDOWN + 1),
     )
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     lock.codes[9] = "1357"
+    assert 9 not in lock_runtime.lock_codes(hass, LOCK_2_ENTITY_ID)
     async_fire_time_changed(
         hass, dt_util.utcnow() + lock.usercode_scan_interval + timedelta(seconds=1)
     )
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
-    assert lock.coordinator.data[pin_address(9)] == SlotCredential.known("1357")
+    assert lock_runtime.lock_codes(hass, LOCK_2_ENTITY_ID)[9] == (
+        SlotCredential.known("1357")
+    )
 
     assert await hass.config_entries.async_unload(second_entry.entry_id)
 
@@ -3328,23 +2995,17 @@ async def test_a_shared_polled_lock_sees_a_change_after_the_entry_that_built_it_
     reads_before = len(lock.service_calls["get_usercodes"])
     lock.codes[3] = "0000"
 
+    # The poll sees the change and the worker puts the code back at once.
     await async_tick_until(
         hass,
         freezer,
-        lambda: hass.states.get(in_sync).state == STATE_OFF,
+        lambda: lock.codes[3] == "2468",
         # A scan interval of ticks, and one more to act on the poll ending it.
         max_ticks=int(lock.usercode_scan_interval / TICK_INTERVAL) + 1,
-        what="the keypad change seen on slot 3",
+        what="the keypad change seen on slot 3 and put right",
     )
     assert len(lock.service_calls["get_usercodes"]) > reads_before
-    await async_tick_until(
-        hass,
-        freezer,
-        lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=3,
-        what="slot 3 back in sync",
-    )
-    assert lock.codes[3] == "2468"
+    assert hass.states.get(in_sync).state == STATE_ON
 
     for entry in hass.config_entries.async_entries(DOMAIN):
         await hass.config_entries.async_unload(entry.entry_id)
@@ -3362,14 +3023,15 @@ async def _reads_over_scan_intervals(
     Any refresh already requested runs first, so only what runs on a timer is
     counted: the scheduled poll, and the drift check when the lock has one.
     """
+    # A poll reads in a background task: waited for too.
     freezer.tick(timedelta(seconds=REQUEST_REFRESH_DEFAULT_COOLDOWN + 1))
     async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
     reads_before = len(lock.service_calls["get_usercodes"])
     for _ in range(intervals):
         freezer.tick(lock.usercode_scan_interval + timedelta(seconds=1))
         async_fire_time_changed(hass)
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
     return len(lock.service_calls["get_usercodes"]) - reads_before
 
 
@@ -3459,8 +3121,10 @@ async def test_disable_polling_leaves_the_drift_check_running(
     """
     "Disable polling" stops the scheduled poll, not the drift check.
 
-    The lock is still hard refreshed on its own interval, and that is every
-    read it answers.
+    The lock is still read fresh on its hard refresh interval, and that is
+    every read it answers: every read is a fresh one, so a drift check is a
+    read of the lock (the mock lock's own, as it reads without a hard
+    refresh).
     """
     with patch.object(
         MockLCMLock,
@@ -3469,13 +3133,11 @@ async def test_disable_polling_leaves_the_drift_check_running(
         return_value=timedelta(minutes=2),
     ):
         lock = await _set_up(hass, _entry_on_the_second_lock(1, disable_polling=True))
-    drift_checks_before = len(lock.service_calls["hard_refresh_codes"])
 
+    # Four one-minute scan intervals: two two-minute drift checks.
     reads = await _reads_over_scan_intervals(hass, freezer, lock, 4)
 
-    drift_checks = len(lock.service_calls["hard_refresh_codes"]) - drift_checks_before
-    assert drift_checks == 2
-    assert reads == drift_checks
+    assert reads == 2
 
     for entry in hass.config_entries.async_entries(DOMAIN):
         assert await hass.config_entries.async_unload(entry.entry_id)
@@ -3631,9 +3293,9 @@ async def test_update_listener_slot_removal_handles_missing_and_failing_coordina
     assert 2 in runtime_data.slot_coordinators
 
     # Simulate slot 1's coordinator already having been discarded.
-    # Whoever discards a coordinator has stopped its managers first; the
-    # removal path cannot reach them once the coordinator is gone.
-    await runtime_data.slot_coordinators.pop(1).async_stop_sync()
+    # Whoever discards a coordinator has stopped it first; the removal path
+    # cannot reach it once it is gone.
+    runtime_data.slot_coordinators.pop(1).async_stop()
 
     # Slot 2's coordinator raises when stopped.
     boom = RuntimeError("simulated coordinator stop failure")
@@ -3703,7 +3365,7 @@ async def test_settled_waits_for_the_last_overlapping_pass(
     [LockDisconnected("simulated disconnect"), LockBusy("simulated busy")],
     ids=["disconnected", "busy"],
 )
-async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
+async def test_pairs_removed_skips_untracked_lock_and_survives_release_failure(
     hass: HomeAssistant,
     mock_lock_config_entry,
     caplog: pytest.LogCaptureFixture,
@@ -3716,8 +3378,8 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     from ``runtime_data.locks`` (e.g. it failed setup) is skipped rather
     than raising, and any provider error from a present lock's
     ``async_release_managed_slot`` -- unreachable, or merely busy behind
-    another operation -- is logged as a warning without blocking the rest of
-    the teardown.
+    another operation -- does not block the rest of the teardown: the
+    release is the lock's worker's to retry.
     """
     config = copy.deepcopy(BASE_CONFIG)
     entry = MockConfigEntry(
@@ -3725,14 +3387,9 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     )
     entry.add_to_hass(hass)
 
-    original_setup_internal = MockLCMLock.async_setup_internal
-
-    async def _fail_lock_2(self: MockLCMLock, config_entry) -> None:
-        if self.lock.entity_id == LOCK_2_ENTITY_ID:
-            raise RuntimeError("simulated unexpected setup failure")
-        await original_setup_internal(self, config_entry)
-
-    with patch.object(MockLCMLock, "async_setup_internal", _fail_lock_2):
+    with _failing_lock_build(
+        LOCK_2_ENTITY_ID, RuntimeError("simulated unexpected setup failure")
+    ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
@@ -3741,21 +3398,27 @@ async def test_pairs_removed_skips_untracked_lock_and_logs_release_failure(
     assert LOCK_1_ENTITY_ID in entry.runtime_data.locks
 
     lock_1 = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    slot_1_in_sync = in_sync_entity_id(hass, entry, 1, LOCK_1_ENTITY_ID)
     with patch.object(
         lock_1,
         "async_release_managed_slot",
         AsyncMock(side_effect=release_error),
-    ):
+    ) as release:
         new_config = copy.deepcopy(config)
         new_config[CONF_SLOTS].pop(1)
-        caplog.set_level(logging.WARNING)
         write_entry_config(hass, entry, new_config)
         await hass.async_block_till_done()
 
-    assert "could not release slot 1" in caplog.text
-    assert LOCK_1_ENTITY_ID in caplog.text
+        # The release was tried and failed; the rest of the teardown went on.
+        assert release.await_args_list[0].args[0] == 1
+        assert hass.states.get(slot_1_in_sync) is None
+        assert 1 not in entry.runtime_data.slot_coordinators
+        assert 2 in entry.runtime_data.slot_coordinators
+        # The clear is still owed: the worker keeps the slot to retry it.
+        worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+        assert worker is not None and worker.slots[1].release
 
-    await hass.config_entries.async_unload(entry.entry_id)
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_an_options_submission_that_changes_nothing_still_settles(
@@ -5348,12 +5011,13 @@ async def test_removing_a_slot_clears_its_code_off_the_lock(
     """
     entry = lock_code_manager_config_entry
     locks = list(entry.runtime_data.locks.values())
+    # Slot 1: slot 2's calendar keeps it inactive, so it holds no code anyway.
     for lock in locks:
-        assert (await lock.async_get_usercodes())[2].pin
+        assert (await lock.async_get_usercodes())[1].pin
 
     # Written the way the editor writes it: the user's subentry goes, and
     # their slot number goes with them.
-    departing = get_entry_config(entry).name_for(2)
+    departing = get_entry_config(entry).name_for(1)
     subentry = next(
         subentry
         for subentry in entry.subentries.values()
@@ -5362,13 +5026,13 @@ async def test_removing_a_slot_clears_its_code_off_the_lock(
     hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
     await hass.async_block_till_done()
 
-    assert not get_entry_config(entry).has_slot(2)
+    assert not get_entry_config(entry).has_slot(1)
     # Every lock in the entry, not just the first: the slot was written to
     # all of them.
     for lock in locks:
         # A cleared slot may drop out of the lock's view entirely or come
         # back empty; both mean nothing is programmed there.
-        credential = (await lock.async_get_usercodes()).get(2)
+        credential = (await lock.async_get_usercodes()).get(1)
         assert not (credential and credential.pin)
 
 
@@ -5568,9 +5232,7 @@ async def test_a_provider_bug_during_setup_raises_no_repair(
     entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="provider_bug")
     entry.add_to_hass(hass)
 
-    with patch.object(
-        BaseLock, "async_setup_internal", side_effect=ValueError("provider bug")
-    ):
+    with _failing_lock_build(LOCK_1_ENTITY_ID, ValueError("provider bug")):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
@@ -5606,9 +5268,7 @@ async def test_cancellation_during_setup_is_never_swallowed(
     # entry machinery absorbs whatever a setup raises, so going through it
     # would assert on that absorption rather than on this loop.
     with (
-        patch.object(
-            BaseLock, "async_setup_internal", side_effect=asyncio.CancelledError
-        ),
+        _failing_lock_build(LOCK_2_ENTITY_ID, asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
         await _async_setup_new_locks(
@@ -5699,16 +5359,20 @@ async def test_releasing_a_lock_from_an_entry_that_never_loaded_purges_every_row
     assert all(ent_reg.async_get(entity_id) is None for entity_id in lock_2_rows)
 
 
-async def test_removing_a_slot_stops_its_managers(
+async def test_removing_a_slot_stops_its_coordinator_and_lets_the_locks_go(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """A removed slot's coordinator goes with every manager it ran, all stopped."""
+    """A removed slot's coordinator is stopped, and no lock's worker keeps the slot."""
     entry = lock_code_manager_config_entry
     coordinator = entry.runtime_data.slot_coordinators[2]
-    managers = coordinator.sync_managers
-    assert managers and all(manager._started for manager in managers)
+    assert coordinator._started
+    workers = [
+        lock_registry(hass).worker(lock_entity_id)
+        for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
+    ]
+    assert all(worker is not None and 2 in worker.slots for worker in workers)
 
     new_config = copy.deepcopy(BASE_CONFIG)
     del new_config[CONF_SLOTS][2]
@@ -5716,8 +5380,9 @@ async def test_removing_a_slot_stops_its_managers(
     await hass.async_block_till_done()
 
     assert 2 not in entry.runtime_data.slot_coordinators
-    assert coordinator.sync_managers == []
-    assert not any(manager._started for manager in managers)
+    assert not coordinator._started
+    # The slot's release clear is done, and the workers have let it go.
+    assert not any(2 in worker.slots for worker in workers)
 
 
 async def test_a_blip_during_the_deferred_setup_retry_is_retried_again(
