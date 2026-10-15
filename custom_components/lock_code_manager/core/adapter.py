@@ -104,7 +104,7 @@ class ProviderPort:
         self.name_for = name_for
         self.polling = polling
         # The worker that owns the lock: set once it is built.
-        self.worker: LockWorker | None = None
+        self.worker: LockWorker[ProviderPort] | None = None
         # The slot a write is in the provider for: its own echo is not the lock.
         self._writing: int | None = None
         # When each slot was last written, on the event loop's clock: a
@@ -523,7 +523,7 @@ class _Coordinator:
     async def async_refresh(self) -> None:
         """Do nothing: the worker's own first read comes first."""
 
-    async def async_in_turn(self, call: Callable[[], Awaitable[Any]]) -> Any:
+    async def async_in_turn[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """
         Run ``call`` against the lock in its worker's turn; return its result.
 
@@ -538,7 +538,7 @@ class _Coordinator:
         assert worker is not None
         raised: list[LockCodeManagerProviderError] = []
 
-        async def _call() -> Any:
+        async def _call() -> T:
             try:
                 return await call()
             except LockCodeManagerProviderError as err:

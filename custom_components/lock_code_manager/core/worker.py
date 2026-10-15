@@ -117,10 +117,10 @@ def _resolve(
 
 
 @dataclass
-class LockWorker:
+class LockWorker[P: LockPort]:
     """The one owner of a lock's slots and of every exchange with it."""
 
-    port: LockPort
+    port: P
     salt: bytes
     gap: float = 2.0
     # Seconds one exchange may take before it counts as no answer.
@@ -313,7 +313,7 @@ class LockWorker:
         self._put(_Job("probe" if probe else "read", slots=wanted, done=done))
         return await done
 
-    async def turn(self, call: Callable[[], Awaitable[Any]]) -> Any:
+    async def turn[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """
         Run ``call`` against the lock in its turn, as one exchange; return its result.
 
@@ -323,7 +323,7 @@ class LockWorker:
         """
         if self._stopping:
             raise LockError(ErrorKind.NO_ANSWER, sent=False, message="stopped")
-        done: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        done: asyncio.Future[T] = asyncio.get_running_loop().create_future()
         self._put(_Job("turn", call=call, done=done))
         return await done
 

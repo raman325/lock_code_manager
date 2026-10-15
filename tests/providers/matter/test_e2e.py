@@ -41,7 +41,6 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_registry,
-    port_of,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers._util import parse_tag
@@ -187,7 +186,7 @@ class TestSetAndClearUsercodes:
 
         worker = lock_registry(hass).worker(e2e_matter_lock.lock.entity_id)
         assert worker is not None
-        assert port_of(worker).others.get(4) is Seen.MASKED
+        assert worker.port.others.get(4) is Seen.MASKED
 
     async def test_clear_usercode_optimistic_update(
         self,

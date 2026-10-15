@@ -41,7 +41,6 @@ from custom_components.lock_code_manager.core.slot import Reading, Status
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_registry,
-    port_of,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
@@ -108,7 +107,7 @@ def _record_pushes(
     """
     worker = lock_registry(hass).worker(lock.lock.entity_id)
     assert worker is not None
-    port = port_of(worker)
+    port = worker.port
     port.others.clear()
     pushed: dict[int, Reading] = {}
     worker.push = pushed.__setitem__  # type: ignore[method-assign]

@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Final, TypedDict
+
 from homeassistant.const import Platform
+from homeassistant.util.hass_dict import HassKey
+
+if TYPE_CHECKING:
+    from .core.adapter import ProviderPort
+    from .core.registry import LockRegistry
+    from .core.worker import LockWorker
+    from .domain.lock_store import LockStore
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
@@ -58,7 +67,27 @@ ATTR_USER_ENTITY_ID = "user_entity_id"
 # One repair for the whole entity-ID rename, however many entries moved.
 ENTITY_IDS_RENAMED_ISSUE = "entity_ids_renamed"
 # Where the migration accumulates those renames while entries migrate.
-RENAMES_KEY = "migration_renames"
+RENAMES_KEY: Final = "migration_renames"
+
+
+class LockCodeManagerData(TypedDict, total=False):
+    """
+    What the integration keeps in ``hass.data[DOMAIN]``.
+
+    The core's keys are named in ``domain.lock_runtime``.
+    """
+
+    resources: bool
+    instance_id: str
+    migration_renames: dict[str, str]
+    lock_registry: LockRegistry[ProviderPort]
+    locks_leaving: set[str]
+    slots_given_up: dict[tuple[str, int], tuple[str, LockWorker[ProviderPort] | None]]
+    slot_issues: dict[str, set[str]]
+    lock_store: LockStore
+
+
+DATA: HassKey[LockCodeManagerData] = HassKey(DOMAIN)
 
 ATTR_CLEAR_CREDENTIALS = "clear_credentials"
 ATTR_SLOT = "slot"

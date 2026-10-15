@@ -47,7 +47,6 @@ from custom_components.lock_code_manager.core.slot import LIMIT
 from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_codes,
     lock_registry,
-    port_of,
 )
 from custom_components.lock_code_manager.domain.models import SlotCode
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
@@ -164,7 +163,7 @@ def poll_interval(hass: HomeAssistant, lock: ZWaveJSUILock) -> timedelta | None:
     worker = lock_registry(hass).worker(lock.lock.entity_id)
     assert worker is not None
     return min(
-        (interval for interval in port_of(worker)._cadence() if interval),
+        (interval for interval in worker.port._cadence() if interval),
         default=None,
     )
 

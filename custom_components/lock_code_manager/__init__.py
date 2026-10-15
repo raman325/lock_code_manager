@@ -78,6 +78,7 @@ from .const import (
     CONF_SLOT,
     CONF_SLOTS,
     CONF_USERS,
+    DATA,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
     LEGACY_EVENT_PIN_USED,
@@ -99,6 +100,7 @@ from .const import (
     STRATEGY_FILENAME,
     STRATEGY_PATH,
     SUBENTRY_TYPE_USER,
+    LockCodeManagerData,
 )
 from .domain.config import (
     EntryConfig,
@@ -369,9 +371,9 @@ async def async_migrate_entry(
             # loaded, and during a config entry's setup they may not have.
             # Accumulated across entries so several of them produce one
             # message rather than one apiece.
-            hass.data.setdefault(DOMAIN, {}).setdefault(RENAMES_KEY, {}).update(
-                dict(re_slugged)
-            )
+            hass.data.setdefault(DATA, LockCodeManagerData()).setdefault(
+                RENAMES_KEY, {}
+            ).update(dict(re_slugged))
         if dropped:
             _async_purge_dropped_slots(hass, config_entry, dropped)
             _LOGGER.info(
@@ -567,11 +569,11 @@ async def _async_register_strategy_resource(hass: HomeAssistant) -> None:
         {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
     )
     _LOGGER.debug("Registered strategy module (resource ID %s)", data[CONF_ID])
-    hass.data[DOMAIN]["resources"] = True
+    hass.data[DATA]["resources"] = True
 
 
 async def _async_cleanup_strategy_resource(
-    hass: HomeAssistant, hass_data: dict[str, Any]
+    hass: HomeAssistant, hass_data: LockCodeManagerData
 ) -> None:
     """Remove the Lovelace strategy resource if we registered it."""
     resources = _get_lovelace_resources(hass)
@@ -606,8 +608,8 @@ async def _async_cleanup_strategy_resource(
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
-    hass.data.setdefault(DOMAIN, {"resources": False})
-    hass.data[DOMAIN]["instance_id"] = await instance_id.async_get(hass)
+    hass.data.setdefault(DATA, LockCodeManagerData(resources=False))
+    hass.data[DATA]["instance_id"] = await instance_id.async_get(hass)
     await async_setup_core(hass)
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
@@ -873,7 +875,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
     async def _deobfuscate_log(call: ServiceCall) -> ServiceResponse:
         """Reverse mask_pin() tokens in pasted log text against the current config."""
-        instance_id = hass.data.get(DOMAIN, {}).get("instance_id", "")
+        instance_id = hass.data.get(DATA, LockCodeManagerData()).get("instance_id", "")
         if not instance_id:
             raise HomeAssistantError(
                 "Lock Code Manager is not fully set up yet; try again in a moment"
@@ -952,7 +954,7 @@ def _setup_entry_after_start(
     # Popped, so it runs once however many entries were migrated. At boot
     # this fires after every entry has, so the renames are complete; on a
     # single entry's reload only that entry's are there to report.
-    if moved := hass.data.get(DOMAIN, {}).pop(RENAMES_KEY, None):
+    if moved := hass.data.get(DATA, LockCodeManagerData()).pop(RENAMES_KEY, None):
         config_entry.async_create_task(
             hass, async_notify_moved(hass, moved), "notify_entity_ids_renamed"
         )
@@ -999,7 +1001,7 @@ async def async_setup_entry(
             f"Unable to start because lock {entity_id} can't be found"
         )
 
-    hass.data.setdefault(DOMAIN, {"resources": False})
+    hass.data.setdefault(DATA, LockCodeManagerData(resources=False))
     await _async_register_strategy_resource(hass)
 
     config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData(
@@ -1131,7 +1133,7 @@ async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
     """Unload an entry, stopping tick managers before tearing down platforms."""
-    hass_data = hass.data[DOMAIN]
+    hass_data = hass.data[DATA]
     runtime_data = config_entry.runtime_data
     callbacks = runtime_data.callbacks
 
@@ -1196,7 +1198,7 @@ async def async_remove_entry(
     """
     entry_id = config_entry.entry_id
     config = get_entry_config(config_entry)
-    if (store := hass.data.get(DOMAIN, {}).get(STORE_KEY)) is not None:
+    if (store := hass.data.get(DATA, LockCodeManagerData()).get(STORE_KEY)) is not None:
         store.forget_entry(config.locks, config.slot_numbers)
     for lock_entity_id in config.locks:
         # Its unload let go of the locks; their slots are someone else's now.

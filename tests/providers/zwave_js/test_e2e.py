@@ -71,7 +71,6 @@ from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeE
 from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_codes,
     lock_registry,
-    port_of,
 )
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import subentry_id_for_slot
@@ -117,7 +116,7 @@ def _record_pushes(
     """Record what the provider pushes to the lock's worker, slot by slot."""
     worker = lock_registry(hass).worker(lock.lock.entity_id)
     assert worker is not None
-    port = port_of(worker)
+    port = worker.port
     pushed: list[tuple[int, SlotCredential]] = []
     forward = port.pushed
 
