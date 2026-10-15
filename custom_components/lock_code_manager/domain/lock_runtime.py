@@ -320,17 +320,11 @@ def async_give_up(
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
-    provider = port_of(worker).provider
-    if (
-        not provider.provider_setup_succeeded
-        and not provider._setup_deferred
-        and not worker.answered
-    ):
-        # Nothing can be written to a lock whose setup failed for good (no
-        # room for codes): no clear to wait on. One whose setup is only
-        # deferred (its integration loading, a node dead at boot) may hold
-        # codes, and so may one that answered and has lost its setup (a
-        # failed revalidation): the clear waits for it.
+    if port_of(worker).provider.pin_unsupported and not worker.answered:
+        # A lock with no PIN support holds no codes: no clear to wait on.
+        # Every other failed setup (a node dead at boot, a slot count not
+        # known until a re-interview, a retry under way) may hold codes, and
+        # the clear waits for it to recover.
         clear = False
     try:
         if clear:

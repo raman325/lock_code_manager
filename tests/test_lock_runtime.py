@@ -21,6 +21,7 @@ from homeassistant.helpers import issue_registry as ir
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.core.slot import Repair, Status
 from custom_components.lock_code_manager.domain.exceptions import (
+    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationUnsupported,
 )
@@ -38,6 +39,7 @@ from .common import (
     TWO_SLOTS_ON_LOCK_1,
     async_advance_clock,
     async_set_slot_pin,
+    current_entry,
     lcm_issue_ids,
     lock_workers,
     mock_lock,
@@ -266,3 +268,39 @@ async def test_a_provider_that_cannot_measure_its_link_leaves_the_reason_alone(
     assert _hold_reason(hass, entry, 1) == (
         "the lock did not take the code after several tries"
     )
+
+
+async def test_a_user_removed_while_setup_fails_validation_is_cleared_later(
+    hass: HomeAssistant, freezer, mock_lock_config_entry
+) -> None:
+    """
+    A user deleted while the lock fails its setup check leaves the lock later.
+
+    A failed check other than "no PIN support" (a slot count unknown until a
+    re-interview) can recover, and the lock still holds the user's PIN. Giving
+    the slot up unclaimed then left that PIN opening the door once it did.
+    """
+    entry = current_entry("Failing validation", {1: "1234", 2: "5678"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(
+        lambda lock: lock.fail(
+            "setup", error=LockCodeManagerProviderError("no slot count")
+        )
+    ) as faults:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        lock = mock_lock(entry)
+        assert not lock.provider_setup_succeeded
+        assert lock.codes[2] == "5678"
+
+        subentry = next(s for s in entry.subentries.values() if s.title == "user2")
+        hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+        await hass.async_block_till_done()
+
+        # A re-interview fixes it, and the lock's integration reloads.
+        faults[0].clear()
+        await lock._async_on_integration_loaded()
+        await async_advance_clock(hass, freezer, 60 * 60)
+
+    assert lock.provider_setup_succeeded
+    assert 2 not in lock.codes

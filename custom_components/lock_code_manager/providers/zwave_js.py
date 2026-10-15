@@ -73,9 +73,6 @@ from ._util import is_masked_code, parse_tag
 
 _LOGGER = logging.getLogger(__name__)
 
-# User Credential Command Class (not in zwave_js_server's CommandClass yet).
-_USER_CREDENTIAL_CC = 131
-
 # Numeric ``ZWaveErrorCodes`` values from node-zwave-js. zwave-js-server-python
 # surfaces the code as a bare int on ``FailedZWaveCommand.zwave_error_code``
 # and ships no enum for it, so the names live here. The driver also appends the
@@ -728,24 +725,6 @@ class ZWaveJSLock(BaseLock):
         # guaranteed to, so this cannot wait for one.
         self._push_credential_update(credential.slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
-
-    async def async_release_managed_slot(self, slot: int) -> None:
-        """
-        Release a slot no longer managed: on a User Code lock, clear it.
-
-        A User Code CC slot is its own implicit, nameless user: it can never
-        carry Lock Code Manager's tag, so the base release (which adopts no
-        untagged user) found no owner and sent nothing -- a deleted user's
-        PIN kept opening the door. The slot is the identity there, and it was
-        this integration's until now. A User Credential lock tags its users:
-        the base release deletes the tagged one.
-        """
-        if self._node_advertises_user_code_cc() and not any(
-            cc.id == _USER_CREDENTIAL_CC for cc in self.node.command_classes
-        ):
-            await self.async_clear_usercode(slot)
-            return
-        await super().async_release_managed_slot(slot)
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """

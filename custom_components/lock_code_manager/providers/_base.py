@@ -245,6 +245,10 @@ class BaseLock:
     # ``_setup_succeeded``, which is also False for a lock whose setup ran
     # and failed -- that one has a diagnosis, this one has never been asked.
     _setup_deferred: bool = field(default=False, init=False)
+    # The last capability probe found no PIN support: the one setup failure
+    # that means no code can be on the lock. Kept apart from the setup flags,
+    # which read "failed" through every recoverable failure and retry too.
+    pin_unsupported: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
     # Reconnect task spawned by the config-entry state listener when the lock
     # integration transitions to LOADED. Tracked so async_unload can cancel it
@@ -828,7 +832,8 @@ class BaseLock:
             # `get_lock_info` bare. A probe is a read, so cancelling it is
             # safe.
             caps = await self._get_cached_capabilities()
-            if CredentialType.PIN not in caps.credential_types:
+            self.pin_unsupported = CredentialType.PIN not in caps.credential_types
+            if self.pin_unsupported:
                 # A degenerate-but-successful probe was just cached;
                 # invalidate it so the reconnect-path revalidation
                 # re-probes instead of serving the failed read forever.
@@ -1678,9 +1683,16 @@ class BaseLock:
         that user instead; the cascade defined by the lock's protocol
         removes its credentials, so they must not also clear here.
         """
-        # Never adopts: see ``async_clear_usercode``. A slot LCM no longer
-        # manages has no claim on whoever owns the credential at that index.
-        await self.async_clear_usercode(slot, adopt_untagged=False)
+        # Adopts no untagged user (see ``async_clear_usercode``): a slot LCM
+        # no longer manages has no claim on whoever owns the credential at
+        # that index. Unless the lock keeps no user records (a Z-Wave User
+        # Code lock): no user there can carry a tag, the slot is the
+        # identity, and it was this integration's until now.
+        await self.async_clear_usercode(
+            slot,
+            adopt_untagged=self.supports_native_users
+            and not await self._supports_user_records(),
+        )
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """
