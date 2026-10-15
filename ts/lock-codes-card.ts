@@ -4,6 +4,7 @@ import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { ifDefined } from 'lit/directives/if-defined.js';
 
+import { DEFAULT_CODE_DISPLAY } from './const';
 import { HomeAssistant } from './ha_type_stubs';
 import { lockCodesCardStyles } from './lock-codes-card.styles';
 import { LcmSubscriptionMixin } from './subscription-mixin';
@@ -24,7 +25,6 @@ import {
 } from './types';
 
 const DEFAULT_TITLE = 'Lock Codes';
-const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 
 // Base class with subscription mixin
 const LockCodesCardBase = LcmSubscriptionMixin(LitElement);

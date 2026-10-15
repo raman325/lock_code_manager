@@ -1,6 +1,7 @@
 import { mdiClose } from '@mdi/js';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 
+import { DEFAULT_CODE_DISPLAY } from './const';
 import { HomeAssistant } from './ha_type_stubs';
 import {
     CodeDisplayMode,
@@ -128,7 +129,7 @@ class LcmUserCardEditor extends LitElement {
             <div class="editor-row">
                 <ha-select
                     .label=${'Code Display'}
-                    .value=${this._config.code_display ?? 'masked_with_reveal'}
+                    .value=${this._config.code_display ?? DEFAULT_CODE_DISPLAY}
                     @selected=${this._displayModeChanged}
                     @closed=${this._stopPropagation}
                     fixedMenuPosition
