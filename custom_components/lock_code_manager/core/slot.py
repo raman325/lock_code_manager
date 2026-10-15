@@ -99,9 +99,10 @@ class Slot:
     fights: list[float] = field(default_factory=list)
     hold: Repair | None = None
     release: bool = False
-    # What the lock or its driver said when it refused the slot, or when the
-    # last write failed, if anything.
+    # What the lock or its driver said when it refused the slot, if anything.
     why: str = ""
+    # The cause the provider named for the last failed write, if it named one.
+    cause: str = ""
     # A release has been sent and answered: it reaches the lock once.
     released: bool = False
     # Bumped each time the counts start over: a sync begun before is not
@@ -198,7 +199,7 @@ class Slot:
 
     def refused(self, *, value: bool, why: str = "") -> None:
         """Hold the slot at once: the lock refused the value, or the slot."""
-        self.why = why
+        self.why, self.cause = why, ""
         if value and self.want is not None:
             self.hold = Repair.SLOT_DISABLED
         else:
@@ -210,7 +211,7 @@ class Slot:
         self.tries = 0
         self.fights.clear()
         self.hold = None
-        self.why = ""
+        self.why = self.cause = ""
 
     def _give_up(self) -> Repair:
         return Repair.CODE_MAY_REMAIN if self.want is None else Repair.CANT_SET

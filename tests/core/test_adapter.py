@@ -44,6 +44,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockBusy,
     LockCodeManagerProviderError,
     LockDisconnected,
+    LockOperationBlocked,
     LockOperationFailed,
     LockOperationUnsupported,
     ProviderNotImplementedError,
@@ -130,6 +131,21 @@ def test_what_a_provider_error_means(error, clearing, kind) -> None:
     """The provider's errors, as what each does to a slot."""
     assert (mapped := lock_error(error, clearing=clearing)) is not None
     assert mapped.kind is kind
+
+
+@pytest.mark.parametrize(
+    ("error", "cause"),
+    [
+        (LockOperationBlocked("user 7 holds it"), "user 7 holds it"),
+        (LockOperationFailed("api down"), ""),
+        (LockDisconnected("gone"), ""),
+    ],
+)
+def test_only_a_named_cause_is_passed_on_as_one(error, cause) -> None:
+    """A cause the provider named is retried, and kept; nothing else is a cause."""
+    assert (mapped := lock_error(error, clearing=False)) is not None
+    assert mapped.kind is ErrorKind.NO_ANSWER
+    assert mapped.cause == cause
 
 
 def test_anything_else_a_provider_raises_is_its_bug() -> None:

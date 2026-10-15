@@ -56,6 +56,7 @@ from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockDisconnected,
+    LockOperationBlocked,
     LockOperationError,
     LockOperationFailed,
 )
@@ -650,7 +651,7 @@ class MatterLock(BaseLock):
                     # the cause, if the lock never takes the name.
                     if isinstance(err, LockOperationError):
                         raise
-                    raise LockOperationFailed(
+                    raise LockOperationBlocked(
                         f"User {existing_user_index} on the lock holds a PIN at "
                         f"this slot's credential index ({slot}) without a Lock "
                         f"Code Manager tag, and the lock would not let Lock Code "

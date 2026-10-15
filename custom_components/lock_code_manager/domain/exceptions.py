@@ -120,6 +120,17 @@ class LockOperationFailed(LockOperationError):
     """
 
 
+class LockOperationBlocked(LockOperationFailed):
+    """
+    Raised when the operation failed for a cause the message names to the user.
+
+    Retried like its parent -- the cause may pass, or the lock may only have
+    failed to answer -- but a slot held after its tries says this, not a
+    generic reason followed by the link's counters, which would point away
+    from it.
+    """
+
+
 class LockOperationUnsupported(LockOperationFailed):
     """
     Raised when the lock can never complete the operation as specified.

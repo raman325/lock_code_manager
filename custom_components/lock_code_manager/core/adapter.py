@@ -37,6 +37,7 @@ from ..domain.exceptions import (
     LockCodeManagerError,
     LockCodeManagerProviderError,
     LockDisconnected,
+    LockOperationBlocked,
     LockOperationError,
     LockOperationUnsupported,
 )
@@ -79,7 +80,8 @@ def lock_error(
         kind = ErrorKind.NO_ANSWER
     else:
         return None
-    return LockError(kind, message=str(err))
+    cause = str(err) if isinstance(err, LockOperationBlocked) else ""
+    return LockError(kind, message=str(err), cause=cause)
 
 
 class ProviderPort:

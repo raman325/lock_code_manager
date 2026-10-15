@@ -40,6 +40,7 @@ from custom_components.lock_code_manager.core.worker import BACKOFF_MAX, OFFLINE
 from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
+    LockOperationBlocked,
     LockOperationFailed,
     LockOperationUnsupported,
 )
@@ -415,13 +416,34 @@ async def test_what_the_provider_measures_of_its_link_is_quoted_in_the_repair(
     assert reason.endswith(LINK_HEALTH)
 
 
+@pytest.mark.parametrize(
+    "error",
+    [LockDisconnected("timed out"), LockOperationFailed("the lock said no")],
+    ids=["disconnected", "failed"],
+)
+async def test_a_write_that_fails_in_transport_is_followed_by_its_link(
+    hass: HomeAssistant, mock_lock_config_entry, error: Exception
+) -> None:
+    """A failure nobody explained keeps the generic reason and the link (#1397)."""
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    lock.fail("set", 1, error=error)
+    with patch.object(lock, "describe_link_health", return_value=LINK_HEALTH):
+        await async_set_slot_pin(hass, entry, 1, "4321")
+        await hass.async_block_till_done()
+
+    assert _hold_reason(hass, entry, 1) == (
+        f"the lock did not take the code after several tries\n\n{LINK_HEALTH}"
+    )
+
+
 async def test_a_cause_the_provider_names_is_not_followed_by_its_link(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
     """Beside a cause, the link's counters point away from it."""
     entry = await async_setup_lcm_entry(hass)
     lock = mock_lock(entry)
-    lock.fail("set", 1, error=LockOperationFailed("user 7 holds this index"))
+    lock.fail("set", 1, error=LockOperationBlocked("user 7 holds this index"))
     with patch.object(lock, "describe_link_health", return_value=LINK_HEALTH):
         await async_set_slot_pin(hass, entry, 1, "4321")
         await hass.async_block_till_done()
