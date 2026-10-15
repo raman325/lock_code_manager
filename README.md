@@ -77,7 +77,10 @@ any others in the highest slots. A lock that reports its free slots and answers 
 supported only for occupied ones has those left alone, once Lock Code Manager has seen it
 report a free slot; it remembers that across restarts. If a lock that can't report its codes
 is treated as one that can, so new users can't be placed, run **Hard refresh usercodes** with
-**Forget that the lock can report codes** (`forget_reporting`) enabled.
+**Forget that the lock can report codes** (`forget_reporting`) enabled. Only do this for a
+lock that can't report its codes: a lock that reports its free slots is then no longer known to
+report, and until Lock Code Manager sees it report a free slot again it may place a new user
+over a code set at the keypad.
 
 ³ **Z-Wave JS UI (MQTT)** — For Z-Wave locks exposed to Home Assistant through
 [zwave-js-ui][zwave-js-ui]'s MQTT discovery gateway rather than the official websocket
