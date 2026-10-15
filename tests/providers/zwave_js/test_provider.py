@@ -721,8 +721,11 @@ async def test_async_set_usercode_calls_primitives(
     zwave_js_lock._min_operation_delay = 0.0
     mock_access_control.get_user_cached.return_value = None
 
-    await zwave_js_lock.async_set_usercode(1, "5678", name="alice", source="sync")
+    result = await zwave_js_lock.async_set_usercode(
+        1, "5678", name="alice", source="sync"
+    )
 
+    assert result is WriteResult.CONFIRMED
     mock_lock_helpers["async_set_user"].assert_called_once()
     mock_lock_helpers["async_set_credential"].assert_called_once()
     # Verify the credential call carries the right Personal Identification Number and slot
@@ -775,8 +778,9 @@ async def test_async_clear_usercode_calls_delete_primitives(
         ),
     ]
 
-    await zwave_js_lock.async_clear_usercode(1)
+    result = await zwave_js_lock.async_clear_usercode(1)
 
+    assert result is True
     mock_lock_helpers["async_delete_credential"].assert_called_once()
     mock_lock_helpers["async_delete_user"].assert_not_called()
 
