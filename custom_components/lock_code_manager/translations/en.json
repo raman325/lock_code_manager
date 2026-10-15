@@ -481,6 +481,10 @@
         }
       }
     },
+    "lock_re_paired_reload": {
+      "title": "Reload Lock Code Manager to use re-paired {lock_entity_id}",
+      "description": "`{lock_entity_id}` was re-paired, so Home Assistant now sees it as a different device. A read of the lock was still going when Lock Code Manager switched over, so it is still using the old device, and codes are not synchronized to the new one.\n\nReload Lock Code Manager to use the new device. This issue will be automatically dismissed when it does."
+    },
     "unmanaged_code": {
       "title": "Unmanaged code on {lock} in slot {slot}",
       "fix_flow": {

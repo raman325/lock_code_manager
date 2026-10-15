@@ -44,6 +44,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.ha.adapter import ProviderPort, reading
 from custom_components.lock_code_manager.ha.runtime import (
+    RE_PAIRED_RELOAD,
     RE_PAIRED_WORK_DROPPED,
     STORE_KEY,
     lock_codes,
@@ -1689,6 +1690,60 @@ class TestRePairedLock:
             worker = lock_registry(hass).worker(lock_id)
             assert worker.port.provider.lock.id == new_id
             assert [len(bridge.sets_for(slot)) for slot in pins] == [2, 2]
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_a_read_that_keeps_the_old_worker_asks_for_a_reload(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        A one-off read holds the lock through its rebuild: the old worker stays.
+
+        The entries take it back, so the lock is still on the old device: the
+        user is told to reload, and the repair goes once the reload is done.
+        """
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        issue_id = f"{RE_PAIRED_RELOAD}_{lock_id}"
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            old = lock_registry(hass).worker(lock_id)
+            bridge.silent = True
+            read = hass.async_create_task(lock_registry(hass).read_once(lock_id, [1]))
+            await async_run_until_quiet()
+            bridge.users.clear()
+            _re_pair_unawaited(hass)
+            await async_step_clock_until(
+                hass,
+                freezer,
+                lambda: issue_id in lcm_issue_ids(hass),
+                max_steps=10,
+                what="the rebuild giving up on the old worker",
+                step=1.0,
+            )
+            assert not read.done()
+            assert lock_registry(hass).worker(lock_id) is old
+            assert "reload Lock Code Manager to use the new device" in caplog.text
+
+            bridge.silent = False
+            await async_step_clock_until(
+                hass, freezer, read.done, max_steps=100, what="the read", step=1.0
+            )
+            assert read.exception() is not None  # the old device is gone
+            await _on_the_clock(
+                hass,
+                freezer,
+                hass.config_entries.async_reload(entry.entry_id),
+                "reloading",
+            )
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            worker = lock_registry(hass).worker(lock_id)
+            assert worker.port.provider.lock.id != old.port.provider.lock.id
             _assert_trouble_free(hass, lock_id)
 
     async def test_a_rename_is_no_rebuild(
