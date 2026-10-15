@@ -1438,7 +1438,7 @@ class MatterLock(BaseLock):
 
         user_index = parse_slot_num(data.get("userIndex"))
 
-        self.hass.async_create_task(
+        self._create_background_task(
             self._dispatch_lock_operation(user_index, credential_index, data),
             f"Matter LockOperation dispatch for {self.lock.entity_id}",
         )
@@ -1575,7 +1575,7 @@ class MatterLock(BaseLock):
             )
             return
 
-        self.hass.async_create_task(
+        self._create_background_task(
             self._dispatch_lock_user_change(user_index, resolved, operation),
             f"Matter LockUserChange dispatch for {self.lock.entity_id}",
         )

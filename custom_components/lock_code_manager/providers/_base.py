@@ -6,7 +6,7 @@ See ARCHITECTURE.md for the provider interface contract.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Coroutine
 import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -753,7 +753,7 @@ class BaseLock:
             self._setup_config_entry_state_listener()
 
             if self.coordinator is not None:
-                self.hass.async_create_task(
+                self._create_background_task(
                     self.coordinator.async_request_refresh(),
                     f"Refresh coordinator for {lock_entity_id}",
                 )
@@ -1054,6 +1054,26 @@ class BaseLock:
 
     @final
     @callback
+    def _create_background_task[T](
+        self, target: Coroutine[Any, Any, T], name: str
+    ) -> asyncio.Task[T]:
+        """
+        Run ``target`` until the lock's integration unloads.
+
+        Tied to that integration's config entry, so its unload or reload
+        cancels the task rather than leaving it to talk to a torn-down
+        integration; the reconnect a reload calls for starts only once the
+        entry is LOADED again, after the cancelling. A lock with no config
+        entry (the virtual lock) runs it until Home Assistant stops.
+        """
+        if self.lock_config_entry is None:
+            return self.hass.async_create_background_task(target, name)
+        return self.lock_config_entry.async_create_background_task(
+            self.hass, target, name
+        )
+
+    @final
+    @callback
     def _async_start_reconnect(self) -> None:
         """
         Run the integration-loaded path, superseding any reconnect in flight.
@@ -1072,7 +1092,7 @@ class BaseLock:
             self._reconnect_task.add_done_callback(self._drain_superseded_reconnect)
             if not self._reconnect_task.done():
                 self._reconnect_task.cancel()
-        self._reconnect_task = self.hass.async_create_task(
+        self._reconnect_task = self._create_background_task(
             self._async_on_integration_loaded(),
             f"Provider reconnect for {self.lock.entity_id}",
         )
@@ -1166,7 +1186,7 @@ class BaseLock:
             return
         if self._last_connection_up is False and is_up:
             if self.coordinator:
-                self.hass.async_create_task(
+                self._create_background_task(
                     self.coordinator.async_request_refresh(),
                     f"Refresh coordinator for {self.lock.entity_id} after reconnect",
                 )

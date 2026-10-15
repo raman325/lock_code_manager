@@ -222,7 +222,9 @@ class BaseMqttLock(BaseLock):
                     self.lock.entity_id,
                 )
 
-        self.hass.async_create_task(_subscribe_or_log())
+        self._create_background_task(
+            _subscribe_or_log(), f"MQTT push subscribe for {self.lock.entity_id}"
+        )
 
     async def _async_read_slots(
         self,

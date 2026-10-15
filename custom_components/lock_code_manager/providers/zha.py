@@ -701,7 +701,7 @@ class ZHALock(BaseLock):
             )
             # Refresh anyway — we know something changed on the lock
             if self.coordinator:
-                self.hass.async_create_task(
+                self._create_background_task(
                     self.coordinator.async_request_refresh(),
                     f"Refresh {self.lock.entity_id} after unparseable programming event",
                 )
@@ -714,7 +714,7 @@ class ZHALock(BaseLock):
             user_id,
         )
         if self.coordinator:
-            self.hass.async_create_task(
+            self._create_background_task(
                 self.coordinator.async_request_refresh(),
                 f"Refresh {self.lock.entity_id} after programming event",
             )

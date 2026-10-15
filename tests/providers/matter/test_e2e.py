@@ -366,7 +366,7 @@ class TestOutOfBandDeletion:
             hass, in_sync, lambda event: states.append(event.data["new_state"].state)
         )
         deliver(EventType.NODE_EVENT, _user_cleared_event(matter_node.node_id, 1))
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
         unsub()
         # The deletion turned the sensor off, then the write-back on again.
         assert states[:1] == [STATE_OFF], states

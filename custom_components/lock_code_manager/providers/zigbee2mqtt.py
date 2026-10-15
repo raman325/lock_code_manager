@@ -256,8 +256,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     action_user,
                 )
                 if self.coordinator:
-                    self.hass.async_create_task(
-                        self.coordinator.async_request_refresh()
+                    self._create_background_task(
+                        self.coordinator.async_request_refresh(),
+                        f"Refresh {self.lock.entity_id} after {action}",
                     )
             return
 
