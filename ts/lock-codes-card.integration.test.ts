@@ -1488,6 +1488,15 @@ describe('LockCodesCard integration', () => {
             expect(codeIsPending(slot)).toBe(false);
         });
 
+        it('does not call an active PIN off while its in-sync state is unknown', () => {
+            // The in-sync sensor reads unavailable (the lock entity is), so
+            // in_sync is null: neither a write due nor a PIN meant off the lock.
+            for (const inSync of [null, undefined]) {
+                const slot = { ...managedSlot, code: 'empty', in_sync: inSync };
+                expect((card as any)._getCodeClass(slot), String(inSync)).toBe('masked');
+            }
+        });
+
         it('never marks an unmanaged slot pending', () => {
             const slot = { ...managedSlot, code: 'empty', in_sync: false, managed: false };
             expect(chipIsPending(slot)).toBe(false);
