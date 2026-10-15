@@ -2182,6 +2182,40 @@ async def test_a_push_during_a_retargeted_write_does_not_hide_the_pin(
     assert not (lock.codes == {1: "1234"} and rig.status(1)[0] is Status.IN_SYNC)
 
 
+async def test_the_same_target_again_keeps_a_reading_after_its_own_write(
+    rig_factory,
+) -> None:
+    """Only a write for another target makes a reading doubtful."""
+    lock = FakeLock({1: "0000"}, masked=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    original = lock.write
+
+    async def _then_fail_the_read_back(slot, pin):
+        lock.read_errors = 1
+        return await original(slot, pin)
+
+    lock.write = _then_fail_the_read_back  # type: ignore[method-assign]
+    rig.worker.want(1, "1234")
+    await rig.settle()
+    # Trusted for its write, though the read-back failed.
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    reads: list[tuple[int, ...]] = []
+    original_read = lock.read
+
+    async def _note(slots):
+        reads.append(tuple(slots))
+        return await original_read(slots)
+
+    lock.read = _note  # type: ignore[method-assign]
+
+    rig.worker.want(1, "1234")
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    await rig.settle()
+
+    assert reads == []
+    assert lock.writes.count((1, "1234")) == 1
+
+
 @pytest.mark.parametrize(
     ("pushed", "reads_first"),
     [

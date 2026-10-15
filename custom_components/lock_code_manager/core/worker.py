@@ -188,17 +188,8 @@ class LockWorker[P: LockPort]:
             self.slots[slot] = Slot(pin, wrote=self.recall(slot), release=release)
         else:
             current.aim(pin, release=release)
-            if (
-                slot in self._unsure
-                and current.seen is not Seen.SILENT
-                and current.agrees(self.salt)
-            ):
-                # A write since the last reading may have landed, so a reading
-                # that agrees with the new target cannot vouch for it: read
-                # first. One that disagrees only leads to a write: the slot
-                # stays out of sync, pending, not unknown -- a read-back that
-                # failed is no reason to forget what the lock said.
-                current.seen = None
+            if self._unsure_of(slot, current):
+                current.doubt(self.salt)
         self.request_sync((slot,))
         # Backing off with nothing to probe: probe this one.
         self._schedule_probe()
@@ -465,20 +456,19 @@ class LockWorker[P: LockPort]:
         slot = self.slots.get(job.slot)
         if slot is None or self._written.get(job.slot, 0) > job.seq:
             return
-        if (unsure := self._unsure.get(job.slot)) is not None and (
-            unsure[0] is not slot or unsure[1] != slot.epoch
-        ):
-            # A write for another target since the last reading may have
-            # landed, and a report may be a cache older than it: one that
-            # agrees with this target cannot vouch for it, so read first. One
-            # that disagrees only leads to a write, as in ``want``: the slot
-            # shows out of sync, pending, not unknown.
+        if self._unsure_of(job.slot, slot):
+            # A report may be a cache older than that write: it is no fight,
+            # and no reason to stop trusting what was written.
             slot.seen = job.reading
-            if slot.agrees(self.salt):
-                slot.seen = None
+            slot.doubt(self.salt)
         else:
             slot.observe(job.reading, self.salt, self.clock(), fresh=False)
         self.request_sync((job.slot,))
+
+    def _unsure_of(self, number: int, slot: Slot) -> bool:
+        """Return whether a write for another target may have landed since a reading."""
+        unsure = self._unsure.get(number)
+        return unsure is not None and (unsure[0] is not slot or unsure[1] != slot.epoch)
 
     async def _sync(self, number: int) -> None:
         """
@@ -543,9 +533,8 @@ class LockWorker[P: LockPort]:
 
         What was sent is what is recorded; if the slot changed hands or wants
         another PIN by the time the write is back, nothing is recorded or read
-        back; the write may have landed, so ``want`` forgot what the lock
-        last said if it agrees with the new target, and the next sync reads
-        before it decides. A refusal holds at once.
+        back; the write may have landed, so ``want`` doubted what the lock
+        last said (``Slot.doubt``). A refusal holds at once.
         Anything else, even a write that never left, is read back -- unless
         the lock has just gone into backoff -- and its message is kept, so a
         slot held after its tries says what went wrong last.

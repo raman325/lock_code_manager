@@ -94,3 +94,20 @@ def test_a_slot_never_read_is_unknown_and_a_held_one_suspended(
     held = _slot(want, wrote, Seen.EMPTY)
     held.hold = Repair.CANT_SET
     assert held.status(SALT) is Status.SUSPENDED
+
+
+@given(
+    want=st.one_of(st.none(), PINS),
+    wrote=WROTE,
+    seen=st.one_of(st.sampled_from(list(Seen)), PINS.map(Holds)),
+    release=st.booleans(),
+)
+def test_doubt_forgets_only_a_reading_that_could_pass_the_slot(
+    want: str | None, wrote: str | None, seen, release: bool
+) -> None:
+    """Doubted, an agreeing reading is read again; a disagreeing one or silence stands."""
+    slot = _slot(want, wrote, seen)
+    slot.release = release
+    agreed = slot.agrees(SALT)
+    slot.doubt(SALT)
+    assert slot.seen is (None if agreed and seen is not Seen.SILENT else seen)

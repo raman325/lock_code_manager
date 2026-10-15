@@ -140,6 +140,21 @@ class Slot:
         # slot withheld or unanswered, so the user sees it is trusted, not read.
         return seen in (Seen.MASKED, Seen.SILENT) and written
 
+    def doubt(self, salt: bytes) -> None:
+        """
+        Forget what the lock said if it agrees with what is wanted.
+
+        For a reading that may be older than a write to another target: if
+        that write landed, an agreeing reading could pass the slot as in
+        sync, so the slot is read first. One that disagrees only leads to a
+        write, so it stands: the slot shows out of sync, pending, not
+        unknown. So does silence: it agrees only through ``wrote``, which a
+        write to another target clears when it is sent, and reading a silent
+        slot again only hears silence.
+        """
+        if self.seen is not Seen.SILENT and self.agrees(salt):
+            self.seen = None
+
     def status(self, salt: bytes) -> Status:
         """Return the slot's sync status."""
         if self.hold is not None:
