@@ -468,7 +468,7 @@ class TestAddingTheLockToAnEntry:
         assert result["type"] == "form"
         assert result["errors"] == {"base": "existing_codes"}
         assert result["description_placeholders"] == {
-            "lock": fake_matter_lock_entity.entity_id,
+            "error_lock": fake_matter_lock_entity.entity_id,
             "slots": "1",
         }
         assert fake_matter_lock.holds(1) == "246810"

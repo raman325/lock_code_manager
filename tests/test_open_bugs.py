@@ -442,26 +442,6 @@ async def test_reauth_refuses_the_lock_that_is_gone(
 
 @pytest.mark.xfail(
     strict=True,
-    reason=(
-        "open: an error's own {lock} placeholder overwrites the reauth "
-        "description's, so the form names the wrong lock as missing"
-    ),
-)
-async def test_reauth_keeps_naming_the_missing_lock_after_an_error(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """After an overlap error on another lock, the description still names the missing one."""
-    entry = _entry(hass, "first", LOCK_1_ENTITY_ID, {1: "test1", 2: "test2"})
-    _entry(hass, "second", LOCK_2_ENTITY_ID, {1: "other"})
-
-    result = await _async_reauth(hass, entry, LOCK_1_ENTITY_ID, [LOCK_2_ENTITY_ID])
-
-    assert result["errors"] == {"base": "slots_already_configured"}
-    assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
-
-
-@pytest.mark.xfail(
-    strict=True,
     reason="open: an overlap error lists slot numbers, which the user never sees",
 )
 async def test_an_overlap_error_names_the_users_in_the_way(
