@@ -1,6 +1,6 @@
 """Full lifecycle E2E tests for Zigbee2MQTT lock provider."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 import json
 import logging
@@ -18,7 +18,9 @@ from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAI
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import (
+    CONF_ENABLED,
     CONF_NAME,
+    CONF_PIN,
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
@@ -31,13 +33,17 @@ from custom_components.lock_code_manager.const import (
     ATTR_IN_SYNC,
     CONF_LOCKS,
     CONF_NUM_USERS,
+    CONF_SLOT,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
+    SERVICE_HARD_REFRESH_USERCODES,
+    SUBENTRY_TYPE_USER,
 )
 from custom_components.lock_code_manager.core.adapter import reading
-from custom_components.lock_code_manager.core.slot import Reading, Status
+from custom_components.lock_code_manager.core.slot import Reading
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_reachable,
     lock_registry,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -48,6 +54,8 @@ from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
     async_configure_flow,
+    async_configure_options,
+    async_restart_lcm,
     async_run_until_quiet,
     async_step_clock_until,
     async_tick_until,
@@ -55,8 +63,8 @@ from tests.common import (
     in_sync_entity_id,
     lcm_issue_ids,
     lcm_records_holding,
+    lock_workers_busy,
     slot_entity_id,
-    sync_status,
     unfinished_tasks,
 )
 
@@ -550,38 +558,6 @@ class TestBridge:
         finally:
             bridge.uninstall()
 
-    async def test_a_bridge_that_never_answers_a_read_still_gets_its_writes(
-        self,
-        hass: HomeAssistant,
-        freezer: FrozenDateTimeFactory,
-        mqtt_lock_discovered,
-        fake_z2m_bridge: FakeZ2MBridge,
-    ) -> None:
-        """
-        PR #1471: a bridge whose reads go unanswered is not an unreachable lock.
-
-        Every read times out, but the writes still go out and land, and
-        nothing is suspended or reported offline: silence on reads says
-        nothing about whether writes land.
-        """
-        bridge = fake_z2m_bridge
-        bridge.silent = True
-        lock_id = mqtt_lock_discovered.entity_id
-        async with _bridge_entry(hass, freezer, lock_id) as entry:
-            await async_advance_clock(hass, freezer, 120)
-            await async_advance_sync_ticks(hass, freezer, 30)
-
-            assert bridge.count("get") > 0
-            assert bridge.users[1] == (ENABLED, "1234")
-            assert bridge.users[2] == (ENABLED, "5678")
-            assert lcm_issue_ids(hass) == []
-            for slot in (1, 2):
-                status = sync_status(
-                    hass, in_sync_entity_id(hass, entry, slot, lock_id)
-                )
-                assert status != Status.SUSPENDED
-            assert hass.states.get(lock_id).state != STATE_UNAVAILABLE
-
     async def test_no_pin_reaches_a_log_record(
         self,
         hass: HomeAssistant,
@@ -679,3 +655,301 @@ class TestBridgeEvents:
             fake_z2m_bridge.operation_event("unlock", 1)
             await hass.async_block_till_done()
             assert hass.states.get(event_1).state != STATE_UNKNOWN
+
+
+# A lock that cannot say what its slots hold (#1581) ----------------------------
+
+
+@pytest.fixture(params=["silent", "cannot_tell"])
+def write_only_bridge(
+    request: pytest.FixtureRequest, fake_z2m_bridge: FakeZ2MBridge
+) -> FakeZ2MBridge:
+    """
+    A bridge whose lock takes writes and never says what a slot holds.
+
+    ``silent``: no read is ever answered. ``cannot_tell``: every read is
+    answered with user status Not Supported, as #1581's converter does.
+    """
+    setattr(fake_z2m_bridge, request.param, True)
+    return fake_z2m_bridge
+
+
+async def _on_the_clock[T](
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    work: Coroutine[Any, Any, T],
+    what: str,
+    max_steps: int = 100,
+) -> T:
+    """Run ``work`` to the end, stepping the clock its silent reads wait on."""
+    task = hass.async_create_task(work)
+    await async_step_clock_until(
+        hass, freezer, task.done, max_steps=max_steps, what=what, step=1.0
+    )
+    return task.result()
+
+
+def _read_slots(bridge: FakeZ2MBridge) -> list[int]:
+    """Return the slot of every read sent to the bridge, in order."""
+    return [body["pin_code"]["user"] for s, body in bridge.requests if s == "get"]
+
+
+def _settled_on(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    lock_id: str,
+    bridge: FakeZ2MBridge,
+    pins: dict[int, str],
+) -> bool:
+    """Return whether each PIN is on the lock and its slot is in sync."""
+    return all(
+        bridge.users.get(slot) == (ENABLED, pin)
+        and _in_sync(hass, entry, slot, lock_id) == STATE_ON
+        for slot, pin in pins.items()
+    )
+
+
+async def _until_settled(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    entry: MockConfigEntry,
+    lock_id: str,
+    bridge: FakeZ2MBridge,
+    pins: dict[int, str],
+) -> None:
+    """Step the clock until the PINs are on and in sync, and the locks idle."""
+    await async_step_clock_until(
+        hass,
+        freezer,
+        lambda: (
+            _settled_on(hass, entry, lock_id, bridge, pins)
+            and not unfinished_tasks(hass)
+            and not lock_workers_busy(hass)
+        ),
+        max_steps=300,
+        what="every PIN on the lock and in sync",
+        step=1.0,
+    )
+
+
+def _assert_trouble_free(hass: HomeAssistant, lock_id: str) -> None:
+    """Assert no repair, no lock taken for offline, and the lock still there."""
+    assert lcm_issue_ids(hass) == []
+    assert lock_reachable(hass, lock_id) is not False
+    assert hass.states.get(lock_id).state != STATE_UNAVAILABLE
+
+
+class TestWriteOnlyLock:
+    """
+    #1581: a lock that takes writes and cannot say what its slots hold.
+
+    Whether it says nothing or answers that it cannot tell, a slot it could
+    not describe is free to number and a write there is trusted. Nothing on
+    the lock can be seen to be in the way, so the numbers start at 1 and no
+    read goes past them.
+    """
+
+    async def test_setup_numbers_from_one_and_a_restart_writes_nothing(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        write_only_bridge: FakeZ2MBridge,
+    ) -> None:
+        """The flow reads only the numbers it issues; sync then settles for good."""
+        bridge = write_only_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        flow_id = result["flow_id"]
+        await async_configure_flow(
+            hass, flow_id, {CONF_NAME: "write only", CONF_LOCKS: [lock_id]}
+        )
+        await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+        result = await _on_the_clock(
+            hass,
+            freezer,
+            async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2}),
+            "allocation",
+            max_steps=30,
+        )
+        assert result["step_id"] == "code_slot", result.get("errors")
+        # Two numbers, one read each: no walk over the lock's 250.
+        assert _read_slots(bridge) == [1, 2]
+
+        pins = {1: "1234", 2: "5678"}
+        for slot, pin in pins.items():
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                async_configure_flow(
+                    hass,
+                    flow_id,
+                    {CONF_NAME: f"user{slot}", CONF_PIN: pin, CONF_ENABLED: True},
+                ),
+                "entry creation",
+            )
+        assert result["type"] == "create_entry"
+        entry = hass.config_entries.async_get_entry(result["result"].entry_id)
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in entry.subentries.values()
+        } == {"user1": 1, "user2": 2}
+
+        await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+        _assert_trouble_free(hass, lock_id)
+        writes = [len(bridge.sets_for(slot)) for slot in pins]
+        assert writes == [1, 1]
+
+        await _on_the_clock(
+            hass,
+            freezer,
+            async_restart_lcm(hass, entry, settle=False),
+            "restart",
+        )
+        await async_advance_clock(hass, freezer, 600, settle=False)
+        await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+
+        assert [len(bridge.sets_for(slot)) for slot in pins] == writes
+        _assert_trouble_free(hass, lock_id)
+        await _on_the_clock(
+            hass,
+            freezer,
+            hass.config_entries.async_unload(entry.entry_id),
+            "entry unload",
+        )
+
+    async def test_adding_a_user_numbers_the_next_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        write_only_bridge: FakeZ2MBridge,
+    ) -> None:
+        """The newcomer's number is the only one read, and their PIN lands."""
+        bridge = write_only_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            flow = await hass.config_entries.subentries.async_init(
+                (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+            )
+            flow = await hass.config_entries.subentries.async_configure(
+                flow["flow_id"], {"next_step_id": "one"}
+            )
+            await _until_settled(
+                hass, freezer, entry, lock_id, bridge, {1: "1234", 2: "5678"}
+            )
+            reads_before = len(_read_slots(bridge))
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                hass.config_entries.subentries.async_configure(
+                    flow["flow_id"],
+                    {CONF_NAME: "user3", CONF_PIN: "9012", CONF_ENABLED: True},
+                ),
+                "adding a user",
+            )
+
+            assert result["type"] == "create_entry", result.get("errors")
+            assert result["data"][CONF_SLOT] == 3
+            assert _read_slots(bridge)[reads_before] == 3
+            pins = {1: "1234", 2: "5678", 3: "9012"}
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            assert set(_read_slots(bridge)) == {1, 2, 3}
+            assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1, 1]
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_adding_the_lock_to_an_entry_is_accepted(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        write_only_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        #1693 reads an added lock at the entry's numbers; this one cannot say.
+
+        So nothing is seen in the way and the lock is added, the same answer
+        allocation gives it. Refusing it with ``occupancy_unknown`` would
+        keep it out of every entry for good: it will never say more.
+        """
+        bridge = write_only_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        entry = current_entry("test_z2m_lockless", pins, locks=())
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        flow = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await _on_the_clock(
+            hass,
+            freezer,
+            async_configure_options(hass, flow["flow_id"], {CONF_LOCKS: [lock_id]}),
+            "adding the lock",
+        )
+
+        assert result["type"] == "create_entry", result.get("errors")
+        assert set(_read_slots(bridge)) == {1, 2}
+        await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+        _assert_trouble_free(hass, lock_id)
+        await _on_the_clock(
+            hass,
+            freezer,
+            hass.config_entries.async_unload(entry.entry_id),
+            "entry unload",
+        )
+
+    @pytest.mark.parametrize(
+        ("before", "after"),
+        [
+            pytest.param("cannot_tell", "silent", id="cannot_tell_then_silent"),
+            pytest.param(None, "cannot_tell", id="read_then_cannot_tell"),
+        ],
+    )
+    async def test_a_read_it_answers_or_never_could_is_no_outage(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+        before: str | None,
+        after: str,
+    ) -> None:
+        """
+        Silence is an outage only from a lock shown able to answer reads.
+
+        Not Supported is no such showing, so a lock that has only ever
+        answered it, and then drops replies, is as it always was. And it is
+        an answer: a lock that described its slots before and now answers
+        Not Supported to every read has not gone. The hard refresh fails on
+        a read either rule calls an outage.
+        """
+        bridge = fake_z2m_bridge
+        if before is not None:
+            setattr(bridge, before, True)
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            setattr(bridge, after, True)
+            reads_before = len(_read_slots(bridge))
+
+            await _on_the_clock(
+                hass,
+                freezer,
+                hass.services.async_call(
+                    DOMAIN,
+                    SERVICE_HARD_REFRESH_USERCODES,
+                    target={"entity_id": lock_id},
+                    blocking=True,
+                ),
+                "hard refresh",
+            )
+            await async_advance_clock(hass, freezer, 120, settle=False)
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+
+            assert len(_read_slots(bridge)) > reads_before
+            assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1]
+            _assert_trouble_free(hass, lock_id)

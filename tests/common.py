@@ -1855,7 +1855,9 @@ async def async_setup_lcm_entry(
     return entry
 
 
-async def async_restart_lcm(hass: HomeAssistant, *entries: ConfigEntry) -> None:
+async def async_restart_lcm(
+    hass: HomeAssistant, *entries: ConfigEntry, settle: bool = True
+) -> None:
     """
     Restart Lock Code Manager's core: everything it kept in memory goes.
 
@@ -1864,6 +1866,9 @@ async def async_restart_lcm(hass: HomeAssistant, *entries: ConfigEntry) -> None:
     Assistant's final write, and the core starts again from what it holds.
     The entries' locks are rebuilt; ``when_mock_lock_built`` keeps what a
     real lock would hold across it.
+
+    Pass ``settle=False`` when the locks' first reads wait on a frozen clock
+    the caller steps: settling here would wait on them without moving it.
     """
     for entry in entries:
         assert await hass.config_entries.async_unload(entry.entry_id)
@@ -1876,7 +1881,8 @@ async def async_restart_lcm(hass: HomeAssistant, *entries: ConfigEntry) -> None:
     await async_setup_core(hass)
     for entry in entries:
         assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    if settle:
+        await hass.async_block_till_done()
 
 
 def current_entry(
