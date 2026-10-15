@@ -1087,6 +1087,8 @@ class TestOtherUsersOnTheLock:
             assert issue.translation_placeholders is not None
             reason = issue.translation_placeholders["reason"]
             assert reason.startswith("User 7 on the lock holds a PIN at this slot's")
+            assert "may not let Lock Code Manager rename it" in reason
+            assert "If this keeps happening, check that user" in reason
             assert "lock maker's app" in reason
             # Advice about the Thread link points away from the cause.
             assert "Thread" not in reason
