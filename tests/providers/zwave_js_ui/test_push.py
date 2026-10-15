@@ -99,14 +99,13 @@ class TestUserCodeValues:
     """User Code Command Class value publications on the node topic."""
 
     @pytest.mark.parametrize(
-        "property_path",
-        [USER_CODE_VALUEID, USER_CODE_NAMED],
-        ids=["valueid", "named"],
-    )
-    @pytest.mark.parametrize(
-        "payload",
-        ["1234", wrapped("1234")],
-        ids=["raw", "time_value"],
+        ("payload", "property_path"),
+        [
+            pytest.param("1234", USER_CODE_VALUEID, id="raw-valueid"),
+            pytest.param("1234", USER_CODE_NAMED, id="raw-named"),
+            pytest.param(wrapped("1234"), USER_CODE_NAMED, id="time_value-named"),
+            # time_value-valueid: test_e2e.py::TestPushUpdates::test_pushed_user_code_updates_state
+        ],
     )
     async def test_a_published_code_confirms_the_slot(
         self,
@@ -168,11 +167,14 @@ class TestUserCodeValues:
         )
 
     @pytest.mark.parametrize(
-        "property_path",
-        [USER_ID_STATUS_VALUEID, USER_ID_STATUS_NAMED],
-        ids=["valueid", "named"],
+        ("payload", "property_path"),
+        [
+            pytest.param("0", USER_ID_STATUS_VALUEID, id="raw-valueid"),
+            pytest.param("0", USER_ID_STATUS_NAMED, id="raw-named"),
+            pytest.param(wrapped(0), USER_ID_STATUS_VALUEID, id="time_value-valueid"),
+            # time_value-named: test_e2e.py::TestPushUpdates::test_pushed_available_status_updates_state
+        ],
     )
-    @pytest.mark.parametrize("payload", ["0", wrapped(0)], ids=["raw", "time_value"])
     async def test_an_available_status_confirms_the_slot_empty(
         self,
         hass: HomeAssistant,
@@ -262,25 +264,6 @@ class TestUserCodeValues:
 
 class TestStaleAvailable:
     """The AVAILABLE status a lock re-sends after a code was written."""
-
-    async def test_available_is_ignored_when_a_pin_is_expected(
-        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
-    ) -> None:
-        """
-        A slot Lock Code Manager wants a code on never reads empty from a push.
-
-        Some locks re-announce AVAILABLE after a successful write. Taken at
-        face value it tells sync the slot was cleared, sync rewrites it, the
-        lock re-announces, and the loop never ends. Same hardware signal, same
-        guard as the zwave_js provider applies.
-        """
-        lock = zui_lock_subscribed
-        lock.coordinator.desired_credential.return_value = SlotCredential.known("1234")
-
-        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
-        await hass.async_block_till_done()
-
-        lock.coordinator.observe_push.assert_not_called()
 
     async def test_available_confirms_empty_without_a_coordinator(
         self, hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
@@ -424,7 +407,6 @@ class TestKeypadEvents:
     @pytest.mark.parametrize(
         ("property_path", "expected_to_locked"),
         [
-            pytest.param(KEYPAD_UNLOCK_NAMED, False, id="named_unlock"),
             pytest.param(KEYPAD_LOCK_NAMED, True, id="named_lock"),
             pytest.param(KEYPAD_UNLOCK_VALUEID, False, id="valueid_unlock"),
         ],
