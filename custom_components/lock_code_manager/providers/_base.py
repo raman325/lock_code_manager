@@ -63,7 +63,7 @@ from ..domain.util import (
     mask_pin,
     per_lock_issue_id,
 )
-from ._util import make_tagged_name, parse_tag
+from ._util import foreign_slots, make_tagged_name, parse_tag
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,6 +99,16 @@ MIN_OPERATION_DELAY = 2.0
 # avoid, and giving a one-slot write those ten slots' patience is the other
 # half of issue #1528.
 OPERATION_TIMEOUT = 600.0
+
+
+def _keeps_user_records(caps: LockCapabilities) -> bool:
+    """
+    Return whether a lock with ``caps`` exposes a separate user-record write path.
+
+    False covers both no-user-management locks and the implicit-user case
+    (e.g. Z-Wave User Code CC: the user IS the credential).
+    """
+    return caps.supports_user_management and caps.max_user_name_length > 0
 
 
 class ProviderCoordinator(Protocol):
@@ -453,6 +463,10 @@ class BaseLock:
     # Slots the last read asked about that the lock said nothing about, for
     # providers that can tell: the core reads them as silent, not unreadable.
     last_silent_slots: frozenset[int] = field(default=frozenset(), init=False)
+    # Slots the last read found a PIN at only under a user with no slot tag,
+    # on a lock with user records: someone else's code at that index, not the
+    # slot's own (``_util.foreign_slots``). The core reads the slot as empty.
+    last_foreign_slots: frozenset[int] = field(default=frozenset(), init=False)
 
     @property
     def usercode_scan_interval(self) -> timedelta:
@@ -1368,12 +1382,25 @@ class BaseLock:
         """
         scope = self.managed_slots if slots is None else slots
         codes = {slot: SlotCredential.empty() for slot in scope}
+        users = await self.async_get_users(slots)
         codes.update(
             {
                 credential.slot: credential.state
-                for user in await self.async_get_users(slots)
+                for user in users
                 for credential in user.credentials_of_type(credential_type)
             }
+        )
+        # Still in the map: what the lock holds counts for occupancy and the
+        # views. Only a lock with user records can tag a user; on one without
+        # (Z-Wave User Code), the slot is the identity. From what setup probed,
+        # so a read asks the lock nothing more.
+        caps = self.cached_capabilities
+        self.last_foreign_slots = (
+            foreign_slots(users)
+            if self.supports_native_users
+            and caps is not None
+            and _keeps_user_records(caps)
+            else frozenset()
         )
         return codes
 
@@ -1431,8 +1458,7 @@ class BaseLock:
         False covers both no-user-management locks and the implicit-user
         case (e.g. Z-Wave User Code CC: the user IS the credential).
         """
-        caps = await self._get_cached_capabilities()
-        return caps.supports_user_management and caps.max_user_name_length > 0
+        return _keeps_user_records(await self._get_cached_capabilities())
 
     async def _build_tagged_user_name(
         self, slot: int, display: str | None

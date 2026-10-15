@@ -966,7 +966,9 @@ class TestOtherUsersOnTheLock:
         for #1518: PR #1522 kept the release from adopting that untagged
         user; the turned-off slot's clear still adopted it by the old
         index-equals-slot rule and cleared the homeowner's credential before
-        any release ran.
+        any release ran. And for #1695: the slot read the homeowner's code as
+        its own, so the clear that leaves it alone never brought it in sync,
+        and it was suspended with a repair nothing could resolve.
         """
         fake_matter_lock.program(7, "777777", name="Mom", credential_index=3)
         slots = {
@@ -976,7 +978,17 @@ class TestOtherUsersOnTheLock:
         async with _entry_on(
             hass, fake_matter_lock_entity, slots, "batch5_release"
         ) as entry:
-            await _async_settle(hass, freezer, entry, fake_matter_lock_entity)
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+            await async_advance_sync_ticks(hass, freezer, 5)
+
+            assert _states(hass, entry, fake_matter_lock_entity, 3) == (STATE_ON, "")
+            assert lcm_issue_ids(hass, "slot_suspended") == []
+            worker = lock_registry(hass).worker(fake_matter_lock_entity.entity_id)
+            assert worker is not None
+            # Reported as a code nobody here manages.
+            assert worker.port.others[3] is Seen.MASKED
+            assert fake_matter_lock.holds(3) == "777777"
+
             subentry = next(
                 (s for s in entry.subentries.values() if s.data.get(CONF_SLOT) == 3),
                 None,
@@ -992,6 +1004,37 @@ class TestOtherUsersOnTheLock:
 
             assert fake_matter_lock.holds(3) == "777777"
             assert fake_matter_lock.users[7].name == "Mom"
+            assert lcm_issue_ids(hass, "slot_suspended") == []
+
+    async def test_a_turned_on_slot_still_adopts_a_user_at_its_index(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        An untagged user at a slot's index is the slot's to adopt when it wants a PIN.
+
+        How Lock Code Manager 2.0 left its users: the write tags the user and
+        puts the slot's PIN on it, instead of leaving it holding the old one
+        (#1695 reads that user as someone else's code only while the slot is off).
+        """
+        await _async_add_user(fake_matter_lock, "Old", credential_index=3)
+        user_index = fake_matter_lock.owner(3)
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "slot3", CONF_PIN: "333333", CONF_ENABLED: True},
+        }
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "batch5_adopt"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+
+            assert fake_matter_lock.holds(3) == "333333"
+            assert fake_matter_lock.owner(3) == user_index
+            assert user_index is not None
+            assert parse_tag(fake_matter_lock.users[user_index].name)[0] == 3
 
 
 class TestOpenBugs:

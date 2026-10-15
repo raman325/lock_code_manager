@@ -39,6 +39,7 @@ read for locks whose names were written by older releases.
   with the canonical format.
 """
 
+from collections.abc import Iterable
 import re
 from typing import Any
 
@@ -46,6 +47,7 @@ from homeassistant.components.mqtt import debug_info as mqtt_debug_info
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from ..domain.credentials import User
 from .const import LOGGER
 
 _LEGACY_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")
@@ -100,6 +102,26 @@ def parse_tag(name: str) -> tuple[int | None, str]:
     if match := _SLOT_ONLY_RE.match(name):
         return int(match.group(1)), ""
     return None, name
+
+
+def foreign_slots(users: Iterable[User]) -> frozenset[int]:
+    """
+    Return the slots only users without a slot tag hold a PIN at.
+
+    On a lock with user records, a PIN is Lock Code Manager's when its user
+    carries a slot tag. One under an untagged user at credential index n is
+    someone else's code at that index: the homeowner's own, made in the
+    vendor's app, or a user Lock Code Manager made before it tagged them.
+    Nothing on the lock tells those apart. A write of slot n adopts the
+    user, tagging it and overwriting their PIN; a slot turned off leaves it
+    alone, as a code nobody here manages (#1695).
+    """
+    tagged: set[int] = set()
+    untagged: set[int] = set()
+    for user in users:
+        holders = untagged if parse_tag(user.name or "")[0] is None else tagged
+        holders.update(credential.slot for credential in user.pin_credentials)
+    return frozenset(untagged - tagged)
 
 
 def parse_slot_num(value: object) -> int | None:

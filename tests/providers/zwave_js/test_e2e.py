@@ -721,7 +721,8 @@ def _lock_holds_on_slot_3(access_control: MagicMock, pin: str) -> None:
             user_id=3,
             active=True,
             user_type=UserCredentialUserType.GENERAL,
-            user_name="slot3",
+            # Lock Code Manager's own user: an untagged one is someone else's.
+            user_name="lcm:3:slot3",
         )
     ]
     access_control.get_all_credentials_cached.return_value = [
@@ -2730,6 +2731,59 @@ class TestUserRemoved:
         assert fake_zwave_lock.holds(2) is None
         assert fake_zwave_lock.holds(1) == "9999"
         assert not lcm_issue_ids(hass, "slot_suspended")
+
+
+class TestSomeoneElsesCodeAtATurnedOffSlot:
+    """A User Credential lock: a homeowner's untagged user at a turned-off slot's index (#1695)."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    async def test_the_slot_reads_clear_and_the_code_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The code is someone else's, not the slot's: in sync, untouched, no repair.
+
+        The clear finds no user tagged for the slot and leaves the code alone
+        (#1518), so a slot reading it as its own never came in sync and was
+        held with a repair nothing could resolve.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: False},
+                }
+            ),
+            unique_id="test_zwave_js_foreign",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        # The homeowner adds a user with a PIN at credential slot 3.
+        fake_zwave_lock.program(3, "5555")
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        assert _slot_states(hass, entry, lock_entity, 3) == (STATE_ON, "")
+        assert fake_zwave_lock.holds(3) == "5555"
+        assert lcm_issue_ids(hass) == []
+        await hass.config_entries.async_unload(entry.entry_id)
 
 
 class TestRestartMidWrite:
