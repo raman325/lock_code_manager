@@ -34,6 +34,7 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOT,
+    CONF_USERS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
     SERVICE_HARD_REFRESH_USERCODES,
@@ -860,11 +861,63 @@ class TestWriteOnlyLock:
 
             assert result["type"] == "create_entry", result.get("errors")
             assert result["data"][CONF_SLOT] == 3
+            # Told on the way out that a keypad code at 3 is replaced.
+            assert result["description"] == "cannot_report"
+            assert result["description_placeholders"] == {
+                "lock": lock_id,
+                "slots": "3",
+            }
             assert _read_slots(bridge)[reads_before] == 3
             pins = {1: "1234", 2: "5678", 3: "9012"}
             await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
             assert set(_read_slots(bridge)) == {1, 2, 3}
             assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1, 1]
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_adding_several_users_says_the_lock_cannot_report(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        write_only_bridge: FakeZ2MBridge,
+    ) -> None:
+        """The block lands at 3 and 4, and the result says a keypad code there goes."""
+        bridge = write_only_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            flow = await hass.config_entries.subentries.async_init(
+                (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+            )
+            flow = await hass.config_entries.subentries.async_configure(
+                flow["flow_id"], {"next_step_id": "several"}
+            )
+            await _until_settled(
+                hass, freezer, entry, lock_id, bridge, {1: "1234", 2: "5678"}
+            )
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                hass.config_entries.subentries.async_configure(
+                    flow["flow_id"],
+                    {
+                        CONF_USERS: {
+                            "user3": {CONF_ENABLED: True, CONF_PIN: "9012"},
+                            "user4": {CONF_ENABLED: True, CONF_PIN: "3456"},
+                        }
+                    },
+                ),
+                "adding users",
+            )
+
+            assert result["type"] == "abort"
+            assert result["reason"] == "users_added_cannot_report"
+            assert result["description_placeholders"] == {
+                "num_users": "2",
+                "lock": lock_id,
+                "slots": "3, 4",
+            }
+            pins = {1: "1234", 2: "5678", 3: "9012", 4: "3456"}
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
             _assert_trouble_free(hass, lock_id)
 
     async def test_adding_the_lock_to_an_entry_is_accepted(
@@ -1087,6 +1140,8 @@ class TestLockThatReportsOnlyFreeSlots:
 
             assert result["type"] == "create_entry", result.get("errors")
             assert result["data"][CONF_SLOT] == 4
+            # It can report: nothing to warn of.
+            assert result["description"] is None
             pins = {1: "1234", 2: "5678", 4: "9012"}
             await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
             assert bridge.sets_for(3) == []
@@ -1168,6 +1223,8 @@ class TestLockThatReportsOnlyFreeSlots:
 
             assert result["type"] == "create_entry", result.get("errors")
             assert result["data"][CONF_SLOT] == 4
+            # Nor is it said to be unable to report.
+            assert result["description"] is None
             await _until_settled(
                 hass, freezer, entry, lock_id, bridge, {**pins, 4: "9012"}
             )

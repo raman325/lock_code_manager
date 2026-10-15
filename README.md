@@ -70,8 +70,9 @@ status is not supported (`not_supported_255`; status 0xFF through ZHA, which is 
 same way). Lock Code Manager still sets and keeps the codes it manages on such a lock, but it
 cannot see a code programmed at the lock itself. So when it picks slots for new users
 (starting from slot 1), or when such a lock is added to an existing configuration, which
-then writes that configuration's codes to it, it may write over one. Setup tells you when a
-lock cannot report its codes, and which slots will be used. On these locks, add codes through
+then writes that configuration's codes to it, it may write over one. Setup, adding users and
+adding a lock tell you when a lock cannot report its codes, and which slots will be used.
+On these locks, add codes through
 Lock Code Manager only, or keep any others in the highest slots. A lock that reports its free
 slots and answers not supported only for occupied ones has those left alone, once Lock Code
 Manager has seen it report a free slot; it remembers that across restarts.
