@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.lock_code_manager.domain.callbacks import EntityCallbackRegistry
+from custom_components.lock_code_manager.ha.callbacks import EntityCallbackRegistry
 
 
 @pytest.fixture

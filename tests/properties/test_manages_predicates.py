@@ -43,8 +43,8 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
-from custom_components.lock_code_manager.domain.config import EntryConfig
-from custom_components.lock_code_manager.domain.queries import (
+from custom_components.lock_code_manager.model.config import EntryConfig
+from custom_components.lock_code_manager.model.queries import (
     another_entry_configures,
     configured_owner,
     entries_configuring,
@@ -127,7 +127,7 @@ def _frozen_get_managed_slots(
     *,
     excluding: ConfigEntry | None = None,
 ) -> set[int]:
-    """``domain.queries.get_managed_slots``."""
+    """``model.queries.get_managed_slots``."""
     return {
         slot_num
         for entry in hass.config_entries.async_entries(DOMAIN)
@@ -155,7 +155,7 @@ def _frozen_find_entry_for_lock_slot(
     *,
     keeping_slots: bool = False,
 ) -> ConfigEntry | None:
-    """``domain.queries.find_entry_for_lock_slot``."""
+    """``model.queries.find_entry_for_lock_slot``."""
     return next(
         (
             entry

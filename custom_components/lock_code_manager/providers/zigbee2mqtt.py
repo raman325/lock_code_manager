@@ -17,9 +17,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import Credential, CredentialRef, User, WriteResult
-from ..domain.exceptions import LockDisconnected, LockOperationFailed
-from ..domain.models import SlotCredential
+from ..model.credentials import Credential, CredentialRef, User, WriteResult
+from ..model.exceptions import LockDisconnected, LockOperationFailed
+from ..model.models import SlotCredential
 from ._mqtt import CANNOT_TELL, BaseMqttLock, SlotAnswer
 from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER

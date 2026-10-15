@@ -41,13 +41,13 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
+from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.providers._base import (
     MIN_OPERATION_DELAY,
     OPERATION_TIMEOUT,
 )
+from custom_components.lock_code_manager.sync.slot import LIMIT
 
 from .common import (
     BASE_CONFIG,

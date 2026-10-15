@@ -9,7 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
@@ -19,7 +19,7 @@ from ..domain.credentials import (
     WriteResult,
     user_from_slot,
 )
-from ..domain.models import SlotCredential
+from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_slot_num
 

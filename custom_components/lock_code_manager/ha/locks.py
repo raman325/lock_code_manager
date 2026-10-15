@@ -16,9 +16,9 @@ from homeassistant.helpers.target import (
 )
 
 from ..const import DOMAIN
+from ..model.exceptions import UnclaimedLockError
+from ..model.queries import iter_loaded_lcm_entries
 from ..providers import BaseLock, resolve_provider_class_for_entity
-from .exceptions import UnclaimedLockError
-from .queries import iter_loaded_lcm_entries
 
 _LOGGER = logging.getLogger(__name__)
 

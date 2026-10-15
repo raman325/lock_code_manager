@@ -20,15 +20,14 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     PENDING_WRITE_TTL,
 )
-from custom_components.lock_code_manager.core.slot import Seen
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.runtime import lock_registry
+from custom_components.lock_code_manager.model.credentials import (
     CredentialRef,
     CredentialType,
     WriteResult,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
     parse_tag,
@@ -37,6 +36,7 @@ from custom_components.lock_code_manager.providers.schlage import (
     SCHLAGE_DOMAIN,
     SchlageLock,
 )
+from custom_components.lock_code_manager.sync.slot import Seen
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,

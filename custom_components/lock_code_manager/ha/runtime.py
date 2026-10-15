@@ -31,23 +31,23 @@ from homeassistant.helpers.issue_registry import (
 from homeassistant.helpers.start import async_at_started
 
 from ..const import DATA, DOMAIN, MAX_SEARCHED_SLOT, LockCodeManagerData
-from ..core.adapter import ProviderPort, lock_error
-from ..core.registry import LockRegistry, SlotTaken
-from ..core.slot import Holds, Reading, Repair, Seen, Status, Want
-from ..core.worker import LockWorker
-from ..providers import BaseLock
-from .exceptions import LockCodeManagerProviderError
-from .lock_store import LockStore
-from .locks import async_create_lock_instance
-from .models import SlotCode
-from .queries import (
+from ..model.exceptions import LockCodeManagerProviderError
+from ..model.models import SlotCode
+from ..model.queries import (
     configured_owner,
     entries_configuring,
     every_configured_lock,
     get_entry_config,
     iter_loaded_lcm_entries,
 )
-from .util import per_lock_issue_id
+from ..model.util import per_lock_issue_id
+from ..providers import BaseLock
+from ..sync.registry import LockRegistry, SlotTaken
+from ..sync.slot import Holds, Reading, Repair, Seen, Status, Want
+from ..sync.worker import LockWorker
+from .adapter import ProviderPort, lock_error
+from .lock_store import LockStore
+from .locks import async_create_lock_instance
 
 _LOGGER = logging.getLogger(__name__)
 

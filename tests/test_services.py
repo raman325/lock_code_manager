@@ -71,21 +71,21 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_CREDENTIAL,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.domain import services
-from custom_components.lock_code_manager.domain.allocation import SlotAllocationError
-from custom_components.lock_code_manager.domain.config import (
-    build_slot_unique_id,
-)
-from custom_components.lock_code_manager.domain.credentials import CredentialType
-from custom_components.lock_code_manager.domain.events import CredentialOperation
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha import services
+from custom_components.lock_code_manager.ha.allocation import SlotAllocationError
+from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
-from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.services import async_set_usercode
-from custom_components.lock_code_manager.domain.util import mask_pin
+from custom_components.lock_code_manager.ha.services import async_set_usercode
+from custom_components.lock_code_manager.model.config import (
+    build_slot_unique_id,
+)
+from custom_components.lock_code_manager.model.credentials import CredentialType
+from custom_components.lock_code_manager.model.events import CredentialOperation
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
+from custom_components.lock_code_manager.model.pin_generator import is_unsafe_pin
+from custom_components.lock_code_manager.model.queries import get_entry_config
+from custom_components.lock_code_manager.model.util import mask_pin
 from custom_components.lock_code_manager.providers.schlage import (
     SCHLAGE_DOMAIN,
     SchlageLock,
@@ -858,7 +858,7 @@ async def test_add_user_service_reports_an_allocation_refusal(
 ) -> None:
     """Allocation's refusal reaches the caller as a translated action error."""
     with patch(
-        "custom_components.lock_code_manager.domain.services.async_allocate_for",
+        "custom_components.lock_code_manager.ha.services.async_allocate_for",
         side_effect=SlotAllocationError(
             "occupancy_unknown", {"locks": LOCK_1_ENTITY_ID}
         ),
@@ -2278,7 +2278,7 @@ async def test_the_batch_is_allocated_for_everyone_it_will_add(
         return frozenset()
 
     with patch(
-        "custom_components.lock_code_manager.domain.services.async_allocate_for",
+        "custom_components.lock_code_manager.ha.services.async_allocate_for",
         _spy,
     ):
         await hass.services.async_call(

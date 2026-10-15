@@ -20,25 +20,23 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import MAX_SEARCHED_SLOT
-from custom_components.lock_code_manager.core.adapter import (
+from custom_components.lock_code_manager.ha.adapter import (
     ProviderPort,
     _Coordinator,
     reading,
 )
-from custom_components.lock_code_manager.core.slot import Reading, Slot
-from custom_components.lock_code_manager.core.worker import LockWorker
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     CredentialRef,
     CredentialType,
     WriteResult,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers import (
     _base as base_module,
     zha as zha_module,
@@ -46,6 +44,8 @@ from custom_components.lock_code_manager.providers import (
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
+from custom_components.lock_code_manager.sync.slot import Reading, Slot
+from custom_components.lock_code_manager.sync.worker import LockWorker
 from tests.providers.helpers import ProviderNativeTransportContractTests
 
 from .helpers import (

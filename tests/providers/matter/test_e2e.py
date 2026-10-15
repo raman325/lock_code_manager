@@ -37,17 +37,17 @@ from custom_components.lock_code_manager.const import (
     CONF_USERS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.slot import Seen
-from custom_components.lock_code_manager.core.worker import RETRY_AFTER
-from custom_components.lock_code_manager.domain.credentials import (
-    WriteResult,
-)
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.credentials import (
+    WriteResult,
+)
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._util import parse_tag
 from custom_components.lock_code_manager.providers.matter import MatterLock
+from custom_components.lock_code_manager.sync.slot import Seen
+from custom_components.lock_code_manager.sync.worker import RETRY_AFTER
 
 # Module path where lock_helpers functions are imported in the provider
 from tests.common import (
@@ -71,7 +71,7 @@ from .conftest import FAKE_MATTER_SLOTS, matter_helpers_patched
 from .fake_node import DlStatus, FakeMatterLock, ImStatus
 
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
-WORKER = "custom_components.lock_code_manager.core.worker"
+WORKER = "custom_components.lock_code_manager.sync.worker"
 
 
 class TestFullSetupLifecycle:

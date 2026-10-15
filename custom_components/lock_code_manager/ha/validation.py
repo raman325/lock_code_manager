@@ -11,8 +11,8 @@ from ..const import (
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
 )
-from .models import LockCodeManagerConfigEntry
-from .queries import get_entry_config
+from ..model.models import LockCodeManagerConfigEntry
+from ..model.queries import get_entry_config
 from .slot_coordinator import SlotEntityCoordinator
 
 

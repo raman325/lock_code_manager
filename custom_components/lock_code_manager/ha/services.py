@@ -17,18 +17,18 @@ from ..const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from ..core.registry import SlotTaken
-from .allocation import SlotAllocationError, async_allocate_for
-from .config import EntryConfig, async_write_entry_config
-from .credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
-from .events import (
+from ..model.config import EntryConfig, async_write_entry_config
+from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
+from ..model.events import (
     CredentialOperation,
     async_fire_credential_used,
 )
-from .lock_runtime import async_write_once
+from ..model.names import identity, name_error, normalize_name
+from ..model.queries import get_entry_config, get_loaded_config_entry
+from ..sync.registry import SlotTaken
+from .allocation import SlotAllocationError, async_allocate_for
 from .locks import get_managed_lock
-from .names import identity, name_error, normalize_name
-from .queries import get_entry_config, get_loaded_config_entry
+from .runtime import async_write_once
 from .slot_coordinator import PinRequiredError, SlotEntityCoordinator
 from .validation import validate_credential
 

@@ -14,7 +14,7 @@ but only for the locks that constrain the numbering at all.
 
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.domain.occupancy import (
+from custom_components.lock_code_manager.model.occupancy import (
     LockOccupancy,
     Occupancy,
 )

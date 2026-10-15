@@ -29,22 +29,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.slot import (
-    Holds,
-    Reading,
-    Repair,
-    Seen,
-    Status,
-)
-from custom_components.lock_code_manager.core.worker import BACKOFF_MAX, OFFLINE_AFTER
-from custom_components.lock_code_manager.domain.exceptions import (
-    LockCodeManagerProviderError,
-    LockDisconnected,
-    LockOperationBlocked,
-    LockOperationFailed,
-    LockOperationUnsupported,
-)
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha.runtime import (
     GIVEN_UP_KEY,
     ISSUES_KEY,
     _label,
@@ -54,12 +39,27 @@ from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_registry,
     signal_lock_changed,
 )
-from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
-from custom_components.lock_code_manager.domain.queries import (
+from custom_components.lock_code_manager.model.exceptions import (
+    LockCodeManagerProviderError,
+    LockDisconnected,
+    LockOperationBlocked,
+    LockOperationFailed,
+    LockOperationUnsupported,
+)
+from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
+from custom_components.lock_code_manager.model.queries import (
     get_entry_config,
     subentry_id_for_slot,
 )
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
+from custom_components.lock_code_manager.sync.slot import (
+    Holds,
+    Reading,
+    Repair,
+    Seen,
+    Status,
+)
+from custom_components.lock_code_manager.sync.worker import BACKOFF_MAX, OFFLINE_AFTER
 
 from .common import (
     LOCK_1_ENTITY_ID,

@@ -14,10 +14,10 @@ from .const import (
     BUS_EVENT_CREDENTIAL_USED,
     EVENT_CREDENTIAL_USED,
 )
-from .domain.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
-from .domain.models import LockCodeManagerConfigEntry
-from .domain.queries import get_entry_config, subentry_id_for_slot
 from .entity import BaseLockCodeManagerEntity
+from .model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
+from .model.models import LockCodeManagerConfigEntry
+from .model.queries import get_entry_config, subentry_id_for_slot
 
 
 async def async_setup_entry(

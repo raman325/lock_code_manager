@@ -17,7 +17,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.adapter import ProviderPort, _Coordinator
+from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 from ...common import user_subentries

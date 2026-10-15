@@ -9,19 +9,19 @@ import pytest
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.lock_code_manager.core.adapter import _Coordinator
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.adapter import _Coordinator
+from custom_components.lock_code_manager.model.credentials import (
     CredentialRef,
     CredentialType,
     User,
     WriteResult,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 
 from .conftest import (

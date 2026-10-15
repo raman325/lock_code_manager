@@ -27,7 +27,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_CREDENTIAL,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.model.queries import get_entry_config
 
 from .common import (
     LOCK_1_ENTITY_ID,

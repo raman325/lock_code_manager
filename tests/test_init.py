@@ -84,33 +84,33 @@ from custom_components.lock_code_manager.const import (
     STRATEGY_PATH,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT
-from custom_components.lock_code_manager.domain import lock_runtime
-from custom_components.lock_code_manager.domain.config import (
+from custom_components.lock_code_manager.entity import build_slot_device_info
+from custom_components.lock_code_manager.ha import runtime as lock_runtime
+from custom_components.lock_code_manager.ha.runtime import lock_registry
+from custom_components.lock_code_manager.model.config import (
     EntryConfig,
     build_slot_device_identifier,
     build_slot_unique_id,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockBusy,
     LockDisconnected,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.slot_assignment import (
+from custom_components.lock_code_manager.model.models import SlotCredential
+from custom_components.lock_code_manager.model.queries import get_entry_config
+from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
     identity,
 )
-from custom_components.lock_code_manager.domain.user_migration import migrate_to_users
-from custom_components.lock_code_manager.domain.util import per_lock_issue_id
-from custom_components.lock_code_manager.entity import build_slot_device_info
+from custom_components.lock_code_manager.model.user_migration import migrate_to_users
+from custom_components.lock_code_manager.model.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,
 )
+from custom_components.lock_code_manager.sync.slot import LIMIT
 
 from .common import (
     BASE_CONFIG,

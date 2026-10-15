@@ -29,7 +29,7 @@ from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
+from custom_components.lock_code_manager.ha.runtime import lock_registry
 from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
 from custom_components.lock_code_manager.providers._base import BaseLock
 
@@ -312,7 +312,7 @@ def disable_rate_limiting(request: pytest.FixtureRequest):
             patched_post_init,
         ),
         patch(
-            "custom_components.lock_code_manager.core.worker.RETRY_AFTER", (0.0, 0.0)
+            "custom_components.lock_code_manager.sync.worker.RETRY_AFTER", (0.0, 0.0)
         ),
     ):
         yield

@@ -34,12 +34,12 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     SERVICE_HARD_REFRESH_USERCODES,
 )
-from custom_components.lock_code_manager.domain.locks import get_locks_from_targets
-from custom_components.lock_code_manager.domain.queries import (
+from custom_components.lock_code_manager.ha.locks import get_locks_from_targets
+from custom_components.lock_code_manager.model.queries import (
     get_loaded_config_entry,
     slots_configured_on,
 )
-from custom_components.lock_code_manager.domain.slot_assignment import (
+from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 

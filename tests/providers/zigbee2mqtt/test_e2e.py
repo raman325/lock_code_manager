@@ -41,21 +41,21 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.core.adapter import reading
-from custom_components.lock_code_manager.core.slot import Reading
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.events import CredentialOperation
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha.adapter import reading
+from custom_components.lock_code_manager.ha.runtime import (
     STORE_KEY,
     lock_codes,
     lock_reachable,
     lock_registry,
     locks_that_cannot_report,
 )
-from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.events import CredentialOperation
+from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
+from custom_components.lock_code_manager.sync.slot import Reading
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,

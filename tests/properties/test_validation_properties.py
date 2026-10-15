@@ -43,7 +43,7 @@ from custom_components.lock_code_manager.const import (
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
 )
-from custom_components.lock_code_manager.domain.validation import validate_credential
+from custom_components.lock_code_manager.ha.validation import validate_credential
 
 from ..common import slot_entity_id
 

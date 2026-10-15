@@ -15,7 +15,7 @@ import json
 
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     _project_user_code_result,
     _unwrap_mqtt_value,

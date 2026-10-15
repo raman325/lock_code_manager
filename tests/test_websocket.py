@@ -88,20 +88,20 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.core.worker import (
+from custom_components.lock_code_manager.ha.runtime import (
+    lock_codes,
+    lock_registry,
+)
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
+from custom_components.lock_code_manager.model.queries import get_entry_config
+from custom_components.lock_code_manager.providers import BaseLock
+from custom_components.lock_code_manager.sync.worker import (
     BACKOFF_AFTER,
     LockError,
     LockWorker,
 )
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.domain.lock_runtime import (
-    lock_codes,
-    lock_registry,
-)
-from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
     _build_slot_entities,

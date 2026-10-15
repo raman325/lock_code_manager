@@ -10,10 +10,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .domain.models import LockCodeManagerConfigEntry
-from .domain.queries import subentry_id_for_slot
-from .domain.slot_coordinator import PinRequiredError
 from .entity import BaseLockCodeManagerEntity
+from .ha.slot_coordinator import PinRequiredError
+from .model.models import LockCodeManagerConfigEntry
+from .model.queries import subentry_id_for_slot
 
 _LOGGER = logging.getLogger(__name__)
 

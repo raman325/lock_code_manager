@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from custom_components.lock_code_manager.core.registry import LockRegistry, SlotTaken
-from custom_components.lock_code_manager.core.slot import Holds, Repair, Seen, Status
-from custom_components.lock_code_manager.core.worker import LockWorker
+from custom_components.lock_code_manager.sync.registry import LockRegistry, SlotTaken
+from custom_components.lock_code_manager.sync.slot import Holds, Repair, Seen, Status
+from custom_components.lock_code_manager.sync.worker import LockWorker
 
 from .test_worker import SALT, SETTLE_LIMIT, Clock, FakeLock
 

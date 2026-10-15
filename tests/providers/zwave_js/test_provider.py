@@ -25,8 +25,8 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.adapter import ProviderPort, _Coordinator
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
+from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
@@ -37,7 +37,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockCodeManagerProviderError,
@@ -45,7 +45,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationFailed,
     LockOperationUnsupported,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.providers.helpers import ProviderNativeTransportContractTests
 
