@@ -19,6 +19,8 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from ..const import MAX_SEARCHED_SLOT
 from ..core.slot import Seen
 from ..providers import resolve_provider_class_for_entity
+from ..providers._base import BaseLock
+from ..providers._util import parse_tag
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
 from .lock_runtime import lock_registry
@@ -228,12 +230,6 @@ async def async_read_occupancy(
             lock_occupancies.append(
                 LockOccupancy(
                     lock_entity_id=lock_entity_id,
-                    # With no provider there is no way to ask whether this
-                    # lock addresses credentials by slot number, so assume
-                    # it does -- the assumption that refuses rather than
-                    # guesses. An unmanaged lock constrains nothing either
-                    # way.
-                    credential_index_follows_slot=skipped.managed,
                     managed=skipped.managed,
                     occupied=None,
                 )
@@ -247,36 +243,28 @@ async def async_read_occupancy(
             )
             lock_occupancies.append(
                 LockOccupancy(
-                    lock_entity_id=lock_entity_id,
-                    credential_index_follows_slot=True,
-                    managed=True,
-                    occupied=None,
+                    lock_entity_id=lock_entity_id, managed=True, occupied=None
                 )
             )
             continue
 
+        occupied: frozenset[int] | None = None
         async with borrowed_lock_instance(lock_instance):
-            follows_slot = lock_instance.credential_index_follows_slot
-            occupied: frozenset[int] | None = None
-            if follows_slot:
-                # A lock that allocates its own credential index cannot
-                # constrain the numbering, so asking it spends a round trip
-                # -- one per index on some providers -- on an answer that
-                # nothing reads.
-                try:
-                    occupied = await _async_occupied(hass, lock_entity_id, indices)
-                except Exception:
-                    _LOGGER.warning(
-                        "Failed to read the contents of %s; treating them as unknown",
-                        lock_entity_id,
-                        exc_info=True,
-                    )
+            try:
+                occupied = await (
+                    _async_occupied(hass, lock_entity_id, indices)
+                    if lock_instance.credential_index_follows_slot
+                    else _async_adoptable(hass, lock_instance, indices)
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to read the contents of %s; treating them as unknown",
+                    lock_entity_id,
+                    exc_info=True,
+                )
         lock_occupancies.append(
             LockOccupancy(
-                lock_entity_id=lock_entity_id,
-                credential_index_follows_slot=follows_slot,
-                managed=True,
-                occupied=occupied,
+                lock_entity_id=lock_entity_id, managed=True, occupied=occupied
             )
         )
     if progress is not None:
@@ -347,7 +335,7 @@ async def async_max_slot(
     so a refusal can name the right one: a number past any single lock's
     range is a number that lock cannot hold, and every lock in an entry
     gets the same numbers. Locks that allocate their own credential index
-    are not asked, because their contents never constrain the numbering.
+    are not asked, because a slot number is not an index into them.
 
     A lock of ``None`` means nothing here could say and the limit is this
     integration's own -- which a message must not describe as a capacity
@@ -538,4 +526,32 @@ async def _async_occupied(
         slot
         for slot, reading in readings.items()
         if reading is not Seen.EMPTY and reading is not Seen.SILENT
+    )
+
+
+async def _async_adoptable(
+    hass: HomeAssistant, lock: BaseLock, indices: Collection[int]
+) -> frozenset[int]:
+    """
+    Return which of ``indices`` a lock that picks its own credential index would adopt.
+
+    Such a lock (Matter) is written by finding the user tagged for the slot,
+    and failing that, adopting an UNTAGGED user holding a PIN at credential
+    index == slot -- how Lock Code Manager 2.0 left its users. That user may
+    just as well be one somebody made in the vendor's app, and adopting it
+    renames them and writes over their PIN, so their index is occupied. A
+    tagged user is Lock Code Manager's own, held by whichever entry has the
+    slot (``claimed_by_other_entries`` says which), and is not in the way.
+    """
+    if (worker := lock_registry(hass).worker(lock.lock.entity_id)) is None:
+        users = await lock.async_get_users()
+    else:
+        # In the lock's turn: an entry holding it may have a write in flight.
+        users = await worker.turn(lock.async_get_users)
+    return frozenset(
+        credential.slot
+        for user in users
+        if parse_tag(user.name or "")[0] is None
+        for credential in user.pin_credentials
+        if credential.slot in indices
     )

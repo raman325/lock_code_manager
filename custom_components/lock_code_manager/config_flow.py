@@ -215,7 +215,7 @@ async def _async_check_existing_codes(
     if not occupancy.is_known:
         return {"base": "occupancy_unknown"}, {"locks": ", ".join(occupancy.unreadable)}
     for lock in occupancy.locks:
-        if lock.constrains_allocation and lock.occupied:
+        if lock.managed and lock.occupied:
             return {"base": "existing_codes"}, {
                 "lock": lock.lock_entity_id,
                 "slots": ", ".join(str(slot) for slot in sorted(lock.occupied)),
