@@ -41,6 +41,9 @@ class SlotCode(StrEnum):
 
     CHECKING: a managed slot whose last reading was set aside to read it
     again, on a lock that has answered. Nothing is known of it until the read.
+
+    NOT_REPORTED: the lock answered that it cannot tell what the slot holds
+    (Zigbee user status Not Supported, #1581).
     """
 
     EMPTY = "empty"
@@ -48,6 +51,7 @@ class SlotCode(StrEnum):
     UNANSWERED = "unanswered"
     DISABLED = "disabled_on_lock"
     CHECKING = "checking"
+    NOT_REPORTED = "not_reported"
 
 
 @dataclass(frozen=True, slots=True)

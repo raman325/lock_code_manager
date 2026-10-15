@@ -17,6 +17,7 @@ import {
     LockCoordinatorSlotData,
     SLOT_CODE_CHECKING,
     SLOT_CODE_DISABLED,
+    SLOT_CODE_NOT_REPORTED,
     SLOT_CODE_UNANSWERED,
     SLOT_CODE_UNREADABLE,
     isSlotEmpty,
@@ -707,11 +708,15 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     /**
-     * Whether the lock gave no PIN back: it holds a code it won't read back, or
-     * it didn't answer at all.
+     * Whether the lock gave no PIN back: it holds a code it won't read back, it
+     * can't report the slot, or it didn't answer at all.
      */
     private _isWithheld(slot: LockCoordinatorSlotData): boolean {
-        return slot.code === SLOT_CODE_UNREADABLE || slot.code === SLOT_CODE_UNANSWERED;
+        return (
+            slot.code === SLOT_CODE_UNREADABLE ||
+            slot.code === SLOT_CODE_UNANSWERED ||
+            slot.code === SLOT_CODE_NOT_REPORTED
+        );
     }
 
     /**
@@ -752,6 +757,11 @@ class LockCodesCard extends LockCodesCardBase {
             return this._isProxyCode(slot)
                 ? "Configured in Lock Code Manager — this lock didn't answer"
                 : "This lock didn't answer";
+        }
+        if (slot.code === SLOT_CODE_NOT_REPORTED) {
+            return this._isProxyCode(slot)
+                ? "Configured in Lock Code Manager — this lock can't report its codes"
+                : "This lock can't report its codes";
         }
         if (slot.code !== SLOT_CODE_UNREADABLE) return undefined;
         return this._isProxyCode(slot)
@@ -818,6 +828,7 @@ class LockCodesCard extends LockCodesCardBase {
             // dots sized to the known length when we have one, else a short fixed
             // placeholder — never the misleading fixed-length "• • •".
             if (!this._isProxyCode(slot)) {
+                if (slot.code === SLOT_CODE_NOT_REPORTED) return 'Not reported';
                 const length = slot.configured_code_length ?? slot.code_length ?? 0;
                 return '◦'.repeat(length > 0 ? length : 3);
             }

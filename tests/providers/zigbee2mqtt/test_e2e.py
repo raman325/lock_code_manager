@@ -43,10 +43,11 @@ from custom_components.lock_code_manager.core.adapter import reading
 from custom_components.lock_code_manager.core.slot import Reading
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_codes,
     lock_reachable,
     lock_registry,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -802,6 +803,9 @@ class TestWriteOnlyLock:
 
         await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
         _assert_trouble_free(hass, lock_id)
+        # The card says which: no answer, or one that it cannot tell.
+        label = SlotCode.NOT_REPORTED if bridge.cannot_tell else SlotCode.UNANSWERED
+        assert lock_codes(hass, lock_id) == {1: label, 2: label}
         writes = [len(bridge.sets_for(slot)) for slot in pins]
         assert writes == [1, 1]
 

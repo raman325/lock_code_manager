@@ -124,6 +124,8 @@ class ProviderPort:
         # Every lock read this run -> whether a read described a slot of it.
         # Kept past this port: a one-off read builds a port per read.
         self.reports: dict[str, bool] = {} if reports is None else reports
+        # Slots the lock last answered it cannot tell what they hold.
+        self.not_reported: set[int] = set()
         self._poll: asyncio.Task[None] | None = None
         self._poll_unsubs: list[Callable[[], None]] = []
         # Unloaded: nothing may start a poll or arm its timer again.
@@ -199,6 +201,8 @@ class ProviderPort:
         )
         if self.reports[lock]:
             silent -= cannot_tell
+        self.not_reported.difference_update(slots)
+        self.not_reported |= cannot_tell
         # The lock answered, but of a slot written too lately to show it yet:
         # left out (silent), so the write is trusted until a later read.
         silent |= self._lagging(slots)
@@ -431,6 +435,7 @@ class ProviderPort:
         if self.worker is None or slot == self._writing:
             # A provider echoing the write it is making is not the lock.
             return
+        self.not_reported.discard(slot)
         if slot not in self.worker.slots:
             self.others[slot] = reading(credential)
             return
