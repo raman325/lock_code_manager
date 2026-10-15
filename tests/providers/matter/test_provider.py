@@ -2591,9 +2591,8 @@ class TestGetCapabilities:
         assert isinstance(caps, LockCapabilities)
         assert caps.supports_user_management is True
         assert caps.max_users == 20
-        # Matter DoorLock spec cap (32 bytes UTF-8); hardcoded because
-        # ``matter.lock_helpers`` does not yet surface the attribute.
-        # 9, not the Matter maximum of 10: the Aqara U400 fails GetUser for a name of exactly 10
+        # 9, not the Matter maximum of 10: the Aqara U400 fails GetUser for a name of
+        # exactly 10
         assert caps.max_user_name_length == 9
         pin_cap = caps.capability_for(CredentialType.PIN)
         assert pin_cap is not None
@@ -2601,6 +2600,34 @@ class TestGetCapabilities:
         assert pin_cap.min_length == 4
         assert pin_cap.max_length == 8
         assert pin_cap.supports_learn is False
+
+    async def test_a_user_name_is_cut_to_nine_characters_never_ten(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """
+        A tagged user name is cut to nine characters, never the ten the SDK allows.
+
+        The Aqara U400 accepts a ten-character name and then fails every GetUser
+        walk while that user exists. ``lcm:6:`` is six characters, so a label of
+        four or more used to land on exactly ten.
+        """
+        mock_get_lock_info = AsyncMock(
+            return_value={
+                "supports_user_management": True,
+                "supported_credential_types": ["pin"],
+                "max_users": 20,
+                "max_pin_users": 15,
+                "min_pin_length": 4,
+                "max_pin_length": 8,
+            }
+        )
+        with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
+            # Slot 6 with a 4-character label
+            assert await matter_lock._build_tagged_user_name(6, "Abcd") == "lcm:6:Abc"
+            # A longer label is cut the same way
+            assert await matter_lock._build_tagged_user_name(6, "Abcde") == "lcm:6:Abc"
+            # A short label is kept whole
+            assert await matter_lock._build_tagged_user_name(6, "Ab") == "lcm:6:Ab"
 
     async def test_get_capabilities_none_fields_default_to_zero(
         self, hass: HomeAssistant, matter_lock: MatterLock
