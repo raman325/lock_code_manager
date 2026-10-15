@@ -63,23 +63,23 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT, Holds, Repair, Status
-from custom_components.lock_code_manager.core.worker import (
+from custom_components.lock_code_manager.ha.locks import async_create_lock_instance
+from custom_components.lock_code_manager.ha.runtime import (
+    lock_registry,
+)
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.exceptions import (
+    DuplicateCodeError,
+    LockDisconnected,
+)
+from custom_components.lock_code_manager.model.models import SlotCredential
+from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
+from custom_components.lock_code_manager.sync.slot import LIMIT, Holds, Repair, Status
+from custom_components.lock_code_manager.sync.worker import (
     BACKOFF_AFTER,
     BACKOFF_MIN,
     LockWorker,
 )
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.exceptions import (
-    DuplicateCodeError,
-    LockDisconnected,
-)
-from custom_components.lock_code_manager.domain.lock_runtime import (
-    lock_registry,
-)
-from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 
 from .common import (
     BASE_CONFIG,
@@ -1016,7 +1016,7 @@ async def test_slots_stored_under_string_keys_and_one_added_later_reach_the_lock
     key, never found it, and sat showing out of sync without ever writing.
     A user added once the entry is running goes the same way. What guards
     this now is the conversion of stored text keys to numbers in
-    ``domain/slot_assignment.py``; the ``int()`` casts in the sync manager
+    ``model/slot_assignment.py``; the ``int()`` casts in the sync manager
     and slot coordinator sit behind it and never see text.
     """
     entry = MockConfigEntry(

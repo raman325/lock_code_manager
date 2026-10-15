@@ -2,7 +2,7 @@
 
 import pytest
 
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialAddress,
     CredentialRef,
@@ -19,7 +19,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     pin_address,
     user_from_slot,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 
 
 class TestCredentialType:

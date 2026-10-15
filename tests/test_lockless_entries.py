@@ -20,7 +20,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.domain.validation import validate_credential
+from custom_components.lock_code_manager.ha.validation import validate_credential
 
 KEYPAD_STATUS_ENTITY = "binary_sensor.front_keypad_status"
 READER_ENTITY = "event.front_keypad_scanned"

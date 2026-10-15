@@ -13,7 +13,7 @@ from homeassistant.util.yaml import save_yaml
 from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain import references
+from custom_components.lock_code_manager.ha import references
 
 from .common import LOCK_1_ENTITY_ID
 

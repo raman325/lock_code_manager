@@ -27,7 +27,7 @@ from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
 )

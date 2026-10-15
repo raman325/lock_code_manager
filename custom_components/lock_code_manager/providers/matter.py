@@ -42,7 +42,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
@@ -52,7 +52,7 @@ from ..domain.credentials import (
     User,
     WriteResult,
 )
-from ..domain.exceptions import (
+from ..model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockDisconnected,
@@ -60,7 +60,7 @@ from ..domain.exceptions import (
     LockOperationError,
     LockOperationFailed,
 )
-from ..domain.models import SlotCredential
+from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import make_compact_tagged_name, parse_slot_num, parse_tag
 from .const import LOGGER

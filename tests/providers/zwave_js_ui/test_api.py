@@ -17,7 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )

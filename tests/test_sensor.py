@@ -15,8 +15,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
-from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
+from custom_components.lock_code_manager.ha.locks import async_create_lock_instance
+from custom_components.lock_code_manager.ha.runtime import lock_registry
 
 from .common import (
     LOCK_1_ENTITY_ID,

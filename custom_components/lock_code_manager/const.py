@@ -6,10 +6,10 @@ from homeassistant.const import Platform
 from homeassistant.util.hass_dict import HassKey
 
 if TYPE_CHECKING:
-    from .core.adapter import ProviderPort
-    from .core.registry import LockRegistry
-    from .core.worker import LockWorker
-    from .domain.lock_store import LockStore
+    from .ha.adapter import ProviderPort
+    from .ha.lock_store import LockStore
+    from .sync.registry import LockRegistry
+    from .sync.worker import LockWorker
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
@@ -70,7 +70,7 @@ class LockCodeManagerData(TypedDict, total=False):
     """
     What the integration keeps in ``hass.data[DOMAIN]``.
 
-    The core's keys are named in ``domain.lock_runtime``.
+    The core's keys are named in ``ha.runtime``.
     """
 
     resources: bool

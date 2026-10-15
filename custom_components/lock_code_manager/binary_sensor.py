@@ -10,16 +10,16 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS, credential_in_sync_key
-from .core.slot import Status
-from .domain.credentials import CredentialAddress, managed_addresses
-from .domain.models import LockCodeManagerConfigEntry
-from .domain.queries import subentry_id_for_slot
 from .entity import (
     BaseLockCodeManagerCodeSlotPerLockEntity,
     BaseLockCodeManagerEntity,
     LockWorkerView,
 )
+from .model.credentials import CredentialAddress, managed_addresses
+from .model.models import LockCodeManagerConfigEntry
+from .model.queries import subentry_id_for_slot
 from .providers import BaseLock
+from .sync.slot import Status
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -29,8 +29,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
 
-from ..domain.credentials import CredentialAddress
-from ..domain.exceptions import (
+from ..model.credentials import CredentialAddress
+from ..model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockBusy,
@@ -41,9 +41,9 @@ from ..domain.exceptions import (
     LockOperationError,
     LockOperationUnsupported,
 )
-from ..domain.models import SlotCredential
-from .slot import Holds, Reading, Seen
-from .worker import ErrorKind, LockError, LockWorker
+from ..model.models import SlotCredential
+from ..sync.slot import Holds, Reading, Seen
+from ..sync.worker import ErrorKind, LockError, LockWorker
 
 if TYPE_CHECKING:
     from ..providers._base import BaseLock

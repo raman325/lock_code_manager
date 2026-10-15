@@ -10,10 +10,10 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import issue_registry as ir
 
 from .const import DOMAIN
-from .core.registry import SlotTaken
-from .domain.lock_runtime import async_resume_slot, async_write_once
-from .domain.locks import get_managed_lock
-from .domain.unmanaged import UNMANAGED_ISSUE_KEY, unmanaged_issue_id
+from .ha.locks import get_managed_lock
+from .ha.runtime import async_resume_slot, async_write_once
+from .ha.unmanaged import UNMANAGED_ISSUE_KEY, unmanaged_issue_id
+from .sync.registry import SlotTaken
 
 _LOGGER = logging.getLogger(__name__)
 

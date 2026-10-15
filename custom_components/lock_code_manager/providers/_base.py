@@ -28,7 +28,7 @@ from ..const import (
     DOMAIN,
     LockCodeManagerData,
 )
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialAddress,
     CredentialRef,
@@ -41,8 +41,8 @@ from ..domain.credentials import (
     pin_address,
     user_from_slot,
 )
-from ..domain.events import CredentialOperation, async_fire_credential_used
-from ..domain.exceptions import (
+from ..model.events import CredentialOperation, async_fire_credential_used
+from ..model.exceptions import (
     CodeRejectedError,
     LockCodeManagerError,
     LockCodeManagerProviderError,
@@ -52,13 +52,13 @@ from ..domain.exceptions import (
     LockOperationUnsupported,
     ProviderNotImplementedError,
 )
-from ..domain.models import SlotCredential
-from ..domain.queries import (
+from ..model.models import SlotCredential
+from ..model.queries import (
     configured_owner,
     get_entry_config,
     slots_configured_on,
 )
-from ..domain.util import (
+from ..model.util import (
     lock_display_name,
     mask_pin,
     per_lock_issue_id,

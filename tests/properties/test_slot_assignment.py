@@ -19,12 +19,12 @@ from hypothesis import assume, given, strategies as st
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
-from custom_components.lock_code_manager.domain.config import EntryConfig
-from custom_components.lock_code_manager.domain.names import (
+from custom_components.lock_code_manager.model.config import EntryConfig
+from custom_components.lock_code_manager.model.names import (
     identity,
     normalize_slot_names,
 )
-from custom_components.lock_code_manager.domain.slot_assignment import (
+from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
     SlotAssignment,
     users_from_slots,

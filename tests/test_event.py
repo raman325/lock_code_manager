@@ -32,13 +32,13 @@ from custom_components.lock_code_manager.const import (
     EVENT_CREDENTIAL_USED,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
 )
-from custom_components.lock_code_manager.domain.events import (
+from custom_components.lock_code_manager.model.events import (
     BUS_EVENT_CREDENTIAL_USED,
     CredentialOperation,
 )

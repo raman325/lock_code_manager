@@ -79,32 +79,32 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.core.worker import LockWorker
-from custom_components.lock_code_manager.domain.allocation import build_lock_instance
-from custom_components.lock_code_manager.domain.config import (
+from custom_components.lock_code_manager.ha.allocation import build_lock_instance
+from custom_components.lock_code_manager.ha.runtime import (
+    CORE_KEYS,
+    REGISTRY_KEY,
+    async_setup_core,
+)
+from custom_components.lock_code_manager.model.config import (
     EntryConfig,
     async_write_entry_config,
     build_slot_unique_id,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
     WriteResult,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.domain.lock_runtime import (
-    CORE_KEYS,
-    REGISTRY_KEY,
-    async_setup_core,
-)
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.slot_assignment import identity
+from custom_components.lock_code_manager.model.models import SlotCredential
+from custom_components.lock_code_manager.model.slot_assignment import identity
 from custom_components.lock_code_manager.providers import BaseLock
+from custom_components.lock_code_manager.sync.worker import LockWorker
 
 LOCK_1_ENTITY_ID = "lock.test_1"
 LOCK_2_ENTITY_ID = "lock.test_2"
@@ -677,7 +677,7 @@ def reading_for():
         return build_lock_instance(hass, dev_reg, ent_reg, config_entry, lock_entity_id)
 
     with patch(
-        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        "custom_components.lock_code_manager.ha.allocation.build_lock_instance",
         _spy,
     ):
         yield read_for

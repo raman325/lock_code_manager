@@ -22,14 +22,13 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     CredentialRef,
     CredentialType,
     WriteResult,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
     parse_tag,
@@ -38,6 +37,7 @@ from custom_components.lock_code_manager.providers.akuvox import (
     AKUVOX_DOMAIN,
     AkuvoxLock,
 )
+from custom_components.lock_code_manager.sync.slot import LIMIT
 from tests.common import (
     async_advance_sync_ticks,
     async_switch_slot,

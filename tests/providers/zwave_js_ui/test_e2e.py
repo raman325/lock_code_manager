@@ -42,14 +42,14 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT
-from custom_components.lock_code_manager.domain.events import CredentialOperation
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha.runtime import (
     lock_codes,
     lock_registry,
 )
-from custom_components.lock_code_manager.domain.models import SlotCode
+from custom_components.lock_code_manager.model.events import CredentialOperation
+from custom_components.lock_code_manager.model.models import SlotCode
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
+from custom_components.lock_code_manager.sync.slot import LIMIT
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,

@@ -26,19 +26,19 @@ from typing import Literal, override
 from homeassistant.config_entries import ConfigEntry
 
 from ..const import PENDING_WRITE_TTL
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
     User,
     WriteResult,
     user_from_slot,
 )
-from ..domain.exceptions import (
+from ..model.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationError,
 )
-from ..domain.models import SlotCredential
+from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import (
     is_masked_code,

@@ -47,7 +47,7 @@ from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import Event, callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
@@ -57,7 +57,7 @@ from ..domain.credentials import (
     User,
     WriteResult,
 )
-from ..domain.exceptions import (
+from ..model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockCodeManagerProviderError,
@@ -65,7 +65,7 @@ from ..domain.exceptions import (
     LockOperationFailed,
     LockOperationUnsupported,
 )
-from ..domain.models import SlotCredential
+from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import is_masked_code, parse_tag
 

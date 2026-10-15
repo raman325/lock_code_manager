@@ -49,35 +49,35 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.adapter import (
+from custom_components.lock_code_manager.ha.adapter import (
     ProviderPort,
     _Coordinator,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT
-from custom_components.lock_code_manager.core.worker import BACKOFF_MIN
-from custom_components.lock_code_manager.domain.allocation import async_read_occupancy
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.allocation import async_read_occupancy
+from custom_components.lock_code_manager.ha.runtime import lock_registry
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
     User,
 )
-from custom_components.lock_code_manager.domain.events import CredentialOperation
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.events import CredentialOperation
+from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.util import per_lock_issue_id
+from custom_components.lock_code_manager.model.models import SlotCredential
+from custom_components.lock_code_manager.model.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
 )
+from custom_components.lock_code_manager.sync.slot import LIMIT
+from custom_components.lock_code_manager.sync.worker import BACKOFF_MIN
 from tests.common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,

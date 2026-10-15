@@ -38,16 +38,16 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.slot_coordinator import (
+    PinRequiredError,
+    SlotEntityCoordinator,
+)
+from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
 )
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.slot_coordinator import (
-    PinRequiredError,
-    SlotEntityCoordinator,
-)
+from custom_components.lock_code_manager.model.queries import get_entry_config
 
 from .common import (
     LOCK_1_ENTITY_ID,
@@ -787,7 +787,7 @@ async def test_active_toggle_enable_survives_repair_issue_delete_failure(
 
     boom = RuntimeError("issue registry boom")
     with patch(
-        "custom_components.lock_code_manager.domain.slot_coordinator.async_delete_issue",
+        "custom_components.lock_code_manager.ha.slot_coordinator.async_delete_issue",
         side_effect=boom,
     ):
         with caplog.at_level(logging.ERROR):
@@ -1082,7 +1082,7 @@ async def test_pin_required_issue_creation_failure_is_swallowed(
 
     boom = RuntimeError("issue registry boom")
     with patch(
-        "custom_components.lock_code_manager.domain.slot_coordinator.async_create_issue",
+        "custom_components.lock_code_manager.ha.slot_coordinator.async_create_issue",
         side_effect=boom,
     ):
         with caplog.at_level(logging.ERROR):

@@ -27,20 +27,20 @@ from homeassistant.core import callback
 from homeassistant.util import dt as dt_util
 
 from ..const import MAX_SEARCHED_SLOT
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
     User,
     WriteResult,
     user_from_slot,
 )
-from ..domain.exceptions import (
+from ..model.exceptions import (
     CodeRejectedError,
     LockCodeManagerError,
     LockDisconnected,
     LockOperationFailed,
 )
-from ..domain.models import SlotCredential
+from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import is_masked_code
 

@@ -44,14 +44,14 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.adapter import ProviderPort, _Coordinator
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
+from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialRef,
     CredentialType,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 from tests.common import async_configure_flow, user_subentries
 

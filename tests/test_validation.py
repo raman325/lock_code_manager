@@ -19,7 +19,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     REASON_USER_DISABLED,
 )
-from custom_components.lock_code_manager.domain.validation import (
+from custom_components.lock_code_manager.ha.validation import (
     ValidationResult,
     validate_credential,
 )

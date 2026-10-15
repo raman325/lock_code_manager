@@ -10,19 +10,19 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
     WriteResult,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.akuvox import (
     AKUVOX_DOMAIN,
     AkuvoxLock,

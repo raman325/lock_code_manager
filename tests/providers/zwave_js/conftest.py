@@ -29,7 +29,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.common import LIFELONG_TASKS
 from tests.providers.zwave_js.fake_node import FakeZWaveLock

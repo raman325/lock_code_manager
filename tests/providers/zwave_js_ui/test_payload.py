@@ -2,8 +2,8 @@
 
 import pytest
 
-from custom_components.lock_code_manager.domain.exceptions import LockOperationFailed
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.exceptions import LockOperationFailed
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     _project_user_code_result,
     _raise_on_supervision_fail,

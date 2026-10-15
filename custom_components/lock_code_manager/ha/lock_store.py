@@ -25,7 +25,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from ..core.worker import LockWorker
+from ..sync.worker import LockWorker
 
 STORE_KEY = f"{DOMAIN}.core"
 STORE_VERSION = 1

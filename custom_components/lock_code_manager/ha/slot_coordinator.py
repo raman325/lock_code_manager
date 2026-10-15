@@ -40,14 +40,14 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
-from .config import EntryConfig, async_write_entry_config
-from .credentials import CredentialType
-from .lock_runtime import async_want
-from .names import name_error, normalize_name
-from .queries import get_entry_config
+from ..model.config import EntryConfig, async_write_entry_config
+from ..model.credentials import CredentialType
+from ..model.names import name_error, normalize_name
+from ..model.queries import get_entry_config
+from .runtime import async_want
 
 if TYPE_CHECKING:
-    from .models import LockCodeManagerConfigEntry
+    from ..model.models import LockCodeManagerConfigEntry
 
 
 _LOGGER = logging.getLogger(__name__)

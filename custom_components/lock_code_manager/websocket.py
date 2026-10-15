@@ -98,21 +98,21 @@ from .const import (
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
-from .domain.config import parse_slot_unique_id
-from .domain.lock_runtime import lock_codes, lock_reachable, signal_lock_changed
-from .domain.locks import get_managed_locks
-from .domain.models import SlotCode
-from .domain.queries import (
-    entries_configuring,
-    find_config_entry_by_title,
-    get_entry_config,
-    slots_configured_on,
-)
-from .domain.services import (
+from .ha.locks import get_managed_locks
+from .ha.runtime import lock_codes, lock_reachable, signal_lock_changed
+from .ha.services import (
     async_clear_slot_condition,
     async_clear_usercode,
     async_set_slot_condition,
     async_set_usercode,
+)
+from .model.config import parse_slot_unique_id
+from .model.models import SlotCode
+from .model.queries import (
+    entries_configuring,
+    find_config_entry_by_title,
+    get_entry_config,
+    slots_configured_on,
 )
 from .providers import BaseLock
 

@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.lock_code_manager.domain import pin_generator
-from custom_components.lock_code_manager.domain.pin_generator import (
+from custom_components.lock_code_manager.model import pin_generator
+from custom_components.lock_code_manager.model.pin_generator import (
     DEFAULT_PIN_LENGTH,
     generate_pin,
     is_unsafe_pin,

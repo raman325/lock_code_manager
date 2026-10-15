@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
-from custom_components.lock_code_manager.domain.util import (
+from custom_components.lock_code_manager.model.util import (
     build_pin_deobfuscation_map,
     deobfuscate_pins,
     lock_display_name,

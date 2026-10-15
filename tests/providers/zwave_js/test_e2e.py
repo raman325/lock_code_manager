@@ -67,23 +67,23 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
-from custom_components.lock_code_manager.core.slot import Holds
-from custom_components.lock_code_manager.core.worker import LockWorker
-from custom_components.lock_code_manager.domain.allocation import async_read_occupancy
-from custom_components.lock_code_manager.domain.credentials import (
-    WriteResult,
-)
-from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha.allocation import async_read_occupancy
+from custom_components.lock_code_manager.ha.runtime import (
     lock_codes,
     lock_registry,
     locks_that_cannot_report,
 )
-from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
-from custom_components.lock_code_manager.domain.queries import subentry_id_for_slot
-from custom_components.lock_code_manager.domain.util import per_lock_issue_id
+from custom_components.lock_code_manager.model.credentials import (
+    WriteResult,
+)
+from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
+from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
+from custom_components.lock_code_manager.model.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from custom_components.lock_code_manager.sync.slot import Holds
+from custom_components.lock_code_manager.sync.worker import LockWorker
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,

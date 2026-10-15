@@ -97,11 +97,11 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT as FIGHT_LIMIT
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.exceptions import (
     ProviderNotImplementedError,
 )
+from custom_components.lock_code_manager.sync.slot import LIMIT as FIGHT_LIMIT
 
 from ..common import (
     CLOCK_STEP,

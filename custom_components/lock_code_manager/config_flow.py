@@ -40,22 +40,22 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
     SUBENTRY_TYPE_USER,
 )
-from .domain.allocation import (
+from .ha.allocation import (
     SlotAllocationError,
     async_allocate_for,
     async_check_slot_capacity,
     async_read_occupancy,
 )
-from .domain.config import EntryConfig, async_write_entry_config
-from .domain.lock_runtime import locks_that_cannot_report
-from .domain.names import (
+from .ha.runtime import locks_that_cannot_report
+from .model.config import EntryConfig, async_write_entry_config
+from .model.names import (
     identity,
     name_error,
     normalize_name,
     validate_user_names,
 )
-from .domain.queries import entries_configuring, get_entry_config
-from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
+from .model.queries import entries_configuring, get_entry_config
+from .model.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
 _LOGGER = logging.getLogger(__name__)
@@ -379,7 +379,7 @@ async def _allocate_for(
     """
     Find numbers for ``num_users``, or say why it could not.
 
-    Allocation itself lives in ``domain.allocation``, which the services call
+    Allocation itself lives in ``ha.allocation``, which the services call
     too; this only turns its refusals into the form errors a flow renders.
 
     ``config_entry`` is the entry being allocated for, whose own numbers do

@@ -20,14 +20,14 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha.runtime import (
     async_give_up,
     async_write_once,
     lock_registry,
 )
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.unmanaged import unmanaged_issue_id
+from custom_components.lock_code_manager.ha.unmanaged import unmanaged_issue_id
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
+from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
