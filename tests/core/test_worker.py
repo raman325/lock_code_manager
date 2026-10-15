@@ -2182,6 +2182,49 @@ async def test_a_push_during_a_retargeted_write_does_not_hide_the_pin(
     assert not (lock.codes == {1: "1234"} and rig.status(1)[0] is Status.IN_SYNC)
 
 
+@pytest.mark.parametrize(
+    ("pushed", "reads_first"),
+    [
+        # The old target's write landed and the lock says so: the slot is
+        # written either way, so it shows out of sync (pending), not unknown.
+        (Holds("5678"), False),
+        # It agrees with the new target, but may be older than the old
+        # write: read first.
+        (Holds("9999"), True),
+    ],
+)
+async def test_a_push_during_a_retargeted_write_is_kept_if_it_disagrees(
+    rig_factory, pushed, reads_first
+) -> None:
+    """A report on an old target's write: only one agreeing with the new is dropped."""
+    lock = FakeLock({1: "1234"})
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    reads: list[tuple[int, ...]] = []
+    original = lock.read
+
+    async def _note(slots):
+        reads.append(tuple(slots))
+        return await original(slots)
+
+    lock.read = _note  # type: ignore[method-assign]
+    statuses: list[Status] = []
+    rig.worker.on_change = lambda: statuses.append(rig.status(1)[0])
+
+    def _meanwhile() -> None:
+        lock.during_write.clear()
+        rig.worker.push(1, pushed)
+        rig.worker.want(1, "9999")
+
+    lock.during_write.append(_meanwhile)
+    rig.worker.want(1, "5678")
+    await rig.settle()
+
+    assert lock.writes[-2:] == [(1, "5678"), (1, "9999")]
+    assert (Status.UNKNOWN in statuses) is reads_first
+    assert reads == ([(1,), (1,)] if reads_first else [(1,)])
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
 async def test_an_owed_try_paid_by_an_agreeing_read_does_not_hold(rig_factory) -> None:
     """A read that pays an owed try and shows the slot in sync charges nothing."""
     lock = FakeLock({1: "0000"})
