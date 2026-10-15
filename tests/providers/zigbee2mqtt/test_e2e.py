@@ -791,6 +791,9 @@ class TestWriteOnlyLock:
                 "entry creation",
             )
         assert result["type"] == "create_entry"
+        # Told on the way out that a keypad code in those slots is replaced.
+        assert result["description"] == "cannot_report"
+        assert result["description_placeholders"] == {"lock": lock_id, "slots": "1, 2"}
         entry = hass.config_entries.async_get_entry(result["result"].entry_id)
         assert {
             subentry.title: subentry.data[CONF_SLOT]
@@ -888,6 +891,16 @@ class TestWriteOnlyLock:
             freezer,
             async_configure_options(hass, flow["flow_id"], {CONF_LOCKS: [lock_id]}),
             "adding the lock",
+        )
+        # Told first that a keypad code in the entry's slots is replaced.
+        assert result["step_id"] == "cannot_report", result.get("errors")
+        assert result["description_placeholders"] == {"lock": lock_id, "slots": "1, 2"}
+        assert entry.options == {}
+        result = await _on_the_clock(
+            hass,
+            freezer,
+            hass.config_entries.options.async_configure(flow["flow_id"], {}),
+            "saving the lock",
         )
 
         assert result["type"] == "create_entry", result.get("errors")
@@ -1015,6 +1028,8 @@ class TestLockThatReportsOnlyFreeSlots:
                 "entry creation",
             )
         assert result["type"] == "create_entry"
+        # It can report: nothing to warn of.
+        assert result["description"] is None
         entry = hass.config_entries.async_get_entry(result["result"].entry_id)
         assert {
             subentry.title: subentry.data[CONF_SLOT]
