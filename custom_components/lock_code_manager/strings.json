@@ -6,6 +6,7 @@
       "unknown": "An unexpected error occurred during setup."
     },
     "error": {
+      "existing_codes": "Lock {lock} already has codes in slots this configuration uses: {slots}. Adding the lock would overwrite them. Clear those slots on the lock, then add it again.",
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
       "missing_pin_if_enabled": "A PIN must be set for any user who is enabled.",
@@ -61,6 +62,10 @@
         },
         "description": "The config is expected to be a dictionary where the key is the user's name. Lock Code Manager picks the code slot each user occupies. For more information, check the docs.",
         "title": "Configure users"
+      },
+      "cannot_report": {
+        "title": "This lock can't report its codes",
+        "description": "{lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
       },
       "reauth_confirm": {
         "data": {
