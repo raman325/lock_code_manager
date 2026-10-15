@@ -9,6 +9,7 @@ from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
@@ -55,7 +56,10 @@ from custom_components.lock_code_manager.domain.lock_runtime import (
     signal_lock_changed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
-from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.domain.queries import (
+    get_entry_config,
+    subentry_id_for_slot,
+)
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
 from .common import (
@@ -214,6 +218,54 @@ async def test_an_owner_reloading_keeps_its_slot(
     assert mock_lock(first).codes[2] == "5678"
     assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == first.entry_id
     assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) != second.entry_id
+
+
+async def test_a_disabled_owner_keeps_its_slot(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Disabling is no hand-off: the slot keeps the owner's PIN, and nobody claims it."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+
+    assert await hass.config_entries.async_set_disabled_by(
+        first.entry_id, ConfigEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) is None
+    assert mock_lock(second).codes[2] == "5678"
+
+
+async def test_a_slot_of_a_disabled_entry_deleted_goes_to_the_entry_still_configuring_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Deleted while disabled, so already unloaded: the delete still hands the slot off."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    assert await hass.config_entries.async_set_disabled_by(
+        first.entry_id, ConfigEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_remove(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == second.entry_id
+    assert mock_lock(second).codes[2] == "2222"
+
+
+async def test_a_slot_its_owner_removes_goes_to_the_entry_still_configuring_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The owner deletes the slot (its user): the other entry configuring it takes it over."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+
+    hass.config_entries.async_remove_subentry(first, subentry_id_for_slot(first, 2))
+    await hass.async_block_till_done()
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == second.entry_id
+    assert mock_lock(second).codes[2] == "2222"
 
 
 async def test_a_slot_given_up_then_wanted_again_is_cleared_plainly(
