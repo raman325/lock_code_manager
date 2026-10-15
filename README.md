@@ -74,7 +74,7 @@ then writes that configuration's codes to it, it may write over one. Setup tells
 lock cannot report its codes, and which slots will be used. On these locks, add codes through
 Lock Code Manager only, or keep any others in the highest slots. A lock that reports its free
 slots and answers not supported only for occupied ones has those left alone, once Lock Code
-Manager has seen it report a free slot since Home Assistant started.
+Manager has seen it report a free slot; it remembers that across restarts.
 
 ³ **Z-Wave JS UI (MQTT)** — For Z-Wave locks exposed to Home Assistant through
 [zwave-js-ui][zwave-js-ui]'s MQTT discovery gateway rather than the official websocket

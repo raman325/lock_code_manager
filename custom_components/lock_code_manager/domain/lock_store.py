@@ -2,7 +2,9 @@
 What the lock workers remember across a restart, in one Home Assistant Store.
 
 Per lock, keyed by its entity registry id so a rename keeps it (#1442), with
-its entity id beside it: whether the lock has ever answered, and per slot
+its entity id beside it: whether the lock has ever answered, whether a read
+of it has ever described a slot (#1581; absent in a record saved before, and
+then not known to), and per slot
 what was last written -- a keyed fingerprint or ``cleared``, never a PIN --
 and a release clear still owed, with the entry that gave the slot up. What a
 slot holds is read again; counts, fights and holds start over (a hold's
@@ -33,7 +35,7 @@ Record = dict[str, Any]
 
 
 class LockStore:
-    """Each lock's record: whether it ever answered, and its slots'."""
+    """Each lock's record: whether it ever answered or described a slot, and its slots'."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Start empty; ``async_load`` reads what was saved."""
@@ -63,6 +65,11 @@ class LockStore:
         """Return whether ``lock`` has ever answered."""
         record = self._find(lock)
         return record is not None and record["answered"]
+
+    def reports(self, lock: str) -> bool:
+        """Return whether a read of ``lock`` has ever described a slot."""
+        record = self._find(lock)
+        return record is not None and record.get("reports", False)
 
     def releases(self) -> list[tuple[str, int, str]]:
         """Return each release clear still owed: lock, slot, the entry that gave it up."""
@@ -102,11 +109,20 @@ class LockStore:
         self._put(
             key,
             {
+                **record,
                 "entity_id": lock,
                 "answered": worker.answered_ever,
                 "slots": slots,
             },
         )
+
+    @callback
+    def reported(self, lock: str) -> None:
+        """Remember that a read of ``lock`` has described a slot."""
+        if (key := self._key(lock)) is None:
+            return  # gone from the entity registry: the lock is gone
+        record = self._locks.get(key, {"answered": False, "slots": {}})
+        self._put(key, {**record, "entity_id": lock, "reports": True})
 
     @callback
     def forget_slot(self, lock: str, slot: int) -> None:
