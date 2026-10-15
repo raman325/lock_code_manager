@@ -1535,7 +1535,10 @@ class TestRePairedLock:
             assert 2 not in worker.slots
             assert bridge.sets_for(2) == []
             assert bridge.users[2] == (ENABLED, "0000")
-            assert "the clear is dropped with the old device" in caplog.text
+            assert (
+                "cleared or written (a one-off PIN) when the device was replaced"
+                in caplog.text
+            )
 
             # The user is told to check the slot: it may be the same lock.
             issue_id = f"{RE_PAIRED_WORK_DROPPED}_{lock_id}"
