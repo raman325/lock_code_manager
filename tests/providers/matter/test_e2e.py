@@ -1093,6 +1093,57 @@ class TestOtherUsersOnTheLock:
         finally:
             await hass.config_entries.async_unload(entry.entry_id)
 
+    async def test_a_node_it_cannot_reach_is_not_a_user_to_remove(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A rename that never reached the lock does not send anyone to the vendor's app.
+
+        Lock Code Manager 2.0's own user for slot 3 is untagged at index 3, so
+        the write adopts it. The server answering that it cannot reach the
+        node is no refusal of the name: blaming the user at the index would
+        have the homeowner remove a code that is Lock Code Manager's own.
+        """
+        fake_matter_lock.program(7, "333333", name="slot3", credential_index=3)
+        fake_matter_lock.fail("SetUser")
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "slot3", CONF_PIN: "444444", CONF_ENABLED: True},
+        }
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [fake_matter_lock_entity.entity_id]},
+            subentries_data=user_subentries(slots),
+            unique_id="batch5_adopt_unreachable",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        try:
+            await async_tick_until(
+                hass,
+                freezer,
+                lambda: bool(lcm_issue_ids(hass, "slot_suspended")),
+                max_ticks=40,
+                what="slot 3 held",
+            )
+
+            assert fake_matter_lock.users[7].name == "slot3"
+            issue = ir.async_get(hass).async_get_issue(
+                DOMAIN,
+                f"slot_suspended_{entry.entry_id}_{fake_matter_lock_entity.entity_id}_3",
+            )
+            assert issue is not None
+            assert issue.translation_placeholders is not None
+            reason = issue.translation_placeholders["reason"]
+            assert "lock maker's app" not in reason
+            assert "is not resolving" in reason
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
 
 class TestOpenBugs:
     """Open Matter bugs, each pinned by a strict xfail on its own assertion."""
