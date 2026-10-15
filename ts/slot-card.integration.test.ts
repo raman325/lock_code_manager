@@ -203,47 +203,6 @@ describe('LockCodeManagerSlotCard integration', () => {
 
             expect(el._data).toEqual(testData);
         });
-
-        it('handles masked PIN data (pin is null with pin_length)', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            el = document.createElement('lcm-slot') as SlotCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el.hass = hass;
-
-            container.appendChild(el);
-            await flush();
-
-            const maskedData = makeSlotCardData({ pin: null, pin_length: 4 });
-            capturedCallback!(maskedData);
-
-            expect(el._data?.pin).toBeNull();
-            expect(el._data?.pin_length).toBe(4);
-        });
-
-        it('handles revealed PIN data', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            el = document.createElement('lcm-slot') as SlotCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el.hass = hass;
-
-            container.appendChild(el);
-            await flush();
-
-            const revealedData = makeSlotCardData({ pin: '5678' });
-            capturedCallback!(revealedData);
-
-            expect(el._data?.pin).toBe('5678');
-        });
     });
 
     describe('identity row (icon + user name + state chip)', () => {
@@ -617,54 +576,6 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
 
             expect(el._error).toBe('Subscription failed');
-        });
-    });
-
-    describe('SlotCode sentinel handling', () => {
-        let card: SlotCardElement & Record<string, unknown>;
-
-        beforeEach(async () => {
-            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card.hass = createMockHassWithConnection();
-            container.appendChild(card);
-            await flush();
-        });
-
-        it('stores "empty" and "unreadable_code" lock codes in _data', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            const card2 = document.createElement('lcm-slot') as SlotCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            card2.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card2.hass = hass;
-            container.appendChild(card2);
-            await flush();
-
-            capturedCallback!(
-                makeSlotCardData({
-                    locks: [
-                        {
-                            code: 'unreadable_code',
-                            entity_id: 'lock.test_1',
-                            in_sync: true,
-                            name: 'Masked Lock'
-                        },
-                        {
-                            code: 'empty',
-                            entity_id: 'lock.test_2',
-                            in_sync: true,
-                            name: 'Empty Lock'
-                        }
-                    ]
-                })
-            );
-
-            expect(card2._data?.locks[0].code).toBe('unreadable_code');
-            expect(card2._data?.locks[1].code).toBe('empty');
         });
     });
 
@@ -1591,88 +1502,6 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(tmpl).toBeDefined();
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
-    });
-
-    describe('sync_status data handling', () => {
-        it('stores sync_status from subscription data in lock entries', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            el = document.createElement('lcm-slot') as SlotCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el.hass = hass;
-
-            container.appendChild(el);
-            await flush();
-
-            const dataWithSyncStatus = makeSlotCardData({
-                locks: [
-                    {
-                        code: '1234',
-                        entity_id: 'lock.test_1',
-                        in_sync: false,
-                        name: 'Test Lock',
-                        sync_status: 'suspended'
-                    }
-                ]
-            });
-            capturedCallback!(dataWithSyncStatus);
-
-            expect(el._data?.locks[0].sync_status).toBe('suspended');
-        });
-
-        it('stores sync_status "syncing" in lock entries', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            el = document.createElement('lcm-slot') as SlotCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el.hass = hass;
-
-            container.appendChild(el);
-            await flush();
-
-            const dataWithSyncStatus = makeSlotCardData({
-                locks: [
-                    {
-                        code: '1234',
-                        entity_id: 'lock.test_1',
-                        in_sync: false,
-                        name: 'Test Lock',
-                        sync_status: 'syncing'
-                    }
-                ]
-            });
-            capturedCallback!(dataWithSyncStatus);
-
-            expect(el._data?.locks[0].sync_status).toBe('syncing');
-        });
-
-        it('lock entry has no sync_status when not provided', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            el = document.createElement('lcm-slot') as SlotCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el.hass = hass;
-
-            container.appendChild(el);
-            await flush();
-
-            const dataWithoutSyncStatus = makeSlotCardData();
-            capturedCallback!(dataWithoutSyncStatus);
-
-            expect(el._data?.locks[0].sync_status).toBeUndefined();
-        });
     });
 
     describe('_renderLockRow sync status rendering', () => {

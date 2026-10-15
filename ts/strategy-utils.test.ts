@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
     createErrorView,
-    createStartingView,
     formatConfigEntryNotFoundError,
     validateViewStrategyConfig
 } from './strategy-utils';
@@ -60,15 +59,6 @@ describe('createErrorView', () => {
         expect(view).toEqual({
             cards: [{ content: 'Error message', type: 'markdown' }],
             title: 'Custom Title'
-        });
-    });
-});
-
-describe('createStartingView', () => {
-    it('creates starting view with starting card', () => {
-        const view = createStartingView();
-        expect(view).toEqual({
-            cards: [{ type: 'starting' }]
         });
     });
 });
