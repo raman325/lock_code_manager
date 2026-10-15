@@ -165,19 +165,55 @@ async def test_a_slot_given_up_is_not_handed_to_an_entry_on_another_lock(
     assert "cannot set slot" not in caplog.text
 
 
-async def test_a_slot_let_go_on_unload_goes_to_the_entry_still_configuring_it(
+async def test_a_slot_on_a_lock_its_owner_drops_goes_to_the_entry_still_configuring_it(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
-    """The owner unloads: the other entry configuring the slot takes it over."""
-    first = await async_setup_lcm_entry(hass)
+    """The owner takes the lock out: the other entry configuring the slot takes it over."""
+    two_locks = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+        CONF_SLOTS: TWO_SLOTS_ON_LOCK_1[CONF_SLOTS],
+    }
+    first = await async_setup_lcm_entry(hass, two_locks)
     second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
     lock = mock_lock(second)
 
-    assert await hass.config_entries.async_unload(first.entry_id)
+    hass.config_entries.async_update_entry(
+        first, options={**two_locks, CONF_LOCKS: [LOCK_2_ENTITY_ID]}
+    )
     await hass.async_block_till_done()
 
     assert lock.codes[2] == "2222"
     assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == second.entry_id
+
+
+async def test_a_slot_of_a_deleted_entry_goes_to_the_entry_still_configuring_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The owner is deleted: the other entry configuring the slot takes it over."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    lock = mock_lock(second)
+
+    assert await hass.config_entries.async_remove(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert lock.codes[2] == "2222"
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == second.entry_id
+
+
+async def test_an_owner_reloading_keeps_its_slot(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A reload is no hand-off: the owner still configures the slot, and gets it back."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+
+    assert await hass.config_entries.async_reload(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_lock(first).codes[2] == "5678"
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == first.entry_id
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) != second.entry_id
 
 
 async def test_a_slot_given_up_then_wanted_again_is_cleared_plainly(
