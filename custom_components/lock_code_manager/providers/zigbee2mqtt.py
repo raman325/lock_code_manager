@@ -20,7 +20,7 @@ from homeassistant.exceptions import HomeAssistantError
 from ..domain.credentials import Credential, CredentialRef, User, WriteResult
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
-from ._mqtt import BaseMqttLock
+from ._mqtt import CANNOT_TELL, BaseMqttLock, SlotAnswer
 from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER
 
@@ -49,6 +49,10 @@ _Z2M_LOCK_ACTIONS_UNLOCKED = frozenset(
 )
 _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
 
+# User status 0xFF, which the Door Lock cluster names "Not Supported": the
+# lock cannot report its users at all.
+_Z2M_STATUS_CANNOT_TELL = "not_supported_255"
+
 
 def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
     """
@@ -66,9 +70,9 @@ def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
     return str(pin_raw) != ""
 
 
-def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
+def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotAnswer:
     """
-    Project one Zigbee2MQTT ``users`` entry to a SlotCredential.
+    Project one Zigbee2MQTT ``users`` entry to a SlotCredential, or ``CANNOT_TELL``.
 
     The status vocabulary comes from zigbee-herdsman-converters'
     ``lockUserStatus`` map (available/enabled/disabled); statuses outside
@@ -85,12 +89,17 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
       all asterisks. That is the withheld state wearing a code's shape, so
       it lands in the same place -- see ``is_masked_code``.
     - ``available`` is the only status that means the slot holds nothing.
-      ``disabled`` is a user the lock is refusing, and unrecognized statuses
-      (``not_supported_*``) say nothing at all, so both project to
-      unreadable for the same reprogramming-storm reason -- and so that
+      ``disabled`` is a user the lock is refusing, and statuses the cluster
+      reserves (``not_supported_<n>``) are none it defines, so both project
+      to unreadable for the same reprogramming-storm reason -- and so that
       allocation does not read either as a free credential index.
+    - ``not_supported_255`` is the one ``not_supported_*`` the cluster does
+      define: Not Supported, a lock that cannot report its users (#1581).
+      That is no code held, nor none: ``CANNOT_TELL``, read as silence.
     """
     status = user_info.get("status")
+    if status == _Z2M_STATUS_CANNOT_TELL:
+        return CANNOT_TELL
     pin_raw = user_info.get("pin_code")
     if status == "enabled":
         if _mqtt_payload_pin_has_code_value(pin_raw):
@@ -120,15 +129,13 @@ class Zigbee2MQTTLock(BaseMqttLock):
     # silent, so that bound always speaks first.
     per_exchange_budget: ClassVar[float | None] = 15.0
 
-    _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
+    _pending_codes: dict[int, asyncio.Future[SlotAnswer]] = field(
         init=False, default_factory=dict
     )
     # Last projected state per slot from the most recent users payload;
     # the delta gate in _process_z2m_device_payload compares against this
     # so full-cached-state republications don't repush stale entries.
-    _last_users_states: dict[int, SlotCredential] = field(
-        init=False, default_factory=dict
-    )
+    _last_users_states: dict[int, SlotAnswer] = field(init=False, default_factory=dict)
     _subscribed_topic: str | None = field(init=False, default=None)
 
     @property
@@ -264,7 +271,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
 
         users_data = payload.get("users")
         if users_data and isinstance(users_data, dict):
-            states: dict[int, SlotCredential] = {}
+            states: dict[int, SlotAnswer] = {}
             for user_id_str, user_info in users_data.items():
                 user_id = parse_slot_num(user_id_str)
                 if user_id is None:
@@ -327,7 +334,10 @@ class Zigbee2MQTTLock(BaseMqttLock):
                         list(changed),
                     )
                     for user_id, state in changed.items():
-                        self._confirm_slot(user_id, state)
+                        # ``CANNOT_TELL`` says no more than silence would:
+                        # not a code there, nor one changed at the keypad.
+                        if isinstance(state, SlotCredential):
+                            self._confirm_slot(user_id, state)
 
         pin_code_data = payload.get("pin_code")
         if pin_code_data and isinstance(pin_code_data, dict):
@@ -625,9 +635,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
             transport_failure="failed to reach the lock",
         )
 
-    async def _async_read_slot(
-        self, slot_num: int, get_topic: str
-    ) -> SlotCredential | None:
+    async def _async_read_slot(self, slot_num: int, get_topic: str) -> SlotAnswer:
         """
         Ask the lock for one slot and wait for the answer; None means silence.
 
@@ -635,7 +643,8 @@ class Zigbee2MQTTLock(BaseMqttLock):
         both silence: a slot the bridge described as withheld, disabled, or
         masked is data, and a slot that produced no reply at all is not.
         That is the distinction ``BaseMqttLock._async_read_slots`` needs to
-        tell a poll from a read that reached nothing.
+        tell a poll from a read that reached nothing. A reply that the lock
+        cannot tell is neither, and comes back as ``CANNOT_TELL``.
         """
         loop = asyncio.get_running_loop()
         future = loop.create_future()
@@ -653,6 +662,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
             self._pending_codes.pop(slot_num, None)
             return None
 
+        credential: SlotAnswer
         try:
             async with asyncio.timeout(10.0):
                 result = await future

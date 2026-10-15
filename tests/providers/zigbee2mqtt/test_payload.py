@@ -10,9 +10,11 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.providers._mqtt import CANNOT_TELL
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
     _mqtt_payload_pin_has_code_value,
+    _project_z2m_user_state,
 )
 
 from .conftest import Z2M_FULL_TOPIC, _minimal_lock
@@ -22,6 +24,45 @@ def test_mqtt_payload_pin_has_code_value_rejects_bool() -> None:
     """Boolean JSON must not count as a PIN payload (truthiness trap)."""
     assert _mqtt_payload_pin_has_code_value(False) is False
     assert _mqtt_payload_pin_has_code_value(True) is False
+
+
+@pytest.mark.parametrize(
+    ("user_info", "expected"),
+    [
+        pytest.param({"status": "available"}, SlotCredential.empty(), id="available"),
+        pytest.param(
+            {"status": "enabled", "pin_code": "1234"},
+            SlotCredential.known("1234"),
+            id="enabled with a PIN",
+        ),
+        pytest.param(
+            {"status": "enabled"}, SlotCredential.unreadable(), id="enabled, withheld"
+        ),
+        pytest.param(
+            {"status": "enabled", "pin_code": "****"},
+            SlotCredential.unreadable(),
+            id="enabled, masked",
+        ),
+        pytest.param(
+            {"status": "disabled"}, SlotCredential.unreadable(), id="disabled"
+        ),
+        pytest.param({"status": "not_supported_255"}, CANNOT_TELL, id="Not Supported"),
+        pytest.param(
+            {"status": "not_supported_2"}, SlotCredential.unreadable(), id="reserved"
+        ),
+    ],
+)
+def test_each_user_status_projects_to_what_it_says(
+    user_info: dict[str, str], expected: object
+) -> None:
+    """
+    Only ``available`` is empty; Not Supported (0xFF) cannot tell (#1581).
+
+    A reserved status the cluster defines no meaning for stays unreadable:
+    it may be a code held, and calling it free would let allocation write
+    over it.
+    """
+    assert _project_z2m_user_state(user_info) == expected
 
 
 def test_users_enabled_without_pin_key_pushes_unreadable() -> None:
