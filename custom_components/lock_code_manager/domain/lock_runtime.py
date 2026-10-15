@@ -670,18 +670,24 @@ def lock_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str | Slot
     What the lock said, never the PIN a slot wants: a card stands the
     configured PIN in for a slot in sync itself, marked as configured rather
     than read (spec D, #1282).
+
+    A managed slot without a reading is never shown by an older word in
+    ``port.others``: that may be the very reading set aside to read the slot
+    again (``Slot.doubt``). On a lock that has answered it is being checked,
+    as its per-lock entities say; before then it is left out.
     """
     if (worker := lock_registry(hass).worker(lock_entity_id)) is None:
         return {}
-    readings = {
-        **worker.port.others,
-        **{
-            slot_num: slot.seen
-            for slot_num, slot in worker.slots.items()
-            if slot.seen is not None
-        },
-    }
-    return {slot: _label(reading) for slot, reading in readings.items()}
+    codes = {slot: _label(reading) for slot, reading in worker.port.others.items()}
+    for slot_num, slot in worker.slots.items():
+        if slot.seen is not None:
+            codes[slot_num] = _label(slot.seen)
+        elif not slot.release:
+            if worker.answered:
+                codes[slot_num] = SlotCode.CHECKING
+            else:
+                codes.pop(slot_num, None)
+    return codes
 
 
 async def async_hard_refresh(worker: LockWorker[ProviderPort]) -> None:

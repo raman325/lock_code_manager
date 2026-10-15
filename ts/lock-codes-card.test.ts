@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
     CodeDisplayMode,
     LockCoordinatorSlotData,
+    SLOT_CODE_CHECKING,
     SLOT_CODE_DISABLED,
     SLOT_CODE_EMPTY,
     SLOT_CODE_UNANSWERED,
@@ -42,6 +43,8 @@ describe('SlotCode guard functions', () => {
             expect(isSlotOccupied(SLOT_CODE_UNANSWERED)).toBe(false));
         it('returns true for "disabled_on_lock" sentinel', () =>
             expect(isSlotOccupied(SLOT_CODE_DISABLED)).toBe(true));
+        it('returns false for "checking" sentinel', () =>
+            expect(isSlotOccupied(SLOT_CODE_CHECKING)).toBe(false));
     });
 
     describe('isSlotSentinel', () => {
@@ -51,7 +54,8 @@ describe('SlotCode guard functions', () => {
                     SLOT_CODE_EMPTY,
                     SLOT_CODE_UNREADABLE,
                     SLOT_CODE_UNANSWERED,
-                    SLOT_CODE_DISABLED
+                    SLOT_CODE_DISABLED,
+                    SLOT_CODE_CHECKING
                 ].every(isSlotSentinel)
             ).toBe(true));
         it('returns false for a PIN string', () => expect(isSlotSentinel('1234')).toBe(false));

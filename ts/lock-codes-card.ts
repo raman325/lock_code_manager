@@ -14,6 +14,7 @@ import {
     LockCodesCardConfig,
     LockCoordinatorData,
     LockCoordinatorSlotData,
+    SLOT_CODE_CHECKING,
     SLOT_CODE_DISABLED,
     SLOT_CODE_UNANSWERED,
     SLOT_CODE_UNREADABLE,
@@ -735,10 +736,10 @@ class LockCodesCard extends LockCodesCardBase {
 
     /** Whether revealing can show a real value, i.e. whether to offer the eye. */
     private _canReveal(slot: LockCoordinatorSlotData): boolean {
-        // A disabled code, or a withheld one LCM can't vouch for (unmanaged or
-        // out of sync), has nothing to reveal — hide the eye rather than toggle
-        // it to no effect.
-        if (slot.code === SLOT_CODE_DISABLED) return false;
+        // A disabled code, a slot being checked, or a withheld one LCM can't
+        // vouch for (unmanaged or out of sync), has nothing to reveal — hide
+        // the eye rather than toggle it to no effect.
+        if (slot.code === SLOT_CODE_DISABLED || slot.code === SLOT_CODE_CHECKING) return false;
         if (this._isWithheld(slot) && !this._isProxyCode(slot)) return false;
         return this._hasCode(slot) || !!slot.configured_code || !!slot.configured_code_length;
     }
@@ -746,6 +747,7 @@ class LockCodesCard extends LockCodesCardBase {
     /** Tooltip for a code whose origin or unreadability isn't self-evident. */
     private _codeTitle(slot: LockCoordinatorSlotData): string | undefined {
         if (slot.code === SLOT_CODE_DISABLED) return 'Disabled on lock';
+        if (slot.code === SLOT_CODE_CHECKING) return 'Waiting for the lock to confirm this slot';
         if (slot.code === SLOT_CODE_UNANSWERED) {
             return this._isProxyCode(slot)
                 ? "Configured in Lock Code Manager — this lock didn't answer"
@@ -780,6 +782,9 @@ class LockCodesCard extends LockCodesCardBase {
         const maskSuffix = shouldMask ? ' masked' : '';
 
         if (slot.code === SLOT_CODE_DISABLED) return 'disabled-on-lock';
+        // A label, styled as one: nothing is known of the slot until the lock
+        // is read, so no PIN, not even the configured one, stands in for it.
+        if (slot.code === SLOT_CODE_CHECKING) return 'no-code';
         if (this._isWithheld(slot)) {
             // Managed + in sync: italicized configured-PIN proxy (still dimmed
             // while masked). Otherwise the value is genuinely unknown and gets
@@ -807,6 +812,7 @@ class LockCodesCard extends LockCodesCardBase {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         if (slot.code === SLOT_CODE_DISABLED) return 'Disabled on lock';
+        if (slot.code === SLOT_CODE_CHECKING) return 'Checking…';
         if (this._isWithheld(slot)) {
             // Unmanaged or out of sync: the value is genuinely unknown. Hollow
             // dots sized to the known length when we have one, else a short fixed

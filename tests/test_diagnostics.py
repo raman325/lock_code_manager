@@ -231,9 +231,9 @@ async def test_mask_code_covers_missing_and_edge_case_credentials(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ) -> None:
-    """``_mask_code`` covers three distinct branches of its label-to-string mapping.
+    """``_mask_code`` covers distinct branches of its label-to-string mapping.
 
-    A slot the lock has said nothing about, a cleared slot (SlotCode.EMPTY),
+    A slot being checked (SlotCode.CHECKING), a cleared slot (SlotCode.EMPTY),
     and a present-but-empty-string PIN (the falsy-label fallback) all
     surface differently in diagnostics output.
     """
@@ -245,8 +245,8 @@ async def test_mask_code_covers_missing_and_edge_case_credentials(
     await hass.async_block_till_done()
     assert 1 not in lock_1.codes
 
-    # Add slot 3 to config, but lock 1 never answers a read of it -- the
-    # lock has said nothing about slot 3 (and backs off).
+    # Add slot 3 to config, but lock 1 never answers a read of it: on a lock
+    # that has answered, slot 3 is being checked.
     lock_1.fail("get", 3)
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][1][CONF_ENABLED] = False  # as switched off above
@@ -268,9 +268,8 @@ async def test_mask_code_covers_missing_and_edge_case_credentials(
     lock_1_data = result["locks"][LOCK_1_ENTITY_ID]["worker"]["data"]
     assert lock_1_data["1"] == "empty"
     assert lock_1_data["9"] == "empty"
-    assert "3" not in lock_1_data
+    assert lock_1_data["3"] == "checking"
 
-    # Slot 3's per-lock entry is empty: the lock has said nothing about it.
     assert result["slots"]["1"]["locks"][LOCK_1_ENTITY_ID] == {"code": "empty"}
-    assert result["slots"]["3"]["locks"][LOCK_1_ENTITY_ID] == {}
+    assert result["slots"]["3"]["locks"][LOCK_1_ENTITY_ID] == {"code": "checking"}
     lock_1.clear_faults()

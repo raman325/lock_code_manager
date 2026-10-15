@@ -38,12 +38,16 @@ class SlotCode(StrEnum):
     slot may be clear or may hold a code.
 
     DISABLED: the lock holds a code for the slot that is not in force.
+
+    CHECKING: a managed slot whose last reading was set aside to read it
+    again, on a lock that has answered. Nothing is known of it until the read.
     """
 
     EMPTY = "empty"
     UNREADABLE_CODE = "unreadable_code"
     UNANSWERED = "unanswered"
     DISABLED = "disabled_on_lock"
+    CHECKING = "checking"
 
 
 @dataclass(frozen=True, slots=True)

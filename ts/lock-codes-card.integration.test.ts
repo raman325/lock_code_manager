@@ -571,6 +571,84 @@ describe('LockCodesCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
+    describe('checking sentinel', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any -- accessing private methods for testing */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.front_door', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        const checking = {
+            active: true,
+            code: 'checking',
+            config_entry_id: 'entry1',
+            configured_code: '1234',
+            enabled: true,
+            in_sync: false,
+            managed: true,
+            name: 'Housekeeper',
+            slot: 2
+        };
+
+        it('shows the slot pending with a label, never a PIN', () => {
+            (card as any)._revealed = true;
+            try {
+                expect((card as any)._isPending(checking)).toBe(true);
+                expect((card as any)._formatCode(checking)).toBe('Checking…');
+                expect((card as any)._getCodeClass(checking).split(' ')).toEqual([
+                    'pending',
+                    'no-code'
+                ]);
+                expect((card as any)._codeTitle(checking)).toBe(
+                    'Waiting for the lock to confirm this slot'
+                );
+                expect((card as any)._canReveal(checking)).toBe(false);
+            } finally {
+                (card as any)._revealed = false;
+            }
+        });
+
+        it('does not count as a code on the lock', () => {
+            expect((card as any)._hasCode(checking)).toBe(false);
+        });
+
+        it('renders the row pending, with no PIN', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            const card2 = document.createElement('lcm-lock-codes') as LockCodesCardElement;
+            card2.setConfig({
+                code_display: 'unmasked',
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+            card2.hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            container.appendChild(card2);
+            await flush();
+
+            capturedCallback!(makeLockCoordinatorData({ slots: [checking] }));
+            await flush();
+
+            const chip = card2.shadowRoot!.querySelector('.slot-chip')!;
+            expect(chip.classList.contains('pending')).toBe(true);
+            const code = chip.querySelector('.lcm-code')!;
+            expect(code.classList.contains('pending')).toBe(true);
+            expect(code.getAttribute('title')).toBe('Waiting for the lock to confirm this slot');
+            expect(code.textContent).toContain('Checking…');
+            expect(chip.textContent).not.toContain('1234');
+            expect(chip.querySelector('.lcm-reveal-button')).toBeNull();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
     describe('disabled-on-lock sentinel', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any -- accessing private methods for testing */
         let card: LockCodesCardElement & Record<string, unknown>;
