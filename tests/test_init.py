@@ -202,7 +202,7 @@ async def test_entry_setup_and_unload(
             (LOCK_DEVICE_DOMAIN, entity_id), mock_lock_entry_id
         )
         assert device
-        assert device.config_entries == {mock_lock_entry_id}
+        assert device.config_entry_id == mock_lock_entry_id
         # Nothing of ours sits on the lock's own device. A device belongs to
         # one config entry as of HA 2026.8, so an entity parked on another
         # integration's device is one this integration cannot show.
@@ -219,7 +219,7 @@ async def test_entry_setup_and_unload(
             lcm_entry_id,
         )
         assert slot_device
-        assert slot_device.config_entries == {lcm_entry_id}
+        assert slot_device.config_entry_id == lcm_entry_id
         # Exact, so anything unexpected landing here is caught too.
         assert {
             entry.unique_id
@@ -352,7 +352,7 @@ async def test_entry_setup_and_unload(
         (LOCK_DEVICE_DOMAIN, LOCK_2_ENTITY_ID), mock_lock_entry_id
     )
     assert device
-    assert device.config_entries == {mock_lock_entry_id}
+    assert device.config_entry_id == mock_lock_entry_id
     assert not [
         entry
         for entry in er.async_entries_for_device(
@@ -4365,7 +4365,7 @@ async def test_reclaim_moves_an_entity_off_the_lock_integrations_device(
         (LOCK_DEVICE_DOMAIN, LOCK_1_ENTITY_ID), mock_lock_config_entry.entry_id
     )
     assert lock_device
-    assert lock_device.config_entries != {DOMAIN}
+    assert lock_device.config_entry_id == mock_lock_config_entry.entry_id
 
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="On The Lock Device"

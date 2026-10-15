@@ -282,20 +282,19 @@ class MatterLock(BaseLock):
         fabric whose node set never contains this lock, so resolution fails
         permanently even though the lock entity -- bound to its own entry's
         client -- keeps working (issue #1268). Resolve against the entry that
-        actually owns the device instead, preferring its primary config entry.
+        actually owns the device instead: a device belongs to a single config
+        entry, ``config_entry_id`` (``primary_config_entry`` and
+        ``config_entries`` are deprecated shims for it).
         """
-        seen: set[str] = set()
-        for entry_id in (device.primary_config_entry, *device.config_entries):
-            if not entry_id or entry_id in seen:
-                continue
-            seen.add(entry_id)
-            entry = self.hass.config_entries.async_get_entry(entry_id)
-            if (
-                entry is not None
-                and entry.domain == MATTER_DOMAIN
-                and entry.state is ConfigEntryState.LOADED
-            ):
-                return entry.runtime_data.adapter.matter_client
+        if not (entry_id := device.config_entry_id):
+            return None
+        entry = self.hass.config_entries.async_get_entry(entry_id)
+        if (
+            entry is not None
+            and entry.domain == MATTER_DOMAIN
+            and entry.state is ConfigEntryState.LOADED
+        ):
+            return entry.runtime_data.adapter.matter_client
         return None
 
     def _match_node(self, client: Any, device: Any) -> Any | None:
@@ -410,13 +409,12 @@ class MatterLock(BaseLock):
                 node_count = -1
             LOGGER.debug(
                 "Matter node resolution failed for %s: device_identifiers=%s, "
-                "primary_config_entry=%s, device_config_entries=%s, "
+                "device_config_entry=%s, "
                 "loaded_matter_entries=%s, owning_client_node_count=%s, "
                 "server_info_present=%s",
                 self.lock.entity_id,
                 getattr(device, "identifiers", None),
-                getattr(device, "primary_config_entry", None),
-                getattr(device, "config_entries", None),
+                getattr(device, "config_entry_id", None),
                 [entry.entry_id for entry in matter_entries],
                 node_count,
                 getattr(client, "server_info", None) is not None,

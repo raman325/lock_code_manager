@@ -2,8 +2,9 @@
 
 from datetime import timedelta
 import logging
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import UnknownError
@@ -16,6 +17,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
 
 from custom_components.lock_code_manager.core.adapter import ProviderPort, _Coordinator
 from custom_components.lock_code_manager.domain.credentials import (
@@ -1366,6 +1368,53 @@ class TestEventSubscription:
         device = matter_lock._fresh_device_entry()
         assert device is not None
         assert matter_lock._owning_matter_client(device) is matter_client
+
+    def test_owning_matter_client_reads_only_config_entry_id(
+        self, matter_lock: MatterLock, matter_client: MagicMock
+    ) -> None:
+        """The owning entry comes from ``config_entry_id`` alone.
+
+        ``DeviceEntry.primary_config_entry`` (and ``config_entries``) are
+        deprecated shims that Home Assistant reports when a custom
+        integration reads them; a device belongs to a single config entry.
+        """
+        device = matter_lock._fresh_device_entry()
+        assert device is not None
+        with (
+            patch.object(
+                dr.DeviceEntry,
+                "primary_config_entry",
+                new_callable=PropertyMock,
+                side_effect=AssertionError("deprecated"),
+            ),
+            patch.object(
+                dr.DeviceEntry,
+                "config_entries",
+                new_callable=PropertyMock,
+                side_effect=AssertionError("deprecated"),
+            ),
+        ):
+            assert matter_lock._owning_matter_client(device) is matter_client
+            # A double carrying only the supported attribute resolves too.
+            only_id = SimpleNamespace(config_entry_id=device.config_entry_id)
+            assert matter_lock._owning_matter_client(only_id) is matter_client
+
+    def test_owning_matter_client_none_for_non_matter_entry(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A device whose entry is not a loaded Matter entry has no owning client."""
+        other = MockConfigEntry(domain="zha")
+        other.add_to_hass(hass)
+        assert (
+            matter_lock._owning_matter_client(
+                SimpleNamespace(config_entry_id=other.entry_id)
+            )
+            is None
+        )
+        assert (
+            matter_lock._owning_matter_client(SimpleNamespace(config_entry_id=None))
+            is None
+        )
 
     def test_match_node_resolves_via_real_get_device_id(
         self, matter_lock: MatterLock, matter_client: MagicMock
