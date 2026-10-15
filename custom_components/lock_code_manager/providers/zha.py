@@ -460,7 +460,9 @@ class ZHALock(BaseLock):
         ``empty`` means confirmed cleared, and ``AVAILABLE`` is the only
         status that says so. ``known`` means the lock is accepting this code,
         which only ``ENABLED`` says. Every other status is ``unreadable``:
-        something is there and its value cannot be trusted. A read that
+        something is there and its value cannot be trusted -- except Not
+        Supported, a lock saying it cannot tell, which is silent
+        (``last_silent_slots``, ``last_cannot_tell_slots``). A read that
         failed -- an error, a reply that is not this slot's answer, zigpy
         giving up on the slot -- is not a reading at all, and fails the read:
         reported as unreadable, a clear the lock acknowledged would read as
@@ -477,6 +479,7 @@ class ZHALock(BaseLock):
             return []
 
         slot_states: dict[int, SlotCredential] = {}
+        cannot_tell: set[int] = set()
         for slot_num in scope:
             try:
                 # zigpy bounds each attempt and gives up after three, raising
@@ -533,7 +536,14 @@ class ZHALock(BaseLock):
             # asterisk per digit, which can never equal the configured PIN,
             # so confirming it makes sync reprogram the slot on every tick
             # forever.
-            if user_status == DoorLock.UserStatus.Available:
+            #
+            # Not Supported (0xFF) is a lock that cannot report its users
+            # (#1581): no code held, nor none. Silent, as Zigbee2MQTT's
+            # ``not_supported_255`` is, and the core takes it from there.
+            if user_status == DoorLock.UserStatus.Not_Supported:
+                cannot_tell.add(slot_num)
+                slot_states[slot_num] = SlotCredential.unreadable()
+            elif user_status == DoorLock.UserStatus.Available:
                 slot_states[slot_num] = SlotCredential.empty()
             elif (
                 user_status == DoorLock.UserStatus.Enabled
@@ -543,6 +553,7 @@ class ZHALock(BaseLock):
                 slot_states[slot_num] = SlotCredential.known(pin_code)
             else:
                 slot_states[slot_num] = SlotCredential.unreadable()
+        self.last_silent_slots = self.last_cannot_tell_slots = frozenset(cannot_tell)
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
     @override

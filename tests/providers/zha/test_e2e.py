@@ -20,6 +20,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CONDITION,
     CONF_ENABLED,
+    CONF_NAME,
     CONF_PIN,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
@@ -31,6 +32,8 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir, translation
 
 from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_NUM_USERS,
     CONF_SLOT,
     CONF_USERS,
     DOMAIN,
@@ -38,16 +41,23 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.core.slot import LIMIT, Holds, Seen
 from custom_components.lock_code_manager.core.worker import LockWorker
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_reachable,
+    lock_registry,
+)
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zha import ZHALock
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
+    async_configure_flow,
+    async_step_clock_until,
     async_tick_until,
     in_sync_entity_id,
+    lock_workers_busy,
     slot_entity_id,
+    unfinished_tasks,
 )
 from tests.conftest import async_advance_time
 
@@ -1122,3 +1132,141 @@ class TestOpenBugs:
             subentry.title: subentry.data[CONF_SLOT]
             for subentry in lcm_config_entry.subentries.values()
         }["user3"] == 3
+
+
+def _not_supported(door_lock: DoorLockStandIn, *, codes_only: bool = False) -> Answer:
+    """
+    Answer a get with user status Not Supported (0xFF, #1581).
+
+    For every user, a lock that cannot report its users at all; with
+    ``codes_only``, only for a user holding a code, a lock that reports
+    which slots are free and nothing of the rest.
+    """
+
+    def _answer(request: Any) -> Frame | None:
+        if codes_only and request.user_id not in door_lock.codes:
+            return None
+        return lock_frame(
+            door_lock.cluster,
+            "get_pin_code_response",
+            user_id=request.user_id,
+            user_status=DoorLock.UserStatus.Not_Supported,
+            user_type=DoorLock.UserType.Unrestricted,
+            code="",
+        )
+
+    return _answer
+
+
+async def _set_up_two_users(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, lock_id: str
+) -> tuple[Any, MockConfigEntry]:
+    """Run the config flow for two users on the lock; return its result and entry."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    flow_id = result["flow_id"]
+    await async_configure_flow(hass, flow_id, {CONF_NAME: "zha", CONF_LOCKS: [lock_id]})
+    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+    result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+    assert result["step_id"] == "code_slot", result.get("errors")
+    for user, pin in (("user1", "1234"), ("user2", "5678")):
+        result = await async_configure_flow(
+            hass, flow_id, {CONF_NAME: user, CONF_PIN: pin, CONF_ENABLED: True}
+        )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entry = hass.config_entries.async_get_entry(result["result"].entry_id)
+    assert entry is not None
+    return result, entry
+
+
+async def _until_settled(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    entry: MockConfigEntry,
+    door_lock: DoorLockStandIn,
+    pins: dict[int, str],
+) -> None:
+    """Step the clock until each PIN is on the lock and in sync, the lock idle."""
+    await async_step_clock_until(
+        hass,
+        freezer,
+        lambda: (
+            all(
+                door_lock.codes.get(slot) == pin
+                and _in_sync_state(hass, entry, slot) == STATE_ON
+                for slot, pin in pins.items()
+            )
+            and not unfinished_tasks(hass)
+            and not lock_workers_busy(hass)
+        ),
+        max_steps=300,
+        what="every PIN on the lock and in sync",
+        step=1.0,
+    )
+
+
+class TestLockThatCannotReport:
+    """
+    #1581 through ZHA: user status Not Supported (0xFF) is read as Zigbee2MQTT reads it.
+
+    From a lock that never described a slot it is silence: free to number,
+    and a write there trusted. From one that has, it is a code the lock will
+    not show, and nothing is numbered there.
+    """
+
+    async def test_a_lock_that_never_reports_numbers_from_one(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        zha_lock_entity,
+        door_lock: DoorLockStandIn,
+    ) -> None:
+        """Two users take 1 and 2, their PINs land, and nothing is held or offline."""
+        door_lock.answers["get_pin_code"] = _not_supported(door_lock)
+        lock_id = zha_lock_entity.entity_id
+
+        result, entry = await _set_up_two_users(hass, freezer, lock_id)
+
+        assert _writes(door_lock, "get_pin_code") == [1, 2]
+        assert result["description"] == "cannot_report"
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in entry.subentries.values()
+        } == {"user1": 1, "user2": 2}
+        pins = {1: "1234", 2: "5678"}
+        await _until_settled(hass, freezer, entry, door_lock, pins)
+        assert _writes(door_lock, "set_pin_code") == [1, 2]
+        assert [
+            issue.issue_id
+            for issue in ir.async_get(hass).issues.values()
+            if issue.domain == DOMAIN
+        ] == []
+        assert lock_reachable(hass, lock_id) is True
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+    @pytest.mark.parametrize("door_lock_codes", [{1: "1111", 3: "3333"}])
+    async def test_a_lock_that_reports_free_slots_keeps_its_codes(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        zha_lock_entity,
+        door_lock: DoorLockStandIn,
+    ) -> None:
+        """Keypad codes at 1 and 3 push two users to 2 and 4."""
+        door_lock.answers["get_pin_code"] = _not_supported(door_lock, codes_only=True)
+        lock_id = zha_lock_entity.entity_id
+
+        result, entry = await _set_up_two_users(hass, freezer, lock_id)
+
+        assert result["description"] is None
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in entry.subentries.values()
+        } == {"user1": 2, "user2": 4}
+        await _until_settled(hass, freezer, entry, door_lock, {2: "1234", 4: "5678"})
+        assert _writes(door_lock, "set_pin_code") == [2, 4]
+        assert door_lock.codes[1] == "1111"
+        assert door_lock.codes[3] == "3333"
+        assert lock_reachable(hass, lock_id) is True
+        assert await hass.config_entries.async_unload(entry.entry_id)
