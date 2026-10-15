@@ -314,17 +314,18 @@ class ZHALock(BaseLock):
     # -- Helpers -------------------------------------------------------------
 
     def _get_gateway(self) -> Any | None:
-        """Return the ZHA gateway proxy, or None if unavailable."""
+        """
+        Return the ZHA gateway proxy, or None if unavailable.
+
+        ``get_zha_gateway_proxy`` raises ``ValueError("No gateway object
+        exists")`` whenever ZHA is not loaded -- setting up, in setup retry,
+        or unloaded. That is the ordinary "not connected" answer, and this is
+        asked on every connection check, so it is not logged: the callers
+        already report a lock whose integration is not ready.
+        """
         try:
             return _get_zha_gateway_proxy(self.hass)
-        except KeyError:
-            return None
-        except ValueError:
-            _LOGGER.warning(
-                "Lock %s: unexpected ValueError getting ZHA gateway",
-                self.lock.entity_id,
-                exc_info=True,
-            )
+        except KeyError, ValueError:
             return None
 
     # -- Connection ----------------------------------------------------------
