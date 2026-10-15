@@ -164,20 +164,14 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     @property
     @override
-    def available(self) -> bool:
-        """Return whether the lock has said anything about the slot yet."""
-        return (
-            BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self)
-            and (slot := self._core_slot()) is not None
-            and slot.seen is not None
-        )
-
-    @property
-    @override
     def is_on(self) -> bool | None:
-        """Return whether the slot is in sync; unknown before the lock has said."""
-        status = self._core_status()
-        if status is None or status is Status.UNKNOWN:
+        """
+        Return whether the slot is in sync.
+
+        Off while the slot is being checked (unknown): it is not known to be
+        in sync, and a write may be due, the same as pending.
+        """
+        if (status := self._core_status()) is None:
             return None
         return status is Status.IN_SYNC
 

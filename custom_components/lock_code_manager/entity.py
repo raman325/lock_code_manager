@@ -425,6 +425,25 @@ class LockWorkerView:
             return None
         return worker.status(int(self.slot_num))[0]
 
+    @property
+    def available(self) -> bool:
+        """
+        Return whether the lock is up and has said something about the slot.
+
+        Before the lock first answers, a slot never read has nothing to show.
+        After that, a slot without a reading is being checked: its reading
+        was set aside to read the slot again (``Slot.doubt``), so it is not
+        gone, and the entity says unknown, not unavailable, until the read.
+        """
+        assert isinstance(self, BaseLockCodeManagerCodeSlotPerLockEntity)
+        worker = self._core_worker()
+        return (
+            self._is_available()
+            and worker is not None
+            and (slot := worker.slots.get(int(self.slot_num))) is not None
+            and (slot.seen is not None or worker.answered)
+        )
+
     def _core_syncing(self) -> bool:
         """Return whether a sync of this slot is queued or running."""
         worker = self._core_worker()

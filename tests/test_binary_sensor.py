@@ -34,6 +34,7 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import (
     Event,
@@ -62,7 +63,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT, Status
+from custom_components.lock_code_manager.core.slot import LIMIT, Holds, Repair, Status
 from custom_components.lock_code_manager.core.worker import (
     BACKOFF_AFTER,
     BACKOFF_MIN,
@@ -458,14 +459,74 @@ async def test_entities_track_availability(
     assert active_entity_obj.available
     assert in_sync_entity_obj.available
 
-    # The per-lock entity is available only once the lock has said something
-    # about the slot.
-    slot = _worker(hass).slots[1]
-    seen, slot.seen = slot.seen, None
-    assert not in_sync_entity_obj.available
 
-    slot.seen = seen
-    assert in_sync_entity_obj.available
+_SLOT_1_CODE_ENTITY = "sensor.mock_title_test1_test_1_pin"
+
+
+@pytest.mark.parametrize(
+    ("status", "in_sync", "sync_attr", "code"),
+    [
+        pytest.param(Status.IN_SYNC, STATE_ON, "in_sync", "1234", id="in_sync"),
+        pytest.param(
+            Status.OUT_OF_SYNC, STATE_OFF, "out_of_sync", "9999", id="out_of_sync"
+        ),
+        # Being checked: the reading was set aside to read the slot again.
+        pytest.param(Status.UNKNOWN, STATE_OFF, None, STATE_UNKNOWN, id="checking"),
+        pytest.param(Status.SUSPENDED, STATE_OFF, "suspended", "9999", id="held"),
+    ],
+)
+async def test_per_lock_entities_stay_available_for_every_status(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    status: Status,
+    in_sync: str,
+    sync_attr: str | None,
+    code: str,
+) -> None:
+    """
+    Once the lock has answered, a slot's entities show its status, never unavailable.
+
+    A slot being checked reads off (not known in sync, as pending) with an
+    unknown code: the card shows it pending, not "?" (#1700's follow-up).
+    """
+    await hass.async_block_till_done()
+    worker = _worker(hass)
+    slot = worker.slots[1]
+    assert worker.answered
+    if status is Status.UNKNOWN:
+        slot.seen = None
+    elif status is not Status.IN_SYNC:
+        slot.seen = Holds("9999")
+    if status is Status.SUSPENDED:
+        slot.hold = Repair.CANT_SET
+    assert worker.status(1)[0] is status
+    worker.on_change()
+    await hass.async_block_till_done()
+
+    in_sync_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
+    assert in_sync_state.state == in_sync
+    assert in_sync_state.attributes.get(ATTR_SYNC_STATUS) == sync_attr
+    assert hass.states.get(_SLOT_1_CODE_ENTITY).state == code
+
+
+async def test_per_lock_entities_are_unavailable_before_the_lock_answers(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A slot never read, on a lock that has not answered yet, has nothing to show."""
+    await hass.async_block_till_done()
+    worker = _worker(hass)
+    worker.slots[1].seen = None
+    with patch.object(
+        LockWorker, "answered", new_callable=PropertyMock, return_value=False
+    ):
+        worker.on_change()
+        await hass.async_block_till_done()
+
+        assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_UNAVAILABLE
+        assert hass.states.get(_SLOT_1_CODE_ENTITY).state == STATE_UNAVAILABLE
 
 
 def _ticks_through_the_backoff(backoff_seconds: float) -> int:

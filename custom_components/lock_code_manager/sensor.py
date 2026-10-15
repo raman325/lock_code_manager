@@ -55,7 +55,8 @@ class LockCodeManagerCodeSlotSensorEntity(
     What the lock holds in the slot: a PIN, or nothing.
 
     A lock that hides its codes shows the configured PIN once the write is
-    trusted (the slot is in sync), and unknown until then.
+    trusted (the slot is in sync), and unknown until then. So does a slot
+    being checked: its last reading was set aside to read it again.
     """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -86,16 +87,6 @@ class LockCodeManagerCodeSlotSensorEntity(
         if self._core_status() is Status.IN_SYNC:
             return slot.want
         return None
-
-    @property
-    @override
-    def available(self) -> bool:
-        """Return whether the lock has said anything about the slot yet."""
-        return (
-            BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self)
-            and (slot := self._core_slot()) is not None
-            and slot.seen is not None
-        )
 
     @override
     async def async_added_to_hass(self) -> None:
