@@ -114,6 +114,12 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(() =>
                 el.setConfig({ config_entry_id: 'abc', slot: 0, type: 'custom:lcm-user' })
             ).toThrow('slot must be a number between 1 and 9999');
+            expect(() =>
+                el.setConfig({ config_entry_id: 'abc', slot: 10000, type: 'custom:lcm-user' })
+            ).toThrow('slot must be a number between 1 and 9999');
+            expect(() =>
+                el.setConfig({ config_entry_id: 'abc', slot: 9999, type: 'custom:lcm-user' })
+            ).not.toThrow();
         });
 
         it('takes a name instead of a slot', () => {

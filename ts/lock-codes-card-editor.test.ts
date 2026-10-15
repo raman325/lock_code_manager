@@ -5,283 +5,10 @@ import { createMockHass } from './test/mock-hass';
 import { CodeDisplayMode, LockCodesCardConfig } from './types';
 
 /**
- * Tests for LockCodesCardEditor logic.
- *
- * These tests verify the configuration handling logic used in the editor
- * without requiring full LitElement component instantiation.
+ * The lock-codes card editor, mounted: config goes in through setConfig,
+ * locks come from the websocket, and assertions read its shadow DOM and the
+ * config-changed events it dispatches.
  */
-describe('LockCodesCardEditor logic', () => {
-    describe('lock selection', () => {
-        interface ConfigWithLock {
-            lock_entity_id?: string;
-        }
-
-        /**
-         * Updates the lock entity ID in config.
-         * Mirrors _lockChanged behavior.
-         */
-        function selectLock(config: ConfigWithLock, newLockId: string): ConfigWithLock {
-            return { ...config, lock_entity_id: newLockId };
-        }
-
-        it('sets lock_entity_id on selection', () => {
-            const config: ConfigWithLock = {};
-            const result = selectLock(config, 'lock.front_door');
-            expect(result.lock_entity_id).toBe('lock.front_door');
-        });
-
-        it('replaces existing lock_entity_id', () => {
-            const config: ConfigWithLock = {
-                lock_entity_id: 'lock.old_door'
-            };
-            const result = selectLock(config, 'lock.new_door');
-            expect(result.lock_entity_id).toBe('lock.new_door');
-        });
-
-        it('preserves other config values', () => {
-            const config = {
-                lock_entity_id: 'lock.old_door',
-                title: 'My Lock',
-                code_display: 'masked' as CodeDisplayMode
-            };
-            const result = selectLock(config, 'lock.new_door');
-            expect(result.lock_entity_id).toBe('lock.new_door');
-        });
-    });
-
-    describe('title handling', () => {
-        interface ConfigWithTitle {
-            title?: string;
-        }
-
-        /**
-         * Processes title input value.
-         * Empty string becomes undefined (to use default title).
-         * Mirrors _titleChanged behavior.
-         */
-        function processTitleInput(inputValue: string): string | undefined {
-            return inputValue || undefined;
-        }
-
-        /**
-         * Updates title in config.
-         */
-        function updateTitle(
-            config: ConfigWithTitle,
-            newTitle: string | undefined
-        ): ConfigWithTitle {
-            return { ...config, title: newTitle };
-        }
-
-        it('converts empty string to undefined', () => {
-            expect(processTitleInput('')).toBeUndefined();
-        });
-
-        it('preserves non-empty string', () => {
-            expect(processTitleInput('My Custom Title')).toBe('My Custom Title');
-        });
-
-        it('preserves whitespace-only string', () => {
-            // Note: the editor doesn't trim, so whitespace is preserved
-            expect(processTitleInput('   ')).toBe('   ');
-        });
-
-        it('sets title in config', () => {
-            const config: ConfigWithTitle = {};
-            const result = updateTitle(config, 'New Title');
-            expect(result.title).toBe('New Title');
-        });
-
-        it('clears title when set to undefined', () => {
-            const config: ConfigWithTitle = { title: 'Old Title' };
-            const result = updateTitle(config, undefined);
-            expect(result.title).toBeUndefined();
-        });
-    });
-
-    describe('code display mode', () => {
-        const CODE_DISPLAY_OPTIONS: Array<{ label: string; value: CodeDisplayMode }> = [
-            { label: 'Masked with Reveal', value: 'masked_with_reveal' },
-            { label: 'Always Masked', value: 'masked' },
-            { label: 'Always Visible', value: 'unmasked' }
-        ];
-
-        it('has three display mode options', () => {
-            expect(CODE_DISPLAY_OPTIONS).toHaveLength(3);
-        });
-
-        it('includes all valid CodeDisplayMode values', () => {
-            const values = CODE_DISPLAY_OPTIONS.map((opt) => opt.value);
-            expect(values).toContain('masked_with_reveal');
-            expect(values).toContain('masked');
-            expect(values).toContain('unmasked');
-        });
-    });
-
-    describe('lock entity filtering', () => {
-        interface LockInfo {
-            entity_id: string;
-            name: string;
-        }
-
-        /**
-         * Extracts entity IDs from lock info array.
-         * Mirrors: `this._locks.map((l) => l.entity_id)`
-         */
-        function getLockEntityIds(locks: LockInfo[]): string[] {
-            return locks.map((l) => l.entity_id);
-        }
-
-        it('extracts entity IDs from locks', () => {
-            const locks: LockInfo[] = [
-                { entity_id: 'lock.front_door', name: 'Front Door' },
-                { entity_id: 'lock.back_door', name: 'Back Door' }
-            ];
-            expect(getLockEntityIds(locks)).toEqual(['lock.front_door', 'lock.back_door']);
-        });
-
-        it('returns empty array for no locks', () => {
-            expect(getLockEntityIds([])).toEqual([]);
-        });
-
-        it('preserves order', () => {
-            const locks: LockInfo[] = [
-                { entity_id: 'lock.z', name: 'Z' },
-                { entity_id: 'lock.a', name: 'A' },
-                { entity_id: 'lock.m', name: 'M' }
-            ];
-            expect(getLockEntityIds(locks)).toEqual(['lock.z', 'lock.a', 'lock.m']);
-        });
-    });
-
-    describe('config change detection', () => {
-        /**
-         * Checks if a new value differs from current.
-         * Used to prevent unnecessary config dispatches.
-         */
-        function valueChanged<T>(currentValue: T | undefined, newValue: T): boolean {
-            return newValue !== currentValue;
-        }
-
-        it('detects lock_entity_id change', () => {
-            expect(valueChanged('lock.old', 'lock.new')).toBe(true);
-        });
-
-        it('detects no change for same lock', () => {
-            expect(valueChanged('lock.same', 'lock.same')).toBe(false);
-        });
-
-        it('detects title change', () => {
-            expect(valueChanged('Old Title', 'New Title')).toBe(true);
-        });
-
-        it('detects title cleared', () => {
-            expect(valueChanged('Had Title', undefined as unknown as string)).toBe(true);
-        });
-
-        it('detects code_display change', () => {
-            expect(valueChanged('masked' as CodeDisplayMode, 'unmasked' as CodeDisplayMode)).toBe(
-                true
-            );
-        });
-    });
-
-    describe('loading state', () => {
-        interface EditorState {
-            loading: boolean;
-            locks: unknown[];
-        }
-
-        /**
-         * Determines what to show based on loading state.
-         */
-        function getLoadingDisplay(state: EditorState): 'loading' | 'warning' | 'picker' {
-            if (state.loading) {
-                return 'loading';
-            }
-            if (state.locks.length === 0) {
-                return 'warning';
-            }
-            return 'picker';
-        }
-
-        it('shows loading when loading is true', () => {
-            expect(getLoadingDisplay({ loading: true, locks: [] })).toBe('loading');
-        });
-
-        it('shows warning when no locks and not loading', () => {
-            expect(getLoadingDisplay({ loading: false, locks: [] })).toBe('warning');
-        });
-
-        it('shows picker when locks exist', () => {
-            expect(
-                getLoadingDisplay({
-                    loading: false,
-                    locks: [{ entity_id: 'lock.test' }]
-                })
-            ).toBe('picker');
-        });
-
-        it('shows loading even if locks exist', () => {
-            // Loading takes precedence
-            expect(
-                getLoadingDisplay({
-                    loading: true,
-                    locks: [{ entity_id: 'lock.test' }]
-                })
-            ).toBe('loading');
-        });
-    });
-
-    describe('config validation', () => {
-        /**
-         * Basic validation for LockCodesCardConfig.
-         */
-        function validateConfig(config: Partial<LockCodesCardConfig>): {
-            error?: string;
-            valid: boolean;
-        } {
-            if (!config.lock_entity_id) {
-                return { valid: false, error: 'lock_entity_id is required' };
-            }
-            return { valid: true };
-        }
-
-        it('requires lock_entity_id', () => {
-            expect(validateConfig({})).toEqual({
-                valid: false,
-                error: 'lock_entity_id is required'
-            });
-        });
-
-        it('rejects empty lock_entity_id', () => {
-            expect(validateConfig({ lock_entity_id: '' })).toEqual({
-                valid: false,
-                error: 'lock_entity_id is required'
-            });
-        });
-
-        it('accepts valid config', () => {
-            expect(
-                validateConfig({
-                    lock_entity_id: 'lock.front_door',
-                    type: 'custom:lcm-lock-codes'
-                })
-            ).toEqual({ valid: true });
-        });
-
-        it('accepts config with optional fields', () => {
-            expect(
-                validateConfig({
-                    code_display: 'masked',
-                    lock_entity_id: 'lock.front_door',
-                    title: 'Custom Title',
-                    type: 'custom:lcm-lock-codes'
-                })
-            ).toEqual({ valid: true });
-        });
-    });
-});
 
 interface LockCodesEditorElement extends HTMLElement {
     hass: HomeAssistant;
@@ -289,8 +16,33 @@ interface LockCodesEditorElement extends HTMLElement {
     updateComplete: Promise<boolean>;
 }
 
+type Valued<T = string> = HTMLElement & { value: T };
+
+type CallWS = (msg: { [key: string]: unknown; type: string }) => unknown;
+
+/** Answers the editor's websocket calls: entries, then each entry's locks. */
+function locksByEntry(entries: Record<string, string[] | Error>): CallWS {
+    return (msg) => {
+        if (msg.type === 'config_entries/get') {
+            return Object.keys(entries).map((entry_id) => {
+                return { entry_id };
+            });
+        }
+        const locks = entries[msg.config_entry_id as string];
+        if (locks instanceof Error) {
+            return Promise.reject(locks);
+        }
+        return {
+            locks: locks.map((entity_id) => {
+                return { entity_id, name: entity_id };
+            })
+        };
+    };
+}
+
 describe('lcm-lock-codes-editor', () => {
     let el: LockCodesEditorElement | undefined;
+    let events: CustomEvent[];
 
     beforeAll(async () => {
         if (!customElements.get('lcm-lock-codes-editor')) {
@@ -304,7 +56,8 @@ describe('lcm-lock-codes-editor', () => {
     });
 
     async function mountEditor(
-        config: Partial<LockCodesCardConfig> = {}
+        config: Partial<LockCodesCardConfig> = {},
+        callWS: CallWS = () => []
     ): Promise<LockCodesEditorElement> {
         const editor = document.createElement('lcm-lock-codes-editor') as LockCodesEditorElement;
         editor.setConfig({
@@ -312,26 +65,197 @@ describe('lcm-lock-codes-editor', () => {
             type: 'custom:lcm-lock-codes',
             ...config
         });
-        editor.hass = createMockHass({ callWS: () => [] });
+        editor.hass = createMockHass({ callWS });
         document.body.appendChild(editor);
         await new Promise((r) => setTimeout(r, 0));
         await editor.updateComplete;
+        events = [];
+        editor.addEventListener('config-changed', (e) => events.push(e as CustomEvent));
         return editor;
     }
 
-    function codeDisplaySelect(editor: HTMLElement): HTMLElement & { value: CodeDisplayMode } {
-        const select = editor.shadowRoot?.querySelector('ha-select');
-        expect(select).not.toBeNull();
-        return select as HTMLElement & { value: CodeDisplayMode };
+    function root(): ShadowRoot {
+        return el!.shadowRoot!;
     }
 
-    it('shows the card default (masked with reveal) when no code_display is configured', async () => {
-        el = await mountEditor();
-        expect(codeDisplaySelect(el).value).toBe('masked_with_reveal');
+    function codeDisplaySelect(): Valued<CodeDisplayMode> {
+        const select = root().querySelector<Valued<CodeDisplayMode>>('ha-select');
+        expect(select).not.toBeNull();
+        return select!;
+    }
+
+    describe('code display', () => {
+        it('shows the card default (masked with reveal) when no code_display is configured', async () => {
+            el = await mountEditor();
+            expect(codeDisplaySelect().value).toBe('masked_with_reveal');
+        });
+
+        it('shows the configured code_display', async () => {
+            el = await mountEditor({ code_display: 'unmasked' });
+            expect(codeDisplaySelect().value).toBe('unmasked');
+        });
+
+        it('offers all three modes', async () => {
+            el = await mountEditor();
+            expect(
+                [...codeDisplaySelect().querySelectorAll<Valued>('ha-list-item')].map(
+                    (item) => item.value
+                )
+            ).toEqual(['masked_with_reveal', 'masked', 'unmasked']);
+        });
+
+        it('dispatches the chosen mode', async () => {
+            el = await mountEditor({ code_display: 'masked', title: 'Front' });
+            const select = codeDisplaySelect();
+            select.value = 'unmasked';
+            select.dispatchEvent(new CustomEvent('selected'));
+            expect(events).toHaveLength(1);
+            expect(events[0].detail.config).toEqual({
+                code_display: 'unmasked',
+                lock_entity_id: 'lock.front_door',
+                title: 'Front',
+                type: 'custom:lcm-lock-codes'
+            });
+        });
+
+        it('does not dispatch when the mode is unchanged', async () => {
+            el = await mountEditor({ code_display: 'masked' });
+            codeDisplaySelect().dispatchEvent(new CustomEvent('selected'));
+            expect(events).toHaveLength(0);
+        });
     });
 
-    it('shows the configured code_display', async () => {
-        el = await mountEditor({ code_display: 'unmasked' });
-        expect(codeDisplaySelect(el).value).toBe('unmasked');
+    describe('lock picker', () => {
+        function picker(): HTMLElement & { includeEntities: string[]; value: string } {
+            const found = root().querySelector('ha-entity-picker');
+            expect(found).not.toBeNull();
+            return found as HTMLElement & { includeEntities: string[]; value: string };
+        }
+
+        it('says it is loading until the locks arrive', async () => {
+            el = await mountEditor({}, () => new Promise(() => {}));
+            expect(root().textContent).toContain('Loading locks...');
+            expect(root().querySelector('.no-locks-warning')).toBeNull();
+        });
+
+        it('warns when no lock is managed', async () => {
+            el = await mountEditor({}, locksByEntry({}));
+            expect(root().textContent).not.toContain('Loading locks...');
+            expect(root().querySelector('.no-locks-warning')).not.toBeNull();
+        });
+
+        it("offers every entry's locks once, skipping an entry that fails", async () => {
+            el = await mountEditor(
+                {},
+                locksByEntry({
+                    a: ['lock.front_door', 'lock.back_door'],
+                    b: new Error('not loaded'),
+                    c: ['lock.back_door', 'lock.garage']
+                })
+            );
+            expect(root().textContent).not.toContain('Loading locks...');
+            expect(root().querySelector('.no-locks-warning')).toBeNull();
+            expect(picker().includeEntities).toEqual([
+                'lock.front_door',
+                'lock.back_door',
+                'lock.garage'
+            ]);
+            expect(picker().value).toBe('lock.front_door');
+        });
+
+        it('dispatches the chosen lock, keeping the rest of the config', async () => {
+            el = await mountEditor({ code_display: 'masked', title: 'Front' });
+            picker().dispatchEvent(
+                new CustomEvent('value-changed', { detail: { value: 'lock.back_door' } })
+            );
+            expect(events).toHaveLength(1);
+            expect(events[0].detail.config).toEqual({
+                code_display: 'masked',
+                lock_entity_id: 'lock.back_door',
+                title: 'Front',
+                type: 'custom:lcm-lock-codes'
+            });
+        });
+
+        it('does not dispatch when the same lock is picked', async () => {
+            el = await mountEditor();
+            picker().dispatchEvent(
+                new CustomEvent('value-changed', { detail: { value: 'lock.front_door' } })
+            );
+            expect(events).toHaveLength(0);
+        });
+    });
+
+    describe('title', () => {
+        function titleInput(): Valued {
+            const found = root().querySelector<Valued>('ha-input');
+            expect(found).not.toBeNull();
+            return found!;
+        }
+
+        async function type(value: string): Promise<void> {
+            const input = titleInput();
+            input.value = value;
+            input.dispatchEvent(new Event('input'));
+            await el!.updateComplete;
+        }
+
+        it('shows an empty field when no title is configured', async () => {
+            el = await mountEditor();
+            expect(titleInput().value).toBe('');
+        });
+
+        it('dispatches a typed title', async () => {
+            el = await mountEditor();
+            await type('Front');
+            expect(events).toHaveLength(1);
+            expect(events[0].detail.config.title).toBe('Front');
+        });
+
+        it('clears the title to undefined, so the card falls back to its own', async () => {
+            el = await mountEditor({ title: 'Front' });
+            await type('');
+            expect(events).toHaveLength(1);
+            expect(events[0].detail.config.title).toBeUndefined();
+        });
+
+        it('keeps whitespace as typed', async () => {
+            el = await mountEditor();
+            await type('   ');
+            expect(events[0].detail.config.title).toBe('   ');
+        });
+
+        it('does not dispatch when the title is unchanged', async () => {
+            el = await mountEditor({ title: 'Front' });
+            await type('Front');
+            expect(events).toHaveLength(0);
+        });
+    });
+
+    it('renders nothing before it has hass and a config', async () => {
+        el = document.createElement('lcm-lock-codes-editor') as LockCodesEditorElement;
+        document.body.appendChild(el);
+        await el.updateComplete;
+        expect(root().querySelector('ha-select')).toBeNull();
+        expect(root().querySelector('ha-entity-picker')).toBeNull();
+    });
+
+    it('dispatches config-changed so it bubbles out of the shadow root', async () => {
+        el = await mountEditor();
+        const outer: CustomEvent[] = [];
+        const onOuter = (e: Event): void => {
+            outer.push(e as CustomEvent);
+        };
+        document.body.addEventListener('config-changed', onOuter);
+        try {
+            const select = codeDisplaySelect();
+            select.value = 'masked';
+            select.dispatchEvent(new CustomEvent('selected'));
+        } finally {
+            document.body.removeEventListener('config-changed', onOuter);
+        }
+        expect(outer).toHaveLength(1);
+        expect(outer[0].bubbles).toBe(true);
+        expect(outer[0].composed).toBe(true);
     });
 });

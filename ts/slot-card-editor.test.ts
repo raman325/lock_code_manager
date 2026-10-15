@@ -3,488 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { HomeAssistant } from './ha_type_stubs';
 import { createMockHass } from './test/mock-hass';
-import { CodeDisplayMode, LockCodeManagerSlotCardConfig } from './types';
-
-/**
- * Tests for LcmSlotCardEditor logic.
- *
- * These tests verify the configuration handling logic used in the editor
- * without requiring full LitElement component instantiation.
- */
-describe('LcmSlotCardEditor logic', () => {
-    describe('config entry selection', () => {
-        interface ConfigWithEntry {
-            config_entry_id?: string;
-            config_entry_title?: string;
-        }
-
-        /**
-         * When selecting a config entry by ID, the title should be cleared.
-         * This mirrors the behavior in _configEntryChanged.
-         */
-        function selectConfigEntry(config: ConfigWithEntry, newEntryId: string): ConfigWithEntry {
-            const { config_entry_title: _, ...rest } = config;
-            return { ...rest, config_entry_id: newEntryId };
-        }
-
-        it('sets config_entry_id on selection', () => {
-            const config: ConfigWithEntry = {};
-            const result = selectConfigEntry(config, 'abc123');
-            expect(result.config_entry_id).toBe('abc123');
-        });
-
-        it('clears config_entry_title when selecting by id', () => {
-            const config: ConfigWithEntry = {
-                config_entry_title: 'My Lock Manager'
-            };
-            const result = selectConfigEntry(config, 'abc123');
-            expect(result.config_entry_id).toBe('abc123');
-            expect(result.config_entry_title).toBeUndefined();
-        });
-
-        it('replaces existing config_entry_id', () => {
-            const config: ConfigWithEntry = {
-                config_entry_id: 'old123'
-            };
-            const result = selectConfigEntry(config, 'new456');
-            expect(result.config_entry_id).toBe('new456');
-        });
-    });
-
-    describe('slot number validation', () => {
-        /**
-         * Validates and parses slot number from string input.
-         * Returns undefined for invalid values.
-         */
-        function parseSlotNumber(input: string): number | undefined {
-            const value = parseInt(input, 10);
-            if (isNaN(value)) {
-                return undefined;
-            }
-            return value;
-        }
-
-        it('parses valid integer', () => {
-            expect(parseSlotNumber('5')).toBe(5);
-        });
-
-        it('parses boundary values', () => {
-            expect(parseSlotNumber('1')).toBe(1);
-            expect(parseSlotNumber('9999')).toBe(9999);
-        });
-
-        it('returns undefined for non-numeric input', () => {
-            expect(parseSlotNumber('abc')).toBeUndefined();
-        });
-
-        it('returns undefined for empty string', () => {
-            expect(parseSlotNumber('')).toBeUndefined();
-        });
-
-        it('parses negative numbers (validation happens elsewhere)', () => {
-            // The editor allows parsing; the card validates bounds
-            expect(parseSlotNumber('-1')).toBe(-1);
-        });
-
-        it('truncates decimal values', () => {
-            expect(parseSlotNumber('5.7')).toBe(5);
-        });
-    });
-
-    describe('code display mode', () => {
-        const CODE_DISPLAY_OPTIONS: Array<{ label: string; value: CodeDisplayMode }> = [
-            { label: 'Masked with Reveal', value: 'masked_with_reveal' },
-            { label: 'Always Masked', value: 'masked' },
-            { label: 'Always Visible', value: 'unmasked' }
-        ];
-
-        it('has three display mode options', () => {
-            expect(CODE_DISPLAY_OPTIONS).toHaveLength(3);
-        });
-
-        it('includes all valid CodeDisplayMode values', () => {
-            const values = CODE_DISPLAY_OPTIONS.map((opt) => opt.value);
-            expect(values).toContain('masked_with_reveal');
-            expect(values).toContain('masked');
-            expect(values).toContain('unmasked');
-        });
-
-        it('defaults to masked_with_reveal for slot card', () => {
-            const getDefaultCodeDisplay = (): CodeDisplayMode => 'masked_with_reveal';
-            expect(getDefaultCodeDisplay()).toBe('masked_with_reveal');
-        });
-    });
-
-    describe('show section toggles', () => {
-        type ShowSectionKey = 'show_conditions' | 'show_lock_status' | 'show_lock_sync';
-
-        interface ShowSectionsConfig {
-            show_conditions?: boolean;
-            show_lock_status?: boolean;
-            show_lock_sync?: boolean;
-        }
-
-        /**
-         * Updates a show section boolean in the config.
-         * Mirrors the _updateConfig helper behavior.
-         */
-        function updateShowSection(
-            config: ShowSectionsConfig,
-            key: ShowSectionKey,
-            value: boolean
-        ): ShowSectionsConfig {
-            return { ...config, [key]: value };
-        }
-
-        it('sets show_conditions to true', () => {
-            const config: ShowSectionsConfig = {};
-            const result = updateShowSection(config, 'show_conditions', true);
-            expect(result.show_conditions).toBe(true);
-        });
-
-        it('sets show_conditions to false', () => {
-            const config: ShowSectionsConfig = { show_conditions: true };
-            const result = updateShowSection(config, 'show_conditions', false);
-            expect(result.show_conditions).toBe(false);
-        });
-
-        it('sets show_lock_status', () => {
-            const config: ShowSectionsConfig = {};
-            const result = updateShowSection(config, 'show_lock_status', false);
-            expect(result.show_lock_status).toBe(false);
-        });
-
-        it('sets show_lock_sync', () => {
-            const config: ShowSectionsConfig = {};
-            const result = updateShowSection(config, 'show_lock_sync', false);
-            expect(result.show_lock_sync).toBe(false);
-        });
-
-        it('preserves other config values', () => {
-            const config: ShowSectionsConfig = {
-                show_conditions: true,
-                show_lock_status: true
-            };
-            const result = updateShowSection(config, 'show_conditions', false);
-            expect(result.show_conditions).toBe(false);
-            expect(result.show_lock_status).toBe(true);
-        });
-    });
-
-    describe('toggle from label click', () => {
-        /**
-         * Simulates toggle behavior when clicking the label.
-         * The new value is the inverse of (current === false).
-         * This matches: `this._config?.show_X === false` check.
-         */
-        function toggleFromLabel(currentValue: boolean | undefined): boolean {
-            // When currentValue is false, toggle to true
-            // When currentValue is undefined or true, toggle to false
-            return currentValue === false;
-        }
-
-        it('toggles undefined to false (treating undefined as true)', () => {
-            // undefined means "show by default", so clicking hides it
-            expect(toggleFromLabel(undefined)).toBe(false);
-        });
-
-        it('toggles true to false', () => {
-            expect(toggleFromLabel(true)).toBe(false);
-        });
-
-        it('toggles false to true', () => {
-            expect(toggleFromLabel(false)).toBe(true);
-        });
-    });
-
-    describe('checkbox checked state', () => {
-        /**
-         * Determines if checkbox should be checked.
-         * Mirrors the `.checked=${this._config.show_X !== false}` pattern.
-         */
-        function isChecked(value: boolean | undefined): boolean {
-            return value !== false;
-        }
-
-        it('returns true when undefined (default to shown)', () => {
-            expect(isChecked(undefined)).toBe(true);
-        });
-
-        it('returns true when explicitly true', () => {
-            expect(isChecked(true)).toBe(true);
-        });
-
-        it('returns false when explicitly false', () => {
-            expect(isChecked(false)).toBe(false);
-        });
-    });
-
-    describe('config entry filtering', () => {
-        interface ConfigEntry {
-            entry_id: string;
-            state: string;
-            title: string;
-        }
-
-        /**
-         * Filters config entries to only include loaded ones.
-         * Mirrors the behavior in _fetchConfigEntries.
-         */
-        function filterLoadedEntries(entries: ConfigEntry[]): ConfigEntry[] {
-            return entries.filter((e) => e.state === 'loaded');
-        }
-
-        it('keeps loaded entries', () => {
-            const entries: ConfigEntry[] = [
-                { entry_id: '1', title: 'Lock 1', state: 'loaded' },
-                { entry_id: '2', title: 'Lock 2', state: 'loaded' }
-            ];
-            expect(filterLoadedEntries(entries)).toHaveLength(2);
-        });
-
-        it('filters out non-loaded entries', () => {
-            const entries: ConfigEntry[] = [
-                { entry_id: '1', title: 'Lock 1', state: 'loaded' },
-                { entry_id: '2', title: 'Lock 2', state: 'not_loaded' },
-                { entry_id: '3', title: 'Lock 3', state: 'setup_error' }
-            ];
-            const result = filterLoadedEntries(entries);
-            expect(result).toHaveLength(1);
-            expect(result[0].entry_id).toBe('1');
-        });
-
-        it('returns empty array when no loaded entries', () => {
-            const entries: ConfigEntry[] = [{ entry_id: '1', title: 'Lock 1', state: 'failed' }];
-            expect(filterLoadedEntries(entries)).toHaveLength(0);
-        });
-
-        it('handles empty input', () => {
-            expect(filterLoadedEntries([])).toEqual([]);
-        });
-    });
-
-    describe('collapsed sections toggle', () => {
-        type CollapsedSection = 'conditions' | 'lock_status';
-
-        /**
-         * Toggles a section in the collapsed_sections array.
-         * Mirrors the _toggleCollapsedSection handler logic.
-         */
-        function toggleCollapsedSection(
-            current: CollapsedSection[] | undefined,
-            section: CollapsedSection,
-            collapsed: boolean
-        ): CollapsedSection[] {
-            const sections = current ?? ['conditions', 'lock_status'];
-            const updated = collapsed
-                ? sections.includes(section)
-                    ? sections
-                    : [...sections, section]
-                : sections.filter((s) => s !== section);
-            return updated;
-        }
-
-        it('adds a section when collapsed from empty', () => {
-            const result = toggleCollapsedSection([], 'conditions', true);
-            expect(result).toEqual(['conditions']);
-        });
-
-        it('adds a second section', () => {
-            const result = toggleCollapsedSection(['conditions'], 'lock_status', true);
-            expect(result).toEqual(['conditions', 'lock_status']);
-        });
-
-        it('removes a section when uncollapsed', () => {
-            const result = toggleCollapsedSection(
-                ['conditions', 'lock_status'],
-                'conditions',
-                false
-            );
-            expect(result).toEqual(['lock_status']);
-        });
-
-        it('returns empty array when last section is removed', () => {
-            const result = toggleCollapsedSection(['conditions'], 'conditions', false);
-            expect(result).toEqual([]);
-        });
-
-        it('uses default when current is undefined', () => {
-            const result = toggleCollapsedSection(undefined, 'conditions', false);
-            expect(result).toEqual(['lock_status']);
-        });
-    });
-
-    describe('condition helpers', () => {
-        /**
-         * Adds a condition helper entity ID to the list.
-         * Mirrors the _addConditionHelper handler logic.
-         */
-        function addConditionHelper(
-            current: string[] | undefined,
-            entityId: string
-        ): string[] | undefined {
-            if (!entityId) return current;
-            const helpers = current ?? [];
-            if (helpers.includes(entityId)) return current;
-            return [...helpers, entityId];
-        }
-
-        /**
-         * Removes a condition helper by index.
-         * Mirrors the _removeConditionHelper handler logic.
-         */
-        function removeConditionHelper(
-            current: string[] | undefined,
-            idx: number
-        ): string[] | undefined {
-            const helpers = [...(current ?? [])];
-            helpers.splice(idx, 1);
-            return helpers.length > 0 ? helpers : undefined;
-        }
-
-        it('adds a helper to empty list', () => {
-            const result = addConditionHelper(undefined, 'input_boolean.test');
-            expect(result).toEqual(['input_boolean.test']);
-        });
-
-        it('adds a helper to existing list', () => {
-            const result = addConditionHelper(['input_boolean.a'], 'input_boolean.b');
-            expect(result).toEqual(['input_boolean.a', 'input_boolean.b']);
-        });
-
-        it('does not add duplicate helper', () => {
-            const current = ['input_boolean.a'];
-            const result = addConditionHelper(current, 'input_boolean.a');
-            expect(result).toBe(current);
-        });
-
-        it('does not add empty entity ID', () => {
-            const current = ['input_boolean.a'];
-            const result = addConditionHelper(current, '');
-            expect(result).toBe(current);
-        });
-
-        it('removes a helper by index', () => {
-            const result = removeConditionHelper(['input_boolean.a', 'input_boolean.b'], 0);
-            expect(result).toEqual(['input_boolean.b']);
-        });
-
-        it('returns undefined when last helper is removed', () => {
-            const result = removeConditionHelper(['input_boolean.a'], 0);
-            expect(result).toBeUndefined();
-        });
-
-        it('returns undefined when removing from single-item list', () => {
-            const result = removeConditionHelper(['input_boolean.only'], 0);
-            expect(result).toBeUndefined();
-        });
-    });
-
-    describe('show_lock_count toggle', () => {
-        /**
-         * Mirrors the _showLockCountChanged handler pattern.
-         */
-        function showLockCountChanged(
-            config: { show_lock_count?: boolean },
-            checked: boolean
-        ): { show_lock_count?: boolean } {
-            return { ...config, show_lock_count: checked };
-        }
-
-        it('sets show_lock_count to true', () => {
-            const result = showLockCountChanged({}, true);
-            expect(result.show_lock_count).toBe(true);
-        });
-
-        it('sets show_lock_count to false', () => {
-            const result = showLockCountChanged({ show_lock_count: true }, false);
-            expect(result.show_lock_count).toBe(false);
-        });
-    });
-
-    describe('toggle show_lock_count from label click', () => {
-        /**
-         * Mirrors _toggleShowLockCount behavior: inverts (current === false).
-         */
-        function toggleShowLockCount(currentValue: boolean | undefined): boolean {
-            return currentValue === false;
-        }
-
-        it('toggles undefined to false', () => {
-            expect(toggleShowLockCount(undefined)).toBe(false);
-        });
-
-        it('toggles true to false', () => {
-            expect(toggleShowLockCount(true)).toBe(false);
-        });
-
-        it('toggles false to true', () => {
-            expect(toggleShowLockCount(false)).toBe(true);
-        });
-    });
-
-    describe('collapsed_sections dedup guard', () => {
-        type CollapsedSection = 'conditions' | 'lock_status';
-
-        /**
-         * Mirrors _toggleCollapsedSection including the dedup guard:
-         * if the section is already present and collapsed=true, no-op.
-         */
-        function toggleCollapsedSection(
-            current: CollapsedSection[] | undefined,
-            section: CollapsedSection,
-            collapsed: boolean
-        ): CollapsedSection[] | undefined {
-            const sections = current ?? [];
-            const updated = collapsed
-                ? sections.includes(section)
-                    ? sections
-                    : [...sections, section]
-                : sections.filter((s) => s !== section);
-            return updated.length > 0 ? updated : undefined;
-        }
-
-        it('returns same array when section already collapsed (dedup guard)', () => {
-            const current: CollapsedSection[] = ['conditions'];
-            const result = toggleCollapsedSection(current, 'conditions', true);
-            expect(result).toBe(current);
-        });
-    });
-
-    describe('config change detection', () => {
-        /**
-         * Checks if a new value differs from the current config value.
-         * Used to prevent unnecessary config dispatches.
-         */
-        function valueChanged<T>(currentValue: T | undefined, newValue: T): boolean {
-            return newValue !== currentValue;
-        }
-
-        it('detects string change', () => {
-            expect(valueChanged('old', 'new')).toBe(true);
-        });
-
-        it('detects no change for same string', () => {
-            expect(valueChanged('same', 'same')).toBe(false);
-        });
-
-        it('detects change from undefined', () => {
-            expect(valueChanged(undefined, 'value')).toBe(true);
-        });
-
-        it('detects number change', () => {
-            expect(valueChanged(1, 2)).toBe(true);
-        });
-
-        it('detects no change for same number', () => {
-            expect(valueChanged(5, 5)).toBe(false);
-        });
-
-        it('detects boolean change', () => {
-            expect(valueChanged(true, false)).toBe(true);
-        });
-    });
-});
+import { LockCodeManagerSlotCardConfig } from './types';
 
 /** Type alias for the editor element with its internal properties exposed */
 interface EditorElement extends HTMLElement {
@@ -983,6 +502,112 @@ describe('LcmSlotCardEditor integration', () => {
             dispatchSpy.mockRestore();
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('show-section checkboxes', () => {
+        const sections = [
+            ['Condition', 'show_conditions'],
+            ['Lock Status', 'show_lock_status'],
+            ['Sync Status in Lock Status', 'show_lock_sync']
+        ] as const;
+
+        async function mount(
+            config: Partial<LockCodeManagerSlotCardConfig> = {}
+        ): Promise<CustomEvent[]> {
+            el = createEditor(config);
+            el.hass = createMockHass({ callWS: () => [] });
+            container.appendChild(el);
+            await flush();
+            const events: CustomEvent[] = [];
+            el.addEventListener('config-changed', (e) => events.push(e as CustomEvent));
+            return events;
+        }
+
+        /** The checkbox row under "Show Sections" whose label reads ``label``. */
+        function row(label: string): HTMLElement {
+            const rows = [...el.shadowRoot!.querySelectorAll<HTMLElement>('.checkbox-row')];
+            const found = rows.find((r) => r.querySelector('label')?.textContent?.trim() === label);
+            expect(found, `no checkbox row labelled ${label}`).toBeTruthy();
+            return found!;
+        }
+
+        it.each(sections)('%s is ticked by default', async (label) => {
+            await mount();
+            const box = row(label).querySelector('ha-checkbox') as HTMLElement & {
+                checked: boolean;
+            };
+            expect(box.checked).toBe(true);
+        });
+
+        it.each(sections)('%s is unticked when hidden in the config', async (label, key) => {
+            await mount({ [key]: false });
+            const box = row(label).querySelector('ha-checkbox') as HTMLElement & {
+                checked: boolean;
+            };
+            expect(box.checked).toBe(false);
+        });
+
+        it.each(sections)('clicking the %s label hides a shown section', async (label, key) => {
+            const events = await mount();
+            row(label).querySelector('label')!.click();
+            expect(events).toHaveLength(1);
+            expect(events[0].detail.config[key]).toBe(false);
+        });
+
+        it.each(sections)('clicking the %s label shows a hidden section', async (label, key) => {
+            const events = await mount({ [key]: false });
+            row(label).querySelector('label')!.click();
+            expect(events).toHaveLength(1);
+            expect(events[0].detail.config[key]).toBe(true);
+        });
+
+        it.each(sections)('unticking the %s checkbox hides the section', async (label, key) => {
+            const events = await mount();
+            const box = row(label).querySelector('ha-checkbox') as HTMLElement & {
+                checked: boolean;
+            };
+            box.checked = false;
+            box.dispatchEvent(new Event('change'));
+            expect(events).toHaveLength(1);
+            expect(events[0].detail.config[key]).toBe(false);
+        });
+    });
+
+    describe('config entry choices', () => {
+        async function mountWithEntries(entries: unknown[]): Promise<ShadowRoot> {
+            el = createEditor();
+            el.hass = createMockHass({ callWS: () => entries });
+            container.appendChild(el);
+            await flush();
+            await (el as unknown as { updateComplete: Promise<boolean> }).updateComplete;
+            return el.shadowRoot!;
+        }
+
+        it('offers only loaded config entries', async () => {
+            const root = await mountWithEntries([
+                { entry_id: 'a', state: 'loaded', title: 'House' },
+                { entry_id: 'b', state: 'not_loaded', title: 'Cabin' },
+                { entry_id: 'c', state: 'setup_error', title: 'Shed' },
+                { entry_id: 'd', state: 'loaded', title: 'Garage' }
+            ]);
+            type Valued = HTMLElement & { label?: string; value: string };
+            const entrySelect = [...root.querySelectorAll<Valued>('ha-select')].find(
+                (select) => select.label === 'LCM Config Entry'
+            );
+            expect(entrySelect).toBeTruthy();
+            const offered = [...entrySelect!.querySelectorAll<Valued>('ha-list-item')].map(
+                (item) => item.value
+            );
+            expect(offered).toEqual(['a', 'd']);
+            expect(root.querySelector('.no-entries-warning')).toBeNull();
+        });
+
+        it('warns when no config entry is loaded', async () => {
+            const root = await mountWithEntries([
+                { entry_id: 'b', state: 'not_loaded', title: 'Cabin' }
+            ]);
+            expect(root.querySelector('.no-entries-warning')).not.toBeNull();
+        });
     });
     /* eslint-enable @typescript-eslint/no-explicit-any */
 });
