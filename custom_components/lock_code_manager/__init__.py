@@ -114,6 +114,7 @@ from .domain.exceptions import UnclaimedLockError
 from .domain.lock_runtime import (
     STORE_KEY,
     async_give_up,
+    async_hand_off,
     async_hard_refresh,
     async_hold_lock,
     async_release_lock,
@@ -1197,6 +1198,9 @@ async def async_remove_entry(
     config = get_entry_config(config_entry)
     if (store := hass.data.get(DOMAIN, {}).get(STORE_KEY)) is not None:
         store.forget_entry(config.locks, config.slot_numbers)
+    for lock_entity_id in config.locks:
+        # Its unload let go of the locks; their slots are someone else's now.
+        async_hand_off(hass, config_entry, lock_entity_id, config.slot_numbers)
     for slot_num in config.slot_numbers:
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
