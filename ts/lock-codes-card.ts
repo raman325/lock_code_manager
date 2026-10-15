@@ -790,11 +790,14 @@ class LockCodesCard extends LockCodesCardBase {
         if (slot.code_length) return 'masked';
         if (!isSlotEmpty(slot.code)) return '';
 
-        // Empty/null code on the lock with a PIN configured: either a write is
-        // due (the pending marker is added by the caller) or the PIN is meant to
-        // be off the lock — the slot is turned off or its condition is blocking.
+        // Empty/null code on the lock with a PIN configured: the PIN is meant to
+        // be off the lock (the slot is turned off or its condition is blocking),
+        // or a write is due (the pending marker is added by the caller), or the
+        // in-sync state is unknown and the card can't say which.
         if (slot.configured_code || slot.configured_code_length) {
-            return this._isPending(slot) ? maskSuffix.trim() : `off${maskSuffix}`;
+            const meantOff =
+                !this._isPending(slot) && (slot.enabled === false || slot.active === false);
+            return meantOff ? `off${maskSuffix}` : maskSuffix.trim();
         }
         return 'no-code';
     }
