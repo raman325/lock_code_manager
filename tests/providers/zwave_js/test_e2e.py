@@ -1507,10 +1507,14 @@ class TestInterviewedAsleep:
             )
 
         assert _setup_failure(hass, lock_entity) is None
-        assert any(
-            message["command"] == "endpoint.invoke_cc_api"
-            and message["methodName"] == "getUsersCount"
-            for message in fake_zwave_lock.commands
+        # Asked once: the count is re-read after it, not re-asked.
+        assert (
+            sum(
+                message["command"] == "endpoint.invoke_cc_api"
+                and message["methodName"] == "getUsersCount"
+                for message in fake_zwave_lock.commands
+            )
+            == 1
         )
         for slot, config in ZWAVE_JS_LCM_CONFIG_SLOTS.items():
             assert fake_zwave_lock.holds(slot) == config[CONF_PIN]
