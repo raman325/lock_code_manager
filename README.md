@@ -65,6 +65,11 @@ MQTT topic from the discovery data Zigbee2MQTT publishes to Home Assistant, so n
 configuration is needed. Locks must be added to Home Assistant via MQTT discovery
 (Zigbee2MQTT’s default).
 During LCM setup, choose your `lock.*` entity from **MQTT**.
+Some locks take PINs but cannot report them: they never answer a read, or answer that user
+status is not supported (`not_supported_255`). Lock Code Manager still sets and keeps the
+codes it manages on such a lock, but it cannot see a code programmed at the lock itself, so
+when it picks slots for new users (starting from slot 1) it may write over one. On these
+locks, add codes through Lock Code Manager only, or keep any others in the highest slots.
 
 ³ **Z-Wave JS UI (MQTT)** — For Z-Wave locks exposed to Home Assistant through
 [zwave-js-ui][zwave-js-ui]'s MQTT discovery gateway rather than the official websocket
