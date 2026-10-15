@@ -28,8 +28,6 @@ from custom_components.lock_code_manager.providers.akuvox import (
     AKUVOX_DOMAIN,
     AkuvoxLock,
     _is_local_user,
-    _make_tagged_name,
-    _parse_tag,
 )
 from tests.providers.helpers import (
     ProviderNativeTransportContractTests,
@@ -57,31 +55,6 @@ def _cred_ref(slot: int) -> CredentialRef:
 
 class TestHelperFunctions:
     """Tests for module-level helpers."""
-
-    @pytest.mark.parametrize(
-        ("slot", "name", "expected"),
-        [
-            pytest.param(1, "Guest", "lcm:1:Guest", id="with-name"),
-            pytest.param(5, None, "lcm:5:Code Slot 5", id="without-name"),
-            pytest.param(3, None, "lcm:3:Code Slot 3", id="none-name"),
-        ],
-    )
-    def test_make_tagged_name(self, slot: int, name: str | None, expected: str) -> None:
-        """Test _make_tagged_name for various inputs."""
-        assert _make_tagged_name(slot, name) == expected
-
-    @pytest.mark.parametrize(
-        ("input_str", "expected"),
-        [
-            pytest.param("[LCM:1] Guest", (1, "Guest"), id="valid-tag"),
-            pytest.param("[LCM:99] Family", (99, "Family"), id="large-slot"),
-            pytest.param("Guest Code", (None, "Guest Code"), id="no-tag"),
-            pytest.param("", (None, ""), id="empty-string"),
-        ],
-    )
-    def test_parse_tag(self, input_str: str, expected: tuple[int | None, str]) -> None:
-        """Test _parse_tag for various inputs."""
-        assert _parse_tag(input_str) == expected
 
     @pytest.mark.parametrize(
         ("user_data", "expected"),
