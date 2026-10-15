@@ -1,6 +1,8 @@
 """Test base class."""
 
 import asyncio
+from collections.abc import Collection
+from dataclasses import replace
 from datetime import timedelta
 import logging
 import time
@@ -2112,6 +2114,12 @@ class _NativeUserOwnerResolutionLock(MockNativeUserLock):
         """Resolve the owner the way a real native-user provider does."""
         return await BaseLock.async_clear_usercode(self, code_slot)
 
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """Project the lock's users the way a real native-user provider does."""
+        return await BaseLock.async_get_usercodes(self, slots)
+
 
 def _lock_user(user_id: int, name: str | None, pin_slot: int) -> User:
     """Build a lock-side user owning one PIN credential."""
@@ -2224,6 +2232,47 @@ async def test_clearing_a_slot_on_a_lock_without_user_records_adopts_by_slot(
 
     deleted.assert_called_once()
     assert deleted.call_args.args[0].user_id == 3
+
+
+async def test_a_read_marks_codes_only_untagged_users_hold_as_foreign(
+    hass: HomeAssistant,
+):
+    """
+    A PIN only an untagged user holds is someone else's code at that index (#1695).
+
+    It is still reported, as what the lock holds; only the slot does not
+    read it as its own. A tagged user at the same index is the slot's own.
+    """
+    lock = _make_base_test_lock(hass, "read_foreign", _NativeUserOwnerResolutionLock)
+    # Probed at setup.
+    await lock._get_cached_capabilities()
+    users = [
+        _lock_user(7, "Mom", 3),
+        _lock_user(8, make_tagged_name(1, "Raman"), 1),
+        _lock_user(9, "Dad", 1),
+    ]
+    with patch.object(lock, "async_get_users", AsyncMock(return_value=users)):
+        codes = await lock.async_get_usercodes([1, 2, 3])
+
+    assert {slot for slot, code in codes.items() if code != SlotCredential.empty()} == {
+        1,
+        3,
+    }
+    assert lock.last_foreign_slots == {3}
+
+
+async def test_a_lock_without_user_records_marks_nothing_foreign(
+    hass: HomeAssistant,
+):
+    """No user there can carry a tag (Z-Wave User Code): the slot is the identity."""
+    lock = _make_base_test_lock(hass, "read_no_records", _NativeUserOwnerResolutionLock)
+    lock._capabilities_cache = replace(_pin_capabilities(), max_user_name_length=0)
+    with patch.object(
+        lock, "async_get_users", AsyncMock(return_value=[_lock_user(3, None, 3)])
+    ):
+        await lock.async_get_usercodes([3])
+
+    assert lock.last_foreign_slots == frozenset()
 
 
 async def test_a_wedged_provider_setup_does_not_park_the_entry(hass: HomeAssistant):

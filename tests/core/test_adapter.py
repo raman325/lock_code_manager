@@ -222,6 +222,44 @@ async def test_a_slot_the_lock_said_nothing_about_is_silent(ports) -> None:
     assert await port.read([1, 2]) == {1: Holds("1234")}
 
 
+class _Foreign(MockLCMLock):
+    """A lock with users: some PINs sit under users with no slot tag."""
+
+    foreign: frozenset[int] = frozenset()
+
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        codes = await super().async_get_usercodes(slots)
+        self.last_foreign_slots = self.foreign
+        return codes
+
+
+async def test_someone_else_s_code_at_a_slot_s_index_is_not_the_slot_s(
+    ports,
+) -> None:
+    """The slot reads empty; the code is kept as one nobody here manages (#1695)."""
+    port, _, lock = await ports(_Foreign)
+    lock.foreign = frozenset({2})
+
+    assert await port.read([1, 2]) == {1: Holds("1234"), 2: Seen.EMPTY}
+    assert port.others[2] == Holds("5678")
+
+
+async def test_a_turned_off_slot_holding_someone_else_s_code_is_in_sync(
+    ports,
+) -> None:
+    """Nothing to clear: no write, no tries, no hold (#1695)."""
+    _, worker, lock = await ports(_Foreign)
+    lock.foreign = frozenset({2})
+    worker.want(2, None)
+    worker.start()
+    await worker.settled()
+
+    assert worker.status(2) == (Status.IN_SYNC, None)
+    assert lock.codes[2] == "5678"
+
+
 async def test_a_read_the_lock_said_nothing_to_is_no_answer(ports) -> None:
     """Once it has answered reads: silence about everything is a lock gone quiet."""
     port, _, lock = await ports(_Silent)

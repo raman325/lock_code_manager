@@ -20,7 +20,7 @@ from ..const import MAX_SEARCHED_SLOT
 from ..core.slot import Seen
 from ..providers import resolve_provider_class_for_entity
 from ..providers._base import BaseLock
-from ..providers._util import parse_tag
+from ..providers._util import foreign_slots
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
 from .lock_runtime import lock_registry
@@ -539,19 +539,15 @@ async def _async_adoptable(
     and failing that, adopting an UNTAGGED user holding a PIN at credential
     index == slot -- how Lock Code Manager 2.0 left its users. That user may
     just as well be one somebody made in the vendor's app, and adopting it
-    renames them and writes over their PIN, so their index is occupied. A
-    tagged user is Lock Code Manager's own, held by whichever entry has the
-    slot (``claimed_by_other_entries`` says which), and is not in the way.
+    renames them and writes over their PIN, so their index is occupied
+    (``foreign_slots``). A tagged user is Lock Code Manager's own, held by
+    whichever entry has the slot (``claimed_by_other_entries`` says which),
+    and is not in the way; nor is an untagged one at its slot, as the write
+    finds the tagged user first.
     """
     if (worker := lock_registry(hass).worker(lock.lock.entity_id)) is None:
         users = await lock.async_get_users()
     else:
         # In the lock's turn: an entry holding it may have a write in flight.
         users = await worker.turn(lock.async_get_users)
-    return frozenset(
-        credential.slot
-        for user in users
-        if parse_tag(user.name or "")[0] is None
-        for credential in user.pin_credentials
-        if credential.slot in indices
-    )
+    return foreign_slots(users) & frozenset(indices)

@@ -155,7 +155,7 @@ class ProviderPort:
             if provider.fresh_read_is_hard_refresh
             else provider.async_get_usercodes
         )
-        provider.last_silent_slots = frozenset()
+        provider.last_silent_slots = provider.last_foreign_slots = frozenset()
         # A slot past the lock's capacity is never asked about: no answer
         # would come, and the lock would be taken for gone (#1398). Its write
         # is refused unsent, which holds it.
@@ -182,8 +182,12 @@ class ProviderPort:
         # The lock answered, but of a slot written too lately to show it yet:
         # left out (silent), so the write is trusted until a later read.
         silent |= self._lagging(slots)
+        # Someone else's code at a slot's index is not the slot's: a slot
+        # turned off is clear, and one wanting a PIN writes it, which adopts
+        # the user (#1695). It is still a code nobody here manages.
+        foreign = provider.last_foreign_slots
         readings = {
-            slot: reading(codes[slot])
+            slot: Seen.EMPTY if slot in foreign else reading(codes[slot])
             for slot in slots
             if slot in codes and slot not in silent
         }
