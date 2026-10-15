@@ -7,7 +7,7 @@ from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import ConfigEntryDisabler
+from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
@@ -21,7 +21,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from custom_components.lock_code_manager.const import (
@@ -846,6 +846,65 @@ async def test_a_slot_taken_on_one_lock_still_reaches_the_entrys_other_lock(
 
     assert mock_lock(second, LOCK_2_ENTITY_ID).codes[2] == "3333"
     assert mock_lock(first, LOCK_1_ENTITY_ID).codes[2] == "5678"
+
+
+def _re_pair(hass: HomeAssistant, lock_entity_id: str) -> str:
+    """
+    Put another device under ``lock_entity_id``: a new registry entry.
+
+    The old one is moved aside rather than removed, so its entity lives on.
+    """
+    entities = er.async_get(hass)
+    old = entities.async_get(lock_entity_id)
+    entities.async_update_entity(lock_entity_id, new_entity_id=f"{lock_entity_id}_old")
+    new = entities.async_get_or_create(
+        "lock",
+        old.platform,
+        f"{old.unique_id}-re-paired",
+        suggested_object_id=lock_entity_id.split(".", 1)[1],
+        config_entry=hass.config_entries.async_get_entry(old.config_entry_id),
+    )
+    assert new.entity_id == lock_entity_id
+    assert new.id != old.id
+    return new.id
+
+
+async def test_two_locks_re_paired_together_set_every_entry_up_again(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    An entry holding both locks is rebuilt for each, one rebuild at a time.
+
+    Together, the second rebuild found the entry the first was unloading:
+    unloading it again was refused, and the entry sharing only the second
+    lock, unloaded alongside, was never set up again.
+    """
+    both = current_entry(
+        "both", {1: "1111", 2: "2222"}, (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
+    )
+    second = current_entry("second", {3: "3333", 4: "4444"}, (LOCK_2_ENTITY_ID,))
+    for entry in (both, second):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    ids = {lock: _re_pair(hass, lock) for lock in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)}
+    await hass.async_block_till_done()
+
+    assert both.state is ConfigEntryState.LOADED
+    assert second.state is ConfigEntryState.LOADED
+    for lock, new_id in ids.items():
+        assert lock_registry(hass).worker(lock).port.provider.lock.id == new_id
+    assert mock_lock(both, LOCK_1_ENTITY_ID).codes == {1: "1111", 2: "2222"}
+    assert mock_lock(second, LOCK_2_ENTITY_ID).codes == {
+        1: "1111",
+        2: "2222",
+        3: "3333",
+        4: "4444",
+    }
+    assert "OperationNotAllowed" not in caplog.text
+    for entry in (both, second):
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def _remove_user_in_slot(

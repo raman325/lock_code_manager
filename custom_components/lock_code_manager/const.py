@@ -1,5 +1,6 @@
 """Constants for lock_code_manager."""
 
+import asyncio
 from typing import TYPE_CHECKING, Final, TypedDict
 
 from homeassistant.const import Platform
@@ -82,6 +83,8 @@ class LockCodeManagerData(TypedDict, total=False):
     slot_issues: dict[str, set[str]]
     lock_store: LockStore
     locks_reporting: dict[str, bool]
+    locks_rebuilding: set[str]
+    rebuild_lock: asyncio.Lock
 
 
 DATA: HassKey[LockCodeManagerData] = HassKey(DOMAIN)

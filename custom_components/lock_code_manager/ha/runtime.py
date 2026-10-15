@@ -15,7 +15,7 @@ from collections.abc import Iterable, Mapping
 import logging
 from typing import Final
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_NAME, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -71,6 +71,9 @@ STORE_KEY: Final = "lock_store"
 REPORTS_KEY: Final = "locks_reporting"
 # Locks whose worker is checked for a device re-paired under their entity id.
 REBUILDS_KEY: Final = "locks_rebuilding"
+# One rebuild at a time: an entry holding two locks re-paired together is
+# unloaded and set up by one rebuild, then the other, never by both at once.
+REBUILD_LOCK_KEY: Final = "rebuild_lock"
 # Everything the core keeps for one run of Home Assistant.
 CORE_KEYS = (
     REGISTRY_KEY,
@@ -80,6 +83,7 @@ CORE_KEYS = (
     STORE_KEY,
     REPORTS_KEY,
     REBUILDS_KEY,
+    REBUILD_LOCK_KEY,
 )
 
 # How long a one-off write from a repair or the card is waited for.
@@ -170,6 +174,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
     data[ISSUES_KEY] = {}
     data[REPORTS_KEY] = {}
     data[REBUILDS_KEY] = set()
+    data[REBUILD_LOCK_KEY] = asyncio.Lock()
 
     def _make(lock_entity_id: str) -> LockWorker[ProviderPort]:
         # A config flow's read before the integration has set up remembers nothing.
@@ -356,6 +361,7 @@ def async_listen_for_re_pairs(
     followed by a creation is one, once the creation is in.
     """
     pending: set[str] = hass.data[DATA][REBUILDS_KEY]
+    one_at_a_time: asyncio.Lock = hass.data[DATA][REBUILD_LOCK_KEY]
 
     @callback
     def _changed(event: Event[er.EventEntityRegistryUpdatedData]) -> None:
@@ -366,7 +372,10 @@ def async_listen_for_re_pairs(
 
         async def _check() -> None:
             try:
-                await _async_rebuild_if_re_paired(hass, lock)
+                # Checked once the rebuild before it is done: it may have
+                # rebuilt this lock too.
+                async with one_at_a_time:
+                    await _async_rebuild_if_re_paired(hass, lock)
             finally:
                 pending.discard(lock)
 
@@ -414,15 +423,30 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
         worker.forget(slot)
         data[GIVEN_UP_KEY].pop((lock, slot), None)
     data[LEAVING_KEY].add(lock)
-    await asyncio.gather(
-        *(hass.config_entries.async_unload(entry.entry_id) for entry in holders)
+    unloaded = await asyncio.gather(
+        *(hass.config_entries.async_unload(entry.entry_id) for entry in holders),
+        return_exceptions=True,
     )
+    for entry, result in zip(holders, unloaded, strict=True):
+        if isinstance(result, BaseException):
+            _LOGGER.error(
+                "Unloading %s for re-paired %s failed: %s", entry.title, lock, result
+            )
     if registry.worker(lock) is worker:
         # A one-off read still holds it, and the entries take it back: not
         # taken for a lock leaving when it stops. A reload rebuilds it.
         data[LEAVING_KEY].discard(lock)
     for entry in holders:
-        await hass.config_entries.async_setup(entry.entry_id)
+        # One set up again meanwhile (a reload), or not unloaded, is left be.
+        if entry.state is not ConfigEntryState.NOT_LOADED:
+            continue
+        try:
+            await hass.config_entries.async_setup(entry.entry_id)
+        except Exception:
+            # The others still set up.
+            _LOGGER.exception(
+                "Setting up %s again for re-paired %s failed", entry.title, lock
+            )
 
 
 async def async_hold_lock(
