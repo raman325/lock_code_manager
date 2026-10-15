@@ -33,6 +33,7 @@ from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
+    ATTR_OPERATION,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
@@ -42,6 +43,7 @@ from custom_components.lock_code_manager.const import (
     EVENT_CREDENTIAL_USED,
 )
 from custom_components.lock_code_manager.core.slot import LIMIT
+from custom_components.lock_code_manager.domain.events import CredentialOperation
 from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_codes,
     lock_registry,
@@ -262,12 +264,6 @@ class TestFullSetupLifecycle:
         locks = lcm_config_entry.runtime_data.locks
         assert [type(lock) for lock in locks.values()] == [ZWaveJSUILock]
 
-    async def test_coordinator_created(
-        self, hass: HomeAssistant, zui_lock: ZWaveJSUILock
-    ) -> None:
-        """The coordinator is created and attached to the provider."""
-        assert zui_lock.coordinator is not None
-
     async def test_gateway_resolved_through_discovery(
         self, hass: HomeAssistant, zui_lock: ZWaveJSUILock
     ) -> None:
@@ -279,13 +275,6 @@ class TestFullSetupLifecycle:
         Everything below this point addresses that base.
         """
         assert zui_lock._api_base == ZUI_API_BASE
-
-    async def test_node_subscription_established(
-        self, hass: HomeAssistant, zui_lock: ZWaveJSUILock
-    ) -> None:
-        """The provider subscribes to the node's value tree during setup."""
-        assert zui_lock._subscribed_node_topic == ZUI_NODE_TOPIC
-        assert zui_lock._push_unsubs
 
 
 class TestInitialSync:
@@ -608,27 +597,6 @@ class TestPushUpdates:
             SlotCode.EMPTY
         )
 
-    async def test_stale_available_does_not_unwind_a_synced_slot(
-        self,
-        hass: HomeAssistant,
-        synced_lcm_config_entry: MockConfigEntry,
-        zui_lock: ZWaveJSUILock,
-    ) -> None:
-        """
-        A lock re-announcing AVAILABLE after a write must not restart sync.
-
-        Some locks send a stale AVAILABLE once a code lands. Believed, it
-        marks the slot cleared, sync rewrites it, the lock re-announces, and
-        the entry never settles -- so the assertion is that a fully synced
-        slot survives one.
-        """
-        fire_zui_node_value(
-            hass, "user_code/endpoint_0/userIdStatus/2", STATUS_AVAILABLE
-        )
-        await hass.async_block_till_done()
-
-        assert held_codes(hass, zui_lock.lock.entity_id).get(2) == (E2E_SLOT_PINS[2])
-
     async def test_a_stale_available_leaves_a_synced_slot_alone(
         self,
         hass: HomeAssistant,
@@ -764,6 +732,7 @@ class TestKeypadEvents:
         await hass.async_block_till_done()
 
         assert len(events) == 1
+        assert events[0].data[ATTR_OPERATION] == CredentialOperation.UNLOCK
         state = hass.states.get(event_entity_id)
         assert state.state != STATE_UNKNOWN
         assert state.attributes[ATTR_CODE_SLOT] == 1

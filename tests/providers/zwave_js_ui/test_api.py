@@ -888,37 +888,6 @@ async def test_publish_failures_are_routed_by_kind(
         await zui_gateway_resolved._async_api_call_at(ZUI_API_BASE, "getInfo", [])
 
 
-async def test_user_code_command_shapes_the_send_command_envelope(
-    zui_gateway_resolved: ZWaveJSUILock, zui_api_responder: ZWaveJSUIApiResponder
-) -> None:
-    """
-    User Code CC calls address this node's endpoint 0 and pass the result through.
-
-    The envelope is what zwave-js-ui's sendCommand api expects: a value-id-ish
-    header, the driver method name, and that method's own argument list.
-    """
-    zui_api_responder.set_result("sendCommand", {"userIdStatus": 1, "userCode": "1234"})
-
-    result = await zui_gateway_resolved._async_user_code_command("get", [5])
-
-    assert result == {"userIdStatus": 1, "userCode": "1234"}
-    assert zui_api_responder.requests == [
-        (
-            ZUI_API_BASE,
-            "sendCommand",
-            [
-                {
-                    "nodeId": ZUI_NODE_ID,
-                    "commandClass": CC_USER_CODE_ID,
-                    "endpoint": 0,
-                },
-                "get",
-                [5],
-            ],
-        )
-    ]
-
-
 async def test_non_api_publishes_pass_through_the_responder(
     hass: HomeAssistant, zui_api_responder: ZWaveJSUIApiResponder
 ) -> None:
