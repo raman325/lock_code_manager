@@ -368,7 +368,8 @@ def async_hand_off(
 
     Only for an owner that stops configuring the slot: given up, or its
     entry deleted. One that merely unloads -- a reload, or disabled --
-    still configures it, and takes it back when it loads.
+    still configures it, and takes it back when it loads, unless the other
+    entry claimed the slot meanwhile by telling the lock what it wants.
     """
     for slot in slots:
         for entry in iter_loaded_lcm_entries(hass):

@@ -31,7 +31,7 @@ from homeassistant.const import (
     STATE_ON,
     STATE_UNAVAILABLE,
 )
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
@@ -292,7 +292,7 @@ async def test_advancing_the_clock_fires_each_timer_at_its_own_time(
     loop = asyncio.get_running_loop()
     start, wall = loop.time(), dt_util.utcnow()
     fired: list[float] = []
-    async_call_later(hass, 30, lambda _now: fired.append(loop.time()))
+    async_call_later(hass, 30, callback(lambda _now: fired.append(loop.time())))
 
     await async_advance_clock(hass, freezer, 45)
 
@@ -356,7 +356,12 @@ async def test_a_deadline_is_bracketed_by_a_tick_either_side(
     """Held a tick short of the deadline and let go a tick past it passes."""
     fired: list[Any] = []
     started_at = time.monotonic()
-    async_call_later(hass, 60, fired.append)
+
+    @callback
+    def _fire(now: Any) -> None:
+        fired.append(now)
+
+    async_call_later(hass, 60, _fire)
 
     await async_advance_across_deadline(
         hass,
@@ -389,7 +394,12 @@ async def test_a_deadline_bracket_fails_on_either_side(
 ) -> None:
     """A wait that ends early, one that outlasts its deadline, or a deadline too near to check."""
     fired: list[Any] = []
-    unsub = async_call_later(hass, fires_after, fired.append)
+
+    @callback
+    def _fire(now: Any) -> None:
+        fired.append(now)
+
+    unsub = async_call_later(hass, fires_after, _fire)
 
     with pytest.raises(pytest.fail.Exception, match=message):
         await async_advance_across_deadline(
@@ -470,8 +480,14 @@ async def test_a_timer_due_within_a_tick_fires_at_its_own_time(
     start = loop.time()
     seen: list[tuple[str, float]] = []
 
-    async_call_later(hass, 0.5, lambda _now: seen.append(("early", loop.time())))
-    async_call_later(hass, 1.5, lambda _now: seen.append(("late", loop.time())))
+    # Callbacks run on the loop: a plain function would go to an executor
+    # thread, which a busy runner can start only after a later jump.
+    async_call_later(
+        hass, 0.5, callback(lambda _now: seen.append(("early", loop.time())))
+    )
+    async_call_later(
+        hass, 1.5, callback(lambda _now: seen.append(("late", loop.time())))
+    )
     await async_advance_sync_ticks(hass, freezer)
 
     assert [name for name, _ in seen] == ["early", "late"]
