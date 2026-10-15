@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import override
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.const import EntityCategory
@@ -110,11 +111,13 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         if self.hass is not None and self.entity_id:
             self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
 
+    @override
     def _register_slot_coordinator_subscription(self) -> None:
         """Subscribe to the derived active-state view rather than the generic state poke."""
         # Type narrowing; the base only calls this hook when set.
@@ -162,6 +165,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         self._attr_entity_registry_enabled_default = key == ATTR_IN_SYNC
 
     @property
+    @override
     def available(self) -> bool:
         """Return whether the lock has said anything about the slot yet."""
         return (
@@ -171,6 +175,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
 
     @property
+    @override
     def is_on(self) -> bool | None:
         """Return whether the slot is in sync; unknown before the lock has said."""
         status = self._core_status()
@@ -179,6 +184,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         return status is Status.IN_SYNC
 
     @property
+    @override
     def extra_state_attributes(self) -> dict[str, str]:
         """Return extra state attributes."""
         status = self._core_status()
@@ -190,6 +196,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return {}
         return {ATTR_SYNC_STATUS: status.value}
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)

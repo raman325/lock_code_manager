@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, final
+from typing import TYPE_CHECKING, Any, final, override
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE
@@ -257,6 +257,7 @@ class BaseLockCodeManagerEntity(Entity):
             self._attr_available: bool = new_available
             self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await Entity.async_added_to_hass(self)
@@ -354,11 +355,13 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
             self.base_unique_id, slot_num, self.key, lock.lock.entity_id
         )
 
+    @override
     def _get_removal_uid(self) -> str:
         """Get unique ID for removal callback registration (per-lock variant)."""
         return f"{self.slot_num}|{self.key}|{self.lock.lock.entity_id}"
 
     @callback
+    @override
     def _handle_remove_lock(self, lock_entity_id: str) -> None:
         """Handle lock entity is being removed."""
         super()._handle_remove_lock(lock_entity_id)
@@ -367,12 +370,14 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
         self.config_entry.async_create_task(self.hass, self._internal_async_remove())
 
     @callback
+    @override
     def _is_available(self) -> bool:
         """Return whether entity is available."""
         return (
             state := self.hass.states.get(self.lock.lock.entity_id)
         ) and state.state != STATE_UNAVAILABLE
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)

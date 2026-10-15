@@ -36,7 +36,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import ClassVar, NoReturn, final
+from typing import ClassVar, NoReturn, final, override
 
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
@@ -67,11 +67,13 @@ class BaseMqttLock(BaseLock):
     _reads_have_succeeded: bool = field(init=False, default=False)
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return MQTT_DOMAIN
 
     @property
+    @override
     def usercode_scan_interval(self) -> timedelta:
         """
         Return scan interval for usercodes.
@@ -86,6 +88,7 @@ class BaseMqttLock(BaseLock):
         return timedelta(minutes=5)
 
     @property
+    @override
     def hard_refresh_interval(self) -> timedelta | None:
         """
         Return interval for hard refresh.
@@ -96,6 +99,7 @@ class BaseMqttLock(BaseLock):
         """
         return timedelta(hours=1)
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -112,6 +116,7 @@ class BaseMqttLock(BaseLock):
             None if slots is None else self.managed_slots | frozenset(slots)
         )
 
+    @override
     async def async_is_device_available(self) -> bool:
         """
         Return whether the lock entity reports an operational state.

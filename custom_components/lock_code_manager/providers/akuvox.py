@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 from homeassistant.config_entries import ConfigEntry
 
@@ -81,16 +81,19 @@ class AkuvoxLock(BaseLock):
     _tagged_once: bool = field(default=False, init=False)
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return AKUVOX_DOMAIN
 
     @property
+    @override
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
         return False
 
     @property
+    @override
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes."""
         return timedelta(minutes=2)
@@ -185,6 +188,7 @@ class AkuvoxLock(BaseLock):
             target={"entity_id": entity_id},
         )
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Set up lock by tagging any pre-existing unmanaged users.
@@ -199,6 +203,7 @@ class AkuvoxLock(BaseLock):
         await self._async_tag_unmanaged_users()
         self._tagged_once = True
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -306,6 +311,7 @@ class AkuvoxLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Return users by reading tagged local users from the Akuvox device.
@@ -347,6 +353,7 @@ class AkuvoxLock(BaseLock):
         )
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -403,6 +410,7 @@ class AkuvoxLock(BaseLock):
         )
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Delete the credential addressed by ``ref``; return whether it changed.

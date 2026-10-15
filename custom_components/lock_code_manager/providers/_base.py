@@ -13,7 +13,7 @@ import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 import logging
-from typing import Any, ClassVar, Literal, NoReturn, Protocol, final
+from typing import Any, ClassVar, Literal, NoReturn, Protocol, final, override
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
@@ -321,16 +321,19 @@ class BaseLock:
         self.device_entry = self.dev_reg.async_get(device_id)
 
     @final
+    @override
     def __repr__(self) -> str:
         """Return a string representation."""
         return f"{self.__class__.__name__}(domain={self.domain}, lock={self.lock.entity_id})"
 
     @final
+    @override
     def __hash__(self) -> int:
         """Hash by lock entity ID (one BaseLock instance per physical lock)."""
         return hash(self.lock.entity_id)
 
     @final
+    @override
     def __eq__(self, other: Any) -> bool:
         """Two BaseLock instances are equal when they wrap the same lock entity."""
         if not isinstance(other, BaseLock):

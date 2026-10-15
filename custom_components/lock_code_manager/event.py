@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, override
 
 from homeassistant.components.event import EventEntity
 from homeassistant.const import ATTR_NAME
@@ -85,6 +85,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         self._recorded_types: set[CredentialType] = set()
 
     @property
+    @override
     def event_types(self) -> list[str]:
         """
         Return the credential kinds a use recorded here can be.
@@ -118,6 +119,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         return sorted(advertised | MANAGED_CREDENTIAL_TYPES | self._recorded_types)
 
     @property
+    @override
     def available(self) -> bool:
         """
         Return True whenever the entry is loaded.
@@ -183,6 +185,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         self._trigger_event(credential_type, event.data)
         self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)

@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, override
 
 from homeassistant.const import CONF_NAME, CONF_PIN
 
@@ -79,6 +79,7 @@ class SlotAssignment:
             deduped[key] = number
         object.__setattr__(self, "slots", MappingProxyType(deduped))
 
+    @override
     def __hash__(self) -> int:
         """
         Hash by content.

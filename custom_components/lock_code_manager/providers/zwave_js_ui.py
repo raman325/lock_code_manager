@@ -7,7 +7,7 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 import json
 import re
-from typing import Any, Literal
+from typing import Any, Literal, override
 from uuid import uuid4
 
 from zwave_js_server.const import CommandClass, SupervisionStatus
@@ -392,6 +392,7 @@ class ZWaveJSUILock(BaseMqttLock):
     _min_operation_delay: float = field(init=False, default=ZWAVE_JS_UI_OPERATION_DELAY)
 
     @property
+    @override
     def supports_push(self) -> bool:
         """
         Return whether this lock's value tree can be subscribed to.
@@ -411,6 +412,7 @@ class ZWaveJSUILock(BaseMqttLock):
         return self._prefix_and_node_topic() is not None
 
     @property
+    @override
     def supports_code_slot_events(self) -> bool:
         """
         Return whether keypad events can be observed.
@@ -421,6 +423,7 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         return self.supports_push
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Bring both subscriptions up before the coordinator runs its first poll.
@@ -538,6 +541,7 @@ class ZWaveJSUILock(BaseMqttLock):
             )
         return parsed
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """
         Return whether MQTT is usable and this lock's gateway is addressable.
@@ -748,6 +752,7 @@ class ZWaveJSUILock(BaseMqttLock):
         )
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """
         Subscribe via background task when still unsubscribed (e.g. reconnect).
@@ -1236,6 +1241,7 @@ class ZWaveJSUILock(BaseMqttLock):
         )
         return response.get("result")
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read Personal Identification Number codes one index at a time.
@@ -1292,6 +1298,7 @@ class ZWaveJSUILock(BaseMqttLock):
             return None
         return _project_user_code_result(result)
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -1330,6 +1337,7 @@ class ZWaveJSUILock(BaseMqttLock):
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Clear a Personal Identification Number from a code slot.
@@ -1348,6 +1356,7 @@ class ZWaveJSUILock(BaseMqttLock):
         self._push_credential_update(ref.slot, SlotCredential.empty())
         return True
 
+    @override
     async def async_get_max_slot(self) -> int | None:
         """
         Report the User Code capacity the lock advertises, if it advertises one.
@@ -1404,6 +1413,7 @@ class ZWaveJSUILock(BaseMqttLock):
         self._pending_api_calls.clear()
 
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """
         Drop the node subscription and the api transport together.
@@ -1418,6 +1428,7 @@ class ZWaveJSUILock(BaseMqttLock):
         self._slot_enabled.clear()
         self._release_api_subscription()
 
+    @override
     async def async_unload(self, remove_permanently: bool) -> None:
         """
         Release both subscriptions on unload, push or no push.

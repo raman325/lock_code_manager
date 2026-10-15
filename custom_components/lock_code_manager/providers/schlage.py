@@ -23,7 +23,7 @@ from collections.abc import Collection
 import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Literal
+from typing import Literal, override
 
 from homeassistant.config_entries import ConfigEntry
 
@@ -75,16 +75,19 @@ class SchlageLock(BaseLock):
     _tagged_once: bool = field(default=False, init=False)
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return SCHLAGE_DOMAIN
 
     @property
+    @override
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
         return False
 
     @property
+    @override
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes."""
         return timedelta(minutes=5)
@@ -136,6 +139,7 @@ class SchlageLock(BaseLock):
             service_data={"entity_id": entity_id, "name": name},
         )
 
+    @override
     async def async_is_device_available(self) -> bool:
         """Return whether the Schlage lock device is available for commands."""
         try:
@@ -149,6 +153,7 @@ class SchlageLock(BaseLock):
             return False
         return True
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Set up lock by performing initial auto-tagging of unmanaged codes.
@@ -302,6 +307,7 @@ class SchlageLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Return users by reading all tagged codes from the Schlage lock.
@@ -362,6 +368,7 @@ class SchlageLock(BaseLock):
         }
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -434,6 +441,7 @@ class SchlageLock(BaseLock):
         )
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Delete the credential addressed by ``ref``; return whether it changed.
@@ -470,6 +478,7 @@ class SchlageLock(BaseLock):
         )
         return True
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:

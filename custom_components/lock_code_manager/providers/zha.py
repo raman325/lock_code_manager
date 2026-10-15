@@ -15,7 +15,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, override
 
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
@@ -161,11 +161,13 @@ class ZHALock(BaseLock):
     # -- Properties ----------------------------------------------------------
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return ZHA_DOMAIN
 
     @property
+    @override
     def supports_push(self) -> bool:
         """
         Return whether this lock supports push-based updates.
@@ -177,6 +179,7 @@ class ZHALock(BaseLock):
         return True
 
     @property
+    @override
     def hard_refresh_interval(self) -> timedelta | None:
         """
         Return interval for drift detection.
@@ -190,6 +193,7 @@ class ZHALock(BaseLock):
 
     # -- Setup ---------------------------------------------------------------
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Initialize provider state and detect programming event support.
@@ -257,6 +261,7 @@ class ZHALock(BaseLock):
         _LOGGER.warning("Could not find DoorLock cluster for %s", self.lock.entity_id)
         return None
 
+    @override
     def describe_link_health(self) -> str | None:
         """
         Report what the coordinator last heard from this lock.
@@ -326,6 +331,7 @@ class ZHALock(BaseLock):
 
     # -- Connection ----------------------------------------------------------
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """Return whether ZHA is loaded and the device is available."""
         gateway = self._get_gateway()
@@ -341,6 +347,7 @@ class ZHALock(BaseLock):
 
     # -- Credential primitives -----------------------------------------------
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -405,6 +412,7 @@ class ZHALock(BaseLock):
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Clear a Personal Identification Number from a slot.
@@ -444,6 +452,7 @@ class ZHALock(BaseLock):
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read Personal Identification Number codes one index at a time.
@@ -540,6 +549,7 @@ class ZHALock(BaseLock):
                 slot_states[slot_num] = SlotCredential.unreadable()
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
+    @override
     async def async_get_max_slot(self) -> int | None:
         """
         Read how many Personal Identification Number users the lock supports.
@@ -576,6 +586,7 @@ class ZHALock(BaseLock):
             return None
         return min(int(supported), MAX_SEARCHED_SLOT)
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -625,6 +636,7 @@ class ZHALock(BaseLock):
     # -- Push updates --------------------------------------------------------
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """Subscribe to DoorLock cluster events."""
         if self._push_unsubs:
@@ -644,6 +656,7 @@ class ZHALock(BaseLock):
         )
 
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from DoorLock cluster events."""
         if not self._push_unsubs:

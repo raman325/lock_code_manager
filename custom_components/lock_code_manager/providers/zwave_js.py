@@ -12,7 +12,7 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
@@ -218,16 +218,19 @@ class ZWaveJSLock(BaseLock):
     check_available_before_exchange = True
 
     @property
+    @override
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
         return True
 
     @property
+    @override
     def connection_check_interval(self) -> timedelta | None:
         """Z-Wave JS exposes config entry state changes, so skip polling."""
         return None
 
     @property
+    @override
     def hard_refresh_interval(self) -> timedelta | None:
         """
         Disable periodic drift detection: Z-Wave is event-driven end to end.
@@ -244,6 +247,7 @@ class ZWaveJSLock(BaseLock):
         return None
 
     @property
+    @override
     def supports_native_users(self) -> bool:
         """Return True: this provider implements the credential primitives."""
         return True
@@ -270,6 +274,7 @@ class ZWaveJSLock(BaseLock):
             return SlotCredential.unreadable()
         return SlotCredential.known(code)
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read every user and all of their credentials from the lock.
@@ -331,6 +336,7 @@ class ZWaveJSLock(BaseLock):
             )
         return list(users_by_id.values())
 
+    @override
     async def async_get_usercodes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -387,6 +393,7 @@ class ZWaveJSLock(BaseLock):
                 codes[slot] = SlotCredential.unreadable()
         return codes
 
+    @override
     async def async_get_capabilities(self) -> LockCapabilities:
         """
         Report the lock's user/credential capabilities via the unified API.
@@ -510,6 +517,7 @@ class ZWaveJSLock(BaseLock):
             return False
         return True
 
+    @override
     async def async_set_user(self, user: User) -> SetUserResult:
         """
         Find-or-create the lock user for the LCM slot encoded in ``user.name``.
@@ -616,6 +624,7 @@ class ZWaveJSLock(BaseLock):
                 None,
             )
 
+    @override
     async def async_delete_user(self, user_id: int) -> None:
         """Delete the lock user (cascades its credentials)."""
         try:
@@ -625,6 +634,7 @@ class ZWaveJSLock(BaseLock):
         except HomeAssistantError as err:
             raise LockOperationFailed(f"delete user {user_id} failed: {err}") from err
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -726,6 +736,7 @@ class ZWaveJSLock(BaseLock):
         self._push_credential_update(credential.slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Delete the credential addressed by ref.
@@ -774,6 +785,7 @@ class ZWaveJSLock(BaseLock):
         return True, ""
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """
         Subscribe to credential change events.
@@ -1035,6 +1047,7 @@ class ZWaveJSLock(BaseLock):
             )
 
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from credential change events."""
         self._clear_push_unsubs()
@@ -1089,6 +1102,7 @@ class ZWaveJSLock(BaseLock):
         )
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return ZWAVE_JS_DOMAIN
@@ -1099,6 +1113,7 @@ class ZWaveJSLock(BaseLock):
             listener()
         self._listeners.clear()
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Set up lock by provider.
@@ -1115,16 +1130,19 @@ class ZWaveJSLock(BaseLock):
             )
         )
 
+    @override
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         self._clear_listeners()
         await super().async_unload(remove_permanently)
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """Return whether the Z-Wave JS client is connected."""
         ready, _reason = self._get_client_state()
         return ready
 
+    @override
     async def async_is_device_available(self) -> bool:
         """Return whether the Z-Wave node is available for commands."""
         try:
@@ -1137,6 +1155,7 @@ class ZWaveJSLock(BaseLock):
             )
             return False
 
+    @override
     def describe_link_health(self) -> str | None:
         """
         Report how much of the traffic aimed at this node fails to complete.
@@ -1192,6 +1211,7 @@ class ZWaveJSLock(BaseLock):
             f"refusing the code."
         )
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:

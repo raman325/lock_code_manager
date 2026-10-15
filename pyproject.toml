@@ -157,6 +157,7 @@ enable_error_code = [
     "ignore-without-code", # Require error codes on type: ignore comments
     "redundant-self",      # Flag redundant Self type annotations
     "truthy-iterable",     # Flag always-truthy iterable checks
+    "explicit-override",   # Require @override on overriding methods
 ]
 disable_error_code = [
     "annotation-unchecked", # Don't flag unchecked type annotations in untyped functions
