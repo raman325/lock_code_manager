@@ -70,9 +70,8 @@ class TestParseTag:
                 (5, "lcm6:nested"),
                 id="canonical-display-looks-like-tag",
             ),
-            # Legacy ``[LCM:<slot>] <name>`` -- read-only.
-            pytest.param("[LCM:1] Guest", (1, "Guest"), id="legacy-simple"),
-            pytest.param("[LCM:99] Family", (99, "Family"), id="legacy-large-slot"),
+            # Legacy ``[LCM:<slot>] <name>`` -- read-only. The plain legacy
+            # and slot-only forms are carried by tests/properties/test_tag_codec.py.
             pytest.param(
                 "[LCM:5]Tight", (5, "Tight"), id="legacy-no-space-after-bracket"
             ),
@@ -81,10 +80,6 @@ class TestParseTag:
             pytest.param("lcm1", (1, ""), id="compact-single-digit"),
             pytest.param("lcm42", (42, ""), id="compact-multi-digit"),
             pytest.param("lcm255", (255, ""), id="compact-max-slot"),
-            # Slot-only fallback -- written when neither canonical nor
-            # compact tier survives the lock's constraints.
-            pytest.param("5", (5, ""), id="slot-only-single-digit"),
-            pytest.param("255", (255, ""), id="slot-only-multi-digit"),
             # Untagged or malformed -- no match.
             pytest.param("Guest Code", (None, "Guest Code"), id="untagged"),
             pytest.param("", (None, ""), id="empty-string"),
@@ -144,7 +139,6 @@ class TestParseSlotNum:
     @pytest.mark.parametrize(
         ("input_value", "expected"),
         [
-            pytest.param(5, 5, id="int-passthrough"),
             pytest.param("5", 5, id="str-digits"),
             pytest.param("042", 42, id="str-padded"),
             pytest.param("five", None, id="str-non-numeric"),

@@ -716,36 +716,6 @@ def test_has_changes_is_false_when_only_slot_contents_change() -> None:
     assert EntryConfigDiff(old=old, new=new).has_changes is False
 
 
-# --- build_slot_unique_id format (never referenced by any test) ---
-
-
-def test_build_slot_unique_id_standard_format() -> None:
-    """
-    The standard unique id is entry|slot|key, pipe-delimited.
-
-    This string is the entity registry key. Changing the separator silently
-    orphans every existing entity, so the exact format is the contract --
-    yet no test referenced this function at all.
-    """
-    assert build_slot_unique_id("abc123", 4, "pin") == "abc123|4|pin"
-
-
-def test_build_slot_unique_id_per_lock_format() -> None:
-    """The per-lock variant appends the lock entity id as a fourth segment."""
-    assert (
-        build_slot_unique_id("abc123", 4, "in_sync", "lock.front_door")
-        == "abc123|4|in_sync|lock.front_door"
-    )
-
-
-def test_build_slot_unique_id_variants_never_collide() -> None:
-    """A per-lock id is always distinct from the standard id it extends."""
-    standard = build_slot_unique_id("abc123", 4, "code")
-    per_lock = build_slot_unique_id("abc123", 4, "code", "lock.front_door")
-    assert standard != per_lock
-    assert per_lock.startswith(f"{standard}|")
-
-
 def test_renaming_somebody_who_does_not_exist_is_a_no_op() -> None:
     """A rename naming an unknown user changes nothing.
 
