@@ -1099,36 +1099,6 @@ async def test_get_config_entry_data_invalid_title(
     assert "title" in msg["error"]["message"]
 
 
-async def test_subscribe_code_slot_slot_2_with_calendar(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test subscribe_code_slot WS API for slot 2 which has a calendar."""
-    ws_client = await hass_ws_client(hass)
-
-    # Subscribe to slot 2 (has calendar configured)
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/subscribe_code_slot",
-            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-            ATTR_SLOT: 2,
-            "reveal": True,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-
-    event = await ws_client.receive_json()
-    assert event["type"] == "event"
-    data = event["event"]
-    assert data[ATTR_SLOT_NUM] == 2
-    # Slot 2 should have calendar in conditions
-    assert CONF_CONDITIONS in data
-
-
 async def test_subscribe_code_slot_omits_number_of_uses(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1158,6 +1128,7 @@ async def test_subscribe_code_slot_omits_number_of_uses(
     event = await ws_client.receive_json()
     assert event["type"] == "event"
     data = event["event"]
+    assert data[ATTR_SLOT_NUM] == 2
     assert LEGACY_NUMBER_OF_USES_KEY not in data[CONF_CONDITIONS]
     assert LEGACY_NUMBER_OF_USES_KEY not in data[CONF_ENTITIES]
 
@@ -1261,40 +1232,6 @@ async def test_subscribe_code_slot_says_only_when_for_a_target_with_no_state(
     assert data[ATTR_SLOT_NUM] == 1
     assert data.get(ATTR_LAST_USED) is not None
     assert data.get(ATTR_LAST_USED_LOCK) is None
-
-
-async def test_subscribe_lock_codes_slot_metadata(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test subscribe_lock_codes includes slot metadata."""
-    ws_client = await hass_ws_client(hass)
-
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/subscribe_lock_codes",
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            "reveal": True,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-
-    event = await ws_client.receive_json()
-    assert event["type"] == "event"
-
-    # Check that slots have metadata
-    slots = event["event"][CONF_SLOTS]
-    assert len(slots) >= 2
-
-    # Find slot 1 - should have name and be managed
-    slot_1 = next((s for s in slots if s[ATTR_SLOT] == 1), None)
-    assert slot_1 is not None
-    assert slot_1.get(CONF_NAME) == "test1"
-    assert slot_1.get(ATTR_MANAGED) is True
 
 
 async def test_subscribe_lock_codes_attributes_a_disabled_entrys_slot(
@@ -1799,6 +1736,9 @@ async def test_subscribe_lock_codes_response_shape(
 
     # Matches LockCoordinatorSlotData interface in frontend types.
     assert len(data[CONF_SLOTS]) > 0
+    slot_1 = next(s for s in data[CONF_SLOTS] if s[ATTR_SLOT] == 1)
+    assert slot_1[CONF_NAME] == "test1"
+    assert slot_1[ATTR_MANAGED] is True
     for slot in data[CONF_SLOTS]:
         assert isinstance(slot[ATTR_SLOT], int)
         assert isinstance(slot[ATTR_CODE], str) or slot[ATTR_CODE] is None

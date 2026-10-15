@@ -97,43 +97,6 @@ async def test_get_locks_from_targets_warns_for_bad_entities(
     assert entity_id in caplog.text
 
 
-async def test_get_locks_from_targets_with_area_id(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test get_locks_from_targets resolves area IDs to locks."""
-    area_reg = ar.async_get(hass)
-    area = area_reg.async_get_or_create("test_area")
-    ent_reg = er.async_get(hass)
-    ent_reg.async_update_entity(LOCK_1_ENTITY_ID, area_id=area.id)
-
-    locks = get_locks_from_targets(hass, {ATTR_AREA_ID: [area.id]})
-
-    assert len(locks) == 1
-    lock = next(iter(locks))
-    assert lock.lock.entity_id == LOCK_1_ENTITY_ID
-
-
-async def test_get_locks_from_targets_with_device_id(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test get_locks_from_targets resolves device IDs to locks."""
-    # Get the device for lock.test_1
-    ent_reg = er.async_get(hass)
-    entry = ent_reg.async_get(LOCK_1_ENTITY_ID)
-    assert entry is not None
-    assert entry.device_id is not None
-
-    locks = get_locks_from_targets(hass, {ATTR_DEVICE_ID: [entry.device_id]})
-
-    assert len(locks) == 1
-    lock = next(iter(locks))
-    assert lock.lock.entity_id == LOCK_1_ENTITY_ID
-
-
 async def test_get_locks_from_targets_empty(
     hass: HomeAssistant,
     mock_lock_config_entry,

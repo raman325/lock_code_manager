@@ -57,11 +57,12 @@ async def test_config_entry_diagnostics(
         "release": False,
     }
 
-    # PINs should be masked (not raw values)
+    # PINs should be masked (not raw values), on every lock
     assert worker_diag["data"]["1"].startswith("pin#")
-    for code in worker_diag["data"].values():
-        if code not in _SENTINEL_VALUES:
-            assert code.startswith("pin#")
+    for each_lock in result["locks"].values():
+        for code in each_lock["worker"]["data"].values():
+            if code not in _SENTINEL_VALUES:
+                assert code.startswith("pin#"), f"Unmasked PIN in diagnostics: {code}"
 
     # Should have slot data
     assert len(result["slots"]) > 0
@@ -70,9 +71,12 @@ async def test_config_entry_diagnostics(
     assert "pin" in slot_diag
     assert "entities" in slot_diag
 
-    # Configured PINs should also be masked
-    if slot_diag["pin"] not in _SENTINEL_VALUES:
-        assert slot_diag["pin"].startswith("pin#")
+    # Configured PINs should also be masked, on every slot
+    for each_slot in result["slots"].values():
+        if each_slot["pin"] not in _SENTINEL_VALUES:
+            assert each_slot["pin"].startswith("pin#"), (
+                f"Unmasked configured PIN: {each_slot['pin']}"
+            )
 
 
 async def test_device_diagnostics_slot_device(
@@ -154,28 +158,6 @@ async def test_device_diagnostics_for_a_device_that_is_not_a_slot(
     # Falls through to config entry diagnostics (superset)
     assert "locks" in result
     assert "slots" in result
-
-
-async def test_mask_code_values(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test that all PIN values in diagnostics are masked deterministically."""
-    result = await async_get_config_entry_diagnostics(
-        hass, lock_code_manager_config_entry
-    )
-
-    for lock_diag in result["locks"].values():
-        for code in lock_diag["worker"]["data"].values():
-            if code not in _SENTINEL_VALUES:
-                assert code.startswith("pin#"), f"Unmasked PIN in diagnostics: {code}"
-
-    for slot_diag in result["slots"].values():
-        if slot_diag["pin"] not in _SENTINEL_VALUES:
-            assert slot_diag["pin"].startswith("pin#"), (
-                f"Unmasked configured PIN: {slot_diag['pin']}"
-            )
 
 
 async def test_sensitive_entities_redacted(
