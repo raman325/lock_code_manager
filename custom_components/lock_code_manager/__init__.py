@@ -1472,12 +1472,11 @@ async def _async_shutdown_slots(
             coordinator.async_stop()
         except Exception:
             _LOGGER.exception("%s coordinator stop raised", coordinator.log_prefix)
-    await asyncio.gather(
-        *(
-            runtime_data.callbacks.invoke_entity_removers_for_slot(slot_num)
-            for slot_num in slot_nums
-        ),
-    )
+    async with asyncio.TaskGroup() as tg:
+        for slot_num in slot_nums:
+            tg.create_task(
+                runtime_data.callbacks.invoke_entity_removers_for_slot(slot_num)
+            )
 
 
 @callback
@@ -1761,38 +1760,16 @@ async def _async_setup_new_locks(
         locks_to_add,
     )
 
-    async def _setup_one_lock(lock_entity_id: str) -> BaseLock:
+    async def _setup_one_lock(lock_entity_id: str) -> BaseLock | None:
         # Every slot's want goes in with the hold: a new worker reads them all
         # in its first exchange.
         wants = {
             slot_num: coordinator.want
             for slot_num, coordinator in runtime_data.slot_coordinators.items()
         }
-        lock = await async_hold_lock(hass, config_entry, lock_entity_id, wants)
-        runtime_data.locks[lock_entity_id] = lock
-        _LOGGER.debug("%s (%s): Holding lock %s", entry_id, entry_title, lock_entity_id)
-        return lock
-
-    # Set up locks concurrently. Each lock's initial usercode fetch can take
-    # seconds (Z-Wave node poll, Schlage HTTP, Matter device read); serial
-    # setup meant lock N+1 only began once lock N finished. return_exceptions
-    # isolates per-lock failures so one bad lock does not block the others.
-    setup_results = await asyncio.gather(
-        *(_setup_one_lock(lock_entity_id) for lock_entity_id in locks_to_add),
-        return_exceptions=True,
-    )
-
-    added_locks: list[BaseLock] = []
-    for lock_entity_id, result in zip(locks_to_add, setup_results, strict=True):
-        if isinstance(result, asyncio.CancelledError):
-            # ``return_exceptions=True`` aggregates a cancelled child rather
-            # than propagating it, so cancellation has to be re-raised by hand
-            # or Home Assistant shutting down looks exactly like a lock that
-            # could not be set up -- and left a persistent repair blaming an
-            # unsupported bridge, surviving the restart that cleared the
-            # actual condition.
-            raise result
-        if isinstance(result, BaseException):
+        try:
+            lock = await async_hold_lock(hass, config_entry, lock_entity_id, wants)
+        except Exception as err:
             # Transport failures degrade inside async_setup_internal, and
             # structural validation failures are logged there and kept
             # degraded, so a popped lock is either a genuine bug or a lock
@@ -1805,21 +1782,35 @@ async def _async_setup_new_locks(
                 entry_id,
                 entry_title,
                 lock_entity_id,
-                result,
-                exc_info=result,
+                err,
+                exc_info=err,
             )
-            if isinstance(result, UnclaimedLockError):
+            if isinstance(err, UnclaimedLockError):
                 # Only this failure has a diagnosis and an action to offer.
                 # Any other exception is a bug in a provider LCM does speak,
                 # and a repair telling that user their bridge is unsupported
                 # sends them to remove a lock that works.
-                _async_report_dropped_lock(hass, lock_entity_id, result)
-            continue
-
-        added_locks.append(result)
+                _async_report_dropped_lock(hass, lock_entity_id, err)
+            return None
+        runtime_data.locks[lock_entity_id] = lock
+        _LOGGER.debug("%s (%s): Holding lock %s", entry_id, entry_title, lock_entity_id)
         async_delete_issue(
             hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
         )
+        return lock
+
+    # Set up locks concurrently. Each lock's initial usercode fetch can take
+    # seconds (Z-Wave node poll, Schlage HTTP, Matter device read); serial
+    # setup meant lock N+1 only began once lock N finished. Each lock handles
+    # its own failure, so one bad lock does not cancel the others; a
+    # cancellation still propagates, so Home Assistant shutting down is not
+    # mistaken for a lock that could not be set up.
+    async with asyncio.TaskGroup() as tg:
+        tasks = [
+            tg.create_task(_setup_one_lock(lock_entity_id))
+            for lock_entity_id in locks_to_add
+        ]
+    added_locks = [lock for task in tasks if (lock := task.result()) is not None]
 
     for lock in added_locks:
         for slot_num in new_config.slot_numbers:
