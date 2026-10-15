@@ -303,6 +303,7 @@ describe('LockCodesCard integration', () => {
             const proxySlot = {
                 slot: 1,
                 code: 'unreadable_code',
+                active: true,
                 managed: true,
                 in_sync: true
             };
@@ -336,6 +337,23 @@ describe('LockCodesCard integration', () => {
                     true
                 );
                 expect((card as any)._canReveal({ slot: 1, code: 'unreadable_code' })).toBe(false);
+            });
+
+            it.each([
+                ['switched off', { active: false, enabled: false }],
+                ['held off by its condition', { active: false, enabled: true }]
+            ])('never stands in a PIN meant to be off the lock (%s)', (_label, state) => {
+                // In sync here means the clear is trusted: the PIN is not on the lock.
+                const slot = { ...proxySlot, ...state, configured_code: '1234' };
+                (card as any)._revealed = true;
+                try {
+                    expect((card as any)._formatCode(slot)).toBe('◦◦◦');
+                    expect((card as any)._getCodeClass(slot)).not.toContain('configured');
+                    expect((card as any)._canReveal(slot)).toBe(false);
+                    expect((card as any)._codeTitle(slot)).not.toContain('Lock Code Manager');
+                } finally {
+                    (card as any)._revealed = false;
+                }
             });
 
             it('tooltips distinguish proxy from unreadable', () => {
@@ -451,7 +469,13 @@ describe('LockCodesCard integration', () => {
         const classes = (slot: Record<string, unknown>): string[] =>
             (card as any)._getCodeClass(slot).split(' ');
 
-        const vouched = { code: 'unanswered', in_sync: true, managed: true, slot: 1 };
+        const vouched = {
+            active: true,
+            code: 'unanswered',
+            in_sync: true,
+            managed: true,
+            slot: 1
+        };
 
         it('stands the configured PIN in when managed and in sync', () => {
             expect((card as any)._formatCode({ ...vouched, configured_code_length: 4 })).toBe(
@@ -471,6 +495,18 @@ describe('LockCodesCard integration', () => {
                     '1234'
                 );
                 expect(classes({ ...vouched, configured_code: '1234' })).toEqual(['configured']);
+            } finally {
+                (card as any)._revealed = false;
+            }
+        });
+
+        it('never stands in a PIN meant to be off the lock', () => {
+            const slot = { ...vouched, active: false, configured_code: '1234', enabled: false };
+            (card as any)._revealed = true;
+            try {
+                expect((card as any)._formatCode(slot)).toBe('◦◦◦');
+                expect((card as any)._canReveal(slot)).toBe(false);
+                expect((card as any)._codeTitle(slot)).toBe("This lock didn't answer");
             } finally {
                 (card as any)._revealed = false;
             }
