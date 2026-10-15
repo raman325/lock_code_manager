@@ -185,4 +185,65 @@ describe('lock-codes card, rendered', () => {
 
         expect(root.querySelector('.lcm-code')?.textContent?.trim()).toBe('••••••');
     });
+
+    it('keeps codes masked in "masked" mode even when the reveal flag is set', async () => {
+        card.setConfig({
+            code_display: 'masked',
+            lock_entity_id: 'lock.front_door',
+            type: 'custom:lcm-lock-codes'
+        });
+        // eslint-disable-next-line no-underscore-dangle -- no public way to set reveal in masked mode
+        (card as unknown as { _revealed: boolean })._revealed = true;
+        const root = await show([managed]);
+
+        expect(root.querySelector('.lcm-code')?.textContent?.trim()).toBe('••••');
+        expect(root.textContent).not.toContain(MANAGED_PIN);
+    });
+
+    it('titles the card with the entity id when nothing names the lock', async () => {
+        // No lock_name in the payload, and hass has no state for the lock.
+        push({
+            lock_entity_id: 'lock.front_door',
+            slots: [managed]
+        } as unknown as LockCoordinatorData);
+        await card.updateComplete;
+
+        expect(card.shadowRoot!.querySelector('.card-header-title')?.textContent).toBe(
+            'lock.front_door'
+        );
+    });
+
+    it.each([
+        // Both empties between two lone actives are borrowed, one each side.
+        ['active, empty, empty, active, empty', 5, [1, 4], ['Slot 2 Empty', 'Slot 3 Empty'], ['5']],
+        [
+            'active, 3 empty, active, 3 empty',
+            8,
+            [1, 5],
+            ['Slot 2 Empty', 'Slot 6 Empty'],
+            ['3 – 4', '7 – 8']
+        ]
+    ])(
+        'summarises each run of empty slots between interleaved actives: %s',
+        async (_label, total, actives, borrowed, summaries) => {
+            const slots: LockCoordinatorSlotData[] = Array.from({ length: total }, (_, i) =>
+                actives.includes(i + 1)
+                    ? { ...managed, slot: i + 1 }
+                    : { code: 'empty', managed: false, slot: i + 1 }
+            );
+            const root = await show(slots);
+
+            const chips = [...root.querySelectorAll('.slots-grid > .slot-chip')];
+            expect(
+                chips
+                    .filter((chip) => chip.classList.contains('empty'))
+                    .map((chip) => chip.textContent?.replace(/\s+/g, ' ').trim())
+            ).toEqual(borrowed);
+            expect(
+                [...root.querySelectorAll('.empty-summary-range')].map((range) =>
+                    range.textContent?.trim()
+                )
+            ).toEqual(summaries);
+        }
+    );
 });
