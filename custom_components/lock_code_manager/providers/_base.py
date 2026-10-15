@@ -251,7 +251,6 @@ class BaseLock:
         default=None, init=False
     )
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
-    _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _setup_succeeded: bool = field(default=False, init=False)
     _setup_running: bool = field(default=False, init=False)
     # Provider setup was skipped altogether because the integration was not
@@ -667,7 +666,7 @@ class BaseLock:
         coordinator: ProviderCoordinator,
     ) -> None:
         """
-        Set up lock and coordinator, signaling completion to waiters.
+        Set up lock and coordinator.
 
         Validates the lock advertises PIN credential support for
         native-user providers; structural failures
@@ -699,130 +698,127 @@ class BaseLock:
         """
         self._lcm_config_entry = config_entry
         try:
-            try:
-                if not await self.async_is_integration_connected():
-                    # Expected during a cold start (the provider integration
-                    # simply hasn't finished loading); recovery is automatic,
-                    # so this is informational, not a warning.
-                    self._setup_deferred = True
-                    LOGGER.info(
-                        "Provider integration for %s is not ready yet. "
-                        "Provider setup is deferred until it finishes "
-                        "loading; entities will be created but unavailable "
-                        "until then.",
-                        self.lock.entity_id,
-                    )
-                else:
-                    await self._async_run_provider_setup(config_entry)
-                    self._setup_succeeded = True
-                    self._clear_setup_validation_issue()
-            except TimeoutError:
-                # Distinct from the transport failures below, and warned
-                # rather than logged at info: those mean the lock answered
-                # "no", this means it did not answer at all. A lock that is
-                # merely still coming up raises LockDisconnected instead of
-                # going quiet, so silence here is a wedge, not a slow boot.
-                # Re-armed, or nothing ever retries. `_async_run_provider_setup`
-                # clears this on the way in, and it is the only thing
-                # `_handle_connection_transition` checks -- while the LOADED
-                # transition the state listener waits for never comes for an
-                # integration that was already loaded and then wedged. Without
-                # it the lock is permanently un-set-up: sync stays gated on
-                # `provider_setup_succeeded` and refuses to write anything
-                # until somebody reloads by hand.
+            if not await self.async_is_integration_connected():
+                # Expected during a cold start (the provider integration
+                # simply hasn't finished loading); recovery is automatic,
+                # so this is informational, not a warning.
                 self._setup_deferred = True
-                LOGGER.warning(
-                    "Capability probe for %s got no answer within %.0fs; its "
-                    "integration is likely wedged rather than slow. Entities "
-                    "will be created but unavailable, and setup is retried "
-                    "once that integration answers again.",
+                LOGGER.info(
+                    "Provider integration for %s is not ready yet. "
+                    "Provider setup is deferred until it finishes "
+                    "loading; entities will be created but unavailable "
+                    "until then.",
                     self.lock.entity_id,
-                    self.operation_timeout_seconds,
-                )
-            except LockOperationError as err:
-                # Re-armed like the reconnect path does: an integration that
-                # stays loaded (a Z-Wave node dead at boot) never brings the
-                # LOADED transition this would otherwise wait for.
-                self._setup_deferred = True
-                LOGGER.warning(
-                    "Provider setup failed for %s: %s. Coordinator will be "
-                    "created but data will be unavailable until the lock "
-                    "comes online. Setup will be retried when the lock "
-                    "integration reconnects.",
-                    self.lock.entity_id,
-                    err,
-                )
-            except LockCodeManagerProviderError as err:
-                LOGGER.error(
-                    "Provider setup failed validation for %s: %s. Entities "
-                    "will be created but unavailable; validation is retried "
-                    "when the lock's integration reloads or reconnects.",
-                    self.lock.entity_id,
-                    err,
-                )
-                self._report_setup_validation_failure(err)
-
-            lock_entity_id = self.lock.entity_id
-            # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
-            # when that integration reloads or reconnects.
-            self._setup_config_entry_state_listener()
-
-            if self.coordinator is not None:
-                self._create_background_task(
-                    self.coordinator.async_request_refresh(),
-                    f"Refresh coordinator for {lock_entity_id}",
                 )
             else:
-                self.coordinator = coordinator
-                # Bounded, unlike the write path. Setup runs while Home
-                # Assistant holds this entry's lock, so a read that never
-                # returns parks it in `setup_in_progress` and takes reload and
-                # remove down with it -- the same trap `async_stop`'s bounded
-                # wait exists for, at the other end of the lifecycle.
-                #
-                # Cancelling a READ is safe: it mutates nothing, so there is no
-                # half-written sequence to leave behind. That is what makes a
-                # deadline right here and wrong around a write.
-                #
-                # Sized to a walk of every managed slot because that is what
-                # the first read is, and a second, smaller number would give up
-                # on a slow-but-working lock.
-                refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
-                try:
-                    async with asyncio.timeout(refresh_budget):
-                        # Records a failure rather than raising it; reported
-                        # by the check below.
-                        await self.coordinator.async_refresh()
-                except TimeoutError:
-                    # The coordinator already recorded the cancellation this
-                    # timeout raised through it -- but it recorded a bare
-                    # CancelledError, which formats as the empty string and
-                    # would leave the report below saying nothing at all.
-                    self.coordinator.async_set_update_error(
-                        TimeoutError(f"no answer within {refresh_budget:.0f}s")
-                    )
+                await self._async_run_provider_setup(config_entry)
+                self._setup_succeeded = True
+                self._clear_setup_validation_issue()
+        except TimeoutError:
+            # Distinct from the transport failures below, and warned
+            # rather than logged at info: those mean the lock answered
+            # "no", this means it did not answer at all. A lock that is
+            # merely still coming up raises LockDisconnected instead of
+            # going quiet, so silence here is a wedge, not a slow boot.
+            # Re-armed, or nothing ever retries. `_async_run_provider_setup`
+            # clears this on the way in, and it is the only thing
+            # `_handle_connection_transition` checks -- while the LOADED
+            # transition the state listener waits for never comes for an
+            # integration that was already loaded and then wedged. Without
+            # it the lock is permanently un-set-up: sync stays gated on
+            # `provider_setup_succeeded` and refuses to write anything
+            # until somebody reloads by hand.
+            self._setup_deferred = True
+            LOGGER.warning(
+                "Capability probe for %s got no answer within %.0fs; its "
+                "integration is likely wedged rather than slow. Entities "
+                "will be created but unavailable, and setup is retried "
+                "once that integration answers again.",
+                self.lock.entity_id,
+                self.operation_timeout_seconds,
+            )
+        except LockOperationError as err:
+            # Re-armed like the reconnect path does: an integration that
+            # stays loaded (a Z-Wave node dead at boot) never brings the
+            # LOADED transition this would otherwise wait for.
+            self._setup_deferred = True
+            LOGGER.warning(
+                "Provider setup failed for %s: %s. Coordinator will be "
+                "created but data will be unavailable until the lock "
+                "comes online. Setup will be retried when the lock "
+                "integration reconnects.",
+                self.lock.entity_id,
+                err,
+            )
+        except LockCodeManagerProviderError as err:
+            LOGGER.error(
+                "Provider setup failed validation for %s: %s. Entities "
+                "will be created but unavailable; validation is retried "
+                "when the lock's integration reloads or reconnects.",
+                self.lock.entity_id,
+                err,
+            )
+            self._report_setup_validation_failure(err)
 
-                if not self.coordinator.last_update_success:
-                    LOGGER.info(
-                        "Failed to fetch initial data for lock %s: %s. "
-                        "Entities will be created but unavailable until lock is ready.",
+        lock_entity_id = self.lock.entity_id
+        # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
+        # when that integration reloads or reconnects.
+        self._setup_config_entry_state_listener()
+
+        if self.coordinator is not None:
+            self._create_background_task(
+                self.coordinator.async_request_refresh(),
+                f"Refresh coordinator for {lock_entity_id}",
+            )
+        else:
+            self.coordinator = coordinator
+            # Bounded, unlike the write path. Setup runs while Home
+            # Assistant holds this entry's lock, so a read that never
+            # returns parks it in `setup_in_progress` and takes reload and
+            # remove down with it -- the same trap `async_stop`'s bounded
+            # wait exists for, at the other end of the lifecycle.
+            #
+            # Cancelling a READ is safe: it mutates nothing, so there is no
+            # half-written sequence to leave behind. That is what makes a
+            # deadline right here and wrong around a write.
+            #
+            # Sized to a walk of every managed slot because that is what
+            # the first read is, and a second, smaller number would give up
+            # on a slow-but-working lock.
+            refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
+            try:
+                async with asyncio.timeout(refresh_budget):
+                    # Records a failure rather than raising it; reported
+                    # by the check below.
+                    await self.coordinator.async_refresh()
+            except TimeoutError:
+                # The coordinator already recorded the cancellation this
+                # timeout raised through it -- but it recorded a bare
+                # CancelledError, which formats as the empty string and
+                # would leave the report below saying nothing at all.
+                self.coordinator.async_set_update_error(
+                    TimeoutError(f"no answer within {refresh_budget:.0f}s")
+                )
+
+            if not self.coordinator.last_update_success:
+                LOGGER.info(
+                    "Failed to fetch initial data for lock %s: %s. "
+                    "Entities will be created but unavailable until lock is ready.",
+                    lock_entity_id,
+                    self.coordinator.last_exception,
+                )
+
+            if self.supports_push:
+                if (
+                    self.lock_config_entry
+                    and self.lock_config_entry.state != ConfigEntryState.LOADED
+                ):
+                    LOGGER.debug(
+                        "Lock %s: deferring push subscription until config entry is loaded",
                         lock_entity_id,
-                        self.coordinator.last_exception,
                     )
-
-                if self.supports_push:
-                    if (
-                        self.lock_config_entry
-                        and self.lock_config_entry.state != ConfigEntryState.LOADED
-                    ):
-                        LOGGER.debug(
-                            "Lock %s: deferring push subscription until config entry is loaded",
-                            lock_entity_id,
-                        )
-                    else:
-                        self.subscribe_push_updates()
-        finally:
-            self._setup_complete.set()
+                else:
+                    self.subscribe_push_updates()
 
     async def _async_run_provider_setup(self, config_entry: ConfigEntry) -> None:
         """
@@ -989,11 +985,6 @@ class BaseLock:
         and again on every provider integration reconnect. Clean up any
         previous state before re-initializing.
         """
-
-    @final
-    async def async_wait_for_setup(self) -> None:
-        """Wait until async_setup has completed."""
-        await self._setup_complete.wait()
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Tear down config-entry-state listener, reconnect task, and push subscription."""

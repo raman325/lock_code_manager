@@ -44,7 +44,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_SOURCE,
     ATTR_SYNC_STATUS,
     ATTR_TARGET,
-    BACKOFF_INITIAL_SECONDS,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
@@ -55,6 +54,7 @@ from custom_components.lock_code_manager.core.adapter import (
     _Coordinator,
 )
 from custom_components.lock_code_manager.core.slot import LIMIT
+from custom_components.lock_code_manager.core.worker import BACKOFF_MIN
 from custom_components.lock_code_manager.domain.allocation import async_read_occupancy
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.credentials import (
@@ -619,7 +619,7 @@ async def test_a_lock_back_from_a_device_outage_gets_its_new_pin_promptly(
     )
     # Long enough for the probes to fail too, each doubling the backoff: the
     # next one is minutes away when the device comes back.
-    await async_advance_clock(hass, freezer, 3 * BACKOFF_INITIAL_SECONDS)
+    await async_advance_clock(hass, freezer, 3 * BACKOFF_MIN)
     assert lock.codes[1] == "1234"
     assert lock.unsubscribe_calls == 1
     subscribed = lock.subscribe_calls
@@ -966,8 +966,6 @@ async def test_async_setup_internal_creates_coordinator_when_setup_fails(
 
     # Coordinator should still have been created
     assert lock.coordinator is not None
-    # Setup complete should be signaled
-    assert lock._setup_complete.is_set()
     # Setup should be marked as failed
     assert lock._setup_succeeded is False
 
@@ -1239,7 +1237,6 @@ async def test_setup_internal_defers_provider_io_when_integration_not_connected(
     # Degraded, not dropped: coordinator and recovery listener exist.
     assert lock.coordinator is not None
     assert lock._config_entry_state_unsub is not None
-    assert lock._setup_complete.is_set()
 
     await lock.async_unload(False)
 
@@ -1285,23 +1282,6 @@ async def test_a_lock_not_connected_at_setup_gets_entities_that_come_up_with_it(
     assert lock.codes[1] == "4321"
     assert lock.service_calls["setup"] == [(entry.entry_id,)]
     assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_setup_complete_set_when_setup_raises_unexpectedly(
-    hass: HomeAssistant,
-):
-    """_setup_complete is set even when setup escapes with an unexpected error.
-
-    Waiters in async_wait_for_setup (shared lock instances across config
-    entries) must not hang forever when setup fails structurally.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_setup_complete")
-
-    with patch.object(lock, "async_setup", side_effect=RuntimeError("boom")):
-        with pytest.raises(RuntimeError):
-            await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
-
-    assert lock._setup_complete.is_set()
 
 
 async def test_on_integration_loaded_runs_deferred_capability_validation(
@@ -1364,7 +1344,6 @@ async def test_setup_internal_structural_failure_degrades_and_recovers_on_reload
         # Degraded, not dropped: coordinator and recovery listener exist.
         assert lock.coordinator is not None
         assert lock._config_entry_state_unsub is not None
-        assert lock._setup_complete.is_set()
 
         # The lock's condition is fixed (e.g. re-interview repopulated the
         # slot count); the next LOADED transition revalidates and recovers.
@@ -2305,7 +2284,6 @@ async def test_a_wedged_provider_setup_does_not_park_the_entry(hass: HomeAssista
 
     # Degraded, not parked: setup returned and the retry path is armed.
     assert lock._setup_succeeded is False
-    assert lock._setup_complete.is_set()
     assert lock._setup_deferred is True
 
 
@@ -2439,7 +2417,6 @@ async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
 
     # Degraded, not dropped: setup finished and the retry path is armed.
     assert lock._setup_succeeded is False
-    assert lock._setup_complete.is_set()
     # The flag IS the retry path. `_handle_connection_transition` checks
     # nothing else, and the LOADED transition the state listener waits for
     # never arrives for an integration that was already loaded and then went
