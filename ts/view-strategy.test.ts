@@ -71,9 +71,17 @@ describe('LockCodeManagerViewStrategy', () => {
 
             const result = await LockCodeManagerViewStrategy.generate(testConfig({}), hass);
 
-            expect(result.cards?.[0]).toHaveProperty('content');
-            const { content } = result.cards?.[0] as { content: string };
-            expect(content).toContain('ERROR');
+            expect(result).toEqual({
+                cards: [
+                    {
+                        content:
+                            '## ERROR: Either `config_entry_title` or `config_entry_id` must ' +
+                            'be provided in the view config, but not both!',
+                        type: 'markdown'
+                    }
+                ],
+                title: 'Lock Code Manager'
+            });
         });
 
         it('returns error when both config_entry_id and config_entry_title provided', async () => {
@@ -84,8 +92,17 @@ describe('LockCodeManagerViewStrategy', () => {
                 hass
             );
 
-            const { content } = result.cards?.[0] as { content: string };
-            expect(content).toContain('ERROR');
+            expect(result).toEqual({
+                cards: [
+                    {
+                        content:
+                            '## ERROR: Either `config_entry_title` or `config_entry_id` must ' +
+                            'be provided in the view config, but not both!',
+                        type: 'markdown'
+                    }
+                ],
+                title: 'Lock Code Manager'
+            });
         });
 
         it('calls generateView with default options', async () => {
@@ -228,8 +245,9 @@ describe('LockCodeManagerViewStrategy', () => {
             );
 
             const { content } = result.cards?.[0] as { content: string };
-            expect(content).toContain('ERROR');
-            expect(content).toContain('missing123');
+            expect(content).toBe(
+                '## ERROR: No Lock Code Manager configuration with ID `missing123` found!'
+            );
         });
 
         it('returns error with title when config_entry_title is used', async () => {
@@ -245,7 +263,9 @@ describe('LockCodeManagerViewStrategy', () => {
             );
 
             const { content } = result.cards?.[0] as { content: string };
-            expect(content).toContain('Missing Config');
+            expect(content).toBe(
+                '## ERROR: No Lock Code Manager configuration called `Missing Config` found!'
+            );
         });
     });
 });

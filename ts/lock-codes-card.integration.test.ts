@@ -166,6 +166,7 @@ describe('LockCodesCard integration', () => {
             await flush();
 
             expect(el._error).toBe('Lock not found');
+            expect(el._data).toBeUndefined();
         });
 
         it('clears _error when subscription data arrives', async () => {
