@@ -182,7 +182,7 @@ async def async_check_slot_capacity(
             raise SlotAllocationError(
                 "slot_out_of_range",
                 {
-                    "lock": lock_entity_id,
+                    "error_lock": lock_entity_id,
                     "num_slots": str(num_slots),
                     "out_of_range_slots": ", ".join(str(slot) for slot in out_of_range),
                 },
@@ -316,7 +316,7 @@ def _too_far(
                 "num_users": str(num_users),
                 "num_slots": str(max_slot),
                 "needed": str(needed),
-                "lock": limiting_lock,
+                "error_lock": limiting_lock,
             },
         )
     return SlotAllocationError(
@@ -324,7 +324,7 @@ def _too_far(
         {
             "num_users": str(num_users),
             "num_slots": str(max_slot),
-            "lock": limiting_lock,
+            "error_lock": limiting_lock,
         },
     )
 

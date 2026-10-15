@@ -193,7 +193,7 @@ def _check_common_slots(
     else:
         return {"base": "slots_already_configured"}, {
             "common_slots": ", ".join(str(slot) for slot in common_slots),
-            "lock": lock,
+            "error_lock": lock,
             "entry_title": entry_title,
         }
 
@@ -218,7 +218,7 @@ async def _async_check_existing_codes(
     for lock in occupancy.locks:
         if lock.managed and lock.occupied:
             return {"base": "existing_codes"}, {
-                "lock": lock.lock_entity_id,
+                "error_lock": lock.lock_entity_id,
                 "slots": ", ".join(str(slot) for slot in sorted(lock.occupied)),
             }
     return {}, {}

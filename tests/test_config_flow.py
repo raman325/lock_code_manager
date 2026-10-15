@@ -33,7 +33,6 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -1953,7 +1952,7 @@ async def test_the_smallest_lock_bounds_the_search(
     # lock stops at 4.
     assert result["errors"] == {"base": "numbers_needed_exceed_capacity"}
     assert result["description_placeholders"]["num_slots"] == "4"
-    assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
+    assert result["description_placeholders"]["error_lock"] == LOCK_2_ENTITY_ID
 
 
 async def test_a_count_past_the_range_is_refused_before_reading(
@@ -1984,7 +1983,7 @@ async def test_a_count_past_the_range_is_refused_before_reading(
     assert result["type"] == "form"
     assert result["errors"] == {"base": "too_many_users"}
     assert result["description_placeholders"]["num_slots"] == "5"
-    assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+    assert result["description_placeholders"]["error_lock"] == LOCK_1_ENTITY_ID
     assert reads == [], "the lock was read past its own range"
 
 
@@ -2059,7 +2058,7 @@ async def test_no_lock_that_can_answer_leaves_our_own_limit(
 
     assert result["errors"] == {"base": "search_limit_reached"}
     assert result["description_placeholders"]["max_slot"] == str(MAX_SEARCHED_SLOT)
-    assert "lock" not in result["description_placeholders"]
+    assert "error_lock" not in result["description_placeholders"]
 
 
 async def test_a_lock_that_reports_its_range_is_the_one_named(
@@ -2084,7 +2083,7 @@ async def test_a_lock_that_reports_its_range_is_the_one_named(
 
     assert result["errors"] == {"base": "too_many_users"}
     assert result["description_placeholders"]["num_slots"] == "4"
-    assert result["description_placeholders"]["lock"] == min(
+    assert result["description_placeholders"]["error_lock"] == min(
         [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
     )
 
@@ -2215,34 +2214,6 @@ async def test_a_lock_whose_config_entry_is_gone_is_skipped(
 
     # Ours, so it still bounds the numbers even unread.
     assert raised.value.managed is True
-
-
-async def test_reauth_reports_a_slot_another_entry_already_manages(
-    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
-) -> None:
-    """
-    Swapping a lock can collide an existing slot set with another entry's.
-
-    Nobody picks numbers any more, but reauth moves an entry's existing
-    numbers onto a different lock, where they may already be spoken for.
-    """
-    _entry_with_users(
-        hass,
-        [LOCK_2_ENTITY_ID],
-        {"Someone": {CONF_ENABLED: True, CONF_PIN: "4321"}},
-        title="other",
-        unique_id="other",
-    )
-
-    errors, placeholders = _check_common_slots(
-        hass,
-        [LOCK_2_ENTITY_ID],
-        get_entry_config(lock_code_manager_config_entry).slot_numbers,
-        lock_code_manager_config_entry,
-    )
-
-    assert errors == {"base": "slots_already_configured"}
-    assert placeholders["entry_title"] == "other"
 
 
 async def test_an_entry_may_reuse_a_number_it_just_released(
@@ -2442,7 +2413,7 @@ async def test_options_flow_refuses_a_lock_holding_codes_in_the_entrys_slots(
     assert result["type"] == "form"
     assert result["errors"] == {"base": "existing_codes"}
     assert result["description_placeholders"] == {
-        "lock": LOCK_2_ENTITY_ID,
+        "error_lock": LOCK_2_ENTITY_ID,
         "slots": "2",
     }
     _assert_options_error_renders(result)
@@ -2492,8 +2463,38 @@ async def test_reauth_refuses_a_lock_holding_codes_in_the_entrys_slots(
 
     assert result["step_id"] == "reauth_confirm"
     assert result["errors"] == {"base": "existing_codes"}
-    assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
+    # The error names the lock it refuses; the description, the missing one.
+    assert result["description_placeholders"]["error_lock"] == LOCK_2_ENTITY_ID
+    assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
     assert result["description_placeholders"]["slots"] == "2"
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+
+async def test_reauth_reports_a_slot_another_entry_already_manages(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Swapping a lock can collide an existing slot set with another entry's.
+
+    Reauth moves an entry's numbers onto a different lock, where they may
+    already be spoken for. The error names that lock; the description still
+    names the one that is missing.
+    """
+    _entry_with_users(
+        hass,
+        [LOCK_2_ENTITY_ID],
+        {"Someone": {CONF_ENABLED: True, CONF_PIN: "4321"}},
+        title="other",
+        unique_id="other",
+    )
+
+    entry, result = await _async_reauth_onto(hass, [LOCK_2_ENTITY_ID])
+
+    assert result["errors"] == {"base": "slots_already_configured"}
+    placeholders = result["description_placeholders"]
+    assert placeholders["error_lock"] == LOCK_2_ENTITY_ID
+    assert placeholders["entry_title"] == "other"
+    assert placeholders["lock"] == LOCK_1_ENTITY_ID
     assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
 
 
@@ -2637,7 +2638,7 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         # Only the numbers both entries hold: the other entry's third user does
         # not collide with anyone here.
         assert result["description_placeholders"] == {
-            "lock": LOCK_2_ENTITY_ID,
+            "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
             "common_slots": "1, 2",
         }
@@ -2676,7 +2677,7 @@ class TestOptionsFlowOverlapWithLoadedEntries:
 
         assert result["errors"] == {"base": "slots_already_configured"}
         assert result["description_placeholders"] == {
-            "lock": LOCK_2_ENTITY_ID,
+            "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
             "common_slots": "1",
         }
@@ -2761,7 +2762,7 @@ class TestOptionsFlowOverlapWithLoadedEntries:
 
         assert result["type"] == "form"
         assert result["errors"] == {"base": "slots_already_configured"}
-        assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+        assert result["description_placeholders"]["error_lock"] == LOCK_1_ENTITY_ID
 
         result = await hass.config_entries.options.async_configure(
             started["flow_id"], {CONF_LOCKS: [LOCK_2_ENTITY_ID]}
@@ -2802,7 +2803,7 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         assert result["type"] == "form"
         assert result["errors"] == {"base": "slots_already_configured"}
         assert result["description_placeholders"] == {
-            "lock": LOCK_2_ENTITY_ID,
+            "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
             "common_slots": "1",
         }
