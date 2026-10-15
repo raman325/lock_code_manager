@@ -737,6 +737,28 @@ class TestRestartsAndRenames:
             index = _index_of(fake_matter_lock, config[CONF_PIN])
             assert fake_matter_lock.owner(index) == tagged[slot]
 
+    async def test_no_user_name_reaches_the_lock_at_ten_characters(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A name is cut to nine characters, and its tag still names its slot.
+
+        The Aqara U400 accepts a ten-character name and then cannot list its
+        users, so nothing may be written at that length.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+
+        names = {user.name for user in fake_matter_lock.users.values()}
+        assert names == {"lcm:1:slo", "lcm:2:slo"}
+        assert {parse_tag(name)[0] for name in names} == set(FAKE_MATTER_SLOTS)
+
 
 class TestRefusedUserUpdates:
     """A lock that refuses every update of a user it already holds."""
