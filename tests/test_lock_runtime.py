@@ -40,6 +40,7 @@ from custom_components.lock_code_manager.core.worker import BACKOFF_MAX, OFFLINE
 from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
+    LockOperationFailed,
     LockOperationUnsupported,
 )
 from custom_components.lock_code_manager.domain.lock_runtime import (
@@ -412,6 +413,20 @@ async def test_what_the_provider_measures_of_its_link_is_quoted_in_the_repair(
     reason = _hold_reason(hass, entry, 1)
     assert reason.startswith("the lock did not take the code after several tries")
     assert reason.endswith(LINK_HEALTH)
+
+
+async def test_a_cause_the_provider_names_is_not_followed_by_its_link(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Beside a cause, the link's counters point away from it."""
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    lock.fail("set", 1, error=LockOperationFailed("user 7 holds this index"))
+    with patch.object(lock, "describe_link_health", return_value=LINK_HEALTH):
+        await async_set_slot_pin(hass, entry, 1, "4321")
+        await hass.async_block_till_done()
+
+    assert _hold_reason(hass, entry, 1) == "user 7 holds this index"
 
 
 async def test_a_provider_that_cannot_measure_its_link_leaves_the_reason_alone(

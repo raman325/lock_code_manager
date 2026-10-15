@@ -633,14 +633,18 @@ class MatterLock(BaseLock):
                     # finds only tagged users (#1518), so a PIN written onto a
                     # user still untagged could never be cleared again --
                     # turning the slot off would leave it opening the door.
-                    # Write nothing; the slot retries, and is held if the
-                    # lock never takes the name.
+                    # Write nothing; the slot retries -- the lock may have
+                    # failed to answer, not refused -- and is held with this,
+                    # the cause, if the lock never takes the name.
                     if isinstance(err, LockOperationError):
                         raise
                     raise LockOperationFailed(
-                        f"Matter set_lock_user could not tag the adopted user "
-                        f"{existing_user_index} for slot {slot} on "
-                        f"{self.lock.entity_id} (tried {candidates}): {err}"
+                        f"User {existing_user_index} on the lock holds a PIN at "
+                        f"this slot's credential index ({slot}) without a Lock "
+                        f"Code Manager tag, and the lock would not let Lock Code "
+                        f"Manager rename it to take it over ({err}). Remove or "
+                        f"rename that user in the lock maker's app or the "
+                        f"lock's own management, then try again."
                     ) from err
                 # UPDATE tolerates any rename failure so the subsequent
                 # credential write still proceeds. The user record is
