@@ -1,7 +1,5 @@
 """Test Z-Wave JS event handling: credential push updates and operation notifications."""
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock, call, patch
 
 import pytest

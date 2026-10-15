@@ -1,7 +1,5 @@
 """Test the Z-Wave JS lock provider."""
 
-from __future__ import annotations
-
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest

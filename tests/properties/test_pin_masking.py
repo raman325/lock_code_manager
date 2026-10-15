@@ -8,8 +8,6 @@ value makes the whole scheme pointless. Example-based tests pin a handful of
 PINs; these pin the invariants over the whole input space.
 """
 
-from __future__ import annotations
-
 import re
 
 from hypothesis import given, strategies as st

@@ -37,8 +37,6 @@ is the status in words and its code, with the cluster code when there is one:
 (MJS_SRE:62-85).
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress

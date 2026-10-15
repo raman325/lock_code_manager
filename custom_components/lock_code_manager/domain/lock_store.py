@@ -15,8 +15,6 @@ of for good, a lock leaves Lock Code Manager or an entry is deleted.
 The design: docs/superpowers/specs/2026-10-14-milestone-5.md.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Collection
 from typing import Any
 

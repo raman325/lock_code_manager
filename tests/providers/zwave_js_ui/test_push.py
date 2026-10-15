@@ -1,7 +1,5 @@
 """Tests for the zwave-js-ui node subscription, push updates, and keypad events."""
 
-from __future__ import annotations
-
 import json
 from logging import ERROR
 from typing import Any

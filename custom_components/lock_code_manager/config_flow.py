@@ -1,7 +1,5 @@
 """Adds config flow for lock_code_manager."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Collection, Container, Iterable, Mapping, Sequence
 import logging

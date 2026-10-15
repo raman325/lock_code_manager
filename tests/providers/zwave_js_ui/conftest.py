@@ -1,7 +1,5 @@
 """Shared fixtures and constants for zwave-js-ui provider tests."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import contextmanager

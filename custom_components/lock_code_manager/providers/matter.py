@@ -8,8 +8,6 @@ cluster events via the push framework for code slot tracking (LockOperation)
 and occupancy updates (LockUserChange).
 """
 
-from __future__ import annotations
-
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta

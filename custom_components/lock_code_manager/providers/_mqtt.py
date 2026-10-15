@@ -31,8 +31,6 @@ the other a per-device topic, and zwave-js-ui also runs an api transport with
 its own lifetime), the payload projections, and the api client.
 """
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta

@@ -1,7 +1,5 @@
 """End-to-end tests for the ZHA provider through a real Lock Code Manager entry."""
 
-from __future__ import annotations
-
 import re
 from typing import Any
 

@@ -1,7 +1,5 @@
 """The provider adapter: an existing provider, as the worker sees it."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Collection
 import contextlib

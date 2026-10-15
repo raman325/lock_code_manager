@@ -1,7 +1,5 @@
 """A provider built to answer one question must not outlive the answer."""
 
-from __future__ import annotations
-
 from unittest.mock import patch
 
 import pytest

@@ -15,8 +15,6 @@ Neither is a property of one call. Both are stated here over generated
 configurations and edit histories.
 """
 
-from __future__ import annotations
-
 from hypothesis import assume, given, strategies as st
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN

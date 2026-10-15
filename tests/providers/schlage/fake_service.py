@@ -32,8 +32,6 @@ change. Core deletes that stale ``AccessCode`` through the cloud
 documented by pyschlage, so the fake takes the quiet answer.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 import time
 import uuid

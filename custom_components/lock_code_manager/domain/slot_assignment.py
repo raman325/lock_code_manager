@@ -19,8 +19,6 @@ miss on another, and a miss reads as a different user and renumbers them onto
 a different credential index.
 """
 
-from __future__ import annotations
-
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType

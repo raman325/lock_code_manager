@@ -17,8 +17,6 @@ service returns masked PINs (``****``), so occupied slots report
 ``SlotCredential.empty()``.
 """
 
-from __future__ import annotations
-
 from collections.abc import Collection
 import contextlib
 from dataclasses import dataclass, field

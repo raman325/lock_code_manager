@@ -44,8 +44,6 @@ objects rather than configuration:
   a narrower question (``_find_shared_lock_instance`` in ``__init__``).
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING
 

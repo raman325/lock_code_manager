@@ -1,7 +1,5 @@
 """Sensor for lock_code_manager."""
 
-from __future__ import annotations
-
 from typing import override
 
 from homeassistant.components.sensor import SensorEntity

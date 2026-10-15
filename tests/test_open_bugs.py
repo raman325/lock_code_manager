@@ -8,8 +8,6 @@ the marker is removed. A test whose marker is gone guards its fix from here
 on.
 """
 
-from __future__ import annotations
-
 import itertools
 import re
 from typing import Any

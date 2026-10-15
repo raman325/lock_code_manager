@@ -1,7 +1,5 @@
 """Tests for entries that manage no locks."""
 
-from __future__ import annotations
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState

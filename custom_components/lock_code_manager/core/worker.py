@@ -11,8 +11,6 @@ the task stops everything the lock was doing.
 The design: docs/superpowers/specs/2026-10-13-core-first-principles.md.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass, field

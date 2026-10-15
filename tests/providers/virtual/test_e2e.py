@@ -1,7 +1,5 @@
 """Full lifecycle E2E tests for Virtual lock provider."""
 
-from __future__ import annotations
-
 import logging
 from unittest.mock import patch
 

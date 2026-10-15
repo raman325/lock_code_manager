@@ -8,8 +8,6 @@ not support programming event notifications, falls back to drift detection
 polling.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field

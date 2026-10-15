@@ -18,8 +18,6 @@ it never decides what a failed sync costs (the worker's answers do).
 The design: docs/superpowers/specs/2026-10-14-core-registry-adapter.md.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable, Collection
 import contextlib

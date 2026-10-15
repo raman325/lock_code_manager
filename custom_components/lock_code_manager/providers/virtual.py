@@ -1,7 +1,5 @@
 """Module for Virtual locks."""
 
-from __future__ import annotations
-
 from collections.abc import Collection
 from dataclasses import dataclass, field
 import logging

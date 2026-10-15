@@ -11,8 +11,6 @@ reaches the projection, so it must also be total. Example-based tests in
 these pin the invariants over the whole input space.
 """
 
-from __future__ import annotations
-
 import json
 
 from hypothesis import given, strategies as st

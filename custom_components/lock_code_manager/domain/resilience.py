@@ -1,7 +1,5 @@
 """Reusable circuit breaker primitive for resilience tracking."""
 
-from __future__ import annotations
-
 from datetime import datetime, timedelta
 
 from homeassistant.util import dt as dt_util

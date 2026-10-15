@@ -1,7 +1,5 @@
 """Property-based tests for random PIN generation."""
 
-from __future__ import annotations
-
 from hypothesis import given, strategies as st
 import pytest
 

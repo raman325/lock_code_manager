@@ -1,7 +1,5 @@
 """Zigbee frames and quirk-style clusters shared by the ZHA provider tests."""
 
-from __future__ import annotations
-
 from typing import Any, NamedTuple
 
 from zhaquirks.clusters import CustomCluster

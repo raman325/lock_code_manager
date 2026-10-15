@@ -9,8 +9,6 @@ decodes them -- from the stock Door Lock cluster or a quirk's -- rather than
 over the handful of shapes the example tests name.
 """
 
-from __future__ import annotations
-
 from typing import Any, NamedTuple
 
 from hypothesis import given, strategies as st

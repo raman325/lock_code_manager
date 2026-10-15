@@ -1,7 +1,5 @@
 """ZHA provider test fixtures."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 import itertools

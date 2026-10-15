@@ -1,7 +1,5 @@
 """Tests for the zwave-js-ui credential operations built on the api client."""
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any

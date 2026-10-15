@@ -48,8 +48,6 @@ too: it drains the loop, and always takes the example's Home Assistant off
 the harness's list of running instances, so one hung example fails alone.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine

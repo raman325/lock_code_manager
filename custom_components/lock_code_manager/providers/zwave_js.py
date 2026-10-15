@@ -6,8 +6,6 @@ notifications for lock/unlock state changes. See ARCHITECTURE.md for the
 provider's role in the data flow.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta

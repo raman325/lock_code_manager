@@ -12,8 +12,6 @@ setup -- not from the slot coordinators, which would test the implementation
 against itself.
 """
 
-from __future__ import annotations
-
 import asyncio
 
 from hypothesis import given, strategies as st

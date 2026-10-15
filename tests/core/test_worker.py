@@ -5,8 +5,6 @@ Each scenario is a case from the bug catalog or the credential-model
 decisions, driven only through the worker's own API.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Collection
 import contextlib

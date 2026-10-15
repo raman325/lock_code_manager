@@ -13,8 +13,6 @@ translates exceptions itself, converting a silent omission into a reviewed
 allowlist edit.
 """
 
-from __future__ import annotations
-
 import ast
 from pathlib import Path
 

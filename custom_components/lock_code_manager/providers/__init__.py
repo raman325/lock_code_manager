@@ -1,7 +1,5 @@
 """Lock provider implementations."""
 
-from __future__ import annotations
-
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 

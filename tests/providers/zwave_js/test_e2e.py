@@ -1,7 +1,5 @@
 """Full lifecycle E2E tests for Z-Wave JS lock provider."""
 
-from __future__ import annotations
-
 import asyncio
 from collections import Counter
 from collections.abc import Iterable

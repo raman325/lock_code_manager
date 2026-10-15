@@ -1,7 +1,5 @@
 """Tests for the shared provider helpers in ``_util.py``."""
 
-from __future__ import annotations
-
 import pytest
 
 from custom_components.lock_code_manager.providers._util import (

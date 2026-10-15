@@ -12,8 +12,6 @@ All operations go through the Home Assistant ``local_akuvox`` integration
 services (``list_users``, ``add_user``, ``modify_user``, ``delete_user``).
 """
 
-from __future__ import annotations
-
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta

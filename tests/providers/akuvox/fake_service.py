@@ -28,8 +28,6 @@ What it answers:
 drops it does.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 import time
 from typing import Any

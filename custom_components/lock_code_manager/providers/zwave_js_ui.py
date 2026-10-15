@@ -1,7 +1,5 @@
 """Module for locks bridged through zwave-js-ui's MQTT gateway."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field

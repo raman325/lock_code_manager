@@ -1,7 +1,5 @@
 """Provide common Z-Wave JS fixtures for Lock Code Manager tests."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Generator
 import copy

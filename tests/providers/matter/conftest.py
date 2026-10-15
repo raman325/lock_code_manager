@@ -1,7 +1,5 @@
 """Matter provider test fixtures."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import ExitStack, contextmanager

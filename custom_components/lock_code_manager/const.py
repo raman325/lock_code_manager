@@ -1,7 +1,5 @@
 """Constants for lock_code_manager."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Final, TypedDict
 
 from homeassistant.const import Platform

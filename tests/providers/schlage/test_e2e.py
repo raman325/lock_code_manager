@@ -1,7 +1,5 @@
 """Full lifecycle E2E tests for Schlage lock provider."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch

@@ -1,7 +1,5 @@
 """Full lifecycle E2E tests for Matter lock provider."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
 from typing import Any

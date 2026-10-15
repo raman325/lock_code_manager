@@ -1,7 +1,5 @@
 """Utility functions for lock_code_manager."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 import logging
 import re

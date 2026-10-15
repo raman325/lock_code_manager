@@ -42,8 +42,6 @@ whose converters (``YA:160-167``) do not read a code back after a
 programming event.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 import json
 from typing import Any

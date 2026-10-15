@@ -11,8 +11,6 @@ provider's setup), and how it is cleaned up after the worker stops.
 The design: docs/superpowers/specs/2026-10-14-core-registry-adapter.md.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass, field

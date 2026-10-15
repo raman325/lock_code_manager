@@ -1,7 +1,5 @@
 """Tests for diagnostics."""
 
-from __future__ import annotations
-
 import copy
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, SERVICE_TURN_OFF

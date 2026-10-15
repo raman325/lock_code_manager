@@ -20,8 +20,6 @@ No registry writes happen here. Entity and device identifiers keep the slot
 number, so there is nothing to move.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Any
 

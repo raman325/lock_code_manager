@@ -13,8 +13,6 @@ the user it happens to:
   anything, and a stale one would be read by something eventually.
 """
 
-from __future__ import annotations
-
 from hypothesis import given, strategies as st
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN

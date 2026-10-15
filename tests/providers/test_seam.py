@@ -1,7 +1,5 @@
 """Tests for the BaseLock User->Credential seam and orchestration (PR 3)."""
 
-from __future__ import annotations
-
 from collections.abc import Collection
 from dataclasses import replace
 from typing import Literal
