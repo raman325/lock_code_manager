@@ -93,6 +93,7 @@ class ProviderPort:
         name_for: Callable[[int], str | None] = lambda slot: None,
         polling: Callable[[], bool] = lambda: True,
         reports: dict[str, bool] | None = None,
+        on_reports: Callable[[], None] = lambda: None,
     ) -> None:
         """
         Wrap ``provider``.
@@ -100,7 +101,8 @@ class ProviderPort:
         ``name_for`` names the user a slot's PIN is written for; ``polling``
         says whether the lock is polled ("Disable polling" spares the drift
         check). ``reports`` is shared by every port for the run: lock ->
-        whether a read of it has described a slot (see ``read``).
+        whether a read of it has described a slot (see ``read``);
+        ``on_reports`` is called when a read of this lock first does.
         """
         self.provider = provider
         self.name_for = name_for
@@ -124,6 +126,7 @@ class ProviderPort:
         # Every lock read this run -> whether a read described a slot of it.
         # Kept past this port: a one-off read builds a port per read.
         self.reports: dict[str, bool] = {} if reports is None else reports
+        self.on_reports = on_reports
         # Slots the lock last answered it cannot tell what they hold.
         self.not_reported: set[int] = set()
         self._poll: asyncio.Task[None] | None = None
@@ -200,8 +203,10 @@ class ProviderPort:
         # answer or not: a provider projecting only the slots an entry manages
         # (Z-Wave JS's hard refresh) leaves an empty one it was asked about
         # out, and that is no lock that cannot report.
-        self.reports[lock] = self.reports.get(lock, False) or bool(set(slots) - silent)
-        if self.reports[lock]:
+        if not self.reports.get(lock) and set(slots) - silent:
+            self.reports[lock] = True
+            self.on_reports()
+        if self.reports.setdefault(lock, False):
             silent -= cannot_tell
         self.not_reported.difference_update(slots)
         self.not_reported |= cannot_tell

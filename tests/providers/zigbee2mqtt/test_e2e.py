@@ -1120,3 +1120,57 @@ class TestLockThatReportsOnlyFreeSlots:
         assert result["errors"] == {"base": "existing_codes"}
         assert result["description_placeholders"]["slots"] == "2"
         assert bridge.sets_for(2) == []
+
+    async def test_a_restart_remembers_the_lock_can_report(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        free_slots_only_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        After a restart the lock's first reads are of its own slots: Not Supported.
+
+        They show nothing, so only what an earlier run saw -- the lock
+        describing a free slot -- keeps the keypad code at 3 from being taken
+        as free by the next user added.
+        """
+        bridge = free_slots_only_bridge
+        bridge.set_user(3, "3333")
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            await _on_the_clock(
+                hass,
+                freezer,
+                async_restart_lcm(hass, entry, settle=False),
+                "restart",
+            )
+            await async_advance_clock(hass, freezer, 600, settle=False)
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+
+            flow = await hass.config_entries.subentries.async_init(
+                (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+            )
+            flow = await hass.config_entries.subentries.async_configure(
+                flow["flow_id"], {"next_step_id": "one"}
+            )
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                hass.config_entries.subentries.async_configure(
+                    flow["flow_id"],
+                    {CONF_NAME: "user4", CONF_PIN: "9012", CONF_ENABLED: True},
+                ),
+                "adding a user",
+            )
+
+            assert result["type"] == "create_entry", result.get("errors")
+            assert result["data"][CONF_SLOT] == 4
+            await _until_settled(
+                hass, freezer, entry, lock_id, bridge, {**pins, 4: "9012"}
+            )
+            assert bridge.sets_for(3) == []
+            assert bridge.users[3] == (ENABLED, "3333")
+            _assert_trouble_free(hass, lock_id)

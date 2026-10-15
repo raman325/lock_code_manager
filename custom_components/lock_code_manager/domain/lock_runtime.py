@@ -62,7 +62,9 @@ ISSUES_KEY: Final = "slot_issues"
 # What the workers remember across a restart.
 STORE_KEY: Final = "lock_store"
 # lock -> whether a read has described a slot of it, for every lock read this
-# run (``ProviderPort.read``). In memory only: a restart starts it over.
+# run (``ProviderPort.read``). A lock that has is kept in the store too, so a
+# restart starts from it: the first reads after one are of the slots Lock Code
+# Manager wrote, and may show nothing.
 REPORTS_KEY: Final = "locks_reporting"
 # Everything the core keeps for one run of Home Assistant.
 CORE_KEYS = (
@@ -128,6 +130,10 @@ async def async_setup_core(hass: HomeAssistant) -> None:
             lock, (int(n) for n, saved in record["slots"].items() if "release" in saved)
         )
     lock_registry(hass)
+    # A config flow's reads before the core started -- the first entry's.
+    for lock, reports in data[REPORTS_KEY].items():
+        if reports:
+            store.reported(lock)
 
     async def _owed(hass: HomeAssistant) -> None:
         for lock, slot, entry_id in store.releases():
@@ -222,8 +228,19 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
                 for entry, _ in entries_configuring(hass, lock_entity_id)
             )
 
+        if store is not None and store.reports(lock_entity_id):
+            data[REPORTS_KEY][lock_entity_id] = True
+
+        def _on_reports() -> None:
+            if (store := data.get(STORE_KEY)) is not None:
+                store.reported(lock_entity_id)
+
         port = ProviderPort(
-            provider, name_for=_name_for, polling=_polling, reports=data[REPORTS_KEY]
+            provider,
+            name_for=_name_for,
+            polling=_polling,
+            reports=data[REPORTS_KEY],
+            on_reports=_on_reports,
         )
         worker = LockWorker(
             port,
@@ -287,6 +304,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             )
             if (store := data.get(STORE_KEY)) is not None:
                 store.forget_lock(lock_entity_id)
+            data[REPORTS_KEY].pop(lock_entity_id, None)
             _warn_not_cleared(
                 lock_entity_id,
                 (

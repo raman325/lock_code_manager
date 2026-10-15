@@ -10,8 +10,10 @@ from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.core.slot import CLEARED, fingerprint
+from custom_components.lock_code_manager.domain.allocation import async_read_occupancy
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.lock_runtime import (
+    REPORTS_KEY,
     STORE_KEY,
     lock_registry,
 )
@@ -290,6 +292,7 @@ async def test_a_dead_lock_handed_off_is_forgotten_with_its_offline_repair(
     its worker stops, and with it anything that could have cleared it.
     """
     entry = await _offline_lock_2(hass, freezer)
+    assert _record(hass, LOCK_2_ENTITY_ID)["reports"] is True
     entry.runtime_data.retained_pairs = {(LOCK_2_ENTITY_ID, 1), (LOCK_2_ENTITY_ID, 2)}
 
     hass.config_entries.async_update_entry(
@@ -301,6 +304,9 @@ async def test_a_dead_lock_handed_off_is_forgotten_with_its_offline_repair(
     assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is None
     assert _OFFLINE_2 not in lcm_issue_ids(hass, "lock_offline")
     assert _record(hass, LOCK_2_ENTITY_ID) is None
+    # Nor is it held in memory: back in an entry, its next read that
+    # describes a slot is remembered again.
+    assert LOCK_2_ENTITY_ID not in hass.data[DOMAIN][REPORTS_KEY]
     assert _record(hass, LOCK_1_ENTITY_ID) is not None
 
 
@@ -515,6 +521,7 @@ async def test_a_lock_replaced_under_the_same_entity_id_starts_over(
                 "gone": {
                     "entity_id": LOCK_1_ENTITY_ID,
                     "answered": True,
+                    "reports": True,
                     "slots": {"1": {"wrote": CLEARED}},
                 }
             }
@@ -525,6 +532,7 @@ async def test_a_lock_replaced_under_the_same_entity_id_starts_over(
 
     assert store.wrote(LOCK_1_ENTITY_ID, 1) is None
     assert not store.answered(LOCK_1_ENTITY_ID)
+    assert not store.reports(LOCK_1_ENTITY_ID)
     assert [r["entity_id"] for r in store.prune({LOCK_1_ENTITY_ID})] == [
         LOCK_1_ENTITY_ID
     ]
@@ -565,6 +573,22 @@ async def test_a_lock_gone_from_the_entity_registry_is_not_kept_twice(
 
     store: LockStore = hass.data[DOMAIN][STORE_KEY]
     assert [r["entity_id"] for r in store._locks.values()].count(LOCK_2_ENTITY_ID) == 1
+
+
+async def test_a_read_before_set_up_that_described_a_slot_is_remembered(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The first entry's config flow reads its lock before there is a store (#1581).
+
+    That the lock described a slot then is kept once there is one: the
+    entry's own reads, of slots it wrote, may never show it again.
+    """
+    await async_read_occupancy(hass, None, [LOCK_1_ENTITY_ID], [1])
+
+    await async_setup_lcm_entry(hass)
+
+    assert _record(hass)["reports"] is True
 
 
 async def test_a_clear_owed_on_a_lock_only_a_disabled_entry_lists_is_sent(
