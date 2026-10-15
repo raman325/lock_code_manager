@@ -103,9 +103,9 @@ async def async_setup_core(hass: HomeAssistant) -> None:
     Start the core: what the workers remember, then the lock registry.
 
     Before any entry sets up, so the first worker starts from it. A lock no
-    entry lists any more -- a disabled entry's included -- is forgotten,
-    with any clear still owed on it: there is nothing to set its provider
-    up with. The clears still owed elsewhere go on once Home Assistant has
+    entry lists any more -- a disabled entry's included -- or no longer in
+    the entity registry is forgotten, with any clear still owed on it: there
+    is nothing to set its provider up with. The clears still owed elsewhere go on once Home Assistant has
     started, every entry loaded; a slot an entry has claimed meanwhile is
     that entry's now, and is only read again.
     """
@@ -118,7 +118,7 @@ async def async_setup_core(hass: HomeAssistant) -> None:
         _warn_not_cleared(
             lock, (int(n) for n, saved in record["slots"].items() if "release" in saved)
         )
-    async_setup_lock_registry(hass)
+    lock_registry(hass)
 
     async def _owed(hass: HomeAssistant) -> None:
         for lock, slot, entry_id in store.releases():
@@ -148,13 +148,13 @@ def port_of(worker: LockWorker) -> ProviderPort:
 def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
     """Create the instance's lock registry; it stops when Home Assistant does."""
     data = hass.data.setdefault(DOMAIN, {"resources": False})
-    # A config flow's read before the integration has set up remembers nothing.
-    store: LockStore | None = data.get(STORE_KEY)
     data[LEAVING_KEY] = set()
     data[GIVEN_UP_KEY] = {}
     data[ISSUES_KEY] = {}
 
     def _make(lock_entity_id: str) -> LockWorker:
+        # A config flow's read before the integration has set up remembers nothing.
+        store: LockStore | None = data.get(STORE_KEY)
         provider = async_create_lock_instance(
             hass, dr.async_get(hass), er.async_get(hass), None, lock_entity_id
         )
@@ -261,7 +261,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
 
     @callback
     def _remember(lock_entity_id: str, worker: LockWorker) -> None:
-        if store is not None:
+        if (store := data.get(STORE_KEY)) is not None:
             store.remember(
                 lock_entity_id,
                 worker,
@@ -278,7 +278,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
             async_delete_issue(
                 hass, DOMAIN, per_lock_issue_id("lock_offline", lock_entity_id)
             )
-            if store is not None:
+            if (store := data.get(STORE_KEY)) is not None:
                 store.forget_lock(lock_entity_id)
             _warn_not_cleared(
                 lock_entity_id,

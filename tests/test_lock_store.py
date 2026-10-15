@@ -519,3 +519,54 @@ async def test_polls_that_change_nothing_save_nothing(
 
     assert mock_lock(entry).service_calls["get_usercodes"]
     assert saves == []
+
+
+async def test_a_lock_replaced_under_the_same_entity_id_starts_over(
+    hass: HomeAssistant, mock_lock_config_entry, hass_storage
+) -> None:
+    """
+    A record whose registry id is gone was for a lock that is gone.
+
+    A new lock given its entity id holds none of what was written to the
+    old one: trusting that would leave a lock that will not show its codes
+    without them.
+    """
+    hass_storage[SAVED_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": SAVED_KEY,
+        "data": {
+            "locks": {
+                "gone": {
+                    "entity_id": LOCK_1_ENTITY_ID,
+                    "answered": True,
+                    "slots": {"1": {"wrote": CLEARED}},
+                }
+            }
+        },
+    }
+    store = LockStore(hass)
+    await store.async_load()
+
+    assert store.wrote(LOCK_1_ENTITY_ID, 1) is None
+    assert not store.answered(LOCK_1_ENTITY_ID)
+    assert [r["entity_id"] for r in store.prune({LOCK_1_ENTITY_ID})] == [
+        LOCK_1_ENTITY_ID
+    ]
+
+
+async def test_a_lock_registry_started_before_set_up_is_kept(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A config flow's read starts the lock registry before Lock Code Manager sets up.
+
+    Setting up keeps it, rather than leaving its workers running beside a
+    second registry's, and what it writes from then on is remembered.
+    """
+    registry = lock_registry(hass)
+
+    await async_setup_lcm_entry(hass)
+
+    assert lock_registry(hass) is registry
+    assert _record(hass) is not None

@@ -142,12 +142,21 @@ class LockStore:
 
     @callback
     def prune(self, keep: Collection[str]) -> list[Record]:
-        """Forget every lock not in ``keep``; return the records forgotten."""
-        dropped = [r for r in self._locks.values() if r["entity_id"] not in keep]
+        """
+        Forget every lock not in ``keep``, or gone; return the records forgotten.
+
+        A record kept under a registry id the registry no longer has was for
+        a lock that is gone, even if another now has its entity id.
+        """
+        kept = {
+            k: r
+            for k, r in self._locks.items()
+            if r["entity_id"] in keep
+            and k in (r["entity_id"], self._key(r["entity_id"]))
+        }
+        dropped = [r for k, r in self._locks.items() if k not in kept]
         if dropped:
-            self._locks = {
-                k: r for k, r in self._locks.items() if r["entity_id"] in keep
-            }
+            self._locks = kept
             self._save()
         return dropped
 
@@ -158,13 +167,17 @@ class LockStore:
         entity = er.async_get(self._hass).async_get(lock)
         return lock if entity is None else entity.id
 
-    def _fallback(self, lock: str) -> str | None:
-        """Return the key of a record kept for ``lock`` under another key."""
-        return next((k for k, r in self._locks.items() if r["entity_id"] == lock), None)
-
     def _key_of(self, lock: str) -> str | None:
-        """Return the key ``lock``'s record is kept under, if it has one."""
-        return key if (key := self._key(lock)) in self._locks else self._fallback(lock)
+        """
+        Return the key ``lock``'s record is kept under, if it has one.
+
+        Its registry id, or its entity id if it was kept before it had one --
+        never another registry id: that was another lock's.
+        """
+        for key in (self._key(lock), lock):
+            if key in self._locks:
+                return key
+        return None
 
     def _find(self, lock: str) -> Record | None:
         return None if (key := self._key_of(lock)) is None else self._locks[key]
