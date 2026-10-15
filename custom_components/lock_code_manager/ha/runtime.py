@@ -456,8 +456,8 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
         )
     for slot in moot:
         _LOGGER.warning(
-            "Slot %s on %s was still being cleared when the device was "
-            "replaced: the clear is dropped with the old device",
+            "Slot %s on %s was still being cleared or written (a one-off PIN) "
+            "when the device was replaced: that work is dropped with the old device",
             slot,
             lock,
         )
