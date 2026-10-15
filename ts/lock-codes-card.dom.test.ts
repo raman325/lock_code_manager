@@ -213,6 +213,23 @@ describe('lock-codes card, rendered', () => {
         }
     );
 
+    it("shows a code a lock that can report won't report as held, not empty (#1581)", async () => {
+        // The backend only hands "not_reported" over for a slot it doesn't
+        // manage from a lock that has described some slot: a keypad code.
+        const root = await show([
+            managed,
+            { code: 'not_reported', managed: false, slot: 2 },
+            { code: 'empty', managed: false, slot: 3 }
+        ]);
+
+        const chip = [...root.querySelectorAll<HTMLElement>('.slot-chip')].find((element) =>
+            element.textContent?.replace(/\s+/g, ' ').includes('Slot 2 ')
+        );
+        expect(chip, 'slot 2 is folded into the empty slots').toBeTruthy();
+        expect(chip?.querySelector('.lcm-code')?.textContent?.trim()).toBe('Not reported');
+        expect(root.querySelector('.empty-summary-range')?.textContent?.trim() ?? '3').toBe('3');
+    });
+
     it('keeps codes masked in "masked" mode even when the reveal flag is set', async () => {
         card.setConfig({
             code_display: 'masked',

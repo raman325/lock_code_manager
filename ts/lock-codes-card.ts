@@ -961,6 +961,10 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     private _hasCode(slot: LockCoordinatorSlotData): boolean {
+        // A slot no one here manages is only ever "not reported" by a lock that
+        // has shown it can report its codes: one it won't report is a code held
+        // there (#1581), not an empty slot.
+        if (slot.code === SLOT_CODE_NOT_REPORTED && slot.managed !== true) return true;
         return isSlotOccupied(slot.code, slot.code_length);
     }
 }
