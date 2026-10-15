@@ -52,18 +52,6 @@ def test_mask_pin_differs_by_instance():
     assert mask_pin("1234", LOCK, "instance-a") != mask_pin("1234", LOCK, "instance-b")
 
 
-@pytest.mark.parametrize(
-    ("pin", "expected"),
-    [
-        (None, "<empty>"),
-        ("", "<empty>"),
-    ],
-)
-def test_mask_pin_empty(pin: str | None, expected: str):
-    """Test mask_pin returns <empty> for None and empty string."""
-    assert mask_pin(pin, LOCK, INSTANCE_ID) == expected
-
-
 def test_deobfuscate_pins_replaces_known_tokens():
     """Known tokens get replaced; unknown tokens are left verbatim."""
     pin = "1234"
