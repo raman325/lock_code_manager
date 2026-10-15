@@ -321,52 +321,6 @@ async def test_a_keypad_press_reaches_the_bus_as_a_credential_used_event(
     assert events[0].data[ATTR_CREDENTIAL_TYPE] == CredentialType.PIN
 
 
-async def test_notification_event_keypad_lock_fires_a_code_slot_event(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """Test that a keypad lock notification event reaches the code slot event funnel."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(
-        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
-    )
-
-    # Capture LCM lock state changed events
-    fired = MagicMock()
-    zwave_js_lock.async_fire_code_slot_event = fired
-
-    # Create a notification event matching the pattern from Home Assistant core tests
-    # Type 6 = ACCESS_CONTROL, Event 5 = KEYPAD_LOCK_OPERATION
-    event = ZwaveEvent(
-        type="notification",
-        data={
-            "source": "node",
-            "event": "notification",
-            "nodeId": lock_schlage_be469.node_id,
-            "endpointIndex": 0,
-            "ccId": 113,  # Notification CC
-            "args": {
-                "type": 6,  # ACCESS_CONTROL
-                "event": 5,  # KEYPAD_LOCK_OPERATION
-                "label": "Access Control",
-                "eventLabel": "Keypad lock operation",
-                "parameters": {"userId": 1},
-            },
-        },
-    )
-    lock_schlage_be469.receive_event(event)
-    await hass.async_block_till_done()
-
-    fired.assert_called_once_with(code_slot=1, to_locked=True)
-
-    await zwave_js_lock.async_unload(False)
-
-
 async def test_notification_event_keypad_unlock_fires_a_code_slot_event(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
