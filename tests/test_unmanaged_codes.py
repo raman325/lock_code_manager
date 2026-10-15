@@ -27,7 +27,6 @@ from custom_components.lock_code_manager.domain.lock_runtime import (
     async_give_up,
     async_write_once,
     lock_registry,
-    port_of,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.unmanaged import unmanaged_issue_id
@@ -382,7 +381,7 @@ async def test_an_unmanaged_clear_after_a_release_is_a_plain_clear(
     assert releases == []
     assert 2 not in lock.codes
     assert done is True
-    assert 2 not in port_of(worker).releasing
+    assert 2 not in worker.port.releasing
 
 
 async def test_clearing_an_unmanaged_code_on_a_lock_no_entry_holds(

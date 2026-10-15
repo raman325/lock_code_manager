@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import DOMAIN, SENSITIVE_ENTITY_KEYS
+from .const import DATA, DOMAIN, SENSITIVE_ENTITY_KEYS, LockCodeManagerData
 from .domain.config import build_slot_device_identifier, slot_unique_id_key
 from .domain.lock_runtime import lock_codes, lock_registry
 from .domain.models import SlotCode
@@ -19,7 +19,7 @@ from .providers._base import BaseLock
 
 def _get_instance_id(hass: HomeAssistant) -> str:
     """Return the HA instance UUID for PIN masking."""
-    return hass.data.get(DOMAIN, {}).get("instance_id", "")
+    return hass.data.get(DATA, LockCodeManagerData()).get("instance_id", "")
 
 
 def _mask_code(

@@ -18,16 +18,17 @@ from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass, field
 import itertools
 import logging
+from typing import Any
 
 from .slot import Reading, Want
-from .worker import LockWorker
+from .worker import LockPort, LockWorker
 
 _LOGGER = logging.getLogger(__name__)
 
-Hook = Callable[[str, LockWorker], Awaitable[None]]
+type Hook[P: LockPort] = Callable[[str, LockWorker[P]], Awaitable[None]]
 
 
-async def _nothing(lock: str, worker: LockWorker) -> None:
+async def _nothing(lock: str, worker: LockWorker[Any]) -> None:
     """Prepare or clean up nothing."""
 
 
@@ -42,8 +43,8 @@ class SlotTaken(Exception):
 
 
 @dataclass
-class _Lock:
-    worker: LockWorker
+class _Lock[P: LockPort]:
+    worker: LockWorker[P]
     holders: set[str] = field(default_factory=set)
     # Slot -> the entry that owns it. A slot given up has no owner.
     owners: dict[int, str] = field(default_factory=dict)
@@ -51,16 +52,16 @@ class _Lock:
     prepared: asyncio.Task[None] | None = None
 
 
-class LockRegistry:
+class LockRegistry[P: LockPort]:
     """Lock id -> its one worker; which entries hold it and own which slots."""
 
     def __init__(
         self,
-        make_worker: Callable[[str], LockWorker],
+        make_worker: Callable[[str], LockWorker[P]],
         grace: float = 30.0,
         *,
-        prepare: Hook = _nothing,
-        cleanup: Hook = _nothing,
+        prepare: Hook[P] = _nothing,
+        cleanup: Hook[P] = _nothing,
     ) -> None:
         """
         Build workers with ``make_worker``; give each ``grace`` to stop.
@@ -73,14 +74,14 @@ class LockRegistry:
         self._grace = grace
         self._prepare = prepare
         self._cleanup = cleanup
-        self._locks: dict[str, _Lock] = {}
+        self._locks: dict[str, _Lock[P]] = {}
         self._stops: dict[str, asyncio.Task[None]] = {}
         self._once = itertools.count()
         self._closed = False
 
     async def hold(
         self, lock: str, owner: str, wants: Mapping[int, Want] | None = None
-    ) -> LockWorker:
+    ) -> LockWorker[P]:
         """
         Hold ``lock`` for ``owner``, claiming ``wants``' slots; return its worker.
 
@@ -93,7 +94,7 @@ class LockRegistry:
 
     async def _hold(
         self, lock: str, owner: str, wants: Mapping[int, Want], *, prepare: bool
-    ) -> LockWorker:
+    ) -> LockWorker[P]:
         while (stopping := self._stops.get(lock)) is not None:
             # Not shield: a stop cancelled with stop()'s caller is still done.
             await asyncio.wait({stopping})
@@ -141,7 +142,7 @@ class LockRegistry:
                     entry.worker.start()
         return entry.worker
 
-    def worker(self, lock: str) -> LockWorker | None:
+    def worker(self, lock: str) -> LockWorker[P] | None:
         """Return ``lock``'s worker, if it has one in service."""
         return None if (entry := self._locks.get(lock)) is None else entry.worker
 
@@ -209,8 +210,8 @@ class LockRegistry:
         slot: int,
         pin: Want,
         *,
-        before: Callable[[LockWorker], None] = lambda worker: None,
-    ) -> LockWorker:
+        before: Callable[[LockWorker[P]], None] = lambda worker: None,
+    ) -> LockWorker[P]:
         """
         Put ``pin`` in a slot no entry owns, or clear it for None.
 
@@ -238,7 +239,7 @@ class LockRegistry:
             self._retire(lock)
         await asyncio.gather(*self._stops.values())
 
-    def _held(self, lock: str, owner: str) -> _Lock:
+    def _held(self, lock: str, owner: str) -> _Lock[P]:
         entry = self._locks.get(lock)
         if entry is None or owner not in entry.holders:
             raise KeyError(f"{owner} does not hold {lock}")
@@ -259,14 +260,14 @@ class LockRegistry:
         entry = self._locks.pop(lock)
         self._stops[lock] = asyncio.create_task(self._stop(lock, entry))
 
-    async def _prepared(self, lock: str, worker: LockWorker) -> None:
+    async def _prepared(self, lock: str, worker: LockWorker[P]) -> None:
         try:
             await self._prepare(lock, worker)
         except Exception:
             # Its worker still runs: the lock is there, just not ready.
             _LOGGER.exception("Preparing lock %s failed", lock)
 
-    async def _stop(self, lock: str, entry: _Lock) -> None:
+    async def _stop(self, lock: str, entry: _Lock[P]) -> None:
         try:
             await entry.worker.stop(self._grace)
             if entry.prepared is not None:
@@ -279,7 +280,7 @@ class LockRegistry:
             del self._stops[lock]
 
 
-def _check_free(entry: _Lock, owner: str, slots: Collection[int]) -> None:
+def _check_free(entry: _Lock[Any], owner: str, slots: Collection[int]) -> None:
     """Raise ``SlotTaken`` if another entry owns any of ``slots``."""
     for slot in slots:
         if (other := entry.owners.get(slot)) not in (None, owner):

@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping
 import logging
-from typing import cast
+from typing import Final
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EVENT_HOMEASSISTANT_STOP
@@ -32,7 +32,7 @@ from homeassistant.helpers.issue_registry import (
 )
 from homeassistant.helpers.start import async_at_started
 
-from ..const import DOMAIN, MAX_SEARCHED_SLOT
+from ..const import DATA, DOMAIN, MAX_SEARCHED_SLOT, LockCodeManagerData
 from ..core.adapter import ProviderPort, lock_error
 from ..core.registry import LockRegistry, SlotTaken
 from ..core.slot import Holds, Reading, Repair, Seen, Status, Want
@@ -53,16 +53,16 @@ from .util import per_lock_issue_id
 
 _LOGGER = logging.getLogger(__name__)
 
-REGISTRY_KEY = "lock_registry"
+REGISTRY_KEY: Final = "lock_registry"
 # Locks leaving Lock Code Manager altogether: their provider's kept state goes.
-LEAVING_KEY = "locks_leaving"
+LEAVING_KEY: Final = "locks_leaving"
 # (lock, slot) -> the entry that gave the slot up, and the worker clearing it:
 # its repair is that entry's, and only that worker's view of it resolves it.
-GIVEN_UP_KEY = "slots_given_up"
+GIVEN_UP_KEY: Final = "slots_given_up"
 # lock -> the per-slot issues raised for it, so a resolved one is deleted.
-ISSUES_KEY = "slot_issues"
+ISSUES_KEY: Final = "slot_issues"
 # What the workers remember across a restart.
-STORE_KEY = "lock_store"
+STORE_KEY: Final = "lock_store"
 # Everything the core keeps for one run of Home Assistant.
 CORE_KEYS = (REGISTRY_KEY, LEAVING_KEY, GIVEN_UP_KEY, ISSUES_KEY, STORE_KEY)
 
@@ -87,16 +87,16 @@ def signal_lock_changed(lock_entity_id: str) -> str:
 
 
 @callback
-def lock_registry(hass: HomeAssistant) -> LockRegistry:
+def lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]:
     """
     Return the instance's lock registry, creating it on first use.
 
     A config flow can read a lock before the integration has set up.
     """
-    data = hass.data.setdefault(DOMAIN, {"resources": False})
+    data = hass.data.setdefault(DATA, LockCodeManagerData(resources=False))
     if REGISTRY_KEY not in data:
         return async_setup_lock_registry(hass)
-    return cast(LockRegistry, data[REGISTRY_KEY])
+    return data[REGISTRY_KEY]
 
 
 async def async_setup_core(hass: HomeAssistant) -> None:
@@ -110,7 +110,7 @@ async def async_setup_core(hass: HomeAssistant) -> None:
     started, every entry loaded; a slot an entry has claimed meanwhile is
     that entry's now, and is only read again.
     """
-    data = hass.data.setdefault(DOMAIN, {"resources": False})
+    data = hass.data.setdefault(DATA, LockCodeManagerData(resources=False))
     store = data[STORE_KEY] = LockStore(hass)
     await store.async_load()
     for record in store.prune(every_configured_lock(hass)):
@@ -140,20 +140,15 @@ def _warn_not_cleared(lock: str, slots: Iterable[int]) -> None:
         )
 
 
-def port_of(worker: LockWorker) -> ProviderPort:
-    """Return the provider port ``worker`` talks to its lock through."""
-    return cast(ProviderPort, worker.port)
-
-
 @callback
-def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
+def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]:
     """Create the instance's lock registry; it stops when Home Assistant does."""
-    data = hass.data.setdefault(DOMAIN, {"resources": False})
+    data = hass.data.setdefault(DATA, LockCodeManagerData(resources=False))
     data[LEAVING_KEY] = set()
     data[GIVEN_UP_KEY] = {}
     data[ISSUES_KEY] = {}
 
-    def _make(lock_entity_id: str) -> LockWorker:
+    def _make(lock_entity_id: str) -> LockWorker[ProviderPort]:
         # A config flow's read before the integration has set up remembers nothing.
         store: LockStore | None = data.get(STORE_KEY)
         provider = async_create_lock_instance(
@@ -241,7 +236,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
         port.worker = worker
         return worker
 
-    async def _prepare(lock_entity_id: str, worker: LockWorker) -> None:
+    async def _prepare(lock_entity_id: str, worker: LockWorker[ProviderPort]) -> None:
         # The provider keeps an entry for re-running its setup on reconnect;
         # any entry that lists the lock serves.
         entry = next((e for e, _ in entries_configuring(hass, lock_entity_id)), None)
@@ -258,10 +253,10 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
                 None,
             )
         if entry is not None:
-            await port_of(worker).async_setup(entry)
+            await worker.port.async_setup(entry)
 
     @callback
-    def _remember(lock_entity_id: str, worker: LockWorker) -> None:
+    def _remember(lock_entity_id: str, worker: LockWorker[ProviderPort]) -> None:
         if (store := data.get(STORE_KEY)) is not None:
             store.remember(
                 lock_entity_id,
@@ -271,8 +266,8 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
                 )[0],
             )
 
-    async def _cleanup(lock_entity_id: str, worker: LockWorker) -> None:
-        port = port_of(worker)
+    async def _cleanup(lock_entity_id: str, worker: LockWorker[ProviderPort]) -> None:
+        port = worker.port
         leaving = lock_entity_id in data[LEAVING_KEY]
         if leaving:
             # Nothing will answer it now: the lock is gone from here.
@@ -334,7 +329,7 @@ async def async_hold_lock(
                 err.owner,
             )
             del wants[err.slot]
-    port = port_of(worker)
+    port = worker.port
     port.releasing.difference_update(wants)
     return port.provider
 
@@ -349,7 +344,7 @@ async def async_release_lock(
     provider's kept state goes with it once no entry holds it.
     """
     if leaving:
-        hass.data[DOMAIN][LEAVING_KEY].add(lock_entity_id)
+        hass.data[DATA][LEAVING_KEY].add(lock_entity_id)
     await lock_registry(hass).release(lock_entity_id, entry.entry_id)
 
 
@@ -391,7 +386,7 @@ def async_want(
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
-    port = port_of(worker)
+    port = worker.port
     current = worker.slots.get(slot)
     if (
         current is not None
@@ -401,7 +396,7 @@ def async_want(
     ):
         return  # nothing new to tell the lock: no sync to queue
     port.releasing.discard(slot)
-    hass.data[DOMAIN][GIVEN_UP_KEY].pop((lock_entity_id, slot), None)
+    hass.data[DATA][GIVEN_UP_KEY].pop((lock_entity_id, slot), None)
     try:
         registry.want(lock_entity_id, entry.entry_id, slot, pin)
     except (KeyError, SlotTaken) as err:
@@ -436,7 +431,7 @@ def async_give_up(
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
-    port = port_of(worker)
+    port = worker.port
     if clear and not worker.answered:
         # A lock with no PIN support holds no codes, unless it answered an
         # earlier run that wrote some: no clear to wait on. Every other
@@ -459,13 +454,13 @@ def async_give_up(
         if clear:
             port.releasing.add(slot)
             registry.give_up(lock_entity_id, entry.entry_id, slot)
-            hass.data[DOMAIN][GIVEN_UP_KEY][lock_entity_id, slot] = (
+            hass.data[DATA][GIVEN_UP_KEY][lock_entity_id, slot] = (
                 entry.entry_id,
                 worker,
             )
         else:
             registry.unclaim(lock_entity_id, entry.entry_id, slot)
-            if (store := hass.data[DOMAIN].get(STORE_KEY)) is not None:
+            if (store := hass.data[DATA].get(STORE_KEY)) is not None:
                 store.forget_slot(lock_entity_id, slot)
     except KeyError:
         return  # never held: nothing to give up
@@ -504,7 +499,7 @@ async def async_write_once(
 
 @callback
 def async_reconcile_issues(
-    hass: HomeAssistant, lock_entity_id: str, worker: LockWorker
+    hass: HomeAssistant, lock_entity_id: str, worker: LockWorker[ProviderPort]
 ) -> None:
     """
     Raise a repair for each slot the worker holds, and drop resolved ones.
@@ -514,7 +509,7 @@ def async_reconcile_issues(
     refused PIN turns the slot off through ``on_disable`` instead. A lock
     that answered before and has stopped answering is ``lock_offline``.
     """
-    data = hass.data[DOMAIN]
+    data = hass.data[DATA]
     given_up = data[GIVEN_UP_KEY]
     for key, (_, clearing) in list(given_up.items()):
         if (
@@ -564,7 +559,7 @@ def async_reconcile_issues(
         issue_id = f"slot_suspended_{entry_id}_{lock_entity_id}_{slot_num}"
         raised.add(issue_id)
         translation_key, reason = issue
-        provider = port_of(worker).provider
+        provider = worker.port.provider
         # The driver's own words over ours when it would not set the code
         # (#1398) -- a refused clear's are about setting, and mislead; whatever
         # the provider can measure of its transport, verbatim (#1397).
@@ -636,7 +631,7 @@ async def async_resume_slot(
     if worker is not None and slot in worker.slots:
         worker.resume(slot)
         return
-    given_up = hass.data[DOMAIN][GIVEN_UP_KEY]
+    given_up = hass.data[DATA][GIVEN_UP_KEY]
     key = (lock_entity_id, slot)
     if key not in given_up and release and entry_id is not None:
         given_up[key] = (entry_id, None)
@@ -646,7 +641,7 @@ async def async_resume_slot(
             slot,
             None,
             # Still a release: a native-user lock deletes the user it tagged.
-            before=lambda new: port_of(new).releasing.add(slot),
+            before=lambda new: new.port.releasing.add(slot),
         )
         # The clear is this worker's now: its view of the slot resolves it.
         given_up[key] = (given_up[key][0], worker)
@@ -676,7 +671,7 @@ def lock_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str | Slot
     if (worker := lock_registry(hass).worker(lock_entity_id)) is None:
         return {}
     readings = {
-        **port_of(worker).others,
+        **worker.port.others,
         **{
             slot_num: slot.seen
             for slot_num, slot in worker.slots.items()
@@ -686,7 +681,7 @@ def lock_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str | Slot
     return {slot: _label(reading) for slot, reading in readings.items()}
 
 
-async def async_hard_refresh(worker: LockWorker) -> None:
+async def async_hard_refresh(worker: LockWorker[ProviderPort]) -> None:
     """
     Re-read the whole lock, past any cache, in its turn: the hard refresh service.
 
@@ -695,7 +690,7 @@ async def async_hard_refresh(worker: LockWorker) -> None:
     the read after it brings what it found into view.
     """
     await worker.read(probe=True)
-    provider = port_of(worker).provider
+    provider = worker.port.provider
 
     async def _walk() -> None:
         try:

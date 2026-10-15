@@ -52,7 +52,6 @@ from custom_components.lock_code_manager.domain.lock_runtime import (
     async_resume_slot,
     async_want,
     lock_registry,
-    port_of,
     signal_lock_changed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
@@ -278,11 +277,11 @@ async def test_a_slot_given_up_then_wanted_again_is_cleared_plainly(
     async_give_up(hass, entry, LOCK_1_ENTITY_ID, 1)
     worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
     assert worker is not None
-    assert 1 in port_of(worker).releasing
+    assert 1 in worker.port.releasing
 
     async_want(hass, entry, LOCK_1_ENTITY_ID, 1, "1234")
 
-    assert 1 not in port_of(worker).releasing
+    assert 1 not in worker.port.releasing
 
 
 async def test_a_lock_that_stops_answering_raises_its_offline_repair(
@@ -365,7 +364,7 @@ async def test_a_held_release_tried_again_without_its_entry_is_still_a_release(
         await async_resume_slot(hass, LOCK_1_ENTITY_ID, 1)
         worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
         assert worker is not None
-        assert 1 in port_of(worker).releasing
+        assert 1 in worker.port.releasing
         await hass.async_block_till_done()
 
     assert built

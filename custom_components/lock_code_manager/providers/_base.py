@@ -26,7 +26,9 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from ..const import (
+    DATA,
     DOMAIN,
+    LockCodeManagerData,
 )
 from ..domain.credentials import (
     Credential,
@@ -130,7 +132,7 @@ class ProviderCoordinator(Protocol):
     async def async_refresh(self) -> None:
         """Take the first read."""
 
-    async def async_in_turn(self, call: Callable[[], Awaitable[Any]]) -> Any:
+    async def async_in_turn[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """Run ``call`` against the lock in its turn; return its result."""
 
     def async_set_update_error(self, err: Exception) -> None:
@@ -388,7 +390,7 @@ class BaseLock:
         return mask_pin(
             pin,
             code_slot,
-            self.hass.data.get(DOMAIN, {}).get("instance_id", ""),
+            self.hass.data.get(DATA, LockCodeManagerData()).get("instance_id", ""),
         )
 
     @final

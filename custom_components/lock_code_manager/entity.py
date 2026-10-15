@@ -38,6 +38,8 @@ from .providers import BaseLock
 if TYPE_CHECKING:
     from homeassistant.helpers.event import _TrackStateChangeFiltered
 
+    from .core.adapter import ProviderPort
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -396,7 +398,7 @@ class LockWorkerView:
 
     config_entry: ConfigEntry
 
-    def _core_worker(self) -> LockWorker | None:
+    def _core_worker(self) -> LockWorker[ProviderPort] | None:
         """
         Return the lock's worker if it syncs this slot for this entry.
 
