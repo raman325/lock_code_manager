@@ -964,7 +964,7 @@ async def test_gateway_that_never_answers_is_skipped(
 @contextmanager
 def record_wait_budgets() -> Iterator[list[float | None]]:
     """
-    Record every ``asyncio.wait_for`` budget spent inside the block.
+    Record every ``asyncio.timeout`` budget spent inside the block.
 
     Which constant bounds an api call is only observable at the wait itself;
     asserting on the argument the provider hands its own helper would pin the
@@ -974,13 +974,13 @@ def record_wait_budgets() -> Iterator[list[float | None]]:
     than for the list's exact contents.
     """
     seen: list[float | None] = []
-    real_wait_for = asyncio.wait_for
+    real_timeout = asyncio.timeout
 
-    async def _spy(awaitable: Any, timeout: float | None = None) -> Any:
-        seen.append(timeout)
-        return await real_wait_for(awaitable, timeout)
+    def _spy(delay: float | None) -> asyncio.Timeout:
+        seen.append(delay)
+        return real_timeout(delay)
 
-    with patch.object(asyncio, "wait_for", _spy):
+    with patch.object(asyncio, "timeout", _spy):
         yield seen
 
 

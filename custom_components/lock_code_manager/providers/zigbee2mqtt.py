@@ -653,7 +653,8 @@ class Zigbee2MQTTLock(BaseMqttLock):
             return None
 
         try:
-            result = await asyncio.wait_for(future, timeout=10.0)
+            async with asyncio.timeout(10.0):
+                result = await future
         except TimeoutError:
             LOGGER.debug(
                 "Timeout waiting for PIN code response for %s slot %s",

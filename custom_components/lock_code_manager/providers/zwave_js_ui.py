@@ -1139,9 +1139,10 @@ class ZWaveJSUILock(BaseMqttLock):
                 ) from err
 
             try:
-                response = await asyncio.wait_for(
-                    future, API_CALL_TIMEOUT if timeout is None else timeout
-                )
+                async with asyncio.timeout(
+                    API_CALL_TIMEOUT if timeout is None else timeout
+                ):
+                    response = await future
             except TimeoutError as err:
                 raise LockDisconnected(
                     f"Timed out waiting for zwave-js-ui {api_name} response for "
