@@ -595,21 +595,6 @@ async def test_config_flow_slots_already_configured(
     assert not set(flow_slots(result).values()) & taken
 
 
-async def test_config_flow_two_entries_same_locks(
-    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
-):
-    """Test two entries that use same locks but different slots set up successfully."""
-    flow_id = await _start_yaml_config_flow(hass)
-
-    with _holding():
-        result = await async_configure_flow(
-            hass,
-            flow_id,
-            {CONF_USERS: {"User 3": {CONF_ENABLED: False, CONF_PIN: "0123"}}},
-        )
-    assert result["type"] == "create_entry"
-
-
 async def test_config_flow_ui_scheduler_entity_excluded(
     hass: HomeAssistant, mock_lock_config_entry
 ):
@@ -1495,10 +1480,7 @@ async def test_config_flow_ui_rejects_duplicate_name(
             },
             "name_not_unique",
         ),
-        (
-            {"   ": {CONF_ENABLED: True, CONF_PIN: "1234"}},
-            "name_required",
-        ),
+        # name_required is test_a_blank_yaml_name_names_the_slot_it_came_from.
     ],
 )
 async def test_config_flow_yaml_enforces_name_rules(

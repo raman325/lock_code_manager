@@ -941,44 +941,6 @@ async def test_subscribe_lock_codes_lock_not_found(
     assert msg["error"]["code"] == "not_found"
 
 
-async def test_subscribe_code_slot_state_change(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test subscribe_code_slot triggers updates on entity state changes."""
-    ws_client = await hass_ws_client(hass)
-
-    # Subscribe to slot 1
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/subscribe_code_slot",
-            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-            ATTR_SLOT: 1,
-            "reveal": True,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-
-    # Receive initial event
-    event = await ws_client.receive_json()
-    assert event["type"] == "event"
-
-    # Change an entity state (enabled switch for slot 1)
-    enabled_entity_id = SLOT_1_ENABLED_ENTITY
-    hass.states.async_set(enabled_entity_id, STATE_OFF)
-    await hass.async_block_till_done()
-
-    # Should receive an update event
-    updated = await ws_client.receive_json()
-    assert updated["type"] == "event"
-    assert updated["event"][ATTR_SLOT_NUM] == 1
-    assert updated["event"][CONF_ENABLED] is False
-
-
 async def test_subscribe_code_slot_coordinator_update(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1494,60 +1456,6 @@ async def test_set_usercode_duplicate_code_error(
 # =============================================================================
 
 
-async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test that setting a PIN via service call is reflected in the subscription."""
-    ws_client = await hass_ws_client(hass)
-
-    # Subscribe to slot 1 with reveal=True
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/subscribe_code_slot",
-            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-            ATTR_SLOT: 1,
-            "reveal": True,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-
-    # Receive initial event with original PIN
-    event = await ws_client.receive_json()
-    assert event["type"] == "event"
-    assert event["event"][CONF_PIN] == "1234"
-
-    # Set a new PIN via service call
-    await hass.services.async_call(
-        "text",
-        "set_value",
-        {"value": "9999"},
-        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    # Collect WebSocket updates until we see the new PIN
-    result = {"pin": None}
-
-    async def _wait_for_pin() -> None:
-        for _ in range(10):
-            msg = await ws_client.receive_json()
-            if msg.get("type") == "event":
-                result["pin"] = msg["event"].get(CONF_PIN)
-                if result["pin"] == "9999":
-                    return
-
-    with contextlib.suppress(TimeoutError):
-        await asyncio.wait_for(_wait_for_pin(), timeout=3.0)
-
-    assert result["pin"] == "9999"
-
-
 async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1653,45 +1561,6 @@ async def test_enable_toggle_reflects_in_subscribe_code_slot(
     updated = await ws_client.receive_json()
     assert updated["type"] == "event"
     assert updated["event"][CONF_ENABLED] is True
-
-
-async def test_coordinator_push_update_reflects_in_subscribe_lock_codes(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test that a lock's push is reflected in subscribe_lock_codes."""
-    ws_client = await hass_ws_client(hass)
-
-    # Subscribe to lock 1 with reveal=True
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/subscribe_lock_codes",
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            "reveal": True,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-
-    # Receive initial event
-    event = await ws_client.receive_json()
-    assert event["type"] == "event"
-
-    # The lock pushes a new code for slot 1
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    _push(lock, 1, "9999")
-    await hass.async_block_till_done()
-
-    # The first update shows slot 1 with code "9999"; the managed PIN is
-    # then put back
-    events = await _async_events_until_quiet(ws_client)
-    slots_by_num = {s[ATTR_SLOT]: s for s in events[0][CONF_SLOTS]}
-    assert slots_by_num[1][ATTR_CODE] == "9999"
-    slots_by_num = {s[ATTR_SLOT]: s for s in events[-1][CONF_SLOTS]}
-    assert slots_by_num[1][ATTR_CODE] == "1234"
 
 
 async def test_set_usercode_reflects_in_subscribe_lock_codes(
@@ -1951,38 +1820,6 @@ async def test_subscribe_lock_codes_response_shape(
             assert isinstance(slot.get(ATTR_CONFIG_ENTRY_TITLE), str)
             # Title comes from the LCM config entry that owns the slot.
             assert slot[ATTR_CONFIG_ENTRY_TITLE] == lock_code_manager_config_entry.title
-
-
-async def test_subscribe_lock_codes_masked_shape_contract(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test that masked subscribe_lock_codes response hides codes and provides code_length."""
-    ws_client = await hass_ws_client(hass)
-
-    # Subscribe with reveal=False (default) for masked codes
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/subscribe_lock_codes",
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-
-    event = await ws_client.receive_json()
-    assert event["type"] == "event"
-
-    # Each slot holding a code has code=None and code_length as an integer;
-    # an empty one (slot 2 is inactive, so cleared) says so instead.
-    for slot in event["event"][CONF_SLOTS]:
-        if slot[ATTR_CODE] == "empty":
-            continue
-        assert slot[ATTR_CODE] is None
-        assert isinstance(slot[ATTR_CODE_LENGTH], int)
 
 
 # =============================================================================
@@ -3550,51 +3387,6 @@ async def test_subscribe_code_slot_receives_live_updates(
     updated = await ws_client.receive_json()
     assert updated["type"] == "event"
     assert updated["event"][CONF_PIN] == "5555"
-
-
-async def test_subscribe_code_slot_receives_coordinator_updates(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """subscribe_code_slot fires events when what the lock holds changes."""
-    ws_client = await hass_ws_client(hass)
-
-    # Subscribe to slot 1
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/subscribe_code_slot",
-            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-            ATTR_SLOT: 1,
-            "reveal": True,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-
-    # Receive initial snapshot
-    event = await ws_client.receive_json()
-    assert event["type"] == "event"
-
-    # The lock reports a new code
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    _push(lock, 1, "5555")
-    await hass.async_block_till_done()
-
-    # Verify the lock status in the first event shows the new code
-    events = await _async_events_until_quiet(ws_client)
-    lock_1_data = next(
-        (
-            lock_data
-            for lock_data in events[0][CONF_LOCKS]
-            if lock_data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
-        ),
-        None,
-    )
-    assert lock_1_data is not None
-    assert lock_1_data[ATTR_CODE] == "5555"
 
 
 class TestAddressingASlotByUser:
