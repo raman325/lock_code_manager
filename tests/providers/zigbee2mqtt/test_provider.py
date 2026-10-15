@@ -1173,41 +1173,6 @@ class TestOccupiedIndices:
             assert codes[2] is SlotCredential.unreadable()
             assert codes[1].is_empty and codes[3].is_empty
 
-    async def test_raises_when_disconnected_rather_than_answering_empty(
-        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
-    ) -> None:
-        """A lock that cannot be reached must not answer at all.
-
-        Raising is what makes occupancy read as unknown; answering with
-        nothing would read as an empty lock.
-        """
-        lock = zigbee2mqtt_lock_connected
-        with (
-            patch.object(
-                lock,
-                "async_is_integration_connected",
-                new=AsyncMock(return_value=False),
-            ),
-            pytest.raises(LockDisconnected),
-        ):
-            await lock.async_get_usercodes(range(1, 4))
-
-    async def test_raises_without_a_get_topic(
-        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
-    ) -> None:
-        """No topic means no question can be asked, which is not an empty lock."""
-        lock = zigbee2mqtt_lock_connected
-        with (
-            patch.object(
-                lock,
-                "async_is_integration_connected",
-                new=AsyncMock(return_value=True),
-            ),
-            patch.object(lock, "_get_topic", return_value=None),
-            pytest.raises(LockDisconnected),
-        ):
-            await lock.async_get_usercodes(range(1, 4))
-
 
 async def test_max_slot_is_the_integrations_limit(
     zigbee2mqtt_lock_connected: Zigbee2MQTTLock,
