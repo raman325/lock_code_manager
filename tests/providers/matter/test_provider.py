@@ -35,6 +35,10 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.providers._util import (
+    make_tagged_name,
+    parse_tag,
+)
 from custom_components.lock_code_manager.providers.matter import (
     MatterLock,
     SetCredentialFailedError,
@@ -2649,6 +2653,44 @@ class TestGetCapabilities:
             name = await matter_lock._build_tagged_user_name(6, "Abcdef")
 
         assert name == "lcm:6:Abc"
+
+    @pytest.mark.parametrize(
+        ("slot", "display", "expected"),
+        [
+            # "lcm:1:Zoë" is 9 characters but 10 bytes: the U400's wedge.
+            pytest.param(1, "Zoë", "lcm:1:Zo", id="two-byte"),
+            pytest.param(6, "日本", "lcm:6:日", id="three-byte-fits"),
+            pytest.param(123, "ë", "lcm:123:", id="no-room-for-the-whole-char"),
+        ],
+    )
+    async def test_tagged_name_stops_short_of_ten_bytes(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        slot: int,
+        display: str,
+        expected: str,
+    ) -> None:
+        """
+        Matter limits a user's name in UTF-8 bytes, so a label is cut to 9 of them.
+
+        Never through the middle of a character, and never into the tag.
+        """
+        mock_get_lock_info = AsyncMock(
+            return_value={
+                "supports_user_management": True,
+                "supported_credential_types": ["pin"],
+                "max_users": 20,
+                "max_pin_users": 15,
+            }
+        )
+        with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
+            name = await matter_lock._build_tagged_user_name(slot, display)
+
+        assert name == expected
+        assert len(name.encode()) <= 9
+        assert parse_tag(name)[0] == slot
+        assert make_tagged_name(slot, display).startswith(name)
 
     async def test_get_capabilities_none_fields_default_to_zero(
         self, hass: HomeAssistant, matter_lock: MatterLock

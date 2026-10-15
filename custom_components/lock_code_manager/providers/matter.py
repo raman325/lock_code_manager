@@ -571,11 +571,18 @@ class MatterLock(BaseLock):
             supports_user_management=bool(info.get("supports_user_management")),
             max_users=info.get("max_users") or 0,
             credential_types=credential_types,
-            # The Matter DoorLock cluster limits UserName to 10 characters, not
-            # 32, and some locks (Aqara U400) accept exactly 10 but then fail
-            # every GetUser walk. Names of 9 or fewer work, so advertise 9.
+            # The Matter DoorLock cluster limits UserName to 10 bytes of UTF-8,
+            # not 32, and some locks (Aqara U400) accept exactly 10 but then
+            # fail every GetUser walk. Names of 9 or fewer work, so advertise
+            # 9 (``_user_name_length`` counts them in bytes).
             max_user_name_length=9,
         )
+
+    @override
+    @staticmethod
+    def _user_name_length(name: str) -> int:
+        """Return ``name``'s length in UTF-8 bytes: what Matter limits, not characters."""
+        return len(name.encode())
 
     @override
     async def async_set_user(self, user: User) -> SetUserResult:

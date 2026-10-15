@@ -1509,21 +1509,30 @@ class BaseLock:
             return None
         if not caps.supports_user_management or caps.max_user_name_length <= 0:
             return None
+        limit = caps.max_user_name_length
         tagged = make_tagged_name(slot, display)
-        if len(tagged) <= caps.max_user_name_length:
+        if self._user_name_length(tagged) <= limit:
             return tagged
-        if len(f"lcm:{slot}:") > caps.max_user_name_length:
+        if self._user_name_length(f"lcm:{slot}:") > limit:
             # Canonical prefix doesn't fit. Try the slot-only fallback so
             # the slot binding survives the read; if the slot digits
             # themselves can't fit either, return ``None`` rather than
             # truncate the slot number to a different one and mis-bind
             # the user.
             slot_str = str(slot)
-            if len(slot_str) > caps.max_user_name_length:
+            if self._user_name_length(slot_str) > limit:
                 return None
             return slot_str
-        # Canonical prefix fits; truncate only the display portion.
-        return tagged[: caps.max_user_name_length]
+        # Canonical prefix fits; truncate only the display portion, a whole
+        # character at a time.
+        while self._user_name_length(tagged) > limit:
+            tagged = tagged[:-1]
+        return tagged
+
+    @staticmethod
+    def _user_name_length(name: str) -> int:
+        """Return ``name``'s length as the lock counts it against its limit."""
+        return len(name)
 
     async def _assert_credential_type_supported(self, credential: Credential) -> None:
         """
