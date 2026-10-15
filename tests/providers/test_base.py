@@ -436,11 +436,50 @@ async def test_config_entry_state_change_resubscribes(
         lock.coordinator.async_request_refresh = AsyncMock()
 
         await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
-        await hass.async_block_till_done()
+        # The reconnect runs as a background task of the reloaded entry: one
+        # started only once the entry is loaded again, so the reload's
+        # unload has nothing of it to cancel.
+        await hass.async_block_till_done(wait_background_tasks=True)
 
         assert lock.unsubscribe_calls == 1
         assert lock.subscribe_calls == 1
         lock.coordinator.async_request_refresh.assert_awaited()
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_lock_integration_unload_cancels_provider_tasks(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A provider's background work ends when its lock integration unloads.
+
+    A follow-up refresh or event dispatch still waiting on an integration
+    that has gone would otherwise talk to it after its teardown.
+    """
+    with patch(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert lock.lock_config_entry is mock_lock_config_entry
+        task = lock._create_background_task(
+            asyncio.Event().wait(), "provider work that never finishes"
+        )
+        await asyncio.sleep(0)
+        assert not task.done()
+
+        await hass.config_entries.async_unload(mock_lock_config_entry.entry_id)
+
+        assert task.cancelled()
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
@@ -1074,8 +1113,7 @@ async def test_on_integration_loaded_logs_debug_on_transient_reconnect_failure(
     lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
     lock._lcm_config_entry = config_entry
 
-    loaded_entry = MagicMock()
-    loaded_entry.state = ConfigEntryState.LOADED
+    loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
     lock.lock_config_entry = loaded_entry
 
     with patch.object(
@@ -1114,8 +1152,7 @@ async def test_a_reconnect_whose_probe_times_out_rearms_the_retry(
     lock._lcm_config_entry = config_entry
     lock._min_operation_delay = 0
 
-    loaded_entry = MagicMock()
-    loaded_entry.state = ConfigEntryState.LOADED
+    loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
     lock.lock_config_entry = loaded_entry
 
     async def _never_returns(*_args, **_kwargs):
@@ -1285,8 +1322,7 @@ async def test_on_integration_loaded_runs_deferred_capability_validation(
 
         # Integration comes up; simulate the LOADED transition callback.
         lock.set_connected(True)
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         await lock._async_on_integration_loaded()
 
@@ -1334,8 +1370,7 @@ async def test_setup_internal_structural_failure_degrades_and_recovers_on_reload
         # Validation failure must invalidate the capability cache; a
         # degenerate-but-successful read would otherwise be served to every
         # revalidation, making recovery impossible.
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         await lock._async_on_integration_loaded()
 
@@ -1425,8 +1460,7 @@ async def test_setup_validation_failure_raises_and_clears_repair_issue(
         # The lock's condition is fixed; the LOADED transition revalidates
         # and the repair dismisses itself.
         caps_mock.return_value = _pin_capabilities()
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         await lock._async_on_integration_loaded()
 
@@ -1456,8 +1490,7 @@ async def test_reconnect_validation_failure_raises_repair_issue(
         assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
 
         lock.set_connected(True)
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         await lock._async_on_integration_loaded()
 
@@ -1513,8 +1546,7 @@ async def test_on_integration_loaded_rejects_lock_without_pin_support(
         await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
 
         lock.set_connected(True)
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         await lock._async_on_integration_loaded()
 
@@ -1976,12 +2008,11 @@ async def test_deferred_setup_is_retried_once_the_lock_becomes_reachable(
     assert lock.provider_setup_succeeded is False
 
     lock.set_connected(True)
-    loaded_entry = MagicMock()
-    loaded_entry.state = ConfigEntryState.LOADED
+    loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
     lock.lock_config_entry = loaded_entry
 
     assert await lock.async_internal_is_reachable() is True
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert lock.provider_setup_succeeded is True
 
@@ -2006,19 +2037,18 @@ async def test_a_deferred_retry_that_hits_a_blip_gets_another_one(
     assert lock.provider_setup_succeeded is False
 
     lock.set_connected(True)
-    loaded_entry = MagicMock()
-    loaded_entry.state = ConfigEntryState.LOADED
+    loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
     lock.lock_config_entry = loaded_entry
 
     with patch.object(
         lock, "async_setup", AsyncMock(side_effect=LockDisconnected("blip"))
     ):
         assert await lock.async_internal_is_reachable() is True
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
     assert lock.provider_setup_succeeded is False
 
     assert await lock.async_internal_is_reachable() is True
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert lock.provider_setup_succeeded is True
 
@@ -2048,16 +2078,15 @@ async def test_a_lock_that_was_set_up_is_not_set_up_again_on_every_check(
         await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
 
         lock.set_connected(True)
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         # The first reachable observation spends the one deferred retry.
         assert await lock.async_internal_is_reachable() is True
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
 
         with patch.object(lock, "_async_start_reconnect") as retry:
             assert await lock.async_internal_is_reachable() is True
-            await hass.async_block_till_done()
+            await hass.async_block_till_done(wait_background_tasks=True)
 
     retry.assert_not_called()
     assert lock.provider_setup_succeeded is False
