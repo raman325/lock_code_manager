@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +15,7 @@ from zigpy.zcl.clusters.closures import DoorLock
 from zigpy.zcl.foundation import Status
 
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
+from homeassistant.components.zha.helpers import get_zha_data
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -713,26 +715,48 @@ async def test_get_connected_cluster_raises_when_disconnected(
             await zha_lock._get_connected_cluster()
 
 
-async def test_get_gateway_handles_exceptions(
-    hass: HomeAssistant, zha_lock: ZHALock
+@pytest.mark.parametrize(
+    "error",
+    [
+        # What get_zha_gateway_proxy raises whenever ZHA is not loaded.
+        ValueError("No gateway object exists"),
+        KeyError("not loaded"),
+    ],
+)
+async def test_get_gateway_unavailable_is_quiet(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
 ) -> None:
-    """Test _get_gateway returns None on KeyError/ValueError."""
+    """
+    ZHA not loaded (setup retry, unloaded) is no gateway, and nothing is logged.
+
+    Asked on every connection check while ZHA retries its setup, a warning with
+    a traceback each time flooded the log.
+    """
+    caplog.set_level(logging.DEBUG, logger="custom_components.lock_code_manager")
     with patch(
         "custom_components.lock_code_manager.providers.zha._get_zha_gateway_proxy",
-        side_effect=KeyError("not loaded"),
+        side_effect=error,
     ):
         assert zha_lock._get_gateway() is None
+        assert await zha_lock.async_is_integration_connected() is False
+    assert not [r for r in caplog.records if r.name.endswith("providers.zha")]
 
 
-async def test_get_gateway_handles_value_error(
-    hass: HomeAssistant, zha_lock: ZHALock
+async def test_get_gateway_while_zha_has_no_gateway(
+    hass: HomeAssistant, zha_lock: ZHALock, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Test _get_gateway logs a warning and returns None on an unexpected ValueError."""
-    with patch(
-        "custom_components.lock_code_manager.providers.zha._get_zha_gateway_proxy",
-        side_effect=ValueError("unexpected"),
-    ):
+    """Against the real helper: no gateway proxy means not connected, quietly."""
+    data = get_zha_data(hass)
+    saved, data.gateway_proxy = data.gateway_proxy, None
+    try:
         assert zha_lock._get_gateway() is None
+        assert await zha_lock.async_is_integration_connected() is False
+    finally:
+        data.gateway_proxy = saved
+    assert "ZHA gateway" not in caplog.text
 
 
 async def test_get_door_lock_cluster_no_device_proxy(
