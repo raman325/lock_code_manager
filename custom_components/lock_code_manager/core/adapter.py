@@ -100,8 +100,9 @@ class ProviderPort:
 
         ``name_for`` names the user a slot's PIN is written for; ``polling``
         says whether the lock is polled ("Disable polling" spares the drift
-        check). ``reports`` is shared by every port for the run: lock ->
-        whether a read of it has described a slot (see ``read``);
+        check). ``reports`` is shared by every port for the run: lock's
+        entity registry id -> whether a read of it has described a slot (see
+        ``read``), so a device re-paired under the same entity id starts over;
         ``on_reports`` is called when a read of this lock first does.
         """
         self.provider = provider
@@ -123,8 +124,9 @@ class ProviderPort:
         self.others: dict[int, Reading] = {}
         # Some read has said something about a slot: silence is now no answer.
         self._answered = False
-        # Every lock read this run -> whether a read described a slot of it.
-        # Kept past this port: a one-off read builds a port per read.
+        # Every lock read this run, by registry id -> whether a read described
+        # a slot of it. Kept past this port: a one-off read builds a port per
+        # read.
         self.reports: dict[str, bool] = {} if reports is None else reports
         self.on_reports = on_reports
         # Slots the lock last answered it cannot tell what they hold.
@@ -198,7 +200,7 @@ class ProviderPort:
         cannot_tell = provider.last_cannot_tell_slots & silent
         if self._answered and silent >= set(slots) and not cannot_tell:
             raise LockError(ErrorKind.NO_ANSWER, message="the lock said nothing")
-        lock = provider.lock.entity_id
+        lock = provider.lock.id
         # Any slot asked about and not silent was described, named in the
         # answer or not: a provider projecting only the slots an entry manages
         # (Z-Wave JS's hard refresh) leaves an empty one it was asked about

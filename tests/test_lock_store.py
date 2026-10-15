@@ -293,6 +293,8 @@ async def test_a_dead_lock_handed_off_is_forgotten_with_its_offline_repair(
     """
     entry = await _offline_lock_2(hass, freezer)
     assert _record(hass, LOCK_2_ENTITY_ID)["reports"] is True
+    lock_2 = er.async_get(hass).async_get(LOCK_2_ENTITY_ID)
+    assert hass.data[DOMAIN][REPORTS_KEY][lock_2.id] is True
     entry.runtime_data.retained_pairs = {(LOCK_2_ENTITY_ID, 1), (LOCK_2_ENTITY_ID, 2)}
 
     hass.config_entries.async_update_entry(
@@ -306,7 +308,7 @@ async def test_a_dead_lock_handed_off_is_forgotten_with_its_offline_repair(
     assert _record(hass, LOCK_2_ENTITY_ID) is None
     # Nor is it held in memory: back in an entry, its next read that
     # describes a slot is remembered again.
-    assert LOCK_2_ENTITY_ID not in hass.data[DOMAIN][REPORTS_KEY]
+    assert lock_2.id not in hass.data[DOMAIN][REPORTS_KEY]
     assert _record(hass, LOCK_1_ENTITY_ID) is not None
 
 

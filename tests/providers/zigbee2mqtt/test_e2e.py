@@ -16,7 +16,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_USER, ConfigFlowResult
 from homeassistant.const import (
     CONF_ENABLED,
     CONF_NAME,
@@ -49,6 +49,7 @@ from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_codes,
     lock_reachable,
     lock_registry,
+    locks_that_cannot_report,
 )
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
@@ -75,6 +76,7 @@ from tests.common import (
 from .conftest import (
     Z2M_FULL_TOPIC,
     Z2M_GET_TOPIC,
+    Z2M_IEEE,
     Z2M_SET_TOPIC,
     Z2M_TOPIC_NAME,
     async_discover_z2m_lock,
@@ -927,6 +929,85 @@ class TestWriteOnlyLock:
             hass,
             freezer,
             hass.config_entries.async_unload(entry.entry_id),
+            "entry unload",
+        )
+
+    async def test_a_lock_re_paired_under_the_same_entity_id_starts_fresh(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        A lock that could report is replaced by one that cannot, same entity id.
+
+        Re-paired under the same friendly name, the new device gets a new
+        registry id and keeps the entity id. What the old one showed -- that
+        it can report -- is not the new one's: its Not Supported slots are
+        free, not taken, and setup says it cannot report.
+        """
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+
+        async def _set_up_two_users() -> ConfigFlowResult:
+            result = await hass.config_entries.flow.async_init(
+                DOMAIN, context={"source": SOURCE_USER}
+            )
+            flow_id = result["flow_id"]
+            await async_configure_flow(
+                hass, flow_id, {CONF_NAME: "re-paired", CONF_LOCKS: [lock_id]}
+            )
+            await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+            return await _on_the_clock(
+                hass,
+                freezer,
+                async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2}),
+                "allocation",
+                max_steps=30,
+            )
+
+        # The old device describes its empty slots.
+        result = await _set_up_two_users()
+        assert result["step_id"] == "code_slot", result.get("errors")
+        hass.config_entries.flow.async_abort(result["flow_id"])
+
+        # Re-paired: the old device's discovery goes, the new one's comes.
+        async_fire_mqtt_message(hass, f"homeassistant/lock/{Z2M_IEEE}/lock/config", "")
+        await hass.async_block_till_done()
+        new_lock = await async_discover_z2m_lock(hass, ieee="0xbeef")
+        assert new_lock.entity_id == lock_id
+        assert new_lock.id != mqtt_lock_discovered.id
+        bridge.cannot_tell = True
+
+        # Its first read is its own: it has described nothing. (Taken for
+        # the old device, every slot would be taken, and allocation would
+        # walk the lock's 250 slots for nothing.)
+        await _on_the_clock(
+            hass, freezer, lock_registry(hass).read_once(lock_id, [1]), "a read"
+        )
+        assert locks_that_cannot_report(hass, [lock_id]) == [lock_id]
+
+        result = await _set_up_two_users()
+        assert result["step_id"] == "code_slot", result.get("errors")
+        for user, pin in (("user1", "1234"), ("user2", "5678")):
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                async_configure_flow(
+                    hass,
+                    result["flow_id"],
+                    {CONF_NAME: user, CONF_PIN: pin, CONF_ENABLED: True},
+                ),
+                "entry creation",
+            )
+        assert result["type"] == "create_entry"
+        assert result["description"] == "cannot_report"
+        assert result["description_placeholders"] == {"lock": lock_id, "slots": "1, 2"}
+        await _on_the_clock(
+            hass,
+            freezer,
+            hass.config_entries.async_unload(result["result"].entry_id),
             "entry unload",
         )
 
