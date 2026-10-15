@@ -1,7 +1,5 @@
 """Binary sensor entities for lock_code_manager."""
 
-from __future__ import annotations
-
 import logging
 from typing import override
 

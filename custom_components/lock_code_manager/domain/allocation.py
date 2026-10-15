@@ -8,8 +8,6 @@ about which numbers are free -- and only one of them reading the locks
 would be the more dangerous disagreement.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Collection, Iterable, Sequence
 import logging
 from typing import Any

@@ -6,8 +6,6 @@ rules are the credential-model decisions as the first-principles design
 states them (docs: 2026-10-13-core-first-principles.md).
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 import hashlib

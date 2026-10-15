@@ -1,7 +1,5 @@
 """Property-based tests for the provider slot-tag codec."""
 
-from __future__ import annotations
-
 from hypothesis import given, strategies as st
 
 from custom_components.lock_code_manager.providers._util import (

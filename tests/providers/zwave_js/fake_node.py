@@ -44,8 +44,6 @@ zwave-js/zwave-js#8930 (v16) changes that; the provider's report shim and
 this fake both follow the released driver.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress

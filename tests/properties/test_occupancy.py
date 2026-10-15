@@ -12,8 +12,6 @@ The first is worse, so unreadable is treated as unknown rather than free --
 but only for the locks that constrain the numbering at all.
 """
 
-from __future__ import annotations
-
 from hypothesis import given, strategies as st
 
 from custom_components.lock_code_manager.domain.occupancy import (

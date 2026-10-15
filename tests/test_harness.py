@@ -6,8 +6,6 @@ the wrong reason, so each one is shown here to do what it says -- and to
 fail loudly, rather than hang, when what it waits for never comes.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 import logging

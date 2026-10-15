@@ -1,7 +1,5 @@
 """The keys the dashboard strategy matches on are the ones the backend sends."""
 
-from __future__ import annotations
-
 import json
 import pathlib
 import re

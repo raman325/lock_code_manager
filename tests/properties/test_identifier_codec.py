@@ -11,8 +11,6 @@ second; the example-based tests that shipped alongside the builder did not,
 because nobody thinks to write down slot ``-1`` by hand.
 """
 
-from __future__ import annotations
-
 from hypothesis import given, strategies as st
 
 from custom_components.lock_code_manager.domain.config import (

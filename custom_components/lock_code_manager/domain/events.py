@@ -1,7 +1,5 @@
 """The unified credential-used bus event."""
 
-from __future__ import annotations
-
 from enum import StrEnum
 
 from homeassistant.config_entries import ConfigEntry

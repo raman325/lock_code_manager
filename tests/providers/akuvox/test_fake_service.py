@@ -1,7 +1,5 @@
 """Self-tests for the stateful Akuvox device (``fake_service.py``), against local_akuvox."""
 
-from __future__ import annotations
-
 import pytest
 
 from homeassistant.core import HomeAssistant

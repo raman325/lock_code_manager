@@ -1,7 +1,5 @@
 """Tests for zwave-js-ui payload unwrapping and credential projection."""
 
-from __future__ import annotations
-
 import pytest
 
 from custom_components.lock_code_manager.domain.exceptions import LockOperationFailed

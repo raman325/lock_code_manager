@@ -1,7 +1,5 @@
 """Codes on a lock that no config entry accounts for."""
 
-from __future__ import annotations
-
 import time
 from unittest.mock import AsyncMock, patch
 

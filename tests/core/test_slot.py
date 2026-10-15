@@ -1,7 +1,5 @@
 """A slot's status, from what it wants, what was written and what the lock shows."""
 
-from __future__ import annotations
-
 from hypothesis import given, strategies as st
 
 from custom_components.lock_code_manager.core.slot import (

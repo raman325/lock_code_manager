@@ -21,8 +21,6 @@ that it happened -- an entry at the new version has been swept, which
 needs no marker of its own and cannot drift from the entry it describes.
 """
 
-from __future__ import annotations
-
 import logging
 
 from homeassistant.config_entries import ConfigEntry

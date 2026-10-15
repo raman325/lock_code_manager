@@ -1,7 +1,5 @@
 """Reporting what still points at an entity ID the migration moved."""
 
-from __future__ import annotations
-
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 

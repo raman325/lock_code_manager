@@ -1,7 +1,5 @@
 """Module for Zigbee2MQTT locks."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field

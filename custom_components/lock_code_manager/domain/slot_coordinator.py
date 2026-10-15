@@ -12,8 +12,6 @@ wants: its PIN while it is active, nothing otherwise.
 There is one SlotEntityCoordinator per (config_entry, slot_num).
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterable
 import logging
 from typing import TYPE_CHECKING, Any

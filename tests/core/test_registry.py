@@ -1,7 +1,5 @@
 """The lock registry: one worker per lock, shared by entries that own its slots."""
 
-from __future__ import annotations
-
 import asyncio
 
 import pytest

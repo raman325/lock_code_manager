@@ -1,7 +1,5 @@
 """What a lock's worker remembers across a restart: the core's store."""
 
-from __future__ import annotations
-
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 

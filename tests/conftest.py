@@ -1,7 +1,5 @@
 """Fixtures for lock_code_manager tests."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import AsyncGenerator, Generator
 from contextlib import ExitStack

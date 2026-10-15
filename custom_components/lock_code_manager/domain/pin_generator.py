@@ -1,7 +1,5 @@
 """Random PIN generation with unsafe-pattern filtering."""
 
-from __future__ import annotations
-
 import secrets
 
 # Common 4-digit PINs that should never be generated.

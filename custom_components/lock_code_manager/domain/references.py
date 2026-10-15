@@ -24,8 +24,6 @@ Two sources, because neither sees everything:
   load, but only for the two files Home Assistant's own config API owns.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import logging

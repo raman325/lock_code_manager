@@ -1,7 +1,5 @@
 """Lock-instance queries and factory (provider-aware layer)."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import logging

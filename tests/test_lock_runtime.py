@@ -1,7 +1,5 @@
 """The core wired into Home Assistant: the lock registry and what it raises."""
 
-from __future__ import annotations
-
 from functools import partial
 from unittest.mock import patch
 

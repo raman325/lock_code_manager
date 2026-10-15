@@ -5,8 +5,6 @@ Handles rate limiting, connection checking, and coordinator refresh after operat
 See ARCHITECTURE.md for the provider interface contract.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable, Collection
 import contextlib

@@ -1,7 +1,5 @@
 """Full lifecycle E2E tests for Zigbee2MQTT lock provider."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 import json

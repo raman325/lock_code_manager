@@ -7,8 +7,6 @@ driven the way the integration drives the lock: through the client's
 real above the fake.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock

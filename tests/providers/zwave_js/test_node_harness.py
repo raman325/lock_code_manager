@@ -7,8 +7,6 @@ end-to-end ones, the provider inside a loaded entry -- and asserts what the
 driver does, cited by file and line (abbreviations in ``fake_node.py``).
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory

@@ -9,8 +9,6 @@ This module is the single place those rules live, so the config flow
 drift from each other.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Mapping
 from typing import Any
 

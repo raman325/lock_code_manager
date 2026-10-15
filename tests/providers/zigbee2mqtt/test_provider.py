@@ -1,7 +1,5 @@
 """Provider methods, error handling, connectivity, and subscription tests for Zigbee2MQTT."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Coroutine
 from contextlib import AbstractContextManager

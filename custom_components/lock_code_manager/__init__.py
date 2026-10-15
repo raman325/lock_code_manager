@@ -1,7 +1,5 @@
 """Lock Code Manager Integration."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 import logging

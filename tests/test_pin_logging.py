@@ -8,8 +8,6 @@ digits. The PINs are eight digits so that a match cannot be an id or a
 timestamp that happens to contain them.
 """
 
-from __future__ import annotations
-
 import logging
 
 from freezegun.api import FrozenDateTimeFactory

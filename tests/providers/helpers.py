@@ -15,8 +15,6 @@ Required fixtures for mixins (define in conftest.py or test module):
     - provider_lock_class: the provider's BaseLock subclass
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from unittest.mock import AsyncMock, MagicMock

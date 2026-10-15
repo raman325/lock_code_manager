@@ -10,8 +10,6 @@ signal per lock; entities and the websocket listen to it.
 The design: docs/superpowers/specs/2026-10-14-core-swap.md.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Iterable, Mapping
 import logging

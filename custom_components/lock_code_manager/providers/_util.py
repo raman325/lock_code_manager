@@ -39,8 +39,6 @@ read for locks whose names were written by older releases.
   with the canonical format.
 """
 
-from __future__ import annotations
-
 import re
 from typing import Any
 

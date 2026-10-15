@@ -14,8 +14,6 @@ credentials. They do not change ``SlotCredential``, which remains the
 coordinator's currency.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum

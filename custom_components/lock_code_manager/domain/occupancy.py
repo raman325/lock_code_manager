@@ -11,8 +11,6 @@ that contain one permanently, so a lock constrains the numbering only when
 Lock Code Manager writes to it AND addresses it by slot number.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 

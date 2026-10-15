@@ -1,7 +1,5 @@
 """Tests for zwave-js-ui gateway discovery and the correlated api client."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager

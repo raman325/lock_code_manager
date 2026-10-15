@@ -20,8 +20,6 @@ Each question is checked two ways:
   answers from its cached view, any other from storage.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass

@@ -1,7 +1,5 @@
 """Tests for centralized provider class resolution."""
 
-from __future__ import annotations
-
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 

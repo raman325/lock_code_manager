@@ -1,7 +1,5 @@
 """Full lifecycle E2E tests for Akuvox lock provider."""
 
-from __future__ import annotations
-
 from unittest.mock import AsyncMock
 
 from freezegun.api import FrozenDateTimeFactory
