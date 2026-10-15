@@ -24,13 +24,13 @@ from custom_components.lock_code_manager.const import (
     CONF_START_SLOT,
     CONF_USERS,
 )
-from custom_components.lock_code_manager.domain.config import EntryConfig
-from custom_components.lock_code_manager.domain.names import identity
-from custom_components.lock_code_manager.domain.slot_assignment import (
+from custom_components.lock_code_manager.model.config import EntryConfig
+from custom_components.lock_code_manager.model.names import identity
+from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
     SlotAssignment,
 )
-from custom_components.lock_code_manager.domain.user_migration import (
+from custom_components.lock_code_manager.model.user_migration import (
     migrate_to_users,
 )
 

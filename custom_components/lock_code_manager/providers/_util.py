@@ -47,7 +47,7 @@ from homeassistant.components.mqtt import debug_info as mqtt_debug_info
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from ..domain.credentials import User
+from ..model.credentials import User
 from .const import LOGGER
 
 _LEGACY_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")

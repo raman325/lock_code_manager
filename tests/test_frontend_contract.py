@@ -18,12 +18,12 @@ from custom_components.lock_code_manager.const import (
     PER_LOCK_ENTITY_SUFFIX,
     credential_in_sync_key,
 )
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialType,
 )
-from custom_components.lock_code_manager.domain.models import SlotCode
+from custom_components.lock_code_manager.model.models import SlotCode
 
 _CONST_TS = pathlib.Path(__file__).resolve().parent.parent / "ts" / "const.ts"
 

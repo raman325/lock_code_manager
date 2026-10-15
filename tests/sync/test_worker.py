@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from custom_components.lock_code_manager.core.slot import (
+from custom_components.lock_code_manager.sync.slot import (
     LIMIT,
     WINDOW,
     Holds,
@@ -22,7 +22,7 @@ from custom_components.lock_code_manager.core.slot import (
     Status,
     fingerprint,
 )
-from custom_components.lock_code_manager.core.worker import (
+from custom_components.lock_code_manager.sync.worker import (
     BACKOFF_AFTER,
     BACKOFF_MAX,
     BACKOFF_MIN,

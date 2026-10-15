@@ -2,7 +2,7 @@
 
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.core.slot import (
+from custom_components.lock_code_manager.sync.slot import (
     CLEARED,
     Holds,
     Repair,

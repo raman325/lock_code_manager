@@ -19,19 +19,19 @@ from typing import Any, Literal, override
 
 from homeassistant.config_entries import ConfigEntry
 
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
     User,
     WriteResult,
     user_from_slot,
 )
-from ..domain.exceptions import (
+from ..model.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationError,
 )
-from ..domain.models import SlotCredential
+from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
 from .const import LOGGER

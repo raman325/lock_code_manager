@@ -101,18 +101,10 @@ from .const import (
     SUBENTRY_TYPE_USER,
     LockCodeManagerData,
 )
-from .domain.config import (
-    EntryConfig,
-    EntryConfigDiff,
-    build_slot_device_identifier,
-    build_slot_unique_id,
-    parse_slot_device_identifier,
-    parse_slot_unique_id,
-    slot_unique_id_key,
-)
-from .domain.credentials import CredentialType
-from .domain.exceptions import UnclaimedLockError
-from .domain.lock_runtime import (
+from .entity import build_slot_device_info
+from .ha.locks import get_locks_from_targets
+from .ha.references import async_notify_moved
+from .ha.runtime import (
     STORE_KEY,
     async_give_up,
     async_hand_off,
@@ -122,24 +114,7 @@ from .domain.lock_runtime import (
     async_setup_core,
     lock_registry,
 )
-from .domain.locks import get_locks_from_targets
-from .domain.models import (
-    LockCodeManagerConfigEntry,
-    LockCodeManagerConfigEntryRuntimeData,
-)
-from .domain.pin_generator import (
-    DEFAULT_PIN_LENGTH,
-    MAX_PIN_LENGTH,
-    MIN_PIN_LENGTH,
-    generate_pin,
-)
-from .domain.queries import (
-    another_entry_configures,
-    get_entry_config,
-    subentry_id_for_slot,
-)
-from .domain.references import async_notify_moved
-from .domain.services import (
+from .ha.services import (
     async_add_users,
     async_clear_condition,
     async_clear_credential,
@@ -150,18 +125,43 @@ from .domain.services import (
     async_set_credential,
     async_use_credential,
 )
-from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT
-from .domain.slot_coordinator import SlotEntityCoordinator
-from .domain.unmanaged import async_sweep_unmanaged_codes
-from .domain.user_migration import migrate_to_users
-from .domain.util import (
+from .ha.slot_coordinator import SlotEntityCoordinator
+from .ha.unmanaged import async_sweep_unmanaged_codes
+from .model.config import (
+    EntryConfig,
+    EntryConfigDiff,
+    build_slot_device_identifier,
+    build_slot_unique_id,
+    parse_slot_device_identifier,
+    parse_slot_unique_id,
+    slot_unique_id_key,
+)
+from .model.credentials import CredentialType
+from .model.exceptions import UnclaimedLockError
+from .model.models import (
+    LockCodeManagerConfigEntry,
+    LockCodeManagerConfigEntryRuntimeData,
+)
+from .model.pin_generator import (
+    DEFAULT_PIN_LENGTH,
+    MAX_PIN_LENGTH,
+    MIN_PIN_LENGTH,
+    generate_pin,
+)
+from .model.queries import (
+    another_entry_configures,
+    get_entry_config,
+    subentry_id_for_slot,
+)
+from .model.slot_assignment import CONF_SLOT_ASSIGNMENT
+from .model.user_migration import migrate_to_users
+from .model.util import (
     PER_LOCK_ISSUE_KEYS,
     build_pin_deobfuscation_map,
     deobfuscate_pins,
     lock_display_name,
     per_lock_issue_id,
 )
-from .entity import build_slot_device_info
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 

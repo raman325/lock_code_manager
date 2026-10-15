@@ -41,9 +41,9 @@ from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
 from homeassistant.core import callback
 
-from ..domain.credentials import User, user_from_slot
-from ..domain.exceptions import LockDisconnected
-from ..domain.models import SlotCredential
+from ..model.credentials import User, user_from_slot
+from ..model.exceptions import LockDisconnected
+from ..model.models import SlotCredential
 from ._base import BaseLock
 from .const import LOGGER
 

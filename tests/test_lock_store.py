@@ -9,20 +9,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from custom_components.lock_code_manager.core.slot import CLEARED, fingerprint
-from custom_components.lock_code_manager.domain.allocation import async_read_occupancy
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha.allocation import async_read_occupancy
+from custom_components.lock_code_manager.ha.lock_store import (
+    STORE_KEY as SAVED_KEY,
+    LockStore,
+)
+from custom_components.lock_code_manager.ha.runtime import (
     REPORTS_KEY,
     STORE_KEY,
     lock_registry,
 )
-from custom_components.lock_code_manager.domain.lock_store import (
-    STORE_KEY as SAVED_KEY,
-    LockStore,
-)
-from custom_components.lock_code_manager.domain.queries import subentry_id_for_slot
-from custom_components.lock_code_manager.domain.util import per_lock_issue_id
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
+from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
+from custom_components.lock_code_manager.model.util import per_lock_issue_id
+from custom_components.lock_code_manager.sync.slot import CLEARED, fingerprint
 
 from .common import (
     LOCK_1_ENTITY_ID,

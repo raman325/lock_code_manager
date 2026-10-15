@@ -39,15 +39,15 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.core.slot import LIMIT, Holds, Seen
-from custom_components.lock_code_manager.core.worker import LockWorker
-from custom_components.lock_code_manager.domain.lock_runtime import (
+from custom_components.lock_code_manager.ha.runtime import (
     lock_reachable,
     lock_registry,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zha import ZHALock
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
+from custom_components.lock_code_manager.sync.slot import LIMIT, Holds, Seen
+from custom_components.lock_code_manager.sync.worker import LockWorker
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,

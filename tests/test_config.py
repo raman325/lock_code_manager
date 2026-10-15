@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.const import (
     CONF_USERS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.config import (
+from custom_components.lock_code_manager.model.config import (
     EntryConfig,
     EntryConfigDiff,
     build_slot_device_identifier,
@@ -24,8 +24,8 @@ from custom_components.lock_code_manager.domain.config import (
     parse_slot_device_identifier,
     parse_slot_unique_id,
 )
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.slot_assignment import (
+from custom_components.lock_code_manager.model.queries import get_entry_config
+from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 

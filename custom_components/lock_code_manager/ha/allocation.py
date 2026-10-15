@@ -17,16 +17,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import MAX_SEARCHED_SLOT
-from ..core.slot import Seen
+from ..model.credentials import CredentialType
+from ..model.exceptions import LockCodeManagerError
+from ..model.occupancy import LockOccupancy, Occupancy
+from ..model.queries import slots_configured_on
 from ..providers import resolve_provider_class_for_entity
 from ..providers._base import BaseLock
 from ..providers._util import foreign_slots
-from .credentials import CredentialType
-from .exceptions import LockCodeManagerError
-from .lock_runtime import lock_registry
+from ..sync.slot import Seen
 from .locks import borrowed_lock_instance
-from .occupancy import LockOccupancy, Occupancy
-from .queries import slots_configured_on
+from .runtime import lock_registry
 
 _LOGGER = logging.getLogger(__name__)
 

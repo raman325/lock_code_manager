@@ -17,7 +17,7 @@ import pytest
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
 
-from custom_components.lock_code_manager.domain.exceptions import LockOperationFailed
+from custom_components.lock_code_manager.model.exceptions import LockOperationFailed
 from custom_components.lock_code_manager.providers.zha import ZHALock, _write_answer
 from tests.providers.zha.helpers import (
     QuirkedDoorLock,

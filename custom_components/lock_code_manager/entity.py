@@ -23,20 +23,20 @@ from .const import (
     ATTR_SLOT_FIELD,
     DOMAIN,
 )
-from .core.slot import Slot, Status
-from .core.worker import LockWorker
-from .domain.config import build_slot_device_identifier, build_slot_unique_id
-from .domain.lock_runtime import lock_registry, signal_lock_changed
-from .domain.models import LockCodeManagerConfigEntry
-from .domain.names import fallback_name
-from .domain.queries import get_entry_config
-from .domain.slot_coordinator import SlotEntityCoordinator
+from .ha.runtime import lock_registry, signal_lock_changed
+from .ha.slot_coordinator import SlotEntityCoordinator
+from .model.config import build_slot_device_identifier, build_slot_unique_id
+from .model.models import LockCodeManagerConfigEntry
+from .model.names import fallback_name
+from .model.queries import get_entry_config
 from .providers import BaseLock
+from .sync.slot import Slot, Status
+from .sync.worker import LockWorker
 
 if TYPE_CHECKING:
     from homeassistant.helpers.event import _TrackStateChangeFiltered
 
-    from .core.adapter import ProviderPort
+    from .ha.adapter import ProviderPort
 
 _LOGGER = logging.getLogger(__name__)
 

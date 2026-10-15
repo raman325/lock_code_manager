@@ -14,15 +14,15 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.allocation import (
+from custom_components.lock_code_manager.ha.allocation import (
     async_check_slot_capacity,
     async_max_slot,
     async_read_occupancy,
 )
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.unmanaged import (
+from custom_components.lock_code_manager.ha.unmanaged import (
     async_sweep_unmanaged_codes,
 )
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     ZWaveJSUILock,
 )

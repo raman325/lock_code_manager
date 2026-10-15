@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, Final
 
 from homeassistant.config_entries import ConfigEntry
 
-from .callbacks import EntityCallbackRegistry
+from ..ha.callbacks import EntityCallbackRegistry
 from .config import EntryConfig
 
 if TYPE_CHECKING:
+    from ..ha.slot_coordinator import SlotEntityCoordinator
     from ..providers import BaseLock
-    from .slot_coordinator import SlotEntityCoordinator
 
 
 class SlotCode(StrEnum):

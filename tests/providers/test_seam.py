@@ -12,13 +12,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.core.adapter import (
+from custom_components.lock_code_manager.ha.adapter import (
     ProviderPort,
     _Coordinator,
 )
-from custom_components.lock_code_manager.core.slot import Holds, Seen
-from custom_components.lock_code_manager.core.worker import ErrorKind, LockError
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
@@ -31,14 +29,16 @@ from custom_components.lock_code_manager.domain.credentials import (
     pin_address,
     user_from_slot,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._base import BaseLock
+from custom_components.lock_code_manager.sync.slot import Holds, Seen
+from custom_components.lock_code_manager.sync.worker import ErrorKind, LockError
 
 
 def _make_lock(hass: HomeAssistant, cls: type[BaseLock], unique: str) -> BaseLock:

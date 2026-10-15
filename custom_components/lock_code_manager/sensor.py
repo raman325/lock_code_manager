@@ -9,11 +9,11 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import ATTR_CODE
-from .core.slot import Holds, Seen, Status
-from .domain.models import LockCodeManagerConfigEntry
-from .domain.queries import subentry_id_for_slot
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, LockWorkerView
+from .model.models import LockCodeManagerConfigEntry
+from .model.queries import subentry_id_for_slot
 from .providers import BaseLock
+from .sync.slot import Holds, Seen, Status
 
 
 async def async_setup_entry(

@@ -22,23 +22,13 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager import providers
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.core.adapter import (
+from custom_components.lock_code_manager.ha.adapter import (
     ProviderPort,
     _Coordinator,
     lock_error,
     reading,
 )
-from custom_components.lock_code_manager.core.slot import Holds, Repair, Seen, Status
-from custom_components.lock_code_manager.core.worker import (
-    BACKOFF_AFTER,
-    BACKOFF_MAX,
-    BACKOFF_MIN,
-    OFFLINE_AFTER,
-    ErrorKind,
-    LockError,
-    LockWorker,
-)
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockBusy,
@@ -49,17 +39,27 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationUnsupported,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._mqtt import BaseMqttLock
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from custom_components.lock_code_manager.sync.slot import Holds, Repair, Seen, Status
+from custom_components.lock_code_manager.sync.worker import (
+    BACKOFF_AFTER,
+    BACKOFF_MAX,
+    BACKOFF_MIN,
+    OFFLINE_AFTER,
+    ErrorKind,
+    LockError,
+    LockWorker,
+)
 
-from ..common import (
+from .common import (
     NO_PIN_CAPABILITIES,
     MockLCMLock,
     MockLCMPushLock,
     when_mock_lock_built,
 )
-from .test_worker import FakeLock, _started, rig_factory  # noqa: F401  (rig_factory is a fixture)
+from .sync.test_worker import FakeLock, _started, rig_factory  # noqa: F401  (rig_factory is a fixture)
 
 SALT = b"salt"
 

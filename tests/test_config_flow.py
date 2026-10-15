@@ -43,23 +43,23 @@ from custom_components.lock_code_manager.const import (
     MAX_SEARCHED_SLOT,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.domain.allocation import (
+from custom_components.lock_code_manager.ha.allocation import (
     LockQuerySkipped,
     build_lock_instance,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
     User,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.model.models import SlotCredential
+from custom_components.lock_code_manager.model.queries import get_entry_config
 
 from .common import (
     BASE_CONFIG,
@@ -1074,7 +1074,7 @@ async def test_setup_refuses_when_a_lock_has_no_provider(
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
 
     with patch(
-        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        "custom_components.lock_code_manager.ha.allocation.build_lock_instance",
         side_effect=LockQuerySkipped(LOCK_1_ENTITY_ID, managed=True),
     ):
         result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
@@ -1094,7 +1094,7 @@ async def test_setup_ignores_a_lock_on_an_unsupported_platform(
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
 
     with patch(
-        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        "custom_components.lock_code_manager.ha.allocation.build_lock_instance",
         side_effect=LockQuerySkipped(LOCK_1_ENTITY_ID, managed=False),
     ):
         result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
@@ -1590,7 +1590,7 @@ async def test_claims_above_the_window_do_not_widen_the_read(
 
     with (
         patch(
-            "custom_components.lock_code_manager.domain.allocation.slots_configured_on",
+            "custom_components.lock_code_manager.ha.allocation.slots_configured_on",
             return_value=set(range(90, 100)),
         ),
         patch.object(MockLCMLock, "async_get_usercodes", _read),
@@ -1661,7 +1661,7 @@ async def test_a_lock_that_fails_unexpectedly_is_unknown_not_empty(
 
     if target == "build_lock_instance":
         patcher = patch(
-            "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+            "custom_components.lock_code_manager.ha.allocation.build_lock_instance",
             side_effect=boom,
         )
     else:
@@ -2140,9 +2140,7 @@ async def test_a_skipped_lock_read_names_the_entry_that_asked(
                 hass, dev_reg, ent_reg, config_entry, "lock.never_registered"
             )
         [record] = [
-            record
-            for record in caplog.records
-            if record.name.endswith("domain.allocation")
+            record for record in caplog.records if record.name.endswith("ha.allocation")
         ]
         asked_by, lock_entity_id = record.args
         assert lock_entity_id == "lock.never_registered"
@@ -3050,7 +3048,7 @@ def test_every_allocation_refusal_has_a_sentence(category: tuple[str, ...]) -> N
     second place to forget.
     """
     source = (
-        Path("custom_components/lock_code_manager/domain/allocation.py")
+        Path("custom_components/lock_code_manager/ha/allocation.py")
         .read_text()
         .replace("\n", " ")
     )

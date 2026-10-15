@@ -32,9 +32,9 @@ from homeassistant.helpers import (
 )
 
 from ..const import CONF_LOCKS, DOMAIN
-from .lock_runtime import lock_registry
+from ..model.queries import slots_configured_on
 from .locks import async_create_lock_instance, borrowed_lock_instance
-from .queries import slots_configured_on
+from .runtime import lock_registry
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ because nobody thinks to write down slot ``-1`` by hand.
 
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.domain.config import (
+from custom_components.lock_code_manager.model.config import (
     build_slot_device_identifier,
     build_slot_unique_id,
     parse_slot_device_identifier,
