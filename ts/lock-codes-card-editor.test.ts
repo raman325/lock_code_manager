@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import { HomeAssistant } from './ha_type_stubs';
+import { createMockHass } from './test/mock-hass';
 import { CodeDisplayMode, LockCodesCardConfig } from './types';
 
 /**
@@ -113,29 +115,6 @@ describe('LockCodesCardEditor logic', () => {
             expect(values).toContain('masked_with_reveal');
             expect(values).toContain('masked');
             expect(values).toContain('unmasked');
-        });
-
-        it('defaults to unmasked for lock codes card', () => {
-            // Lock codes card shows codes by default (different from slot card)
-            const getDefaultCodeDisplay = (): CodeDisplayMode => 'unmasked';
-            expect(getDefaultCodeDisplay()).toBe('unmasked');
-        });
-
-        /**
-         * Gets the default value for code_display in UI.
-         * Mirrors: `.value=${this._config.code_display ?? 'unmasked'}`
-         */
-        function getDisplayValue(configValue: CodeDisplayMode | undefined): CodeDisplayMode {
-            return configValue ?? 'unmasked';
-        }
-
-        it('uses unmasked when undefined', () => {
-            expect(getDisplayValue(undefined)).toBe('unmasked');
-        });
-
-        it('uses configured value when set', () => {
-            expect(getDisplayValue('masked')).toBe('masked');
-            expect(getDisplayValue('masked_with_reveal')).toBe('masked_with_reveal');
         });
     });
 
@@ -301,5 +280,58 @@ describe('LockCodesCardEditor logic', () => {
                 })
             ).toEqual({ valid: true });
         });
+    });
+});
+
+interface LockCodesEditorElement extends HTMLElement {
+    hass: HomeAssistant;
+    setConfig: (config: LockCodesCardConfig) => void;
+    updateComplete: Promise<boolean>;
+}
+
+describe('lcm-lock-codes-editor', () => {
+    let el: LockCodesEditorElement | undefined;
+
+    beforeAll(async () => {
+        if (!customElements.get('lcm-lock-codes-editor')) {
+            await import('./lock-codes-card-editor');
+        }
+    });
+
+    afterEach(() => {
+        el?.remove();
+        el = undefined;
+    });
+
+    async function mountEditor(
+        config: Partial<LockCodesCardConfig> = {}
+    ): Promise<LockCodesEditorElement> {
+        const editor = document.createElement('lcm-lock-codes-editor') as LockCodesEditorElement;
+        editor.setConfig({
+            lock_entity_id: 'lock.front_door',
+            type: 'custom:lcm-lock-codes',
+            ...config
+        });
+        editor.hass = createMockHass({ callWS: () => [] });
+        document.body.appendChild(editor);
+        await new Promise((r) => setTimeout(r, 0));
+        await editor.updateComplete;
+        return editor;
+    }
+
+    function codeDisplaySelect(editor: HTMLElement): HTMLElement & { value: CodeDisplayMode } {
+        const select = editor.shadowRoot?.querySelector('ha-select');
+        expect(select).not.toBeNull();
+        return select as HTMLElement & { value: CodeDisplayMode };
+    }
+
+    it('shows the card default (masked with reveal) when no code_display is configured', async () => {
+        el = await mountEditor();
+        expect(codeDisplaySelect(el).value).toBe('masked_with_reveal');
+    });
+
+    it('shows the configured code_display', async () => {
+        el = await mountEditor({ code_display: 'unmasked' });
+        expect(codeDisplaySelect(el).value).toBe('unmasked');
     });
 });
