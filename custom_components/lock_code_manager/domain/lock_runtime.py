@@ -61,10 +61,12 @@ GIVEN_UP_KEY: Final = "slots_given_up"
 ISSUES_KEY: Final = "slot_issues"
 # What the workers remember across a restart.
 STORE_KEY: Final = "lock_store"
-# lock -> whether a read has described a slot of it, for every lock read this
-# run (``ProviderPort.read``). A lock that has is kept in the store too, so a
-# restart starts from it: the first reads after one are of the slots Lock Code
-# Manager wrote, and may show nothing.
+# lock's entity registry id -> whether a read has described a slot of it, for
+# every lock read this run (``ProviderPort.read``). By registry id, as the
+# store keeps it: a device re-paired under the same entity id starts over. A
+# lock that has is kept in the store too, so a restart starts from it: the
+# first reads after one are of the slots Lock Code Manager wrote, and may show
+# nothing.
 REPORTS_KEY: Final = "locks_reporting"
 # Everything the core keeps for one run of Home Assistant.
 CORE_KEYS = (
@@ -131,9 +133,10 @@ async def async_setup_core(hass: HomeAssistant) -> None:
         )
     lock_registry(hass)
     # A config flow's reads before the core started -- the first entry's.
-    for lock, reports in data[REPORTS_KEY].items():
-        if reports:
-            store.reported(lock)
+    entities = er.async_get(hass)
+    for key, reports in data[REPORTS_KEY].items():
+        if reports and (entity := entities.async_get(key)) is not None:
+            store.reported(entity.entity_id)
 
     async def _owed(hass: HomeAssistant) -> None:
         for lock, slot, entry_id in store.releases():
@@ -229,7 +232,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             )
 
         if store is not None and store.reports(lock_entity_id):
-            data[REPORTS_KEY][lock_entity_id] = True
+            data[REPORTS_KEY][provider.lock.id] = True
 
         def _on_reports() -> None:
             if (store := data.get(STORE_KEY)) is not None:
@@ -304,7 +307,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             )
             if (store := data.get(STORE_KEY)) is not None:
                 store.forget_lock(lock_entity_id)
-            data[REPORTS_KEY].pop(lock_entity_id, None)
+            data[REPORTS_KEY].pop(port.provider.lock.id, None)
             _warn_not_cleared(
                 lock_entity_id,
                 (
@@ -769,4 +772,10 @@ def locks_that_cannot_report(hass: HomeAssistant, locks: Iterable[str]) -> list[
     keypad is invisible, and the slots handed out may hold one.
     """
     reports = hass.data.get(DATA, {}).get(REPORTS_KEY, {})
-    return [lock for lock in locks if reports.get(lock) is False]
+    entities = er.async_get(hass)
+    return [
+        lock
+        for lock in locks
+        if (entity := entities.async_get(lock)) is not None
+        and reports.get(entity.id) is False
+    ]
