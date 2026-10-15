@@ -169,6 +169,11 @@ class ProviderNativeTransportContractTests:
     Client/library-based providers (Matter, Z-Wave JS) instead override
     ``inject_native_transport_error`` to patch their lowest SDK call (or its
     mock) to raise their native exception type.
+
+    The virtual provider does not use this mixin. It has no transport layer:
+    ``async_get_users`` reads in-memory state with no SDK or client call, so
+    there is no native transport exception and the #1257 contract does not
+    apply.
     """
 
     # Default native transport exception for service-based providers. Override
