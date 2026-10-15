@@ -47,7 +47,7 @@ from homeassistant.core import HomeAssistant
 from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
 from custom_components.lock_code_manager.domain.config import EntryConfig
 from custom_components.lock_code_manager.domain.queries import (
-    another_enabled_entry_configures,
+    another_entry_configures,
     configured_owner,
     entries_configuring,
     get_entry_config,
@@ -193,21 +193,6 @@ def _frozen_find_entry_for_lock_slot(
             and config.has_slot(code_slot)
         ),
         None,
-    )
-
-
-def _frozen_lock_managed_by_other_entry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    lock_entity_id: str,
-) -> bool:
-    """``__init__._lock_managed_by_other_entry``."""
-    return any(
-        entry.entry_id != config_entry.entry_id
-        and get_entry_config(entry).has_lock(lock_entity_id)
-        for entry in hass.config_entries.async_entries(
-            DOMAIN, include_disabled=False, include_ignore=False
-        )
     )
 
 
@@ -364,20 +349,18 @@ def test_syncing_owner_counts_only_entries_keeping_their_slots(
 
 
 @given(specs=ENTRY_SETS)
-def test_another_enabled_entry_configures_ignores_disabled_and_ignored(
+def test_another_entry_configures_counts_disabled_but_not_ignored(
     specs: list[EntrySpec],
 ) -> None:
-    """Another entry counts if it is neither disabled nor ignored, in any state."""
+    """Another entry counts unless it is ignored: disabled, in any state, it does."""
 
     def probe(hass: HomeAssistant, entries: list[MockConfigEntry]) -> None:
         for asking in entries:
             for lock in LOCKS:
                 expected = any(
-                    entry is not asking and spec.enabled and spec.configures(lock)
+                    entry is not asking and not spec.ignored and spec.configures(lock)
                     for spec, entry in zip(specs, entries, strict=True)
                 )
-                actual = another_enabled_entry_configures(hass, asking, lock)
-                assert actual is _frozen_lock_managed_by_other_entry(hass, asking, lock)
-                assert actual is expected
+                assert another_entry_configures(hass, asking, lock) is expected
 
     _with_entries(specs, probe)

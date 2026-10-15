@@ -13,7 +13,7 @@ The design: docs/superpowers/specs/2026-10-14-core-swap.md.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import logging
 from typing import cast
 
@@ -30,6 +30,7 @@ from homeassistant.helpers.issue_registry import (
     async_create_issue,
     async_delete_issue,
 )
+from homeassistant.helpers.start import async_at_started
 
 from ..const import DOMAIN, MAX_SEARCHED_SLOT
 from ..core.adapter import ProviderPort, lock_error
@@ -38,9 +39,15 @@ from ..core.slot import Holds, Reading, Repair, Seen, Status, Want
 from ..core.worker import LockWorker
 from ..providers import BaseLock
 from .exceptions import LockCodeManagerProviderError
+from .lock_store import LockStore
 from .locks import async_create_lock_instance
 from .models import SlotCredential
-from .queries import configured_owner, entries_configuring, get_entry_config
+from .queries import (
+    configured_owner,
+    entries_configuring,
+    every_configured_lock,
+    get_entry_config,
+)
 from .util import per_lock_issue_id
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +60,10 @@ LEAVING_KEY = "locks_leaving"
 GIVEN_UP_KEY = "slots_given_up"
 # lock -> the per-slot issues raised for it, so a resolved one is deleted.
 ISSUES_KEY = "slot_issues"
+# What the workers remember across a restart.
+STORE_KEY = "lock_store"
+# Everything the core keeps for one run of Home Assistant.
+CORE_KEYS = (REGISTRY_KEY, LEAVING_KEY, GIVEN_UP_KEY, ISSUES_KEY, STORE_KEY)
 
 # How long a one-off write from a repair or the card is waited for.
 WRITE_ONCE_WAIT = 60.0
@@ -87,6 +98,47 @@ def lock_registry(hass: HomeAssistant) -> LockRegistry:
     return cast(LockRegistry, data[REGISTRY_KEY])
 
 
+async def async_setup_core(hass: HomeAssistant) -> None:
+    """
+    Start the core: what the workers remember, then the lock registry.
+
+    Before any entry sets up, so the first worker starts from it. A lock no
+    entry lists any more -- a disabled entry's included -- is forgotten,
+    with any clear still owed on it: there is nothing to set its provider
+    up with. The clears still owed elsewhere go on once Home Assistant has
+    started, every entry loaded; a slot an entry has claimed meanwhile is
+    that entry's now, and is only read again.
+    """
+    data = hass.data.setdefault(DOMAIN, {"resources": False})
+    store = data[STORE_KEY] = LockStore(hass)
+    await store.async_load()
+    for record in store.prune(every_configured_lock(hass)):
+        lock = record["entity_id"]
+        async_delete_issue(hass, DOMAIN, per_lock_issue_id("lock_offline", lock))
+        _warn_not_cleared(
+            lock, (int(n) for n, saved in record["slots"].items() if "release" in saved)
+        )
+    async_setup_lock_registry(hass)
+
+    async def _owed(hass: HomeAssistant) -> None:
+        for lock, slot, entry_id in store.releases():
+            await async_resume_slot(hass, lock, slot, entry_id=entry_id, release=True)
+
+    async_at_started(hass, _owed)
+
+
+def _warn_not_cleared(lock: str, slots: Iterable[int]) -> None:
+    """Say that clears owed on a lock leaving Lock Code Manager will not be sent."""
+    for slot in slots:
+        _LOGGER.warning(
+            "Slot %s on %s was still being cleared when the lock left Lock "
+            "Code Manager: it is not cleared, and any code left in it stays "
+            "on the lock",
+            slot,
+            lock,
+        )
+
+
 def port_of(worker: LockWorker) -> ProviderPort:
     """Return the provider port ``worker`` talks to its lock through."""
     return cast(ProviderPort, worker.port)
@@ -96,6 +148,8 @@ def port_of(worker: LockWorker) -> ProviderPort:
 def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
     """Create the instance's lock registry; it stops when Home Assistant does."""
     data = hass.data.setdefault(DOMAIN, {"resources": False})
+    # A config flow's read before the integration has set up remembers nothing.
+    store: LockStore | None = data.get(STORE_KEY)
     data[LEAVING_KEY] = set()
     data[GIVEN_UP_KEY] = {}
     data[ISSUES_KEY] = {}
@@ -118,6 +172,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
                 n for n, slot in worker.slots.items() if slot.release
             )
             async_reconcile_issues(hass, lock_entity_id, worker)
+            _remember(lock_entity_id, worker)
             async_dispatcher_send(hass, signal_lock_changed(lock_entity_id))
 
         @callback
@@ -177,7 +232,10 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
             # so this fits the longest walk anything here asks for.
             budget=provider._operation_budget(MAX_SEARCHED_SLOT),
             on_change=_on_change,
+            on_send=lambda: _remember(lock_entity_id, worker),
             on_disable=_on_disable,
+            recall=lambda slot: store.wrote(lock_entity_id, slot) if store else None,
+            answered_before=store is not None and store.answered(lock_entity_id),
         )
         port.worker = worker
         return worker
@@ -201,10 +259,37 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry:
         if entry is not None:
             await port_of(worker).async_setup(entry)
 
+    @callback
+    def _remember(lock_entity_id: str, worker: LockWorker) -> None:
+        if store is not None:
+            store.remember(
+                lock_entity_id,
+                worker,
+                lambda slot: data[GIVEN_UP_KEY].get(
+                    (lock_entity_id, slot), (None, None)
+                )[0],
+            )
+
     async def _cleanup(lock_entity_id: str, worker: LockWorker) -> None:
         port = port_of(worker)
+        leaving = lock_entity_id in data[LEAVING_KEY]
+        if leaving:
+            # Nothing will answer it now: the lock is gone from here.
+            async_delete_issue(
+                hass, DOMAIN, per_lock_issue_id("lock_offline", lock_entity_id)
+            )
+            if store is not None:
+                store.forget_lock(lock_entity_id)
+            _warn_not_cleared(
+                lock_entity_id,
+                (
+                    n
+                    for n, slot in worker.slots.items()
+                    if slot.release and slot.hold is None
+                ),
+            )
         if port.managed:
-            await port.async_unload(lock_entity_id in data[LEAVING_KEY])
+            await port.async_unload(leaving)
         else:
             # A one-off read's provider: drop what reading subscribed to, and
             # nothing else (unloading the virtual lock writes its store back).
@@ -322,12 +407,13 @@ def async_give_up(
         return
     port = port_of(worker)
     if clear and not worker.answered:
-        # A lock with no PIN support holds no codes: no clear to wait on.
-        # Every other failed setup (a node dead at boot, a slot count not
-        # known until a re-interview, a retry under way) may hold codes, and
-        # the clear waits for it to recover -- except one that crashed, which
-        # nothing retries short of a reload: that clear would wait forever.
-        if port.provider.pin_unsupported:
+        # A lock with no PIN support holds no codes, unless it answered an
+        # earlier run that wrote some: no clear to wait on. Every other
+        # failed setup (a node dead at boot, a slot count not known until a
+        # re-interview, a retry under way) may hold codes, and the clear waits
+        # for it to recover -- except one that crashed, which nothing retries
+        # short of a reload: that clear would wait forever.
+        if port.provider.pin_unsupported and not worker.answered_ever:
             clear = False
         elif port.setup_crashed:
             _LOGGER.warning(
@@ -348,6 +434,8 @@ def async_give_up(
             )
         else:
             registry.unclaim(lock_entity_id, entry.entry_id, slot)
+            if (store := hass.data[DOMAIN].get(STORE_KEY)) is not None:
+                store.forget_slot(lock_entity_id, slot)
     except KeyError:
         return  # never held: nothing to give up
 
@@ -403,6 +491,8 @@ def async_reconcile_issues(
             and key[1] not in worker.slots
         ):
             del given_up[key]  # cleared and dropped: nothing left to resume
+            if (store := data.get(STORE_KEY)) is not None:
+                store.forget_slot(*key)
     # A clear held by a worker since stopped (decision F) is not this
     # worker's to resolve: its repair stays until it is tried again.
     kept = {

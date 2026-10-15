@@ -112,10 +112,12 @@ from .domain.config import (
 from .domain.credentials import CredentialType
 from .domain.exceptions import UnclaimedLockError
 from .domain.lock_runtime import (
+    STORE_KEY,
     async_give_up,
     async_hard_refresh,
     async_hold_lock,
     async_release_lock,
+    async_setup_core,
     lock_registry,
 )
 from .domain.locks import get_locks_from_targets
@@ -130,7 +132,7 @@ from .domain.pin_generator import (
     generate_pin,
 )
 from .domain.queries import (
-    another_enabled_entry_configures,
+    another_entry_configures,
     get_entry_config,
     subentry_id_for_slot,
 )
@@ -605,7 +607,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {"resources": False})
     hass.data[DOMAIN]["instance_id"] = await instance_id.async_get(hass)
-    lock_registry(hass)
+    await async_setup_core(hass)
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
         [
@@ -1060,9 +1062,7 @@ async def async_unload_lock(
                 config_entry,
                 lock_entity_id,
                 leaving=remove_permanently
-                and not another_enabled_entry_configures(
-                    hass, config_entry, lock_entity_id
-                ),
+                and not another_entry_configures(hass, config_entry, lock_entity_id),
             )
             for lock_entity_id in lock_entity_ids
             if runtime_data.locks.pop(lock_entity_id, None) is not None
@@ -1111,7 +1111,7 @@ async def _async_release_locks(
         return
     for lock_entity_id in lock_entity_ids:
         runtime_data.callbacks.invoke_lock_removed_handlers(lock_entity_id)
-        if not another_enabled_entry_configures(hass, config_entry, lock_entity_id):
+        if not another_entry_configures(hass, config_entry, lock_entity_id):
             # A lock that never got an instance has no teardown to clear its
             # repair, and removing it from the entry is exactly what that
             # repair asks the user to do.
@@ -1195,12 +1195,14 @@ async def async_remove_entry(
     """
     entry_id = config_entry.entry_id
     config = get_entry_config(config_entry)
+    if (store := hass.data.get(DOMAIN, {}).get(STORE_KEY)) is not None:
+        store.forget_entry(config.locks, config.slot_numbers)
     for slot_num in config.slot_numbers:
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
         # Only delete per-lock issues if no other LCM entry manages this lock.
-        if not another_enabled_entry_configures(hass, config_entry, lock_entity_id):
+        if not another_entry_configures(hass, config_entry, lock_entity_id):
             for issue_key in PER_LOCK_ISSUE_KEYS:
                 async_delete_issue(
                     hass, DOMAIN, per_lock_issue_id(issue_key, lock_entity_id)
