@@ -487,31 +487,6 @@ async def test_options_flow_edits_the_locks(
     assert entry_users(entry) == {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
 
 
-async def test_config_flow_reauth(
-    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
-):
-    """Test reauth flow for updating locks."""
-    lock_code_manager_config_entry.async_start_reauth(
-        hass, context={"lock_entity_id": LOCK_1_ENTITY_ID}
-    )
-    await hass.async_block_till_done()
-    flows = list(
-        lock_code_manager_config_entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-    )
-    assert len(flows) == 1
-    [result] = flows
-
-    assert result["step_id"] == "reauth_confirm"
-    flow_id = result["flow_id"]
-
-    result = await async_configure_flow(
-        hass, flow_id, {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
-    )
-
-    assert result["type"] == "abort"
-    assert result["reason"] == "locks_updated"
-
-
 async def test_config_flow_reauth_form_refetch(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
 ):
@@ -1179,12 +1154,14 @@ async def test_reauth_reads_the_locks_for_the_entry_it_is_repairing(
     [flow] = lock_code_manager_config_entry.async_get_active_flows(
         hass, {SOURCE_REAUTH}
     )
+    assert flow["step_id"] == "reauth_confirm"
 
     with reading_for() as read_for:
         result = await async_configure_flow(
             hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
         )
 
+    assert result["type"] == "abort"
     assert result["reason"] == "locks_updated"
     assert read_for, "reauth accepted the new locks without reading them"
     assert all(read is lock_code_manager_config_entry for read in read_for)

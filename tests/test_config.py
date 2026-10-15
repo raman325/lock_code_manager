@@ -812,19 +812,6 @@ def test_stored_pin_is_stripped_on_read(stored: str, expected: str) -> None:
     assert config.users["u"]["pin"] == expected
 
 
-def test_whitespace_only_stored_pin_reads_as_no_pin() -> None:
-    """
-    A whitespace-only stored PIN normalizes to empty, not to a matchable value.
-
-    Empty means "this user has no PIN"; a surviving "  " would be a truthy
-    credential nobody can enter.
-    """
-    config = EntryConfig.from_mapping(
-        {CONF_LOCKS: [], CONF_SLOTS: {1: {"name": "u", "pin": "   ", "enabled": True}}}
-    )
-    assert not config.slot(1)["pin"]
-
-
 def test_stored_pin_stripping_survives_the_user_keyed_shape() -> None:
     """Both stored shapes normalize: the slot-keyed input and the user-keyed one."""
     config = EntryConfig.from_mapping(

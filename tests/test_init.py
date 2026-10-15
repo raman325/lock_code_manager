@@ -2283,6 +2283,7 @@ async def test_unload_logs_slot_coordinator_stop_exceptions(
         )
         await hass.async_block_till_done()
 
+    assert runtime_data.slot_coordinators == {}
     assert any(
         record.exc_info is not None and record.exc_info[1] is boom
         for record in caplog.records
@@ -4554,43 +4555,16 @@ async def test_renaming_a_user_keeps_the_subentry_they_live_in(
     after = entry.subentries[before.subentry_id]
     assert after.title == "Sherene"
     assert after.data[CONF_SLOT] == 1
+    assert get_entry_config(entry).name_for(1) == "Sherene"
     # Every entity that was theirs is still theirs, under the same id.
     assert entity_ids <= set(ent_reg.entities)
-
-
-async def test_renaming_a_user_renames_their_device(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """
-    Driven through the name entity, which is how a user actually renames.
-
-    That path writes to data with empty options, so it returns before the
-    update listener does any entity work -- the device would keep the old
-    name if the rename were handled alongside entity creation.
-    """
-    entry_id = lock_code_manager_config_entry.entry_id
-    dev_reg = dr.async_get(hass)
-    identifier = (DOMAIN, f"{entry_id}|1")
-    before = get_entry_config(lock_code_manager_config_entry).name_for(1)
+    # Their device follows the rename too. The name entity writes data with
+    # empty options, so it returns before the update listener does any entity
+    # work: a rename handled alongside entity creation would miss it.
     assert (
-        dev_reg.async_get_device_by_identifier(identifier, entry_id).name
-        == f"Mock Title {before}"
-    )
-
-    await hass.services.async_call(
-        TEXT_DOMAIN,
-        SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: "Sherene"},
-        target={ATTR_ENTITY_ID: SLOT_1_NAME_ENTITY},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    assert get_entry_config(lock_code_manager_config_entry).name_for(1) == "Sherene"
-    assert (
-        dev_reg.async_get_device_by_identifier(identifier, entry_id).name
+        dr.async_get(hass)
+        .async_get_device_by_identifier((DOMAIN, f"{entry.entry_id}|1"), entry.entry_id)
+        .name
         == "Mock Title Sherene"
     )
 
@@ -5377,6 +5351,7 @@ async def test_removing_a_slot_stops_its_coordinator_and_lets_the_locks_go(
     await hass.async_block_till_done()
 
     assert 2 not in entry.runtime_data.slot_coordinators
+    assert 1 in entry.runtime_data.slot_coordinators
     assert not coordinator._started
     # The slot's release clear is done, and the workers have let it go.
     assert not any(2 in worker.slots for worker in workers)

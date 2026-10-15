@@ -1157,34 +1157,6 @@ async def test_use_credential_valid_by_title(
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
 
 
-async def test_use_credential_unknown(hass: HomeAssistant, validate_entry) -> None:
-    """A code no slot holds is rejected as unknown."""
-    response = await _call_use_credential(
-        hass,
-        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "0000"},
-    )
-    assert response == {
-        ATTR_VALID: False,
-        ATTR_USER: None,
-        ATTR_REASON: REASON_UNKNOWN_CODE,
-    }
-
-
-@pytest.mark.parametrize(
-    ("code", "reason"),
-    [("5678", REASON_USER_DISABLED), ("9999", REASON_CONDITION_NOT_MET)],
-)
-async def test_use_credential_failure_reasons(
-    hass: HomeAssistant, validate_entry, code: str, reason: str
-) -> None:
-    """A matched-but-inactive code reports why it did not validate."""
-    response = await _call_use_credential(
-        hass,
-        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code},
-    )
-    assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
-
-
 @pytest.mark.parametrize(
     "selector",
     [
@@ -1545,10 +1517,16 @@ async def test_use_credential_with_a_target_outside_the_entry(
 
 
 @pytest.mark.parametrize(
-    "code", ["0000", "5678", "9999"], ids=["unknown", "disabled", "condition"]
+    ("code", "reason"),
+    [
+        ("0000", REASON_UNKNOWN_CODE),
+        ("5678", REASON_USER_DISABLED),
+        ("9999", REASON_CONDITION_NOT_MET),
+    ],
+    ids=["unknown", "disabled", "condition"],
 )
 async def test_use_credential_announces_nothing_when_invalid(
-    hass: HomeAssistant, validate_entry, code: str
+    hass: HomeAssistant, validate_entry, code: str, reason: str
 ) -> None:
     """
     A code that does not validate is not a use, however it failed.
@@ -1563,7 +1541,7 @@ async def test_use_credential_announces_nothing_when_invalid(
     )
     await hass.async_block_till_done()
 
-    assert response[ATTR_VALID] is False
+    assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
     assert [
         event.event_type for event in fired if event.event_type.startswith(DOMAIN)
     ] == []
@@ -2170,7 +2148,7 @@ async def test_add_user_refuses_two_names_meaning_one_person_in_one_call(
 @pytest.mark.parametrize(
     "payload",
     [
-        pytest.param({CONF_NAME: "Newcomer", CONF_PIN: "9876"}, id="released-flat"),
+        # The released flat shape is test_add_user_service's own payload.
         pytest.param(
             {CONF_USERS: {CONF_NAME: "Newcomer", CONF_PIN: "9876"}}, id="single-mapping"
         ),

@@ -472,28 +472,6 @@ async def test_condition_entity_subscription_owned_by_coordinator(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_coordinator_removed_on_slot_removal(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Removing a slot via options tears down its coordinator."""
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    assert 2 in runtime_data.slot_coordinators
-
-    new_options = {
-        CONF_LOCKS: list(runtime_data.locks.keys()),
-        CONF_SLOTS: {
-            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
-        },
-    }
-    write_entry_config(hass, lock_code_manager_config_entry, new_options)
-    await hass.async_block_till_done()
-
-    assert 2 not in runtime_data.slot_coordinators
-    assert 1 in runtime_data.slot_coordinators
-
-
 async def test_unload_reads_slots_via_entry_config_view(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -766,44 +744,6 @@ async def test_write_config_fields_refreshes_runtime_config_before_notify(
     assert captured_pin, "subscriber must fire at least once"
     assert captured_pin[0] == "5555"
     assert all(pin == "5555" for pin in captured_pin)
-
-
-async def test_unload_continues_when_slot_coordinator_stop_raises(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    caplog: pytest.LogCaptureFixture,
-):
-    """``async_unload_entry`` clears every slot coordinator even when one stop raises."""
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    coordinators = list(runtime_data.slot_coordinators.values())
-    assert len(coordinators) >= 2
-
-    failing = coordinators[0]
-    boom = RuntimeError("simulated coordinator stop failure")
-    original_stop = failing.async_stop
-    raised = {"value": False}
-
-    def failing_stop() -> None:
-        original_stop()
-        if not raised["value"]:
-            raised["value"] = True
-            raise boom
-
-    with patch.object(failing, "async_stop", failing_stop):
-        with caplog.at_level(logging.WARNING):
-            await hass.config_entries.async_unload(
-                lock_code_manager_config_entry.entry_id
-            )
-            await hass.async_block_till_done()
-
-    assert raised["value"]
-    assert runtime_data.slot_coordinators == {}
-    assert any(
-        record.exc_info is not None and record.exc_info[1] is boom
-        for record in caplog.records
-        if record.levelname == "ERROR"
-    )
 
 
 async def test_register_active_view_initial_writer_failure_propagates_and_discards(

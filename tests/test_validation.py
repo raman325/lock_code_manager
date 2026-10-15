@@ -17,8 +17,6 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    REASON_CONDITION_NOT_MET,
-    REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
 )
 from custom_components.lock_code_manager.domain.validation import (
@@ -88,36 +86,6 @@ async def validation_entry_fixture(hass: HomeAssistant) -> MockConfigEntry:
     yield lcm_entry
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
-
-
-async def test_valid_code(hass: HomeAssistant, validation_entry):
-    """An active slot's PIN validates and reports the configured user name."""
-    result = validate_credential(validation_entry, "1234")
-    assert result == ValidationResult(valid=True, user="alice", reason=None)
-
-
-async def test_unknown_code(hass: HomeAssistant, validation_entry):
-    """A code no slot holds is rejected as unknown."""
-    result = validate_credential(validation_entry, "0000")
-    assert result == ValidationResult(
-        valid=False, user=None, reason=REASON_UNKNOWN_CODE
-    )
-
-
-async def test_disabled_user(hass: HomeAssistant, validation_entry):
-    """A disabled slot's PIN is rejected as user_disabled."""
-    result = validate_credential(validation_entry, "5678")
-    assert result == ValidationResult(
-        valid=False, user=None, reason=REASON_USER_DISABLED
-    )
-
-
-async def test_condition_not_met(hass: HomeAssistant, validation_entry):
-    """A slot blocked only by its condition entity is rejected as condition_not_met."""
-    result = validate_credential(validation_entry, "9999")
-    assert result == ValidationResult(
-        valid=False, user=None, reason=REASON_CONDITION_NOT_MET
-    )
 
 
 async def test_disabled_and_condition_off(hass: HomeAssistant, validation_entry):
