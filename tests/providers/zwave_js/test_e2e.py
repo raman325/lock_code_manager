@@ -35,7 +35,11 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
+from homeassistant.config_entries import (
+    SOURCE_USER,
+    ConfigEntryDisabler,
+    ConfigEntryState,
+)
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_NAME,
@@ -57,6 +61,8 @@ from homeassistant.helpers.event import async_track_state_change_event
 from custom_components.lock_code_manager.const import (
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
+    CONF_NUM_USERS,
+    CONF_SLOT,
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
@@ -71,6 +77,7 @@ from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeE
 from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_codes,
     lock_registry,
+    locks_that_cannot_report,
 )
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import subentry_id_for_slot
@@ -80,6 +87,7 @@ from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
+    async_configure_flow,
     async_set_slot_pin,
     async_switch_slot,
     async_tick_until,
@@ -2745,3 +2753,49 @@ class TestReEnableWhileClearing:
         assert (STATE_OFF, STATE_UNKNOWN if clear_out else "") in states, states
         assert all(STATE_UNAVAILABLE not in seen for seen in states), states
         assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "9999")
+
+
+class TestEmptySlotsAreReported:
+    """A lock that can read its codes is never taken for one that cannot (#1581)."""
+
+    async def test_setup_on_empty_slots_says_nothing_of_the_lock(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Every slot the flow reads is empty: that is the lock describing them.
+
+        The read projects only the slots an entry manages, and a new entry
+        manages none, so the empty slots it asked about come back unnamed --
+        answered all the same, not silent.
+        """
+        fake_zwave_lock.program(1, None)
+        fake_zwave_lock.program(2, None)
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        flow_id = result["flow_id"]
+        await async_configure_flow(
+            hass, flow_id, {CONF_NAME: "zwave", CONF_LOCKS: [lock_entity.entity_id]}
+        )
+        await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+        result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+        assert result["step_id"] == "code_slot", result.get("errors")
+        for user, pin in (("user1", "1234"), ("user2", "5678")):
+            result = await async_configure_flow(
+                hass, flow_id, {CONF_NAME: user, CONF_PIN: pin, CONF_ENABLED: True}
+            )
+
+        assert result["type"] == "create_entry"
+        assert result["description"] is None
+        assert locks_that_cannot_report(hass, [lock_entity.entity_id]) == []
+        entry = hass.config_entries.async_get_entry(result["result"].entry_id)
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in entry.subentries.values()
+        } == {"user1": 1, "user2": 2}
+        assert await hass.config_entries.async_unload(entry.entry_id)

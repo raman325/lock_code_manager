@@ -196,9 +196,11 @@ class ProviderPort:
         if self._answered and silent >= set(slots) and not cannot_tell:
             raise LockError(ErrorKind.NO_ANSWER, message="the lock said nothing")
         lock = provider.lock.entity_id
-        self.reports[lock] = self.reports.get(lock, False) or any(
-            slot in codes for slot in set(slots) - silent
-        )
+        # Any slot asked about and not silent was described, named in the
+        # answer or not: a provider projecting only the slots an entry manages
+        # (Z-Wave JS's hard refresh) leaves an empty one it was asked about
+        # out, and that is no lock that cannot report.
+        self.reports[lock] = self.reports.get(lock, False) or bool(set(slots) - silent)
         if self.reports[lock]:
             silent -= cannot_tell
         self.not_reported.difference_update(slots)
