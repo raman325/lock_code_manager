@@ -1139,8 +1139,11 @@ class TestOtherUsersOnTheLock:
             assert issue is not None
             assert issue.translation_placeholders is not None
             reason = issue.translation_placeholders["reason"]
+            # Unexplained: the generic reason, as any transport failure.
+            assert reason.startswith(
+                "the lock did not take the code after several tries"
+            )
             assert "lock maker's app" not in reason
-            assert "is not resolving" in reason
         finally:
             await hass.config_entries.async_unload(entry.entry_id)
 

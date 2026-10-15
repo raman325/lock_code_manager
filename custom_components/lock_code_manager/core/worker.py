@@ -54,13 +54,19 @@ class LockError(Exception):
     """A failed exchange: what kind, and whether it reached the lock."""
 
     def __init__(
-        self, kind: ErrorKind, *, sent: bool = True, message: str = ""
+        self, kind: ErrorKind, *, sent: bool = True, message: str = "", cause: str = ""
     ) -> None:
-        """Describe the failure; ``sent`` is False when nothing left for the lock."""
+        """
+        Describe the failure; ``sent`` is False when nothing left for the lock.
+
+        ``cause`` is set only when the provider named, for the user, why it
+        failed.
+        """
         super().__init__(message or kind.value)
         self.kind = kind
         self.sent = sent
         self.message = message
+        self.cause = cause
 
 
 class LockPort(Protocol):
@@ -534,8 +540,8 @@ class LockWorker[P: LockPort]:
         back; ``want`` forgot what the lock last said -- the write may have
         landed -- so the next sync reads before it decides. A refusal holds at once.
         Anything else, even a write that never left, is read back -- unless
-        the lock has just gone into backoff -- and its message is kept, so a
-        slot held after its tries says what went wrong last.
+        the lock has just gone into backoff -- and a cause the provider named
+        is kept, so a slot held after its tries says it.
         """
         pin = slot.want
         slot.wrote = None
@@ -561,6 +567,8 @@ class LockWorker[P: LockPort]:
         except LockError as err:
             if not current():
                 return
+            # If it is held after its tries, a cause the provider named says why.
+            slot.cause = err.cause
             if err.kind is ErrorKind.ALREADY_SO:
                 slot.wrote_want(self.salt)
                 slot.released = slot.release
@@ -572,13 +580,10 @@ class LockWorker[P: LockPort]:
             elif err.kind is ErrorKind.SLOT_REFUSED:
                 slot.refused(value=False, why=err.message)
                 return
-            else:
-                # Tried again; if it is held after its tries, this says why.
-                slot.why = err.message
         else:
             if not current():
                 return
-            slot.why = ""
+            slot.cause = ""
             slot.released = slot.release
             if changed is not False:
                 slot.wrote_want(self.salt)
