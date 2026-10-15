@@ -881,8 +881,35 @@ class MatterLock(BaseLock):
         or the slot was configured but never written). Lock-side
         transport failures bubble up so the base wraps them in a warning
         and the teardown still completes.
+
+        A lock that cannot list its users (some fail every ``GetUser`` walk
+        while one particular user exists) would otherwise never release a
+        slot, because finding the user needs that listing. When it fails,
+        fall back to the user index recorded for this slot at the last read
+        or write, but only if exactly one index is recorded: with none, or
+        more than one, there is nothing safe to clear, so the failure
+        bubbles up as before. The listing always wins when it works.
         """
-        user_index = await self._find_user_index_for_slot(slot, adopt_untagged=False)
+        try:
+            user_index = await self._find_user_index_for_slot(
+                slot, adopt_untagged=False
+            )
+        except LockDisconnected:
+            recorded = [
+                index
+                for index, anchored in self._slot_by_user_index.items()
+                if anchored == slot
+            ]
+            if len(recorded) != 1:
+                raise
+            user_index = recorded[0]
+            LOGGER.warning(
+                "Lock %s: cannot list users to release slot %s; clearing the "
+                "user recorded at index %s instead",
+                self.lock.entity_id,
+                slot,
+                user_index,
+            )
         if user_index is None:
             LOGGER.debug(
                 "Lock %s: no LCM-owned user to release for slot %s",
