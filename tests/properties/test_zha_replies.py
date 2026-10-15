@@ -9,9 +9,10 @@ decodes them -- from the stock Door Lock cluster or a quirk's -- rather than
 over the handful of shapes the example tests name.
 """
 
+from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from hypothesis import given, strategies as st
+from hypothesis import example, given, strategies as st
 import pytest
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
@@ -27,7 +28,8 @@ from tests.providers.zha.helpers import (
 
 # Small enough that a reply and the slot asked collide often.
 _users = st.integers(min_value=0, max_value=4)
-_clusters = st.sampled_from([DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock])
+_CLUSTER_TYPES = (DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock)
+_clusters = st.sampled_from(_CLUSTER_TYPES)
 _codes = st.text(alphabet="0123456789*", max_size=8)
 _statuses = st.sampled_from(list(foundation.Status))
 
@@ -95,6 +97,48 @@ def _replies(draw: st.DrawFn) -> _Drawn:
     return _Drawn(kind, cluster, reply)
 
 
+def _examples(*cases: dict[str, Any]) -> Callable[[Any], Any]:
+    """Pin each case as an explicit example of the property it decorates."""
+
+    def apply(test: Any) -> Any:
+        for case in cases:
+            test = example(**case)(test)
+        return test
+
+    return apply
+
+
+def _drawn(cluster: type[DoorLock], kind: str, **fields: Any) -> _Drawn:
+    """Build ``kind`` as ``cluster`` decodes it."""
+    return _Drawn(kind, cluster, lock_frame(cluster, kind, **fields).payload)
+
+
+_SUCCESS = foundation.Status.SUCCESS
+
+
+# Replies no end-to-end test sends a read, pinned rather than left to chance:
+# a write's response and a Default Response, each saying SUCCESS, and raw
+# bytes.
+@_examples(
+    *(
+        {
+            "drawn": _drawn(cluster, "set_pin_code_response", status=_SUCCESS),
+            "slot_num": 3,
+        }
+        for cluster in _CLUSTER_TYPES
+    ),
+    {
+        "drawn": _Drawn(
+            "default_response",
+            DoorLock,
+            default_response(
+                DoorLock.ServerCommandDefs.get_pin_code.id, _SUCCESS
+            ).payload,
+        ),
+        "slot_num": 3,
+    },
+    {"drawn": _Drawn("undecoded_bytes", DoorLock, b"unexpected"), "slot_num": 3},
+)
 @given(drawn=_replies(), slot_num=_users)
 def test_only_the_slots_own_reply_answers_a_read(drawn: _Drawn, slot_num: int) -> None:
     """
@@ -127,6 +171,36 @@ _writes = st.sampled_from(
 )
 
 
+_SET = (
+    DoorLock.ServerCommandDefs.set_pin_code,
+    DoorLock.ClientCommandDefs.set_pin_code_response,
+)
+_CLEAR = (
+    DoorLock.ServerCommandDefs.clear_pin_code,
+    DoorLock.ClientCommandDefs.clear_pin_code_response,
+)
+
+
+# A frame about something else that says SUCCESS -- the other write's
+# response, or a cluster command sharing the Default Response's id -- is a
+# false confirmation, pinned per cluster. Raw bytes are never decoded, so one
+# cluster stands for all.
+@_examples(
+    *(
+        {"drawn": _drawn(cluster, kind, status=_SUCCESS), "write": write}
+        for cluster in _CLUSTER_TYPES
+        for write, kind in (
+            (_SET, "clear_pin_code_response"),
+            (_CLEAR, "set_pin_code_response"),
+            (_SET, "set_week_day_schedule_response"),
+            (_CLEAR, "set_week_day_schedule_response"),
+        )
+    ),
+    *(
+        {"drawn": _Drawn("undecoded_bytes", DoorLock, b"\x01"), "write": write}
+        for write in (_SET, _CLEAR)
+    ),
+)
 @given(drawn=_replies(), write=_writes)
 def test_only_the_writes_own_reply_answers_it(
     drawn: _Drawn,

@@ -356,16 +356,6 @@ _FOREIGN_REPLIES = [
     ),
 ]
 
-# The write's own refusal, in a Default Response naming it.
-_OWN_REFUSALS = [
-    pytest.param(
-        lambda _cluster, request_id, _response: (
-            default_response(request_id, Status.FAILURE).payload
-        ),
-        id="default_response_naming_the_write",
-    ),
-]
-
 _CLUSTERS = pytest.mark.parametrize(
     "door_lock_cluster_type",
     [DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock],
@@ -433,33 +423,6 @@ async def test_a_write_answered_by_another_frame_fails_for_a_retry(
     )
 
     with pytest.raises(LockOperationFailed, match="answered by a reply to something"):
-        await _write(zha_lock, command)
-    assert 3 not in pushed_to_worker
-
-
-@_CLUSTERS
-@pytest.mark.parametrize(
-    ("command", "request_id", "response"),
-    [("clear_pin_code", _CLEAR_PIN_CODE_ID, "clear_pin_code_response")],
-    ids=["clear"],
-)
-@pytest.mark.parametrize("reply", _OWN_REFUSALS)
-async def test_the_writes_own_refusal_rejects_the_code(
-    zha_lock: ZHALock,
-    pushed_to_worker: dict[int, Reading],
-    command: str,
-    request_id: int,
-    response: str,
-    reply: Any,
-) -> None:
-    """A non-zero status in the write's own reply rejects it and pushes nothing."""
-    cluster = zha_lock._get_door_lock_cluster()
-    assert cluster is not None
-    setattr(
-        cluster, command, AsyncMock(return_value=reply(cluster, request_id, response))
-    )
-
-    with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
         await _write(zha_lock, command)
     assert 3 not in pushed_to_worker
 

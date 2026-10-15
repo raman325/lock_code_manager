@@ -31,6 +31,7 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
     ATTR_IN_SYNC,
+    ATTR_OPERATION,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOT,
@@ -43,6 +44,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.core.adapter import reading
 from custom_components.lock_code_manager.core.slot import Reading
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
+from custom_components.lock_code_manager.domain.events import CredentialOperation
 from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_codes,
     lock_reachable,
@@ -617,6 +619,7 @@ class TestBridgeEvents:
             state = hass.states.get(event_1)
             assert state.state != STATE_UNKNOWN
             assert state.attributes[ATTR_CODE_SLOT] == 1
+            assert state.attributes[ATTR_OPERATION] == CredentialOperation.UNLOCK
 
     @pytest.mark.parametrize(
         "payload",
