@@ -62,6 +62,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.core.slot import Holds
 from custom_components.lock_code_manager.core.worker import LockWorker
+from custom_components.lock_code_manager.domain.allocation import async_read_occupancy
 from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
 )
@@ -2783,6 +2784,39 @@ class TestSomeoneElsesCodeAtATurnedOffSlot:
         assert _slot_states(hass, entry, lock_entity, 3) == (STATE_ON, "")
         assert fake_zwave_lock.holds(3) == "5555"
         assert lcm_issue_ids(hass) == []
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_new_slot_is_not_offered_over_it(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The slot reads it as empty; what the lock holds is still occupied (#1693).
+
+        Offered to a new slot, its write would adopt the user at that index
+        and overwrite the homeowner's code with Lock Code Manager's.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(ZWAVE_JS_LCM_CONFIG_SLOTS),
+            unique_id="test_zwave_js_foreign_occupancy",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # The homeowner adds a user with a PIN at credential slot 5.
+        fake_zwave_lock.program(5, "5555")
+        await hass.async_block_till_done()
+
+        occupancy = await async_read_occupancy(
+            hass, None, [lock_entity.entity_id], [4, 5, 6]
+        )
+        assert occupancy.locks[0].occupied == {5}
         await hass.config_entries.async_unload(entry.entry_id)
 
 

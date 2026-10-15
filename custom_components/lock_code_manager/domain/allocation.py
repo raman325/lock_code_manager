@@ -251,11 +251,15 @@ async def async_read_occupancy(
         occupied: frozenset[int] | None = None
         async with borrowed_lock_instance(lock_instance):
             try:
-                occupied = await (
-                    _async_occupied(hass, lock_entity_id, indices)
-                    if lock_instance.credential_index_follows_slot
-                    else _async_adoptable(hass, lock_instance, indices)
-                )
+                if not lock_instance.credential_index_follows_slot:
+                    occupied = await _async_adoptable(hass, lock_instance, indices)
+                else:
+                    occupied = await _async_occupied(hass, lock_entity_id, indices)
+                    if lock_instance.supports_native_users:
+                        # The read gives a slot someone else's code at its
+                        # index as empty (#1695): the slot's own view, not
+                        # what the lock holds. Adopting it overwrites theirs.
+                        occupied |= await _async_adoptable(hass, lock_instance, indices)
             except Exception:
                 _LOGGER.warning(
                     "Failed to read the contents of %s; treating them as unknown",
