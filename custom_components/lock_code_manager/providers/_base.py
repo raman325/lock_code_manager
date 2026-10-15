@@ -1468,18 +1468,21 @@ class BaseLock:
 
         Emits ``lcm:{slot}:{display}`` (canonical format from
         :func:`._util.make_tagged_name`) and truncates the display portion
-        so the overall length fits ``max_user_name_length``. The tag prefix
+        so the overall length fits ``max_user_name_length``. Length is
+        whatever :meth:`_user_name_length` counts -- characters by default,
+        UTF-8 bytes on Matter -- and the display is cut a whole character
+        at a time, never mid-character. The tag prefix
         is sacred -- it's how :func:`._util.parse_tag` recovers the slot
         binding on subsequent reads -- so when the full prefix fits,
         truncation only ever shortens the user-supplied display.
 
         When the lock's limit can't even fit the canonical prefix
-        (``len("lcm:{slot}:") > max_user_name_length``), the helper
+        (``_user_name_length("lcm:{slot}:") > max_user_name_length``), the helper
         falls back to writing just the slot number as the user name
         (``str(slot)``). :func:`._util.parse_tag` recognizes
         digit-only names as a length-constrained encoding of the slot
         binding. If even the slot digits don't fit
-        (``len(str(slot)) > max_user_name_length``, e.g. slot 255 on a
+        (``_user_name_length(str(slot)) > max_user_name_length``, e.g. slot 255 on a
         2-char-limit lock), the helper returns ``None`` rather than
         truncating the slot to a different number and silently
         mis-binding the user. The seam treats ``None`` as "leave name
