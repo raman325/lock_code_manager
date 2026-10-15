@@ -132,7 +132,8 @@ class TestSetAndClearUsercodes:
         """Clear a code via the base orchestration and verify clear_lock_credential was called."""
         matter_mock_helpers["clear_lock_credential"].reset_mock()
         matter_mock_helpers["get_lock_users"].reset_mock()
-        # Slot 2 is occupied (user_index 2) in the default fixture helpers
+        # Slot 2 is occupied by LCM's tagged user at user_index 2.
+        matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
         with (
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_users",
@@ -195,6 +196,7 @@ class TestSetAndClearUsercodes:
         """After clear, the provider pushes an empty slot 2 to the lock's worker."""
         worker = lock_registry(hass).worker(e2e_matter_lock.lock.entity_id)
         assert worker is not None
+        matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
         pushed: list[tuple[int, object]] = []
         with (
             patch.object(
@@ -844,18 +846,6 @@ class TestOtherUsersOnTheLock:
 
         assert FAKE_MATTER_SLOTS[1][CONF_PIN] in fake_matter_lock.codes.values()
 
-
-class TestOpenBugs:
-    """Open Matter bugs, each pinned by a strict xfail on its own assertion."""
-
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "open (#1518): a turned-off slot's clear adopts an untagged user holding a "
-            "PIN at the slot's credential index and removes the homeowner's code"
-        ),
-    )
     async def test_a_turned_off_user_leaves_a_homeowner_s_code_alone(
         self,
         hass: HomeAssistant,
@@ -867,10 +857,11 @@ class TestOpenBugs:
         Neither turning a user off nor deleting it removes a code Lock Code Manager did not write.
 
         Slot 3's user is turned off, so nothing was ever written for it, and
-        the homeowner's own user holds a PIN at credential index 3. #1518
-        (PR #1522) kept the release from adopting that untagged user; the
-        turned-off slot's clear still adopts it by the old index-equals-slot
-        rule and clears the homeowner's credential before any release runs.
+        the homeowner's own user holds a PIN at credential index 3. Regression
+        for #1518: PR #1522 kept the release from adopting that untagged
+        user; the turned-off slot's clear still adopted it by the old
+        index-equals-slot rule and cleared the homeowner's credential before
+        any release ran.
         """
         fake_matter_lock.program(7, "777777", name="Mom", credential_index=3)
         slots = {
@@ -896,6 +887,10 @@ class TestOpenBugs:
 
             assert fake_matter_lock.holds(3) == "777777"
             assert fake_matter_lock.users[7].name == "Mom"
+
+
+class TestOpenBugs:
+    """Open Matter bugs, each pinned by a strict xfail on its own assertion."""
 
     @pytest.mark.xfail(
         strict=True,

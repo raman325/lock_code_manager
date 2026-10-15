@@ -778,13 +778,12 @@ async def test_clear_usercode_native_no_op_when_no_owner(
     assert 7 not in lock._users
 
 
-async def test_clear_usercode_native_resolves_owner_when_user_id_not_slot(
+async def test_clear_usercode_native_leaves_an_untagged_owner_alone(
     hass: HomeAssistant,
 ) -> None:
-    """Native clear targets the credential's real owner, not the slot index."""
-    lock = _make_lock(hass, _NativeStubLock, "seam_clear_foreign_owner")
-    # A user whose id differs from the credential slot (e.g. created by another
-    # controller or auto-allocated by the integration).
+    """Native clear never deletes the credential of a user LCM did not tag (#1518)."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_untagged_owner")
+    # Another controller's user, holding a PIN at the slot's index.
     lock._users = {
         12: User(
             user_id=12,
@@ -793,11 +792,8 @@ async def test_clear_usercode_native_resolves_owner_when_user_id_not_slot(
         )
     }
     changed = await lock.async_clear_usercode(5)
-    assert changed is True
-    # The ref is built from the resolved owner, so the credential delete
-    # targets user_id=12 / slot=5, not the slot index alone.
-    assert lock.calls == [("delete_credential", 12, 5)]
-    # User stays put -- lifecycle is decoupled from credential presence.
+    assert changed is False
+    assert lock.calls == []
     assert 12 in lock._users
 
 
@@ -900,6 +896,7 @@ async def test_clear_usercode_native_only_clears_the_targeted_credential(
     lock._users = {
         4: User(
             user_id=4,
+            name="lcm:4:alice",
             credentials=[
                 credential_from_slot(4, SlotCredential.known("1234")),
                 credential_from_slot(8, SlotCredential.known("5678")),

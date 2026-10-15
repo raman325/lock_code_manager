@@ -1249,9 +1249,7 @@ class BaseLock:
             source=source,
         )
 
-    async def async_clear_usercode(
-        self, code_slot: int, *, adopt_untagged: bool = True
-    ) -> bool:
+    async def async_clear_usercode(self, code_slot: int) -> bool:
         """
         Clear a usercode on a code slot via the User->Credential primitives.
 
@@ -1270,13 +1268,16 @@ class BaseLock:
         occurred, so the coordinator refreshes and verifies the actual
         state.
 
-        ``adopt_untagged`` is what separates a clear from a release. Clearing
-        a slot LCM still manages may adopt an untagged owner: the slot is
-        ours, adoption is how a pre-tag install is taken over, and the write
-        that follows corrects a wrong guess. Releasing a slot LCM no longer
-        manages may not -- the premise has inverted, nothing follows to
-        correct anything, and the untagged user at that index is as likely to
-        be somebody else's as ours.
+        A clear adopts no untagged user (#1518). Adoption belongs to the set
+        path, where the write that follows tags the user and corrects a wrong
+        guess; a clear is an end state -- a slot turned off or released --
+        and nothing follows it to correct anything. The untagged user holding
+        a PIN at that index is as likely to be one the homeowner made in the
+        vendor's app as ours. The cost: a pre-tag install's PIN in a slot
+        that is off stays on the lock until the slot is turned on again and
+        the write adopts it. The exception is a lock that keeps no user
+        records (a Z-Wave User Code lock): no user there can carry a tag, so
+        the slot is the identity.
         """
         if not self.supports_native_users:
             ref = CredentialRef(
@@ -1284,11 +1285,9 @@ class BaseLock:
             )
             return await self.async_delete_credential(ref)
 
-        # Owner resolution is two-pass to match the same identity rule the
-        # set path uses (see Matter's _find_user_index_for_slot). The
-        # canonical pass matches by the ``lcm:<slot>:`` tag in user.name;
-        # the fallback adopts installs from before user-tag matching,
-        # where ``credential.slot`` was pinned to the LCM slot. Matching
+        # Owner resolution matches by the ``lcm:<slot>:`` tag in user.name,
+        # falling back to the slot only on a lock with no user records,
+        # where ``credential.slot`` is the LCM slot. Matching
         # by ``credential.slot == code_slot`` alone is unsafe once
         # providers let the lock auto-allocate the credential index -- a
         # tagged user for slot A whose credential lands at index B would
@@ -1310,19 +1309,17 @@ class BaseLock:
                 if credential.slot == code_slot
             )
         except StopIteration:
-            owner_user_id = (
-                next(
-                    (
-                        user.user_id
-                        for user in users
-                        if parse_tag(user.name or "")[0] is None
-                        for credential in user.pin_credentials
-                        if credential.slot == code_slot
-                    ),
-                    None,
-                )
-                if adopt_untagged
-                else None
+            if await self._supports_user_records():
+                return False
+            owner_user_id = next(
+                (
+                    user.user_id
+                    for user in users
+                    if parse_tag(user.name or "")[0] is None
+                    for credential in user.pin_credentials
+                    if credential.slot == code_slot
+                ),
+                None,
             )
         if owner_user_id is None:
             # No user owns this slot's credential -- nothing to clear.
@@ -1710,16 +1707,7 @@ class BaseLock:
         that user instead; the cascade defined by the lock's protocol
         removes its credentials, so they must not also clear here.
         """
-        # Adopts no untagged user (see ``async_clear_usercode``): a slot LCM
-        # no longer manages has no claim on whoever owns the credential at
-        # that index. Unless the lock keeps no user records (a Z-Wave User
-        # Code lock): no user there can carry a tag, the slot is the
-        # identity, and it was this integration's until now.
-        await self.async_clear_usercode(
-            slot,
-            adopt_untagged=self.supports_native_users
-            and not await self._supports_user_records(),
-        )
+        await self.async_clear_usercode(slot)
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """
