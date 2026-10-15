@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import json
 import logging
 from typing import Any
-from unittest.mock import DEFAULT
+from unittest.mock import DEFAULT, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
@@ -16,7 +16,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
-from homeassistant.config_entries import SOURCE_USER, ConfigFlowResult
+from homeassistant.config_entries import SOURCE_USER, ConfigEntryState, ConfigFlowResult
 from homeassistant.const import (
     CONF_ENABLED,
     CONF_NAME,
@@ -25,7 +25,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
@@ -52,6 +52,7 @@ from custom_components.lock_code_manager.ha.runtime import (
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.events import CredentialOperation
 from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
+from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -81,6 +82,7 @@ from .conftest import (
     Z2M_SET_TOPIC,
     Z2M_TOPIC_NAME,
     async_discover_z2m_lock,
+    z2m_lock_discovery_payload,
 )
 from .fake_bridge import ENABLED, FakeZ2MBridge
 
@@ -1353,4 +1355,238 @@ class TestLockThatReportsOnlyFreeSlots:
             )
             assert bridge.sets_for(3) == []
             assert bridge.users[3] == (ENABLED, "3333")
+            _assert_trouble_free(hass, lock_id)
+
+
+# A lock re-paired under its entity id while an entry holds it ------------------
+
+
+def _re_pair(hass: HomeAssistant) -> Coroutine[Any, Any, er.RegistryEntry]:
+    """
+    Replace the bridge's lock by another device under the same entity id.
+
+    The old device's discovery goes and the new one's comes in one go, as a
+    Zigbee2MQTT lock re-joined under the same friendly name: the new device
+    has a new registry id.
+    """
+    async_fire_mqtt_message(hass, f"homeassistant/lock/{Z2M_IEEE}/lock/config", "")
+    return async_discover_z2m_lock(hass, ieee="0xbeef")
+
+
+def _spy_on_unloads(hass: HomeAssistant) -> Any:
+    """Count the config entries Home Assistant is asked to unload."""
+    return patch.object(
+        hass.config_entries, "async_unload", wraps=hass.config_entries.async_unload
+    )
+
+
+class TestRePairedLock:
+    """
+    A lock re-paired under its entity id is a different device.
+
+    The worker's provider is bound to the old one's registry entry, so the
+    entries holding the lock set up again on the new one, and its slots are
+    written to it.
+    """
+
+    async def test_the_new_device_is_set_up_and_its_slots_written(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """Not offline, the PINs written to it, and taken as it reports."""
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            old = lock_registry(hass).worker(lock_id)
+            store = hass.data[DOMAIN][STORE_KEY]
+            assert store.reports(lock_id)
+            assert locks_that_cannot_report(hass, [lock_id]) == []
+
+            # The new device holds nothing, and cannot say what it holds.
+            assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1]
+            bridge.users.clear()
+            bridge.cannot_tell = True
+
+            @callback
+            def _old_worker_changes(event: Event) -> None:
+                # The old worker finishing an exchange once the new device is
+                # in: what it remembers is filed under the new registry id.
+                if event.data["action"] == "create":
+                    old.on_change()
+                    # And the new entity updated as its rebuild starts: one
+                    # rebuild still.
+                    er.async_get(hass).async_update_entity(lock_id, name="Front door")
+
+            unsub = hass.bus.async_listen(
+                er.EVENT_ENTITY_REGISTRY_UPDATED, _old_worker_changes
+            )
+            with _spy_on_unloads(hass) as unload:
+                new_lock = await _re_pair(hass)
+                unsub()
+                assert new_lock.entity_id == lock_id
+                await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            assert unload.call_count == 1
+
+            worker = lock_registry(hass).worker(lock_id)
+            assert worker is not old
+            assert worker.port.provider.lock.id == new_lock.id
+            # Each written to the new device once.
+            assert [len(bridge.sets_for(slot)) for slot in pins] == [2, 2]
+            _assert_trouble_free(hass, lock_id)
+            # What was kept of the old device is not the new one's.
+            assert not store.reports(lock_id)
+            assert locks_that_cannot_report(hass, [lock_id]) == [lock_id]
+
+            # Allocation numbers the next slots, and says the lock cannot report.
+            flow = await hass.config_entries.subentries.async_init(
+                (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+            )
+            flow = await hass.config_entries.subentries.async_configure(
+                flow["flow_id"], {"next_step_id": "several"}
+            )
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                hass.config_entries.subentries.async_configure(
+                    flow["flow_id"],
+                    {
+                        CONF_USERS: {
+                            "user3": {CONF_ENABLED: True, CONF_PIN: "9012"},
+                            "user4": {CONF_ENABLED: True, CONF_PIN: "3456"},
+                        }
+                    },
+                ),
+                "adding users",
+            )
+            assert result["reason"] == "users_added_cannot_report"
+            assert result["description_placeholders"]["slots"] == "3, 4"
+            pins = {**pins, 3: "9012", 4: "3456"}
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_a_clear_owed_to_the_old_device_is_dropped(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        A slot given up and still being cleared when the device is replaced.
+
+        The clear was the old device's, which is gone: it does not keep the
+        old worker running, and the new device's slot is not cleared.
+        """
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            old = lock_registry(hass).worker(lock_id)
+            # The old device stops answering: the clear is sent, never seen done.
+            bridge.silent = True
+            hass.config_entries.async_remove_subentry(
+                entry, subentry_id_for_slot(entry, 2)
+            )
+            # Not settled: the old worker is waiting on the clock for the lock.
+            await async_run_until_quiet()
+            assert old.slots[2].release
+            assert old.slots[2].hold is None
+
+            # The new device answers, and has a code of its own in slot 2.
+            bridge.silent = False
+            bridge.users = {2: (ENABLED, "0000")}
+            bridge.requests.clear()
+            async_fire_mqtt_message(
+                hass, f"homeassistant/lock/{Z2M_IEEE}/lock/config", ""
+            )
+            async_fire_mqtt_message(
+                hass,
+                "homeassistant/lock/0xbeef/lock/config",
+                json.dumps(z2m_lock_discovery_payload(ieee="0xbeef")),
+            )
+            await async_step_clock_until(
+                hass,
+                freezer,
+                lambda: lock_registry(hass).worker(lock_id) not in (None, old),
+                max_steps=100,
+                what="the lock's worker built again",
+                step=1.0,
+            )
+            await _until_settled(hass, freezer, entry, lock_id, bridge, {1: "1234"})
+
+            worker = lock_registry(hass).worker(lock_id)
+            assert (
+                worker.port.provider.lock.id == er.async_get(hass).async_get(lock_id).id
+            )
+            assert 2 not in worker.slots
+            assert bridge.sets_for(2) == []
+            assert bridge.users[2] == (ENABLED, "0000")
+            assert "the clear is dropped with the old device" in caplog.text
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_a_rename_is_no_rebuild(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """The same registry id under another entity id is the same device."""
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        entities = er.async_get(hass)
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            old = lock_registry(hass).worker(lock_id)
+            with _spy_on_unloads(hass) as unload:
+                entities.async_update_entity(lock_id, new_entity_id="lock.renamed")
+                await hass.async_block_till_done()
+                # And back, so the entry finds its lock to unload.
+                entities.async_update_entity("lock.renamed", new_entity_id=lock_id)
+                await hass.async_block_till_done()
+            unload.assert_not_called()
+            assert lock_registry(hass).worker(lock_id) is old
+
+    async def test_a_lock_removed_is_left_as_it_was(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """Gone and not re-created: its worker, the entry and the store as before."""
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            old = lock_registry(hass).worker(lock_id)
+            store = hass.data[DOMAIN][STORE_KEY]
+            kept = dict(store._locks)
+            with _spy_on_unloads(hass) as unload:
+                async_fire_mqtt_message(
+                    hass, f"homeassistant/lock/{Z2M_IEEE}/lock/config", ""
+                )
+                await hass.async_block_till_done()
+            assert er.async_get(hass).async_get(lock_id) is None
+            unload.assert_not_called()
+            assert lock_registry(hass).worker(lock_id) is old
+            assert entry.state is ConfigEntryState.LOADED
+            assert lock_id in entry.runtime_data.locks
+            # Its record stays until the next start drops it (M5a).
+            assert store._locks == kept
+
+            # A new device under its entity id, later: that is a re-pair.
+            bridge.users.clear()
+            await async_discover_z2m_lock(hass, ieee="0xbeef")
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            assert lock_registry(hass).worker(lock_id) is not old
             _assert_trouble_free(hass, lock_id)

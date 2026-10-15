@@ -114,6 +114,7 @@ from .ha.runtime import (
     async_hand_off,
     async_hard_refresh,
     async_hold_lock,
+    async_listen_for_re_pairs,
     async_release_lock,
     async_setup_core,
     lock_registry,
@@ -1012,6 +1013,7 @@ async def async_setup_entry(
     config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData(
         config=EntryConfig.from_entry(config_entry),
     )
+    config_entry.async_on_unload(async_listen_for_re_pairs(hass, config_entry))
 
     _async_reclaim_entities_from_foreign_devices(hass, config_entry)
     _async_prune_orphaned_slot_devices(hass, config_entry)
