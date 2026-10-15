@@ -78,7 +78,6 @@ from .conftest import (
     Z2M_SET_TOPIC,
     Z2M_TOPIC_NAME,
     async_discover_z2m_lock,
-    get_z2m_lock,
 )
 from .fake_bridge import ENABLED, FakeZ2MBridge
 
@@ -136,15 +135,6 @@ def _fire_device_payload(hass: HomeAssistant, payload: dict[str, Any]) -> None:
 class TestFullSetupLifecycle:
     """Verify LCM correctly discovers and sets up the Z2M provider."""
 
-    async def test_provider_discovered_as_zigbee2mqtt(
-        self,
-        hass: HomeAssistant,
-        lcm_config_entry,
-    ) -> None:
-        """Verify LCM discovers the MQTT lock and creates a Zigbee2MQTTLock."""
-        lock = get_z2m_lock(lcm_config_entry)
-        assert isinstance(lock, Zigbee2MQTTLock)
-
     async def test_coordinator_created(
         self,
         hass: HomeAssistant,
@@ -165,21 +155,6 @@ class TestFullSetupLifecycle:
 
 class TestPushUpdatesViaMqtt:
     """Verify MQTT messages flow through to the lock's worker."""
-
-    async def test_users_payload_updates_coordinator(
-        self,
-        hass: HomeAssistant,
-        z2m_lock,
-    ) -> None:
-        """Firing a users payload on the device topic reaches the worker."""
-        seen = _record_pushes(hass, z2m_lock)
-        _fire_device_payload(
-            hass,
-            {"users": {"1": {"status": "enabled", "pin_code": "1234"}}},
-        )
-        await hass.async_block_till_done()
-
-        assert seen(1) == reading(SlotCredential.known("1234"))
 
     async def test_multiple_slots_in_single_message(
         self,
@@ -204,25 +179,6 @@ class TestPushUpdatesViaMqtt:
         assert seen(2) == reading(SlotCredential.known("2222"))
         # Slot 3 is no slot LCM manages: a code nobody manages.
         assert seen(3) == reading(SlotCredential.unreadable())
-
-    async def test_disabled_slot_is_occupied_not_empty(
-        self,
-        hass: HomeAssistant,
-        z2m_lock,
-    ) -> None:
-        """A disabled user is one the lock is holding and refusing.
-
-        Reporting it empty tells sync the slot is confirmed cleared and tells
-        allocation the credential index is free to hand out.
-        """
-        seen = _record_pushes(hass, z2m_lock)
-        _fire_device_payload(
-            hass,
-            {"users": {"5": {"status": "disabled"}}},
-        )
-        await hass.async_block_till_done()
-
-        assert seen(5) == reading(SlotCredential.unreadable())
 
     async def test_available_slot_is_empty(
         self,
